@@ -250,7 +250,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
         catalog,
         None,
         Nil,
-        List(RegisteredPlugin(echo, EntryName("histos.law.Echo$"), contribution)(Fixed(echo, contribution))),
+        List(RegisteredPlugin(echo, contribution)(Fixed(echo, contribution))),
         docCheck = doc,
         ci = ci,
         supply = SupplyChain(),

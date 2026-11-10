@@ -61,11 +61,10 @@ final class Fixed(val id: PluginId, value: Contribution) extends HistosPlugin:
     ZIO.succeed(PluginOutput("fixed", Nil))
 end Fixed
 
-/** A value of its own class that closes over `tag`. The jar entry stays `entry`. */
+/** A value of its own class that closes over `tag`. */
 final class Configured(entry: HistosPlugin, tag: String) extends HistosPlugin:
-  def id: PluginId                  = entry.id
-  override def entryClass: Class[?] = entry.getClass
-  def contribute: Contribution      = entry.contribute
+  def id: PluginId             = entry.id
+  def contribute: Contribution = entry.contribute
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     ZIO.succeed(PluginOutput(tag, Nil))
@@ -244,9 +243,9 @@ object PluginSpec extends ZIOSpecDefault:
   )
 
   private val contract = suite("contract")(
-    test("a load error names the header until the plugin object exists"):
+    test("a load error names the coordinate"):
       val dependency = Dep("dev.earlyeffect::specular:0.2.0")
-      val path       = ProjectPath("tools/docs-preview")
+      val moduleName = ProjectName("tools")
       for
         pluginApi <- ZIO.fromEither(ApiDigest.from(digest))
         launcher  <- ZIO.fromEither(ApiDigest.from(other))
@@ -258,7 +257,7 @@ object PluginSpec extends ZIOSpecDefault:
           .NoSource(PluginCoordinate.Published(dependency))
           .message
         val pathMissing =
-          PluginLoadError.NoSource(PluginCoordinate.Path(path)).message
+          PluginLoadError.NoSource(PluginCoordinate.Module(moduleName)).message
         assertTrue(
           linkName(LinkStrategy.Api) == "refused",
           mismatch.contains("dev.earlyeffect::specular:0.2.0"),
@@ -271,7 +270,7 @@ object PluginSpec extends ZIOSpecDefault:
             .contains("dev.earlyeffect::specular:0.2.0"),
           missing.contains("dev.earlyeffect::specular:0.2.0"),
           !missing.contains(pluginApi.value),
-          pathMissing.contains("tools/docs-preview"),
+          pathMissing.contains("tools"),
           !pathMissing.contains(pluginApi.value),
           PluginLoadError
             .EngineLeak(
@@ -282,11 +281,11 @@ object PluginSpec extends ZIOSpecDefault:
             .contains("histos.schedule.Sendable"),
           PluginLoadError
             .Defect(
-              PluginCoordinate.Path(path),
+              PluginCoordinate.Module(moduleName),
               "java.lang.ExceptionInInitializerError",
             )
             .message
-            .contains("tools/docs-preview"),
+            .contains("tools"),
           PluginRunError
             .Defect("java.lang.RuntimeException")
             .message
@@ -306,7 +305,6 @@ object PluginSpec extends ZIOSpecDefault:
         PluginArgs.empty.require(ParamName("out")) == Left(
           PluginRunError.MissingArg(ParamName("out"))
         ),
-        HistosPlugin.EntryResourceName == "META-INF/histos/plugin",
       ),
   )
 
@@ -365,26 +363,23 @@ object PluginSpec extends ZIOSpecDefault:
       assertTrue(
         built.map(_.plugins) == Right(
           List(
-            RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo)(Echo),
-            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet)(Quiet),
+            RegisteredPlugin(Echo.id, echo)(Echo),
+            RegisteredPlugin(Quiet.id, quiet)(Quiet),
           )
         ),
         instances(built).corresponds(List(Echo, Quiet))(_ eq _),
       )
     ,
-    test("a configured value is the registered instance and names the entry object"):
+    test("a configured value is the registered instance"):
       val configured = Configured(Echo, "x")
       val built      = Projects(use(configured), jvm("core"))
-      assertTrue(
-        built.map(_.plugins.map(_.entry)) == Right(List(EntryName("histos.plugin.Echo$"))),
-        instances(built).corresponds(List(configured))(_ eq _),
-      )
+      assertTrue(instances(built).corresponds(List(configured))(_ eq _))
     ,
     test("two evaluations of one build give equal graphs although the plugin values differ"):
       def evaluate = Projects(use(Configured(Echo, "x")), jvm("core"))
       assertTrue(evaluate == evaluate)
     ,
-    test("a value whose entry class has no entry name is a plugin defect"):
+    test("an anonymous plugin registers as that value"):
       val anonymous = new HistosPlugin:
         def id: PluginId             = PluginId("test.anonymous")
         def contribute: Contribution = Contribution(Nil, Nil, Nil)
@@ -392,7 +387,10 @@ object PluginSpec extends ZIOSpecDefault:
         def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
           ZIO.succeed(PluginOutput("anonymous", Nil))
       val built = Projects(use(anonymous), jvm("core"))
-      assertTrue(built == Left(BuildError.PluginDefect(anonymous.id, anonymous.getClass.getName)))
+      assertTrue(
+        built.map(_.plugins.map(_.id)) == Right(List(anonymous.id)),
+        instances(built).corresponds(List(anonymous))(_ eq _),
+      )
     ,
     test("a build that does not call use stores no plugins"):
       assertTrue(Projects(jvm("core")).map(_.plugins) == Right(Nil))

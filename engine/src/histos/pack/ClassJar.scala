@@ -16,7 +16,7 @@ object ClassJar:
     write(classes, Nil, destination)
 
   /** Class files plus named extras. A repeated entry name is refused. `replacing` drops those names from the class walk
-    * and then adds its own files. Only the plugin stamp uses that list.
+    * and then adds its own files.
     */
   def write(
       classes: Path,

@@ -54,18 +54,49 @@ private[load] object BuildFile:
       source: Path,
       classpath: List[Path],
       out: Path,
+      label: String = "histos.scala",
   ): IO[LoadError, Unit] =
-    drive(source, classpath, out).flatMap: reporter =>
+    drive(List(source), classpath, out).flatMap: reporter =>
       if reporter.hasErrors then
         ZIO.fail(
           LoadError.CompileFailed(
-            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source)))
+            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source, label)))
+          )
+        )
+      else ZIO.unit
+
+  /** Each path is rewritten to its label in a diagnostic. The generated wiring file is not a repo path. */
+  private[load] def compileLabeled(
+      labeled: List[(Path, String)],
+      classpath: List[Path],
+      out: Path,
+  ): IO[LoadError, Unit] =
+    drive(labeled.map(_._1), classpath, out).flatMap: reporter =>
+      if reporter.hasErrors then
+        ZIO.fail(
+          LoadError.CompileFailed(
+            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewriteAll(error.message, labeled)))
+          )
+        )
+      else ZIO.unit
+
+  /** Sources already live in the repo, so a diagnostic keeps the path the compiler printed. */
+  private[load] def compileSources(
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+  ): IO[LoadError, Unit] =
+    drive(sources, classpath, out).flatMap: reporter =>
+      if reporter.hasErrors then
+        ZIO.fail(
+          LoadError.CompileFailed(
+            reporter.allErrors.map(error => CompilerMessage.fromCompiler(error.message))
           )
         )
       else ZIO.unit
 
   private[load] def drive(
-      source: Path,
+      sources: List[Path],
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, StoreReporter] =
@@ -77,8 +108,7 @@ private[load] object BuildFile:
           "-d",
           out.toString,
           "-color:never",
-          source.toString,
-        )
+        ) ++ sources.map(_.toString)
       )
       .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
 
@@ -87,13 +117,14 @@ private[load] object BuildFile:
       display: Path,
       temp: Path,
   ): BuildNotes =
-    val problems = reporter.allErrors.map(error => noted(error, display, temp))
+    val problems = reporter.allErrors.map(error => noted(error, display, temp, "histos.scala"))
     BuildNotes(reporter.hasErrors, problems)
 
   private[load] def noted(
       diagnostic: dotty.tools.dotc.reporting.Diagnostic,
       display: Path,
       temp: Path,
+      label: String,
   ): CompileProblem =
     val pos      = diagnostic.pos
     val severity = diagnostic.level match
@@ -102,7 +133,7 @@ private[load] object BuildFile:
       case _ => CompileSeverity.Info
     val placed = pos.exists
     CompileProblem(
-      rewrite(diagnostic.message, temp),
+      rewrite(diagnostic.message, temp, label),
       if placed then Some(display) else None,
       severity,
       if placed then Some(pos.startLine) else None,
@@ -112,9 +143,14 @@ private[load] object BuildFile:
       PositionBase.Dotty,
     )
 
-  private[load] def rewrite(message: String, temp: Path): String =
+  private def rewriteAll(message: String, labeled: List[(Path, String)]): String =
+    labeled.foldLeft(message): (text, item) =>
+      val (path, label) = item
+      rewrite(text, path, label)
+
+  private[load] def rewrite(message: String, temp: Path, label: String = "histos.scala"): String =
     List(temp.toString, temp.toAbsolutePath.toString).distinct
-      .foldLeft(message)((text, from) => text.replace(from, "histos.scala"))
+      .foldLeft(message)((text, from) => text.replace(from, label))
 
   private[load] def open(
       classes: Path,
@@ -199,3 +235,6 @@ private[load] object BuildFile:
     _ => LoadError.Io(IoFailure(path, fault))
 
 end BuildFile
+
+/** The class loader `open` returns. `close` closes it. */
+private[load] final case class Opened(build: BuildLoader)

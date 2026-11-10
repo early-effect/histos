@@ -104,6 +104,9 @@ enum BuildError:
   case TwoAssets(name: ProjectName, position: SourcePos)
   case DuplicateResource(name: ProjectName, resource: ResourceName, position: SourcePos)
   case RemoteNeeds(name: ProjectName, needs: Set[Need], position: SourcePos)
+  case UnknownPluginModule(raw: String, position: SourcePos)
+  case PluginOnAggregate(name: ProjectName, position: SourcePos)
+  case DuplicatePluginCoordinate(render: String, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position) =>
@@ -195,6 +198,12 @@ enum BuildError:
     case RemoteNeeds(name, needs, position) =>
       val listed = needs.toList.map(needWord).sorted.mkString(", ")
       s"'${name.value}' stores remote test results and needs $listed (${position.line}:${position.column})"
+    case UnknownPluginModule(raw, position) =>
+      s"'$raw' is not a module in this graph (${position.line}:${position.column})"
+    case PluginOnAggregate(name, position) =>
+      s"'${name.value}' is an aggregate, and a plugin coordinate names a module (${position.line}:${position.column})"
+    case DuplicatePluginCoordinate(render, position) =>
+      s"plugin $render is named twice (${position.line}:${position.column})"
 
   private def needWord(need: Need): String = need match
     case Need.Network => "network"

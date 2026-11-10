@@ -5,7 +5,6 @@ import histos.plugin.{
   ApiDigest,
   Contribution,
   DeclaredTask,
-  EntryName,
   HistosPlugin,
   PluginArgs,
   PluginId,
@@ -114,7 +113,6 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
       List(
         RegisteredPlugin(
           pluginId,
-          EntryName.trusted("demo.Plugin$"),
           Contribution(List(task(held), task(brief)), Nil, Nil),
         )(BindPlugin)
       ),

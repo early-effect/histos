@@ -40,7 +40,6 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-
   ScalacFlags,
   SemanticDb,
   Sources,

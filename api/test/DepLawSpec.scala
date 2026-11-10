@@ -50,7 +50,7 @@ object DepLawSpec extends ZIOSpecDefault:
         plugin.PluginCoordinate.Published(java).render == "o:n:1",
         plugin.PluginCoordinate.Published(binary).render == "o::n:1",
         plugin.PluginCoordinate.Published(full).render == "o:::n:1",
-        plugin.PluginCoordinate.Path(path"modules/core").render == "modules/core",
+        plugin.PluginCoordinate.Module(ProjectName("core")).render == "core",
       ),
   )
 

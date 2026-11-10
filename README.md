@@ -365,15 +365,13 @@ Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be
 
 ## Plugins
 
-A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. A command name the grammar owns is reserved. `acp` is reserved and has no command. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
-
-`use` takes a plugin value, and the engine calls `contribute` and `run` on that same value. An object plugin is its own value. A plugin that takes configuration at `use` returns a value of another class that closes over it and overrides `entryClass` with the entry object's class. The jar still names one entry object in `META-INF/histos/plugin`. The loader loads that entry, checks it is a plugin with the id `use` registered, and runs the value `use` passed. [LoaderConfiguredPluginLawSpec](engine/test/LoaderConfiguredPluginLawSpec.scala) locks that.
+A plugin is a service. The layer provides it. Configuration is that layer's environment. The contract is [docs/plugins.md](docs/plugins.md). A command name the grammar owns is reserved. `acp` is reserved and has no command.
 
 `run` is called inside a `Scope`. That scope closes when the task returns, including when the task is interrupted. A temp file and a fork that must not outlive the task belong there. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope. An acquire extended into `ResourceLife.Generation` stays open after the task returns and closes when this generation of plugin classes is released. `Server.install` is that acquire. `Server.serve` never returns, so the watch never starts.
 
 `src/main/resources` is copied into the main class directory. `src/test/resources` is copied into the test class directory. `.resources` on the module adds generated files to the main class directory. A generated name replaces an unmanaged file of that name. The same generated name twice is refused when the graph is built. `run`, test, and the binary jar read that class directory. The sources jar stays sources only. This is not the assembly file `publish assets` uploads.
 
-A packaged plugin jar records `META-INF/histos/version` as the sha256 of the host api jar this process loaded. Authors do not commit that hex. A path plugin has no version resource. A jar that does not contain `META-INF/histos/plugin` does not gain one.
+Authors do not commit `META-INF/histos/plugin`. A tree that still contains that file fails the build and names the path. A plugin is a layer, not a file. A plugin module is an ordinary module: its tests compile, and another module may `dependsOn` it.
 
 ## Scenarios
 

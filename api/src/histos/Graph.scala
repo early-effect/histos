@@ -3,11 +3,11 @@ package histos
 import histos.plugin.{
   CiSettings,
   DeclaredInput,
-  EntryName,
   HistosPlugin,
   JobCheck,
   ModuleNote,
   Need,
+  PluginCoordinate,
   PluginId,
   RegisteredPlugin,
   RepoPath,
@@ -144,7 +144,12 @@ final case class ProjectGraph private (
     coverage: CoverageJob = CoverageJob.Off,
     coverageExcludes: CoverageExcludes = CoverageExcludes(),
     formatting: Formatting = Formatting.Off,
+    coordinates: List[PluginCoordinate] = Nil,
 ):
+  /** The wiring built these plugins. The rest of the graph is unchanged. */
+  def withPlugins(registered: List[RegisteredPlugin]): ProjectGraph =
+    copy(plugins = registered)
+
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
 
@@ -205,6 +210,7 @@ object ProjectGraph:
       coverage: CoverageJob = CoverageJob.Off,
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
+      coordinates: List[PluginCoordinate] = Nil,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -225,6 +231,7 @@ object ProjectGraph:
       coverage,
       coverageExcludes,
       formatting,
+      coordinates,
     )
 end ProjectGraph
 
@@ -284,6 +291,12 @@ object Projects:
 
   /** `histos fmt` formats with the `.scalafmt.conf` at the repository root, and CI checks it. Off unless a build asks.
     */
+  /** Plugin classes come from these modules and ship pins. The wiring compile uses them. The graph does not load the
+    * plugins.
+    */
+  def plugins(first: PluginRef | ShipPlugin, rest: (PluginRef | ShipPlugin)*): Organized =
+    Organized.empty.plugins(first, rest*)
+
   def scalafmt: Organized = Organized.empty.scalafmt
 
   /** `histos fmt` formats with the scalafmt configuration at `conf`, and CI checks it. */
@@ -344,18 +357,19 @@ object Projects:
       uses: Uses = Uses(Nil),
   ): Either[BuildError, ProjectGraph] =
     for
-      registered <- registerAll(uses)
-      _          <- checkPlugins(registered)
-      named      <- nameAll(listed)
-      _          <- duplicates(named)
-      _          <- shape(named)
-      built      <- links(named)
-      _          <- directories(built)
-      _          <- cycle(built)
-      _          <- bindPlugins(registered, built)
-      ships      <- ShipLink.catalog(catalog, built)
-      _          <- uniqueResolvers(settings.resolvers)
-      builtGraph <-
+      registered  <- registerAll(uses)
+      _           <- checkPlugins(registered)
+      named       <- nameAll(listed)
+      _           <- duplicates(named)
+      _           <- shape(named)
+      built       <- links(named)
+      _           <- directories(built)
+      _           <- cycle(built)
+      _           <- bindPlugins(registered, built)
+      ships       <- ShipLink.catalog(catalog, built)
+      coordinates <- pluginCoordinates(settings.pluginSources, built)
+      _           <- uniqueResolvers(settings.resolvers)
+      builtGraph  <-
         Right(
           ProjectGraph.trusted(
             built,
@@ -376,10 +390,38 @@ object Projects:
             settings.coverage,
             settings.coverageExcludes,
             settings.formatting,
+            coordinates,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
     yield builtGraph
+
+  private def pluginCoordinates(
+      sources: List[PluginRef],
+      projects: List[Project],
+  ): Either[BuildError, List[PluginCoordinate]] =
+    sources.foldLeft[Either[BuildError, List[PluginCoordinate]]](Right(Nil)): (acc, source) =>
+      acc.flatMap: seen =>
+        source match
+          case PluginRef.Module(raw, position) =>
+            ProjectName.from(raw) match
+              case Left(_)     => Left(BuildError.BadName(raw, position))
+              case Right(name) =>
+                projects.find(_.name == name) match
+                  case None               => Left(BuildError.UnknownPluginModule(raw, position))
+                  case Some(_: Aggregate) => Left(BuildError.PluginOnAggregate(name, position))
+                  case Some(_: Module)    =>
+                    val coordinate = PluginCoordinate.Module(name)
+                    if seen.contains(coordinate) then
+                      Left(BuildError.DuplicatePluginCoordinate(coordinate.render, position))
+                    else Right(seen :+ coordinate)
+          case PluginRef.Ship(dependency, link, position) =>
+            val coordinate = PluginCoordinate.Published(dependency, link)
+            val repeat     = seen.exists:
+              case PluginCoordinate.Published(have, _) => have == dependency
+              case PluginCoordinate.Module(_)          => false
+            if repeat then Left(BuildError.DuplicatePluginCoordinate(coordinate.render, position))
+            else Right(seen :+ coordinate)
 
   private def uniqueResolvers(
       resolvers: List[Resolver]
@@ -715,21 +757,14 @@ object Projects:
       catch
         case NonFatal(err) =>
           Left(BuildError.PluginDefect(plugin.id, err.getClass.getName))
-    contributed.flatMap: contribution =>
-      EntryName.fromClass(plugin.entryClass) match
-        case Right(entry) =>
-          Right(
-            RegisteredPlugin(
-              plugin.id,
-              entry,
-              contribution.copy(
-                checks = contribution.checks ++ plugin.checks,
-                preflight = contribution.preflight ++ plugin.preflight,
-              ),
-            )(plugin)
-          )
-        case Left(_) =>
-          Left(BuildError.PluginDefect(plugin.id, plugin.entryClass.getName))
+    contributed.map: contribution =>
+      RegisteredPlugin(
+        plugin.id,
+        contribution.copy(
+          checks = contribution.checks ++ plugin.checks,
+          preflight = contribution.preflight ++ plugin.preflight,
+        ),
+      )(plugin)
 
   private def checkPlugins(
       registered: List[RegisteredPlugin]
@@ -880,6 +915,10 @@ end Projects
 final class Organized private (settings: Organized.Settings):
   def tools(catalog: ToolCatalog): Organized = Organized(settings.copy(tools = catalog))
 
+  /** Replaces the plugin coordinates. A module must also be passed to [[apply]]. */
+  def plugins(first: PluginRef | ShipPlugin, rest: (PluginRef | ShipPlugin)*): Organized =
+    Organized(settings.copy(pluginSources = (first :: rest.toList).map(PluginRef.normalize)))
+
   def organization(value: Organization): Organized = Organized(settings.copy(organization = Some(value)))
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
@@ -1017,6 +1056,7 @@ object Organized:
       coverage: CoverageJob = CoverageJob.Off,
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
+      pluginSources: List[PluginRef] = Nil,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())

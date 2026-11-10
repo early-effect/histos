@@ -15,11 +15,12 @@ object Resources:
   def files(sourceBase: Path): IO[JarError, List[(String, Path)]] =
     filesAt(sourceBase.resolve("main").resolve("resources")).mapBoth(
       {
-        case AssetError.Escaped(raw)     => JarError.Escaped(raw)
-        case AssetError.Duplicate(name)  => JarError.Duplicate(name.value)
-        case AssetError.Collides(name)   => JarError.Duplicate(name.value)
-        case AssetError.Missing(path)    => JarError.Io(JarIo.Read(path))
-        case AssetError.Unreadable(path) => JarError.Io(JarIo.Read(path))
+        case AssetError.Escaped(raw)         => JarError.Escaped(raw)
+        case AssetError.Duplicate(name)      => JarError.Duplicate(name.value)
+        case AssetError.Collides(name)       => JarError.Duplicate(name.value)
+        case AssetError.Missing(path)        => JarError.Io(JarIo.Read(path))
+        case AssetError.Unreadable(path)     => JarError.Io(JarIo.Read(path))
+        case AssetError.CommittedEntry(path) => JarError.Io(JarIo.Read(path))
       },
       _.map((name, path) => name.value -> path),
     )
@@ -45,7 +46,9 @@ object Resources:
                 if !absolute.startsWith(base) then Left(AssetError.Escaped(name))
                 else
                   ResourceName.from(name) match
-                    case Left(_)     => Left(AssetError.Escaped(name))
+                    case Left(_)                                                     => Left(AssetError.Escaped(name))
+                    case Right(safe) if safe.value == AssetError.refusedName =>
+                      Left(AssetError.CommittedEntry(file))
                     case Right(safe) => Right(seen :+ (safe, file))
       }
       .mapError(_ => AssetError.Unreadable(root))

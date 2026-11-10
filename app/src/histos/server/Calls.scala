@@ -25,7 +25,7 @@ import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
 import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
-import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
+import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Resolve, ResolveError}
 import histos.schedule.{CacheConfig, CacheNamespace, RemoteCache}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
@@ -514,8 +514,8 @@ object Calls:
       text => told(say, text) *> ok(say),
     )
 
-  /** Stage plugin cells, load that generation, then solve and commit once. Check and verify load the locked generation.
-    * The adopted graph is not the update input.
+  /** Load the graph, then solve and commit once. Check and verify load that generation. Plugin lock cells stay until a
+    * ship pin names them. The adopted graph is not the update input.
     */
   def resolveWork(
       repo: Path,
@@ -523,62 +523,47 @@ object Calls:
       action: ResolveAction,
       native: histos.native.NativeOrigin,
   ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
-    ZIO.serviceWithZIO[Loader](_.scan(repo)).flatMap { scanned =>
-      val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
-        action match
-          case ResolveAction.Update =>
-            for
-              plugins <- Resolve.planPlugins(
-                scanned.requests,
-                Repositories.central,
-              )
-              prior <- Resolve.readLock(repo).catchSome { case ResolveError.NoLock(_) =>
-                ZIO.succeed(DependencyLock(Nil))
-              }
-              built <- generation(
-                _.loadLocked(repo, apiJar, prior.copy(plugins = plugins))
-              )
-              updated <- Resolve.update(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-                PluginUpdate.Replace(plugins),
-              )
-            yield updated
-          case ResolveAction.Check =>
-            for
-              _ <- Resolve.requirePlugins(repo, scanned.requests)
-              _ <- Resolve.checkPlugins(
-                repo,
-                scanned.requests,
-                Repositories.central,
-              )
-              built <- generation(_.load(repo, apiJar))
-              text  <- Resolve.check(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-              )
-            yield text
-          case ResolveAction.Verify =>
-            for
-              _     <- Resolve.requirePlugins(repo, scanned.requests)
-              built <- generation(_.load(repo, apiJar))
-              text  <- Resolve.verify(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-              )
-            yield text
-      followed.flatMap(text =>
-        Resolve
-          .readLock(repo)
-          .map(lock => DependencyLock.withEvictions(text, lock))
-      )
-    }
+    val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
+      action match
+        case ResolveAction.Update =>
+          for
+            prior <- Resolve.readLock(repo).catchSome { case ResolveError.NoLock(_) =>
+              ZIO.succeed(DependencyLock(Nil))
+            }
+            built <- generation(_.loadLocked(repo, apiJar, prior))
+            updated <- Resolve.update(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+              PluginUpdate.Keep,
+            )
+          yield updated
+        case ResolveAction.Check =>
+          for
+            built <- generation(_.load(repo, apiJar))
+            text  <- Resolve.check(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+            )
+          yield text
+        case ResolveAction.Verify =>
+          for
+            built <- generation(_.load(repo, apiJar))
+            text  <- Resolve.verify(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+            )
+          yield text
+    followed.flatMap(text =>
+      Resolve
+        .readLock(repo)
+        .map(lock => DependencyLock.withEvictions(text, lock))
+    )
 
   private def generation[A](
       load: Loader => ZIO[Scope, LoadError, A]

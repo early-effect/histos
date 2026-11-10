@@ -7,7 +7,6 @@ import histos.plugin.{
   Contribution,
   DeclaredInput,
   DeclaredTask,
-  EntryName,
   EnvName,
   HistosPlugin,
   InputKey,
@@ -104,7 +103,6 @@ object GraphTextLawSpec extends ZIOSpecDefault:
     val command = CommandSpec(CommandName("pack"), Nil, TaskName("pack"), PluginDetail.trusted("packs it"))
     val plugin  = RegisteredPlugin(
       id,
-      EntryName.trusted("demo.Pack"),
       Contribution(List(task), List(command), List(TaskJob(JobName("nightly"), TaskName("pack")))),
     )(Unrun)
     ProjectGraph.trusted(List(api, root), Splits.aggregate, Catalog.empty, None, Nil, List(plugin))

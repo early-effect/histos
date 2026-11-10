@@ -2,11 +2,11 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.Publisher
-import histos.jdk.{Machine, Sha256Digest}
-import histos.plugin.{ApiDigest, HistosPlugin}
+import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.workspace.Workspace
-import histos.zinc.{GraphCompile, ScalacClasspath}
+import histos.zinc.GraphCompile
 import histos.version.ShipName
 import histos.{
   GeneratedAsset,
@@ -271,17 +271,21 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         }
       }
     ,
-    test("a plugin jar's version line is the host api digest, and the class directory keeps the planted line"):
+    test("a committed plugin entry fails the publish and names that file"):
       ZIO.scoped {
         Workspace.work("histos-local-plugin").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
               ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val plug    = module("plug", Jvm)(scala3)
-                val maven   = repo.resolve("maven")
-                val store   = repo.resolve("store")
-                val built   = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(plug)), plug)
-                val planted = "ab" * 32
+                val plug  = module("plug", Jvm)(scala3)
+                val maven = repo.resolve("maven")
+                val store = repo.resolve("store")
+                val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(plug)), plug)
+                val entry = histos.AssetError.refusedName
+                  .split("/")
+                  .foldLeft(
+                    repo.resolve("src").resolve("main").resolve("resources")
+                  )(_.resolve(_))
                 for
                   graph <- ZIO.fromEither(built)
                   _     <- LawGit.ready(repo)
@@ -289,43 +293,21 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     repo.resolve("src").resolve("main").resolve("scala").resolve("Plug.scala"),
                     "object Plug:\n  def ready: Int = 1\n",
                   )
-                  _ <- Workspace.writeString(
-                    repo.resolve("src").resolve("main").resolve("resources").resolve(HistosPlugin.EntryResourceName),
-                    "plug\n",
-                  )
-                  _ <- Workspace.writeString(
-                    repo.resolve("src").resolve("main").resolve("resources").resolve(ApiDigest.resource),
-                    planted,
-                  )
+                  _ <- Workspace.writeString(entry, "plug\n")
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
                     DependencyLock.render(pinned(lock, ProjectName("plug"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .either
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
-                  api     <- ScalacClasspath.hostApi(repo)
-                  host    <- ZIO.attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(api))).value).orDie
-                  version <- zipTextOf(found.modules.flatMap(_.jar.toList), ApiDigest.resource)
-                  plugin  <- zipTextOf(found.modules.flatMap(_.jar.toList), HistosPlugin.EntryResourceName)
-                  sourceVersion <- zipTextOf(found.modules.flatMap(_.sources.toList), ApiDigest.resource)
-                  classVersion  <- Workspace.readIfPresent(
-                    GraphCompile.classesDir(repo, ProjectName("plug"), scala3).resolve(ApiDigest.resource)
-                  )
-                  refused     = found.refused.isEmpty && found.skipped.isEmpty && found.held.isEmpty
-                  count       = found.modules.length
-                  stamped     = version.getOrElse("")
-                  plantedHere = classVersion.getOrElse("")
+                  text = found.fold(_.message, _ => "")
                 yield assertTrue(
-                  refused,
-                  count == 1,
-                  stamped == host + "\n",
-                  plantedHere == planted,
-                  stamped != plantedHere,
-                  plugin.contains("plug\n"),
-                  sourceVersion.isEmpty,
+                  text.contains(entry.toString),
+                  text.contains("delete it. A plugin is a layer, not a file."),
                 )
               }
             }

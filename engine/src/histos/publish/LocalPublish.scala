@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.jdk.{JdkRuntime, Sha256, Sha256Digest}
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.central.{
   Artifact,
   ArtifactId,
@@ -14,13 +14,19 @@ import histos.central.{
 }
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.pack.{Assembly, AssemblyError, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
-import histos.plugin.{ApiDigest, HistosPlugin}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, ScalacClasspath, Sources}
+import histos.zinc.{
+  CompileError,
+  GraphCompile,
+  GraphCompileError,
+  JvmCompile,
+  ProductDigest,
+  Sources,
+}
 import histos.{
   Dep,
   MainClass,
@@ -420,9 +426,8 @@ object LocalPublish:
       module   <- ZIO.fromEither(moduleOf(graph, cell.module))
       packed   <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- pluginStamp(repo, List(cell.classes), jarPath, cell)
       classes <- ClassJar
-        .write(cell.classes, Nil, jarPath, stamp)
+        .write(cell.classes, Nil, jarPath)
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
@@ -466,14 +471,12 @@ object LocalPublish:
       jars     <- runtimeJars(repo, graph, ordered, cell.version, cell.platform)
       packed   <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- pluginStamp(repo, dirs, jarPath, cell)
       classes <- Assembly
         .write(
           dirs,
           jars,
           histos.pack.MainClass.trusted(main.value),
           jarPath,
-          replacing = stamp.map((entry, file) => AssemblyFile(entry, file)),
         )
         .mapError(error => LocalPublishError.Pack(cell.module, cell.version, cell.platform, error))
       sources <- ClassJar
@@ -576,34 +579,6 @@ object LocalPublish:
         cells.find(cell => cell.module == item.name && cell.version == version && cell.platform == platform) match
           case Some(cell) => Right(paths :+ cell.classes)
           case None       => Left(LocalPublishError.MissingClasses(item.name, version, platform))
-
-  /** When a class directory contains the plugin entry, the binary jar's version line is the host api digest. The file
-    * is written beside the jar, not into the class directory.
-    */
-  private def pluginStamp(
-      repo: Path,
-      dirs: List[Path],
-      jar: Path,
-      cell: histos.zinc.CompiledCell,
-  ): ZIO[Any, LocalPublishError, List[(String, Path)]] =
-    val refused = (error: JarError) => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error)
-    ZIO
-      .attemptBlocking(dirs.exists(dir => Files.isRegularFile(dir.resolve(HistosPlugin.EntryResourceName))))
-      .mapError(_ => refused(JarError.Io(JarIo.Read(jar))))
-      .flatMap:
-        case false => ZIO.succeed(Nil)
-        case true  =>
-          for
-            api <- ScalacClasspath.hostApi(repo).mapError(LocalPublishError.Compile(_))
-            hex <- ZIO
-              .attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(api))).value)
-              .mapError(_ => refused(JarError.Io(JarIo.Read(api))))
-            digest <- ZIO.fromEither(ApiDigest.from(hex)).mapError(_ => refused(JarError.Io(JarIo.Read(api))))
-            file = jar.resolveSibling("api.version")
-            _ <- Workspace
-              .writeString(file, digest.value + "\n")
-              .mapError(failure => refused(JarError.Io(JarIo.Write(failure.path))))
-          yield List(ApiDigest.resource -> file)
 
   private def runtimeJars(
       repo: Path,

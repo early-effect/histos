@@ -3,7 +3,6 @@ package histos.preview
 import histos.plugin.{
   Contribution,
   DeclaredTask,
-  EntryName,
   HistosPlugin,
   PluginId,
   RegisteredPlugin,
@@ -30,7 +29,6 @@ object PlanTaskLawSpec extends ZIOSpecDefault:
     plugins = List(
       RegisteredPlugin(
         plugin,
-        EntryName("demo.Law$"),
         Contribution(List(DeclaredTask(pack, Seal.Hermetic, Set.empty, Nil, Nil, Nil)), Nil, Nil),
       )(Unrun)
     ),

@@ -1,9 +1,7 @@
 package histos.resolve
 
 import histos.plugin.LinkStrategy
-import histos.{Dep, ProjectPath}
 
-/** A header the loader can put on the build classpath. */
+/** A published plugin the lock can name. The build file does not parse this from text. */
 enum PluginRequest:
   case Dep(dependency: histos.Dep, link: LinkStrategy)
-  case Path(path: ProjectPath)

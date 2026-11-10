@@ -75,12 +75,11 @@ object CodecSamples:
   private val setup       = ActionName("actions/setup")
   private val macos       = RunnerName("macos")
   private val otherSecret = SecretName("OTHER_TOKEN")
-  private val otherEntry  = EntryName("other.Plugin$")
   private val jdk17       = JdkVersion.trusted("17.0.2", JdkMajor.trusted(17))
   private val node20      = NodeVersion.trusted("20.0.0", NodeMajor.trusted(20))
   private val blob        = Digest.trusted("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
   private val published   = PluginCoordinate.Published(dep)
-  private val sourced     = PluginCoordinate.Path(projectPath)
+  private val sourced     = PluginCoordinate.Module(core)
   private val tool        = ToolId(ToolRole.Compiler, scala3, ToolVariant.Jvm)
   private val found       = ResolveError.NotFound("dev.zio", "zio", "0")
   private val absent      = ModuleTestError.Absent(core)
@@ -125,25 +124,18 @@ object CodecSamples:
   )
 
   val pluginLoads: List[PluginLoadError] = List(
-    PluginLoadError.BadCoordinate("x"),
-    PluginLoadError.Misplaced(1),
     PluginLoadError.Unlocked("demo"),
-    PluginLoadError.NoEntry("demo"),
-    PluginLoadError.AmbiguousEntry("demo"),
     PluginLoadError.Unversioned("demo"),
     PluginLoadError.VersionMismatch(dep, digest, otherApi),
     PluginLoadError.ApiLink(dep),
     PluginLoadError.NoSource(published),
-    PluginLoadError.PathIsSource(projectPath),
     PluginLoadError.ReservedPackage("scala.None"),
     PluginLoadError.EngineLeak(published, "histos.engine.X"),
     PluginLoadError.BuildLeak("histos.build.X"),
-    PluginLoadError.ForeignEntry(plugin, entry),
-    PluginLoadError.NotEntry(plugin, entry, otherEntry),
     PluginLoadError.IdMismatch(plugin, otherId),
-    PluginLoadError.Undeclared(plugin),
     PluginLoadError.Defect(published, "boom"),
     PluginLoadError.Io(PluginIo.Read(path)),
+    PluginLoadError.Construction("broke"),
   )
 
   val pluginRuns: List[PluginRunError] = List(
@@ -185,7 +177,7 @@ object CodecSamples:
     ResolveError.UnsupportedPlatform(Platform.Js),
     ResolveError.Lock(LockError.Empty),
     ResolveError.Io(io),
-    ResolveError.Plugin(PluginLoadError.BadCoordinate("x")),
+    ResolveError.Plugin(PluginLoadError.Unlocked("x")),
     ResolveError.Repository(RepositoryIo.Fetch),
     ResolveError.Scalafmt(histos.format.ScalafmtConfError.NoVersion(path)),
   )
@@ -315,6 +307,9 @@ object CodecSamples:
     BuildError.TwoAssets(core, pos),
     BuildError.DuplicateResource(core, ResourceName.trusted("note.txt"), pos),
     BuildError.RemoteNeeds(core, Set(Need.Network, Need.Docker), pos),
+    BuildError.UnknownPluginModule("missing", pos),
+    BuildError.PluginOnAggregate(core, pos),
+    BuildError.DuplicatePluginCoordinate("core", pos),
   )
 
   val loadErrors: List[LoadError] = List(
@@ -324,7 +319,7 @@ object CodecSamples:
     LoadError.NoEntry,
     LoadError.AmbiguousEntry(List(BinaryName.trusted("demo.Build$"))),
     LoadError.BrokenGraph(BuildError.EmptyName(pos)),
-    LoadError.Plugin(PluginLoadError.BadCoordinate("x")),
+    LoadError.Plugin(PluginLoadError.Unlocked("x")),
     LoadError.Resolve(found),
     LoadError.MissingApi(path),
     LoadError.NoHome,

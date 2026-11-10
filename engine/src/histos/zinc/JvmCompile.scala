@@ -267,9 +267,7 @@ object JvmCompile:
   private def jarBan(path: Path): Option[ClasspathBan] =
     val zip = new ZipFile(path.toFile)
     try
-      if ClassMarker.HistosBuild.present(zip) || ClassMarker.PluginEntry
-          .present(zip)
-      then Some(ClasspathBan.Histos)
+      if ClassMarker.HistosBuild.present(zip) then Some(ClasspathBan.Histos)
       else None
     finally zip.close()
 

@@ -822,7 +822,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "PluginDefect(plugin,binary) | TwoPublications(name,position) | " +
               "AssemblyShape(name,position) | AssetWithoutAssembly(name,position) | " +
               "TwoAssets(name,position) | DuplicateResource(name,resource,position) | " +
-              "RemoteNeeds(name,needs,position)"
+              "RemoteNeeds(name,needs,position) | UnknownPluginModule(raw,position) | " +
+              "PluginOnAggregate(name,position) | DuplicatePluginCoordinate(render,position)"
           ),
           """{"DuplicateResolver":{"token":"central"}}""",
           histos.BuildError.DuplicateResolver("central"),
@@ -1285,9 +1286,9 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         ) &&
         mixed[histos.plugin.PluginCoordinate](
           "PluginCoordinate",
-          "Published(dependency) | Path(path)",
-          """{"Path":{"path":"modules/core"}}""",
-          histos.plugin.PluginCoordinate.Path(histos.ProjectPath("modules/core")),
+          "Published(dependency,link) | Module(name)",
+          """{"Module":{"name":"core"}}""",
+          histos.plugin.PluginCoordinate.Module(histos.ProjectName("core")),
         )
     )
 
@@ -1311,18 +1312,14 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         mixed[histos.plugin.PluginLoadError](
           "PluginLoadError",
           (
-            "BadCoordinate(raw) | Misplaced(line) | Unlocked(coordinate) | " +
-              "NoEntry(coordinate) | AmbiguousEntry(coordinate) | " +
-              "Unversioned(coordinate) | " +
+            "Unlocked(coordinate) | Unversioned(coordinate) | " +
               "VersionMismatch(dependency,pluginApi,launcher) | ApiLink(dependency) | " +
-              "NoSource(coordinate) | PathIsSource(path) | ReservedPackage(binary) | " +
+              "NoSource(coordinate) | ReservedPackage(binary) | " +
               "EngineLeak(coordinate,binary) | BuildLeak(binary) | " +
-              "ForeignEntry(plugin,entry) | NotEntry(plugin,entry,expected) | " +
-              "IdMismatch(declared,found) | Undeclared(plugin) | " +
-              "Defect(coordinate,binary) | Io(op)"
+              "IdMismatch(declared,found) | Defect(coordinate,binary) | Io(op) | Construction(detail)"
           ),
-          """{"BadCoordinate":{"raw":"x"}}""",
-          histos.plugin.PluginLoadError.BadCoordinate("x"),
+          """{"Unlocked":{"coordinate":"demo"}}""",
+          histos.plugin.PluginLoadError.Unlocked("demo"),
         ) &&
         mixed[histos.plugin.PluginRunError](
           "PluginRunError",
