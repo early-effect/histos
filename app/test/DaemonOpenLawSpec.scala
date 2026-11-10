@@ -25,7 +25,7 @@ import histos.{
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 
-import zio.{Duration, Scope, ZIO, ZLayer}
+import zio.{Duration, IO, Promise, Scope, ZIO, ZLayer}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 
 /** A server on its own socket answers version and cache, and an empty clean removes products. */
@@ -86,6 +86,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
             assembled  <- Client.talk(socket, Call.Assembly(None)).runCollect
             ran        <- Client.talk(socket, Call.Run(lawName.value, None)).runCollect
             rebooted   <- Client.talk(socket, Call.Reboot).runCollect
+            stopped    <- running.done.either
             closed     <- ZIO.attempt(Files.exists(socket)).orDie
           yield assertTrue(
             outs(versionFeeds) == version,
@@ -97,6 +98,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
             done(assembled).exists(faultHas("'app' is not a module")),
             done(ran).exists(faultHas("'daemonlaw' does not name a main")),
             done(rebooted).contains(CallResult.reported()),
+            stopped == Right(()),
             !closed,
           )
         }
@@ -106,7 +108,75 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           case None         => ZIO.dieMessage("daemon did not answer")
         }
         .provideSomeLayer[Scope](opened)
-  ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock
+    ,
+    test("reboot reaches the client before the successor runs"):
+      ZIO
+        .scoped {
+          for
+            hold    <- Promise.make[Nothing, Unit]
+            _       <- ZIO.addFinalizer(hold.succeed(()).unit)
+            running <- stand(_ => hold.await)
+            heard   <- Client.talk(running.record.socket, Call.Reboot).runCollect.timeout(Duration.fromSeconds(5))
+            waiting <- hold.poll
+            _       <- hold.succeed(())
+            _       <- running.done.ignore
+          yield assertTrue(
+            heard.flatMap(done).contains(CallResult.reported()),
+            waiting.isEmpty,
+          )
+        }
+        .timeout(Duration.fromSeconds(30))
+        .flatMap {
+          case Some(result) => ZIO.succeed(result)
+          case None         => ZIO.dieMessage("reboot did not answer before the successor")
+        }
+        .provideSomeLayer[Scope](opened),
+  ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect.sequential
+
+  private def stand(
+      relaunch: Path => IO[ServerError, Unit]
+  ): ZIO[
+    Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    ServerError,
+    Daemon.Running,
+  ] =
+    for
+      repo <- ZIO.acquireRelease(
+        ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hd")).orDie
+      )(path => Workspace.delete(path).catchAll(error => ZIO.dieMessage(error.message)))
+      _ <- ZIO
+        .attemptBlocking(
+          Files.copy(
+            repository.resolve("dependencies.lock"),
+            repo.resolve("dependencies.lock"),
+            StandardCopyOption.REPLACE_EXISTING,
+          )
+        )
+        .orDie
+      api = repo.resolve("api.jar")
+      _       <- ZIO.attemptBlocking(Files.write(api, Array.emptyByteArray)).orDie
+      loaded  <- Machine.load(repo).either
+      machine <- loaded match
+        case Left(error)  => ZIO.dieMessage(error.message)
+        case Right(value) => ZIO.succeed(value)
+      found <- GraphCompile.jdk(machine).either
+      jdk   <- found match
+        case Left(error)  => ZIO.dieMessage(error.message)
+        case Right(value) => ZIO.succeed(value)
+      running <- Daemon.open(
+        repo,
+        graph,
+        HistosBuild.fixed(graph),
+        jdk,
+        version,
+        api,
+        Nil,
+        ZIO.dieMessage("version does not load a build"),
+        Calls.quiet,
+        machine,
+        relaunch,
+      )
+    yield running
 
   private def faultHas(text: String)(result: CallResult): Boolean =
     result match

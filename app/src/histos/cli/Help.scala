@@ -99,7 +99,12 @@ object Help:
     Entry("bsp", "server", "histos bsp", "Speak the build server protocol."),
     Entry("mcp", "server", "histos mcp", "Speak the MCP server."),
     Entry("reload", "server", "histos reload", "Reload the build file."),
-    Entry("reboot", "server", "histos reboot", "Replace the running server."),
+    Entry(
+      "reboot",
+      "server",
+      "histos reboot",
+      "Replace the running server, or start one, and return when it is listening.",
+    ),
     Entry("cancel", "server", "histos cancel <id>", "Cancel one run."),
     Entry("preview", "preview", "histos preview compile [project ...]", "Show the plan. Nothing is compiled."),
   )

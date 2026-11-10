@@ -4,7 +4,7 @@ import heddle.LinePipe
 import histos.doctor.FaultText
 import histos.bsp.{Bsp, Connection, Frame}
 import histos.central.{PortalServer, ReleaseFeed}
-import histos.build.{Beat, Build}
+import histos.build.{Beat, Build, BuildEvent}
 import histos.load.LoadedBuild
 import histos.server.{
   AssemblyMark,
@@ -592,7 +592,7 @@ object Cli:
       case Command.Launcher(action) =>
         attach(repo, Call.Launcher(action), launcherLocal(repo, action))
       case Command.Reload                   => reload(repo)
-      case Command.Reboot                   => reboot(repo, apiJar)
+      case Command.Reboot                   => reboot(repo)
       case Command.Cancel(id)               => cancel(repo, id)
       case Command.PreviewCompile(projects) =>
         preview(repo, apiJar, projects)
@@ -764,7 +764,7 @@ object Cli:
                   track = false,
                   shown,
                   adopted(repo, apiJar, _),
-                  cliEdges(repo, apiJar, _),
+                  cliEdges(repo, _),
                   heard(repo, _),
                 )
               build
@@ -823,7 +823,7 @@ object Cli:
                             shown,
                             other,
                             say,
-                            cliEdges(repo, apiJar, say),
+                            cliEdges(repo, say),
                           )
                           .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
@@ -846,7 +846,7 @@ object Cli:
         case Right(build) => Right(Some(build))
       }
 
-  private def cliEdges(repo: Path, apiJar: Path, say: Say): Perform.Edges[Local] =
+  private def cliEdges(repo: Path, say: Say): Perform.Edges[Local] =
     Perform.Edges(
       watch = (_, _, edge) =>
         Calls.finish(
@@ -856,7 +856,9 @@ object Cli:
           ),
         ),
       reload = ZIO.fail(ServerError.NoServer),
-      reboot = bootCall(repo, apiJar).flatMap(result => Calls.finish(say, result)),
+      reboot = bootCall(repo).flatMap { socket =>
+        say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
+      },
       bsp = Calls.finish(
         say,
         CallResult.Fault(BuildFault.Rejected(Rejection.Watch(CliParseError.Rejected.message))),
@@ -997,7 +999,6 @@ object Cli:
   private def startServer(repo: Path): IO[ServerError, Path] =
     val home = repo.resolve(".histos")
     val gate = home.resolve("server.starting")
-    val log  = home.resolve("server.log")
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking {
@@ -1015,24 +1016,9 @@ object Cli:
         .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
         .flatMap {
           case None    => awaitServer(repo)
-          case Some(_) => spawnServer(repo, log) *> awaitServer(repo)
+          case Some(_) => Daemon.spawn(repo) *> awaitServer(repo)
         }
     }
-
-  private def spawnServer(repo: Path, log: Path): IO[ServerError, Unit] =
-    ZIO
-      .attemptBlocking {
-        Files.createDirectories(log.getParent)
-        if !Files.exists(log) then Files.createFile(log)
-        new ProcessBuilder("./histos", "server")
-          .directory(repo.toFile)
-          .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
-          .redirectErrorStream(true)
-          .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
-          .start()
-        ()
-      }
-      .mapError(_ => ServerError.Io(ServerIo.Bind(log)))
 
   private def awaitServer(repo: Path): IO[ServerError, Path] =
     val attempts                               = 1200
@@ -1806,9 +1792,15 @@ object Cli:
       case None =>
         Completed(CliExit.TaskFailed, out, "the call did not finish", Playback.Heard)
 
-  /** A running server replaces itself. No server starts one. */
-  private[histos] def reboot(repo: Path, apiJar: Path): URIO[Local, Completed] =
-    rebootAt(repo, serve(repo, apiJar))
+  /** A running server replaces itself. No server starts one. The command returns when a server is listening. */
+  private[histos] def reboot(repo: Path): URIO[Any, Completed] =
+    rebootAt(repo, cold(repo))
+
+  private def cold(repo: Path): URIO[Any, Completed] =
+    bootCall(repo).fold(
+      error => Completed(CliExit.LoadFailed, "", error.message, Playback.Held),
+      socket => Completed(CliExit.Success, socket.toString, "", Playback.Held),
+    )
 
   private def rebootAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R, Completed] =
     pinned(repo, Call.Reboot, miss)(text =>
@@ -1904,17 +1896,13 @@ object Cli:
       case Boot.Transport(error) =>
         Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
 
-  /** A reboot that is not a transport failure. Transport fails the effect. */
-  private[histos] def bootCall(
-      repo: Path,
-      apiJar: Path,
-  ): ZIO[Loader & Scope & ContentStore & Resolve & Machine, ServerError, CallResult] =
-    boot(repo, apiJar).flatMap:
-      case Boot.Up               => ZIO.succeed(CallResult.reported())
-      case Boot.Load(error)      => ZIO.succeed(CallResult.Fault(BuildFault.Load(error)))
-      case Boot.Jdk(error)       => ZIO.succeed(Perform.jdkMissed(Call.Reboot, error))
-      case Boot.Pin(error)       => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
-      case Boot.Transport(error) => ZIO.fail(error)
+  /** The socket a listening server recorded. A missing `./histos` is [[ServerError.NoServer]]. */
+  private[histos] def bootCall(repo: Path): IO[ServerError, Path] =
+    ensureServer(repo).flatMap {
+      case Left(error)         => ZIO.fail(error)
+      case Right(None)         => ZIO.fail(ServerError.NoServer)
+      case Right(Some(socket)) => ZIO.succeed(socket)
+    }
 
   /** A matching server runs the command. Another driver is rebooted first. `local` runs when that socket is missing or
     * dead.
@@ -2332,7 +2320,7 @@ object Cli:
       case Command.Reload =>
         reload(repo)
       case Command.Reboot =>
-        rebootAt(repo, inProcessReady(repo)((api, machine) => withLocal(machine)(serve(repo, api))))
+        reboot(repo)
       case Command.Cancel(id) =>
         cancel(repo, id)
       case Command.PreviewCompile(projects) =>

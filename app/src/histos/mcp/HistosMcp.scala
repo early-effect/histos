@@ -266,7 +266,7 @@ object HistosMcp:
       )(_ => ask(Call.Reload))
       rebooting <- reloading.tool[NoArgs](
         Names.reboot,
-        "Replace a running server, or start one.",
+        "Replace a running server, or start one, and return when a server is listening.",
       )(_ => ask(Call.Reboot))
       cachePath <- rebooting.tool[NoArgs](
         Names.cachePath,

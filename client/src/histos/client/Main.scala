@@ -18,9 +18,9 @@ import zio.{ExitCode, IO, Scope, ZIO, ZIOAppDefault, durationInt}
 
 /** Batch commands. `server`, `bsp`, and `mcp` never reach this process. Zinc stays in the JVM server.
   *
-  * ZIO never installs its shutdown hook on Scala Native, so this process installs SIGINT and SIGTERM itself. The
-  * handler calls `_exit`. A session is one blocking read loop, then `System.exit`, so a finished call does not wait on
-  * the runtime to join a fiber per frame.
+  * ZIO never installs its shutdown hook on Scala Native, and nothing there consults `gracefulShutdownTimeout`.
+  * Returning from `run` calls `exit`, which can hang while the pool and the GC threads are still up. This process
+  * flushes and calls `_exit` after a batch session and after the JVM child returns. SIGINT and SIGTERM do the same.
   */
 object Main extends ZIOAppDefault:
   signal.signal(signal.SIGINT, onSignal(_))
@@ -44,10 +44,15 @@ object Main extends ZIOAppDefault:
       code => ZIO.succeed(leave(code, None)),
     )
 
-  /** `System.exit` does not return. The code is the type the caller already has. */
+  /** Print `line` when one is present, then `_exit`. `_exit` does not return. The code keeps the caller's type. */
   private def leave(code: Int, line: Option[String]): Int =
     line.foreach(text => System.err.println(text))
-    System.exit(code)
+    halt(code)
+
+  private def halt(code: Int): Int =
+    System.out.flush()
+    System.err.flush()
+    unistd._exit(code)
     code
 
   private def talk(repo: Path, call: Call): ZIO[Scope, ServerError, Int] =
@@ -226,4 +231,5 @@ object Main extends ZIOAppDefault:
         new ProcessBuilder(command*).inheritIO().start().waitFor()
       }
       .orElseSucceed(1)
+      .map(halt)
 end Main
