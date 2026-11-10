@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 import zio.{Scope, ZIO}
 import zio.test.*
 
-/** Real scalafmt from this checkout's lock, read from the local Coursier cache. Nothing is downloaded. */
+/** The scalafmt jars this checkout locks. A cached jar is reused. A missing one is fetched. */
 object FormatterLawSpec extends ZIOSpecDefault:
   private val messy = "object   A {  def f( x:Int)=x }\n"
   private val tidy  = "object A { def f(x: Int) = x }\n"
@@ -89,7 +89,7 @@ object FormatterLawSpec extends ZIOSpecDefault:
           _      <- run(repo, jars, FormatMode.Write)
           second <- ZIO.serviceWithZIO[Formatters](_.openings)
         yield assertTrue(first >= 1, second == first),
-  ).provideSomeLayerShared[TestEnvironment & Scope](Resolve.offline(cache) ++ Formatters.live) @@ TestAspect.sequential
+  ).provideSomeLayerShared[TestEnvironment & Scope](Resolve.retained(cache) ++ Formatters.live) @@ TestAspect.sequential
 
   private def run(repo: Path, jars: FormatterJars, mode: FormatMode) =
     listed(repo).flatMap(files =>
