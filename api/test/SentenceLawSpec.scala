@@ -151,13 +151,13 @@ object SentenceLawSpec extends ZIOSpecDefault:
       val module = ProjectName("core")
       val scala3 = scala"3.10.0"
       assertTrue(
-        BuildError.PluginMissingCell(plugin, module, Some(scala3), Some(Platform.Jvm)).message ==
+        PluginGraphFault.PluginMissingCell(plugin, module, Some(scala3), Some(Platform.Jvm)).message ==
           "plugin law names Scala 3.10.0 on jvm of 'core', and 'core' does not build it",
-        BuildError.PluginMissingCell(plugin, module, Some(scala3), None).message ==
+        PluginGraphFault.PluginMissingCell(plugin, module, Some(scala3), None).message ==
           "plugin law names Scala 3.10.0 of 'core', and 'core' does not build it",
-        BuildError.PluginMissingCell(plugin, module, None, Some(Platform.Js)).message ==
+        PluginGraphFault.PluginMissingCell(plugin, module, None, Some(Platform.Js)).message ==
           "plugin law names js of 'core', and 'core' does not build it",
-        BuildError.PluginMissingCell(plugin, module, None, None).message ==
+        PluginGraphFault.PluginMissingCell(plugin, module, None, None).message ==
           "plugin law names a cell of 'core', and 'core' does not build it",
       ),
   )

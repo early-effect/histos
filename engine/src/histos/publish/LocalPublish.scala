@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.jdk.{JdkRuntime, Sha256, Sha256Digest}
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.central.{
   Artifact,
   ArtifactId,
@@ -15,12 +15,12 @@ import histos.central.{
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.plugin.{ApiDigest, PluginCoordinate}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
-import histos.plugin.{ApiDigest, HistosPlugin}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, ScalacClasspath, Sources}
+import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, Sources}
 import histos.{
   Dep,
   MainClass,
@@ -94,6 +94,7 @@ object LocalPublish:
       jdk: JdkRuntime,
       env: Map[String, String],
       write: PublishWrite,
+      api: ApiDigest,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
   ): ZIO[histos.resolve.Resolve & Publisher & histos.cache.ContentStore, LocalPublishError, PublishOutput] =
     for
@@ -149,6 +150,7 @@ object LocalPublish:
                       jobs(plans, live.modules, cells),
                       cells,
                       write,
+                      api,
                     )
                   yield PublishOutput(
                     skipped(live),
@@ -167,6 +169,7 @@ object LocalPublish:
       jobs: List[Job],
       cells: List[histos.zinc.CompiledCell],
       write: PublishWrite,
+      api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, List[PublishedModule]] =
     execute(combine(jobs.map: job =>
       val cell = job.cell
@@ -175,7 +178,7 @@ object LocalPublish:
         Chunk.empty,
         Set(Need.Io),
       )
-      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, cells, write))))
+      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, cells, write, api))))
 
   private def combine(
       steps: List[Step[PublishEnv, LocalPublishError, PublishedModule]]
@@ -394,14 +397,15 @@ object LocalPublish:
       jobs: List[Job],
       cells: List[histos.zinc.CompiledCell],
       write: PublishWrite,
+      api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell     = job.cell
     val artifact = artifactName(graph, cell.module, cell.version, cell.platform)
     publication(graph, cell.module) match
       case Publication.Assembly(main) =>
-        stageAssembly(repo, graph, group, job, cells, main, artifact, write)
+        stageAssembly(repo, graph, group, job, cells, main, artifact, write, api)
       case Publication.Library | Publication.SbtPlugin(_) | Publication.Application =>
-        stageLibrary(repo, graph, group, job, jobs, artifact, write)
+        stageLibrary(repo, graph, group, job, jobs, artifact, write, api)
 
   private def stageLibrary(
       repo: Path,
@@ -411,6 +415,7 @@ object LocalPublish:
       jobs: List[Job],
       artifact: String,
       write: PublishWrite,
+      api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
@@ -420,7 +425,7 @@ object LocalPublish:
       module   <- ZIO.fromEither(moduleOf(graph, cell.module))
       packed   <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- pluginStamp(repo, List(cell.classes), jarPath, cell)
+      stamp   <- versionStamp(repo, graph, cell, api)
       classes <- ClassJar
         .write(cell.classes, Nil, jarPath, stamp)
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
@@ -455,6 +460,7 @@ object LocalPublish:
       main: MainClass,
       artifact: String,
       write: PublishWrite,
+      api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
@@ -466,7 +472,7 @@ object LocalPublish:
       jars     <- runtimeJars(repo, graph, ordered, cell.version, cell.platform)
       packed   <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- pluginStamp(repo, dirs, jarPath, cell)
+      stamp   <- versionStamp(repo, graph, cell, api)
       classes <- Assembly
         .write(
           dirs,
@@ -576,34 +582,6 @@ object LocalPublish:
         cells.find(cell => cell.module == item.name && cell.version == version && cell.platform == platform) match
           case Some(cell) => Right(paths :+ cell.classes)
           case None       => Left(LocalPublishError.MissingClasses(item.name, version, platform))
-
-  /** When a class directory contains the plugin entry, the binary jar's version line is the host api digest. The file
-    * is written beside the jar, not into the class directory.
-    */
-  private def pluginStamp(
-      repo: Path,
-      dirs: List[Path],
-      jar: Path,
-      cell: histos.zinc.CompiledCell,
-  ): ZIO[Any, LocalPublishError, List[(String, Path)]] =
-    val refused = (error: JarError) => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error)
-    ZIO
-      .attemptBlocking(dirs.exists(dir => Files.isRegularFile(dir.resolve(HistosPlugin.EntryResourceName))))
-      .mapError(_ => refused(JarError.Io(JarIo.Read(jar))))
-      .flatMap:
-        case false => ZIO.succeed(Nil)
-        case true  =>
-          for
-            api <- ScalacClasspath.hostApi(repo).mapError(LocalPublishError.Compile(_))
-            hex <- ZIO
-              .attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(api))).value)
-              .mapError(_ => refused(JarError.Io(JarIo.Read(api))))
-            digest <- ZIO.fromEither(ApiDigest.from(hex)).mapError(_ => refused(JarError.Io(JarIo.Read(api))))
-            file = jar.resolveSibling("api.version")
-            _ <- Workspace
-              .writeString(file, digest.value + "\n")
-              .mapError(failure => refused(JarError.Io(JarIo.Write(failure.path))))
-          yield List(ApiDigest.resource -> file)
 
   private def runtimeJars(
       repo: Path,
@@ -804,6 +782,29 @@ object LocalPublish:
         case Javadoc   => s"$stem-javadoc.jar"
         case DocSite   => s"$stem-doc"
   end Scratch
+
+  /** The binary jar of a module the graph names as a plugin. The sources jar is left alone. */
+  private def versionStamp(
+      repo: Path,
+      graph: ProjectGraph,
+      cell: histos.zinc.CompiledCell,
+      api: ApiDigest,
+  ): ZIO[Any, LocalPublishError, List[(String, Path)]] =
+    val named = graph.coordinates.exists:
+      case PluginCoordinate.Module(name)    => name == cell.module
+      case PluginCoordinate.Published(_, _) => false
+    if !named then ZIO.succeed(Nil)
+    else
+      val path = repo
+        .resolve(".histos")
+        .resolve("jars")
+        .resolve(cell.module.value)
+        .resolve(cell.version.value)
+        .resolve(s"${cell.platform.token}-api-digest")
+      Workspace
+        .writeString(path, s"${api.value}\n")
+        .mapError(_ => LocalPublishError.Io(path.toString))
+        .as(List(ApiDigest.resource -> path))
 
   private def scratch(
       repo: Path,

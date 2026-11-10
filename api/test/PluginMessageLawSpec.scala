@@ -1,35 +1,27 @@
 package histos.plugin
 
-import histos.{Dep, DepKind, ProjectName, ProjectPath}
+import histos.{Dep, DepKind, ProjectName}
 
 import java.nio.file.Path
 
 import zio.test.*
 
 object PluginMessageLawSpec extends ZIOSpecDefault:
-  private val binary    = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Binary)
-  private val java      = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Java)
-  private val full      = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Full)
-  private val source    = ProjectPath("tools/docs")
-  private val plugin    = PluginId("test.echo")
-  private val other     = PluginId("test.other")
-  private val entry     = EntryName("test.Echo$")
-  private val expected  = EntryName("test.Other$")
-  private val pluginApi = ApiDigest.trusted("a" * 64)
-  private val launcher  = ApiDigest.trusted("b" * 64)
-  private val echo      = PluginTaskId(plugin, TaskName("echo"))
-  private val site      = PluginTaskId(plugin, TaskName("site"))
+  private val binary     = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Binary)
+  private val java       = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Java)
+  private val full       = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Full)
+  private val moduleName = ProjectName("tools")
+  private val plugin     = PluginId("test.echo")
+  private val other      = PluginId("test.other")
+  private val pluginApi  = ApiDigest.trusted("a" * 64)
+  private val launcher   = ApiDigest.trusted("b" * 64)
+  private val echo       = PluginTaskId(plugin, TaskName("echo"))
+  private val site       = PluginTaskId(plugin, TaskName("site"))
 
   def spec = suite("plugin message laws")(
     test("a load error is that sentence, and the coordinate keeps its separator"):
       val rows = List(
-        PluginLoadError.BadCoordinate("nope")   -> "'nope' is not an exact plugin coordinate",
-        PluginLoadError.Misplaced(3)            -> "plugin(...) on line 3 is outside the header",
-        PluginLoadError.Unlocked(binary.render) -> s"plugin ${binary.render} is not in the lock",
-        PluginLoadError.NoEntry(binary.render)  ->
-          s"plugin ${binary.render} does not contain ${HistosPlugin.EntryResourceName}",
-        PluginLoadError.AmbiguousEntry(binary.render) ->
-          s"plugin ${binary.render} has more than one line in ${HistosPlugin.EntryResourceName}",
+        PluginLoadError.Unlocked(binary.render)    -> s"plugin ${binary.render} is not in the lock",
         PluginLoadError.Unversioned(binary.render) ->
           s"plugin ${binary.render} does not contain ${ApiDigest.resource}",
         PluginLoadError.VersionMismatch(binary, pluginApi, launcher) ->
@@ -42,23 +34,15 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
           s"plugin ${full.render} uses LinkStrategy.Api, which is refused",
         PluginLoadError.NoSource(PluginCoordinate.Published(binary)) ->
           s"plugin ${binary.render} needs sources, and this loader does not have them",
-        PluginLoadError.NoSource(PluginCoordinate.Path(source)) ->
-          s"plugin ${source.value} needs sources, and this loader does not have them",
-        PluginLoadError.PathIsSource(source) ->
-          s"plugin path '${source.value}' is source and does not take that link strategy",
+        PluginLoadError.NoSource(PluginCoordinate.Module(moduleName)) ->
+          s"plugin ${moduleName.value} needs sources, and this loader does not have them",
         PluginLoadError.ReservedPackage("java.lang.String") -> "'java.lang.String' is in a reserved package",
-        PluginLoadError.EngineLeak(PluginCoordinate.Path(source), "histos.Graph") ->
-          s"plugin ${source.value} links 'histos.Graph'",
+        PluginLoadError.EngineLeak(PluginCoordinate.Module(moduleName), "histos.Graph") ->
+          s"plugin ${moduleName.value} links 'histos.Graph'",
         PluginLoadError.BuildLeak("histos.Graph") ->
           "the build links 'histos.Graph', and no plugin class asked for it",
-        PluginLoadError.ForeignEntry(plugin, entry) ->
-          s"plugin ${plugin.value} entry ${entry.value} was not defined by its header jar",
-        PluginLoadError.NotEntry(plugin, entry, expected) ->
-          s"plugin ${plugin.value} entry ${entry.value} does not match ${expected.value}",
         PluginLoadError.IdMismatch(plugin, other) ->
           s"plugin ${plugin.value} loaded as ${other.value}",
-        PluginLoadError.Undeclared(plugin) ->
-          s"plugin ${plugin.value} is used and is not in the header",
         PluginLoadError.Defect(PluginCoordinate.Published(java), "java.lang.ExceptionInInitializerError") ->
           s"plugin ${java.render} failed while loading (java.lang.ExceptionInInitializerError)",
         PluginLoadError.Io(PluginIo.Read(Path.of("read.bin")))       -> "plugin read failed at read.bin",

@@ -401,7 +401,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
             )
       ,
       test(
-        "histos in a jar is banned unless that jar is the permitted api, and a classes tree of the build trait is not"
+        "histos in a jar is banned unless that jar is the permitted api, and a classes tree is not"
       ):
         Workspace
           .work("histos-ban-api")
@@ -413,7 +413,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
               _      <- Workspace.writeString(source, "object A\n")
               banned <- jar(dir.resolve("api.jar"), ClassMarker.HistosBuild.entry)
               _      <- Workspace.writeString(ClassMarker.HistosBuild.under(tree), "")
-              _      <- Workspace.writeString(ClassMarker.PluginEntry.under(plugin), "")
+              _      <- Workspace.writeString(plugin.resolve("META-INF").resolve("histos").resolve("plugin"), "")
               hidden <- refused(cell(dir.resolve("c1"), dir.resolve("a1"), List(source), List(banned)))
               waived <- refused(
                 cell(dir.resolve("c2"), dir.resolve("a2"), List(source), List(banned), permitted = List(banned))
@@ -424,7 +424,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
               hidden._1 == Left(CompileError.Banned(banned, ClasspathBan.Histos)),
               kind(waived._1) == "no-tool",
               kind(passed._1) == "no-tool",
-              marked._1 == Left(CompileError.Banned(plugin, ClasspathBan.Histos)),
+              kind(marked._1) == "no-tool",
               hidden._2 == 0 && waived._2 == 0 && passed._2 == 0 && marked._2 == 0,
             ),
     ) @@ TestAspect.sequential).provideSomeLayerShared[TestEnvironment & Scope](gate),

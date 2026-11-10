@@ -2,6 +2,7 @@ package histos.server
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.report.CallResult
 import histos.resolve.Resolve
 import histos.workspace.Workspace
@@ -37,7 +38,16 @@ object CallsSnapshotLawSpec extends ZIOSpecDefault:
                 case Left(error)  => ZIO.dieMessage(error.message)
                 case Right(value) => ZIO.succeed(value)
               (snapped, snapHeard) <- speak(say =>
-                Calls.publishSnapshots(dir, graph, HistosBuild.fixed(graph), machine, jdk, Nil, say)
+                Calls.publishSnapshots(
+                  dir,
+                  graph,
+                  HistosBuild.fixed(graph),
+                  machine,
+                  jdk,
+                  Nil,
+                  say,
+                  ApiDigest.trusted("ab" * 32),
+                )
               )
               (promoted, promoteHeard) <- speak(say => Calls.promote(dir, machine, "nope", say))
               (assets, assetHeard)     <- speak(say => Calls.publishAssets(dir, graph, machine, Nil, say))

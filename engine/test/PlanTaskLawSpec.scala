@@ -1,16 +1,6 @@
 package histos.preview
 
-import histos.plugin.{
-  Contribution,
-  DeclaredTask,
-  EntryName,
-  HistosPlugin,
-  PluginId,
-  RegisteredPlugin,
-  RunRequest,
-  Seal,
-  TaskName,
-}
+import histos.plugin.{Contribution, DeclaredTask, HistosPlugin, PluginId, RegisteredPlugin, RunRequest, Seal, TaskName}
 import histos.version.Catalog
 import histos.{Platform, ProjectGraph, ProjectNameError, Splits}
 
@@ -30,7 +20,6 @@ object PlanTaskLawSpec extends ZIOSpecDefault:
     plugins = List(
       RegisteredPlugin(
         plugin,
-        EntryName("demo.Law$"),
         Contribution(List(DeclaredTask(pack, Seal.Hermetic, Set.empty, Nil, Nil, Nil)), Nil, Nil),
       )(Unrun)
     ),

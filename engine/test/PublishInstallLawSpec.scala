@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
@@ -16,9 +17,10 @@ import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 /** `publish local` compiles the module and installs the snapshot coordinate where Coursier reads ivy2 local.
   */
 object PublishInstallLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"histos.runlaw"
-  private val app    = module("runlaw", Jvm)(scala3)
+  private val hostApi = ApiDigest.trusted("ab" * 32)
+  private val scala3  = scala"3.10.0"
+  private val group   = organization"histos.runlaw"
+  private val app     = module("runlaw", Jvm)(scala3)
 
   def spec = suite("publish install laws")(
     test("a development publish installs the snapshot jar into ivy2 local and names that coordinate"):
@@ -56,6 +58,7 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                         Nil,
                         jdk,
                         Map.empty,
+                        hostApi,
                         _ => ZIO.unit,
                         line => notes.update(_ :+ line),
                       )

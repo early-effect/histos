@@ -228,7 +228,7 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
           val program =
             for
               _       <- silence
-              jarPath <- jar(repo.resolve("histos.jar"), "META-INF/histos/plugin")
+              jarPath <- jar(repo.resolve("histos.jar"), "notes.txt")
               found   <- refused(repo, mod, scala213, Platform.Js, List(jarPath))
             yield assertTrue(
               found.feeds == List(

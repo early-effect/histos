@@ -26,6 +26,7 @@ object CodecLawSpec extends ZIOSpecDefault:
     JsonLaw.enumLaw("every toolchain miss round-trips, and a wrong kind is rejected", toolchainMisses),
     JsonLaw.enumLaw("every native fetch round-trips, and a wrong kind is rejected", nativeFetches),
     JsonLaw.enumLaw("every build error round-trips, and a missing cell keeps its version", buildErrors),
+    JsonLaw.enumLaw("every plugin graph fault round-trips, and a missing cell keeps its version", pluginGraphFaults),
     JsonLaw.enumLaw("every ci fault round-trips, and a wrong kind is rejected", ciFaults),
     JsonLaw.enumLaw("every load error round-trips, and a wrong kind is rejected", loadErrors),
     JsonLaw.enumLaw("every plugin load error round-trips, and a wrong kind is rejected", pluginLoads),

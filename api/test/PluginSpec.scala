@@ -61,11 +61,10 @@ final class Fixed(val id: PluginId, value: Contribution) extends HistosPlugin:
     ZIO.succeed(PluginOutput("fixed", Nil))
 end Fixed
 
-/** A value of its own class that closes over `tag`. The jar entry stays `entry`. */
+/** A value of its own class that closes over `tag`. */
 final class Configured(entry: HistosPlugin, tag: String) extends HistosPlugin:
-  def id: PluginId                  = entry.id
-  override def entryClass: Class[?] = entry.getClass
-  def contribute: Contribution      = entry.contribute
+  def id: PluginId             = entry.id
+  def contribute: Contribution = entry.contribute
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     ZIO.succeed(PluginOutput(tag, Nil))
@@ -244,9 +243,9 @@ object PluginSpec extends ZIOSpecDefault:
   )
 
   private val contract = suite("contract")(
-    test("a load error names the header until the plugin object exists"):
+    test("a load error names the coordinate"):
       val dependency = Dep("dev.earlyeffect::specular:0.2.0")
-      val path       = ProjectPath("tools/docs-preview")
+      val moduleName = ProjectName("tools")
       for
         pluginApi <- ZIO.fromEither(ApiDigest.from(digest))
         launcher  <- ZIO.fromEither(ApiDigest.from(other))
@@ -258,7 +257,7 @@ object PluginSpec extends ZIOSpecDefault:
           .NoSource(PluginCoordinate.Published(dependency))
           .message
         val pathMissing =
-          PluginLoadError.NoSource(PluginCoordinate.Path(path)).message
+          PluginLoadError.NoSource(PluginCoordinate.Module(moduleName)).message
         assertTrue(
           linkName(LinkStrategy.Api) == "refused",
           mismatch.contains("dev.earlyeffect::specular:0.2.0"),
@@ -271,7 +270,7 @@ object PluginSpec extends ZIOSpecDefault:
             .contains("dev.earlyeffect::specular:0.2.0"),
           missing.contains("dev.earlyeffect::specular:0.2.0"),
           !missing.contains(pluginApi.value),
-          pathMissing.contains("tools/docs-preview"),
+          pathMissing.contains("tools"),
           !pathMissing.contains(pluginApi.value),
           PluginLoadError
             .EngineLeak(
@@ -282,11 +281,11 @@ object PluginSpec extends ZIOSpecDefault:
             .contains("histos.schedule.Sendable"),
           PluginLoadError
             .Defect(
-              PluginCoordinate.Path(path),
+              PluginCoordinate.Module(moduleName),
               "java.lang.ExceptionInInitializerError",
             )
             .message
-            .contains("tools/docs-preview"),
+            .contains("tools"),
           PluginRunError
             .Defect("java.lang.RuntimeException")
             .message
@@ -306,7 +305,6 @@ object PluginSpec extends ZIOSpecDefault:
         PluginArgs.empty.require(ParamName("out")) == Left(
           PluginRunError.MissingArg(ParamName("out"))
         ),
-        HistosPlugin.EntryResourceName == "META-INF/histos/plugin",
       ),
   )
 
@@ -365,26 +363,23 @@ object PluginSpec extends ZIOSpecDefault:
       assertTrue(
         built.map(_.plugins) == Right(
           List(
-            RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo)(Echo),
-            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet)(Quiet),
+            RegisteredPlugin(Echo.id, echo)(Echo),
+            RegisteredPlugin(Quiet.id, quiet)(Quiet),
           )
         ),
         instances(built).corresponds(List(Echo, Quiet))(_ eq _),
       )
     ,
-    test("a configured value is the registered instance and names the entry object"):
+    test("a configured value is the registered instance"):
       val configured = Configured(Echo, "x")
       val built      = Projects(use(configured), jvm("core"))
-      assertTrue(
-        built.map(_.plugins.map(_.entry)) == Right(List(EntryName("histos.plugin.Echo$"))),
-        instances(built).corresponds(List(configured))(_ eq _),
-      )
+      assertTrue(instances(built).corresponds(List(configured))(_ eq _))
     ,
     test("two evaluations of one build give equal graphs although the plugin values differ"):
       def evaluate = Projects(use(Configured(Echo, "x")), jvm("core"))
       assertTrue(evaluate == evaluate)
     ,
-    test("a value whose entry class has no entry name is a plugin defect"):
+    test("an anonymous plugin registers as that value"):
       val anonymous = new HistosPlugin:
         def id: PluginId             = PluginId("test.anonymous")
         def contribute: Contribution = Contribution(Nil, Nil, Nil)
@@ -392,7 +387,10 @@ object PluginSpec extends ZIOSpecDefault:
         def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
           ZIO.succeed(PluginOutput("anonymous", Nil))
       val built = Projects(use(anonymous), jvm("core"))
-      assertTrue(built == Left(BuildError.PluginDefect(anonymous.id, anonymous.getClass.getName)))
+      assertTrue(
+        built.map(_.plugins.map(_.id)) == Right(List(anonymous.id)),
+        instances(built).corresponds(List(anonymous))(_ eq _),
+      )
     ,
     test("a build that does not call use stores no plugins"):
       assertTrue(Projects(jvm("core")).map(_.plugins) == Right(Nil))
@@ -427,7 +425,7 @@ object PluginSpec extends ZIOSpecDefault:
     ,
     test("the same plugin id cannot be registered twice"):
       val built = Projects(use(Echo, Echo), jvm("core"))
-      assertTrue(built == Left(BuildError.DuplicatePlugin(Echo.id)))
+      assertTrue(built == Left(BuildError.PluginGraph(PluginGraphFault.DuplicatePlugin(Echo.id))))
     ,
     test(
       "one plugin cannot declare a task twice, and two plugins can share the local name"
@@ -442,8 +440,9 @@ object PluginSpec extends ZIOSpecDefault:
       val shared   = Projects(use(left, right), jvm("core"))
       assertTrue(
         repeated == Left(
-          BuildError
-            .DuplicatePluginTask(PluginId("test.echo"), TaskName("echo"))
+          BuildError.PluginGraph(
+            PluginGraphFault.DuplicatePluginTask(PluginId("test.echo"), TaskName("echo"))
+          )
         ),
         shared.map(_.plugins.map(_.id)) == Right(
           List(PluginId("test.one"), PluginId("test.two"))
@@ -463,7 +462,7 @@ object PluginSpec extends ZIOSpecDefault:
       )
       val built = Projects(use(left, right), jvm("core"))
       assertTrue(
-        built == Left(BuildError.DuplicateCommand(CommandName("site")))
+        built == Left(BuildError.PluginGraph(PluginGraphFault.DuplicateCommand(CommandName("site"))))
       )
     ,
     test(
@@ -482,11 +481,13 @@ object PluginSpec extends ZIOSpecDefault:
       val shadowed = Projects(use(shadow), jvm("core"))
       val unknown  = Projects(use(missing), jvm("core"))
       assertTrue(
-        shadowed == Left(BuildError.CommandShadow(CommandName("test"))),
+        shadowed == Left(BuildError.PluginGraph(PluginGraphFault.CommandShadow(CommandName("test")))),
         unknown == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         ),
       )
@@ -518,12 +519,14 @@ object PluginSpec extends ZIOSpecDefault:
       val refused    = Projects(use(reserved), jvm("core"))
       val unknown    = Projects(use(missing), jvm("core"))
       assertTrue(
-        duplicated == Left(BuildError.DuplicateJob(JobName("nightly"))),
-        refused == Left(BuildError.ReservedJob(JobName("test"))),
+        duplicated == Left(BuildError.PluginGraph(PluginGraphFault.DuplicateJob(JobName("nightly")))),
+        refused == Left(BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("test")))),
         unknown == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         ),
       )
@@ -554,10 +557,12 @@ object PluginSpec extends ZIOSpecDefault:
       )
       assertTrue(
         Projects(use(first, second), jvm("core")) == Left(
-          BuildError.DuplicateSite(JobName("docs"), JobName("guide"))
+          BuildError.PluginGraph(PluginGraphFault.DuplicateSite(JobName("docs"), JobName("guide")))
         ),
         Projects(use(cron), jvm("core")).isRight,
-        Projects(use(pages), jvm("core")) == Left(BuildError.ReservedJob(JobName("pages"))),
+        Projects(use(pages), jvm("core")) == Left(
+          BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("pages")))
+        ),
         schedule.nonEmpty,
       )
     ,
@@ -635,9 +640,11 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(plugin), jvm("core"))
       assertTrue(
         built == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         )
       )
@@ -663,10 +670,10 @@ object PluginSpec extends ZIOSpecDefault:
           .note(PluginId("test.other"), NoteKey("role"), NoteText("site"))
         assertTrue(
           Projects(repeated) == Left(
-            BuildError.DuplicateNote(docs, id, NoteKey("role"))
+            BuildError.PluginGraph(PluginGraphFault.DuplicateNote(docs, id, NoteKey("role")))
           ),
           Projects(use(plugin), docsModule) == Left(
-            BuildError.MissingNote(docs, id, NoteKey("role"))
+            BuildError.PluginGraph(PluginGraphFault.MissingNote(docs, id, NoteKey("role")))
           ),
         )
     ,
@@ -683,7 +690,7 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue(
           Projects(use(plugin), jvm("core")) == Left(
-            BuildError.PluginMissingModule(PluginId("test.echo"), missing)
+            BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(PluginId("test.echo"), missing))
           )
         )
     ,
@@ -701,7 +708,7 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue:
           Projects(use(plugin), aggregate("root", core), core) == Left(
-            BuildError.PluginMissingModule(PluginId("test.echo"), root)
+            BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(PluginId("test.echo"), root))
           )
     ,
     test("a named cell has to be one the module builds"):
@@ -721,19 +728,23 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue(
           version == Left(
-            BuildError.PluginMissingCell(
-              PluginId("test.echo"),
-              core,
-              Some(scala2),
-              None,
+            BuildError.PluginGraph(
+              PluginGraphFault.PluginMissingCell(
+                PluginId("test.echo"),
+                core,
+                Some(scala2),
+                None,
+              )
             )
           ),
           platform == Left(
-            BuildError.PluginMissingCell(
-              PluginId("test.echo"),
-              core,
-              None,
-              Some(Js),
+            BuildError.PluginGraph(
+              PluginGraphFault.PluginMissingCell(
+                PluginId("test.echo"),
+                core,
+                None,
+                Some(Js),
+              )
             )
           ),
         )
@@ -744,7 +755,7 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(Boom), jvm("core"))
       assertTrue(
         built == Left(
-          BuildError.PluginDefect(Boom.id, "java.lang.IllegalStateException")
+          BuildError.PluginGraph(PluginGraphFault.PluginDefect(Boom.id, "java.lang.IllegalStateException"))
         ),
         built.is(_.left).message.contains("java.lang.IllegalStateException"),
         !built.is(_.left).message.contains("nope"),

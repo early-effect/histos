@@ -23,9 +23,9 @@ import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
-import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
+import histos.plugin.{ApiDigest, PluginArgs, PluginCoordinate, PluginRunError, PluginTaskId}
 import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
-import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
+import histos.resolve.{BuildResolvers, DependencyLock, PluginRequest, PluginUpdate, Resolve, ResolveError}
 import histos.schedule.{CacheConfig, CacheNamespace, RemoteCache}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
@@ -166,6 +166,7 @@ object Calls:
       jdk: JdkRuntime,
       tokens: List[String],
       say: Say,
+      launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       reported(
@@ -179,6 +180,7 @@ object Calls:
           tokens,
           jdk,
           machine.env,
+          launcher,
           feed => speak(say, console, feed).ignore,
           hear(say),
         ),
@@ -193,6 +195,7 @@ object Calls:
       jdk: JdkRuntime,
       tokens: List[String],
       say: Say,
+      launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       reported(
@@ -206,6 +209,7 @@ object Calls:
           tokens,
           jdk,
           machine.env,
+          launcher,
           feed => speak(say, console, feed).ignore,
           hear(say),
         ),
@@ -221,6 +225,7 @@ object Calls:
       tokens: List[String],
       automatic: Boolean,
       say: Say,
+      launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       released(
@@ -235,6 +240,7 @@ object Calls:
           jdk,
           machine.env,
           automatic,
+          launcher,
           feed => speak(say, console, feed).ignore,
           hear(say),
         ),
@@ -514,8 +520,9 @@ object Calls:
       text => told(say, text) *> ok(say),
     )
 
-  /** Stage plugin cells, load that generation, then solve and commit once. Check and verify load the locked generation.
-    * The adopted graph is not the update input.
+  /** Load the graph, then solve and commit once. Check and verify load that generation. Update replaces the plugin
+    * section with the graph's ship pins. A locked load fetches those pins and does not solve them. The adopted graph is
+    * not the update input.
     */
   def resolveWork(
       repo: Path,
@@ -523,62 +530,55 @@ object Calls:
       action: ResolveAction,
       native: histos.native.NativeOrigin,
   ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
-    ZIO.serviceWithZIO[Loader](_.scan(repo)).flatMap { scanned =>
-      val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
-        action match
-          case ResolveAction.Update =>
-            for
-              plugins <- Resolve.planPlugins(
-                scanned.requests,
-                Repositories.central,
-              )
-              prior <- Resolve.readLock(repo).catchSome { case ResolveError.NoLock(_) =>
-                ZIO.succeed(DependencyLock(Nil))
-              }
-              built <- generation(
-                _.loadLocked(repo, apiJar, prior.copy(plugins = plugins))
-              )
-              updated <- Resolve.update(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-                PluginUpdate.Replace(plugins),
-              )
-            yield updated
-          case ResolveAction.Check =>
-            for
-              _ <- Resolve.requirePlugins(repo, scanned.requests)
-              _ <- Resolve.checkPlugins(
-                repo,
-                scanned.requests,
-                Repositories.central,
-              )
-              built <- generation(_.load(repo, apiJar))
-              text  <- Resolve.check(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-              )
-            yield text
-          case ResolveAction.Verify =>
-            for
-              _     <- Resolve.requirePlugins(repo, scanned.requests)
-              built <- generation(_.load(repo, apiJar))
-              text  <- Resolve.verify(
-                repo,
-                built.graph,
-                BuildResolvers(built.graph.resolvers),
-                native,
-              )
-            yield text
-      followed.flatMap(text =>
-        Resolve
-          .readLock(repo)
-          .map(lock => DependencyLock.withEvictions(text, lock))
-      )
-    }
+    val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
+      action match
+        case ResolveAction.Update =>
+          for
+            prior <- Resolve.readLock(repo).catchSome { case ResolveError.NoLock(_) =>
+              ZIO.succeed(DependencyLock(Nil))
+            }
+            built <- generation(_.loadLocked(repo, apiJar, prior))
+            requests = pluginRequests(built.graph)
+            plugins <- Resolve.planPlugins(requests, BuildResolvers(built.graph.resolvers))
+            updated <- Resolve.update(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+              PluginUpdate.Replace(plugins),
+            )
+          yield updated
+        case ResolveAction.Check =>
+          for
+            built <- generation(_.load(repo, apiJar))
+            requests = pluginRequests(built.graph)
+            text <- Resolve.check(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+            )
+            _ <- Resolve.checkPlugins(repo, requests, BuildResolvers(built.graph.resolvers))
+          yield text
+        case ResolveAction.Verify =>
+          for
+            built <- generation(_.load(repo, apiJar))
+            text  <- Resolve.verify(
+              repo,
+              built.graph,
+              BuildResolvers(built.graph.resolvers),
+              native,
+            )
+          yield text
+    followed.flatMap(text =>
+      Resolve
+        .readLock(repo)
+        .map(lock => DependencyLock.withEvictions(text, lock))
+    )
+
+  private def pluginRequests(graph: ProjectGraph): List[PluginRequest] =
+    graph.coordinates.collect:
+      case PluginCoordinate.Published(dependency, link) => PluginRequest.Dep(dependency, link)
 
   private def generation[A](
       load: Loader => ZIO[Scope, LoadError, A]
@@ -1309,6 +1309,8 @@ object Calls:
       case fault                       => fault
 
   private object Quiet extends PluginRuntime:
+    def launcher: ApiDigest = ApiDigest.trusted("a" * 64)
+
     def run(
         id: PluginTaskId,
         args: PluginArgs,

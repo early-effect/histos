@@ -1,18 +1,20 @@
 package histos.plugin
 
-import histos.{Dep, DepKind, ProjectPath}
+import histos.{Dep, DepKind, ProjectName}
 
-/** The header line that named a plugin, before any plugin object exists. */
+/** A plugin the graph names before any plugin value exists. A published pin links `BinaryOrSource` unless the build
+  * says otherwise.
+  */
 enum PluginCoordinate:
-  case Published(dependency: Dep)
-  case Path(path: ProjectPath)
+  case Published(dependency: Dep, link: LinkStrategy = LinkStrategy.BinaryOrSource)
+  case Module(name: ProjectName)
 
   def render: String = this match
-    case Published(dependency) =>
+    case Published(dependency, _) =>
       val separator = dependency.kind match
         case DepKind.Java   => ":"
         case DepKind.Binary => "::"
         case DepKind.Full   => ":::"
       s"${dependency.organization}$separator${dependency.name}:${dependency.revision}"
-    case Path(path) => path.value
+    case Module(name) => name.value
 end PluginCoordinate

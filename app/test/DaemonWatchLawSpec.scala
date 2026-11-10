@@ -6,7 +6,6 @@ import histos.plugin.{
   DeclaredInput,
   DeclaredOutput,
   DeclaredTask,
-  EntryName,
   HistosPlugin,
   OutputName,
   PluginArgs,
@@ -91,7 +90,6 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
       List(
         RegisteredPlugin(
           docs,
-          EntryName.trusted("demo.Plugin$"),
           Contribution(
             List(
               DeclaredTask(

@@ -3,6 +3,7 @@ package histos.publish
 import histos.cache.ContentStore
 import histos.central.{DeploymentId, DeploymentState}
 import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
+import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
 import histos.version.{CiVersion, ShipName}
@@ -33,11 +34,12 @@ import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
 import zio.test.*
 
 object PublishRunLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val number = ship"1.2.3"
-  private val group  = organization"example.com"
-  private val app    = module("app", Jvm)(scala3)
-  private val packed =
+  private val hostApi = ApiDigest.trusted("ab" * 32)
+  private val scala3  = scala"3.10.0"
+  private val number  = ship"1.2.3"
+  private val group   = organization"example.com"
+  private val app     = module("app", Jvm)(scala3)
+  private val packed  =
     module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
 
   private val stock = stubbed[Resolve] ++ stubbed[ContentStore]
@@ -59,6 +61,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   List("missing"),
                   runtime,
                   Map.empty,
+                  hostApi,
                   _ => ZIO.unit,
                   note(notes),
                 )
@@ -91,6 +94,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   Nil,
                   runtime,
                   Map.empty,
+                  hostApi,
                   _ => ZIO.unit,
                   note(notes),
                 )
@@ -105,6 +109,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   runtime,
                   Map.empty,
                   false,
+                  hostApi,
                   _ => ZIO.unit,
                   note(notes),
                 )
@@ -141,6 +146,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   Nil,
                   runtime,
                   Map.empty,
+                  hostApi,
                   _ => ZIO.unit,
                   note(notes),
                 )
@@ -155,6 +161,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   runtime,
                   Map.empty,
                   false,
+                  hostApi,
                   _ => ZIO.unit,
                   note(notes),
                 )

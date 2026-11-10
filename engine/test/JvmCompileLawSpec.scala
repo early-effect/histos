@@ -39,7 +39,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
             )
           program.provideSomeLayer[TestEnvironment & Scope](gate)
     ,
-    test("a histos plugin directory is banned before an empty source list"):
+    test("a directory that holds a plugin file is not histos, so empty sources are NoSources"):
       Workspace
         .work("histos-jvm-plugin")
         .flatMap: dir =>
@@ -50,7 +50,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
               _     <- Workspace.writeString(marker, "entry")
               found <- counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), Nil, List(plugin), Nil))
             yield assertTrue(
-              found.result == Left(CompileError.Banned(plugin, ClasspathBan.Histos)),
+              found.result == Left(CompileError.NoSources),
               found.idle,
             )
           program.provideSomeLayer[TestEnvironment & Scope](gate)

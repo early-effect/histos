@@ -8,7 +8,8 @@ import java.nio.file.{Files, Path}
 import zio.{IO, ZIO}
 
 /** The api boundary jar a loader spec hands to `Loader`. `prepare` hashes the path with `Files.readAllBytes`, so a
-  * classes directory is zipped first.
+  * classes directory is zipped first. A dest that is already a file stays: a second zip would take a new timestamp and
+  * a new digest.
   */
 object LoaderApiJar:
   def of(cls: Class[?], dest: Path): IO[LoadError, Path] =
@@ -21,6 +22,12 @@ object LoaderApiJar:
           .flatMap: file =>
             if file then ZIO.succeed(path)
             else
-              ClassJar
-                .write(path, dest)
-                .mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)
+              ZIO
+                .attemptBlocking(Files.isRegularFile(dest))
+                .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat)))
+                .flatMap: present =>
+                  if present then ZIO.succeed(dest)
+                  else
+                    ClassJar
+                      .write(path, dest)
+                      .mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)

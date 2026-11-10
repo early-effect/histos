@@ -12,6 +12,7 @@ import histos.central.{
   RepositoryUser,
 }
 import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
+import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
 import histos.version.ShipName
@@ -111,10 +112,14 @@ object ReleaseRunLawSpec extends ZIOSpecDefault:
             for
               graph   <- load(Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(app)), app))
               runtime <- jdk
-              missing <- ReleaseRun.stage(repo, graph, Nil, runtime, Map.empty, _ => ZIO.unit).either
-              bare    <- touched(repo)
-              signer  <- ReleaseRun.stage(repo, graph, Nil, runtime, loop, _ => ZIO.unit).either
-              still   <- touched(repo)
+              missing <- ReleaseRun
+                .stage(repo, graph, Nil, runtime, Map.empty, ApiDigest.trusted("ab" * 32), _ => ZIO.unit)
+                .either
+              bare   <- touched(repo)
+              signer <- ReleaseRun
+                .stage(repo, graph, Nil, runtime, loop, ApiDigest.trusted("ab" * 32), _ => ZIO.unit)
+                .either
+              still <- touched(repo)
             yield assertTrue(
               missing == Left(ReleaseError.Credentials),
               signer == Left(ReleaseError.Signer(SignerError.NoSecret)),

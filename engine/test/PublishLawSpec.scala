@@ -3,6 +3,7 @@ package histos.publish
 import histos.cache.ContentStore
 import histos.central.{MavenModule, Publisher, ReleaseFeed}
 import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest, VersionError as JdkVersionError}
+import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.select.SelectError
 import histos.toolchain.RuntimeIdentity
@@ -52,6 +53,7 @@ import zio.test.*
 object PublishLawSpec extends ZIOSpecDefault:
   private val number  = ship"1.2.3"
   private val scala3  = scala"3.10.0"
+  private val hostApi = ApiDigest.trusted("ab" * 32)
   private val sha     = CommitSha("0123456789abcdef0123456789abcdef01234567")
   private val stored  = SnapshotCoordinate(number, sha.abbreviate)
   private val pointer = SnapshotPointer(number)
@@ -504,7 +506,7 @@ object PublishLawSpec extends ZIOSpecDefault:
             ZIO.acquireRelease(directory("histos-publish"))(delete).flatMap { repo =>
               registry(repo, releases) *>
                 Clock.instant *>
-                LocalPublish.run(repo, graph, Nil, runtime, env, write).either.map(claim)
+                LocalPublish.run(repo, graph, Nil, runtime, env, write, hostApi).either.map(claim)
             }
 
   private def checked(
@@ -524,7 +526,7 @@ object PublishLawSpec extends ZIOSpecDefault:
             ZIO.acquireRelease(directory("histos-publish"))(delete).flatMap { repo =>
               registry(repo, releases) *>
                 Clock.instant *>
-                LocalPublish.run(repo, graph, Nil, runtime, env, write).map(claim)
+                LocalPublish.run(repo, graph, Nil, runtime, env, write, hostApi).map(claim)
             }
 
   private def registry(repo: Path, releases: Option[String]): ZIO[Any, Nothing, Unit] =

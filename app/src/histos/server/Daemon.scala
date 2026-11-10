@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
 import histos.jdk.Sha256Digest
-import histos.load.{HeaderScan, LoadError, LoadedBuild}
+import histos.load.{LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
@@ -18,10 +18,7 @@ import histos.{Platform, ProjectGraph, ProjectName, Resolution}
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
 import java.nio.channels.{Channels, ServerSocketChannel, SocketChannel}
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
-
-import scala.jdk.CollectionConverters.*
+import java.nio.file.{Files, Path, StandardCopyOption}
 
 import histos.build.BuildEvent
 import zio.json.*
@@ -55,28 +52,27 @@ object Fingerprint:
     val pin   = resolution match
       case Resolution.Lock  => tagged(repo.resolve("dependencies.lock"))
       case Resolution.Solve => ZIO.succeed(Chunk.empty[Byte])
+    val wiring = repo.resolve("histos.wiring.scala")
     for
       built <- tagged(build)
+      wired <- tagged(wiring)
       lock  <- pin
-      extra <- pathBytes(repo, build)
-    yield Sha256Digest.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
+    yield Sha256Digest.of(built ++ Chunk.single(0.toByte) ++ wired ++ lock).value
 
   private[server] def trusted(raw: String): Fingerprint = raw
 
-  /** The files [[read]] hashes. A header that does not parse contributes no plugin directories. */
+  /** The files [[read]] hashes. An unnamed directory is not a root. */
   def roots(repo: Path, resolution: Resolution = Resolution.Solve): UIO[List[Path]] =
-    val build = repo.resolve("histos.scala")
-    val lock  = repo.resolve("dependencies.lock")
+    val build  = repo.resolve("histos.scala")
+    val wiring = repo.resolve("histos.wiring.scala")
+    val lock   = repo.resolve("dependencies.lock")
     ZIO
       .attemptBlocking {
-        val plugins =
-          if Files.isRegularFile(build) then
-            HeaderScan.paths(Files.readString(build)).map(path => repo.resolve(path.value))
-          else Nil
+        val wired  = if Files.isRegularFile(wiring) then List(wiring) else Nil
         val pinned = resolution match
           case Resolution.Lock  => List(lock)
           case Resolution.Solve => Nil
-        (build :: pinned ++ plugins).distinct
+        (build :: wired ++ pinned).distinct
       }
       .orElseSucceed:
         resolution match
@@ -92,40 +88,6 @@ object Fingerprint:
         else Chunk.single(0.toByte)
       }
       .mapError(_ => ServerError.Io(ServerIo.Read(path)))
-
-  /** Regular files under each header path, after the lock. No path plugin leaves the old hash.
-    */
-  private def pathBytes(repo: Path, build: Path): IO[ServerError, Chunk[Byte]] =
-    ZIO
-      .attemptBlocking {
-        if !Files.isRegularFile(build) then Chunk.empty
-        else
-          val paths = HeaderScan.paths(Files.readString(build))
-          if paths.isEmpty then Chunk.empty
-          else
-            val files = paths.flatMap(tree(repo, _)).sortBy(relative(repo, _))
-            files.foldLeft(Chunk.single(0.toByte)): (acc, path) =>
-              val name = relative(repo, path).getBytes(StandardCharsets.UTF_8)
-              acc ++ Chunk.fromArray(name) ++ Chunk.single(0.toByte) ++
-                Chunk.fromArray(Files.readAllBytes(path)) ++ Chunk.single(
-                  0.toByte
-                )
-      }
-      .mapError(_ => ServerError.Io(ServerIo.Read(build)))
-
-  private def tree(repo: Path, project: histos.ProjectPath): List[Path] =
-    val root = repo.resolve(project.value)
-    if !Files.isDirectory(root) then Nil
-    else
-      val walk = Files.walk(root)
-      try
-        walk.iterator.asScala
-          .filter(path => Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-          .toList
-      finally walk.close()
-
-  private def relative(repo: Path, path: Path): String =
-    repo.relativize(path).toString.replace('\\', '/')
 end Fingerprint
 
 object Record:

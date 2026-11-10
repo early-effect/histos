@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
@@ -29,9 +30,10 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** Local publish hands the staged jars to the build. It does not install them. */
 object PublishRecordLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
-  private val named  = module("recordlaw", Jvm)(scala3)
+  private val hostApi = ApiDigest.trusted("ab" * 32)
+  private val scala3  = scala"3.10.0"
+  private val group   = organization"example.com"
+  private val named   = module("recordlaw", Jvm)(scala3)
 
   def spec = suite("publish record laws")(
     test("no organization is refused before a class file exists"):
@@ -53,7 +55,7 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
                 case Left(error)  => ZIO.dieMessage(error.message)
                 case Right(value) => ZIO.succeed(value)
               ran <- PublishRun
-                .local(dir, graph, HistosBuild.fixed(graph), Nil, jdk, Map.empty, _ => ZIO.unit, _ => ZIO.unit)
+                .local(dir, graph, HistosBuild.fixed(graph), Nil, jdk, Map.empty, hostApi, _ => ZIO.unit, _ => ZIO.unit)
                 .either
               classes <- ZIO.attempt(Files.exists(dir.resolve(".histos").resolve("classes"))).orDie
             yield assertTrue(
@@ -91,7 +93,7 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
                 _    <- Workspace.writeString(source, "object Ready:\n  def n: Int = 1\n")
                 _    <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
                 ran  <- PublishRun
-                  .local(dir, graph, recording(graph, seen), Nil, jdk, Map.empty, _ => ZIO.unit, _ => ZIO.unit)
+                  .local(dir, graph, recording(graph, seen), Nil, jdk, Map.empty, hostApi, _ => ZIO.unit, _ => ZIO.unit)
                   .either
                 recorded <- seen.get
               yield

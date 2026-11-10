@@ -1,18 +1,14 @@
 package histos.load
 
-import histos.cache.ContentStore
 import histos.jdk.Sha256
-import histos.plugin.{DeclaredTask, LinkStrategy, PluginDetail, PluginRunError, Seal, TaskDep, TaskName}
-import histos.resolve.{PluginRequest, Resolve}
+import histos.plugin.{DeclaredTask, PluginDetail, PluginRunError, Seal, TaskDep, TaskName}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.GraphCompile
-import histos.{Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ProjectPath, ScalaVersion, SourcePos}
+import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion, SourcePos}
 
 import java.nio.file.{Files, Path}
 
-import slayer.stubbed
-
-import zio.{Scope, ZIO, ZLayer}
+import zio.ZIO
 import zio.test.*
 
 object LoaderLawSpec extends ZIOSpecDefault:
@@ -20,50 +16,7 @@ object LoaderLawSpec extends ZIOSpecDefault:
   private val v3   = ScalaVersion.trusted("3.10.0")
   private val core = ProjectName.trusted("core")
 
-  private val loaded =
-    (stubbed[Resolve] ++ stubbed[ContentStore]) >>> Loader.live
-
   def spec = suite("load laws")(
-    suite("a header is a typed scan")(
-      test("a comment stays, a plugin line is blanked, and the default links are binary-or-source and source"):
-        val text =
-          """// note
-            |
-            |plugin(dep"org::name:1.2.3")
-            |plugin(path"plugins/extra")
-            |
-            |object Build""".stripMargin
-        HeaderScan.scan(text) match
-          case Left(error)  => assertTrue(error == PluginLoadErrorWrong)
-          case Right(found) =>
-            assertTrue(
-              found.requests == List(published, PluginRequest.Path(ProjectPath.trusted("plugins/extra"))),
-              found.source.contains("// note"),
-              found.source.contains("object Build"),
-              !found.source.contains("plugin("),
-              HeaderScan.paths(text) == List(ProjectPath.trusted("plugins/extra")),
-            )
-      ,
-      test("an api link, a ranged revision, a path link, and an escape are different failures"):
-        assertTrue(
-          failure("""plugin(dep"org::name:1.2.3").link(Api)""") ==
-            Left(histos.plugin.PluginLoadError.ApiLink(Dep.trusted("org", "name", "1.2.3", DepKind.Binary))),
-          failure("""plugin(dep"org::name:1.2.+")""") ==
-            Left(histos.plugin.PluginLoadError.BadCoordinate("org::name:1.2.+")),
-          failure("""plugin(dep"org::name:latest.integration")""") ==
-            Left(histos.plugin.PluginLoadError.BadCoordinate("org::name:latest.integration")),
-          failure("""plugin(path"plugins/extra").link(ExactBinary)""") ==
-            Left(histos.plugin.PluginLoadError.PathIsSource(ProjectPath.trusted("plugins/extra"))),
-          failure("""plugin(path"../extra")""") ==
-            Left(histos.plugin.PluginLoadError.BadCoordinate("../extra")),
-          failure("""plugin(path"")""") == Left(histos.plugin.PluginLoadError.BadCoordinate("")),
-          failure("plugin(foo)") == Left(histos.plugin.PluginLoadError.Misplaced(1)),
-          failure("object Build\nplugin(dep\"org::name:1.2.3\")") ==
-            Left(histos.plugin.PluginLoadError.Misplaced(2)),
-          HeaderScan.paths("plugin(foo)") == Nil,
-          HeaderScan.scan("// only") == Right(ScannedBuild(Nil, "// only")),
-        ),
-    ),
     suite("a class home and a reserved package are closed sets")(
       test("the api root is a boundary, a deeper histos package is refused, and anything else is open"):
         assertTrue(
@@ -240,14 +193,14 @@ object LoaderLawSpec extends ZIOSpecDefault:
             val missing    = root.resolve("missing")
             for
               _      <- writeBytes(histosTree.resolve("histos/A.class"), Array(1)).mapError(LoadError.Io(_))
-              own    <- PluginCompile.engineClass(histosTree)
+              own    <- ReservedPackage.engineClass(histosTree)
               _      <- writeBytes(demoTree.resolve("demo/B.class"), Array(1)).mapError(LoadError.Io(_))
-              other  <- PluginCompile.engineClass(demoTree)
-              absent <- PluginCompile.engineClass(missing)
+              other  <- ReservedPackage.engineClass(demoTree)
+              absent <- ReservedPackage.engineClass(missing)
               _      <- writeBytes(scalaTree.resolve("scala/Predef.class"), Array(1)).mapError(LoadError.Io(_))
-              scala  <- PluginCompile.engineClass(scalaTree)
+              scala  <- ReservedPackage.engineClass(scalaTree)
               _      <- writeBytes(zioTree.resolve("zio/Task.class"), Array(1)).mapError(LoadError.Io(_))
-              zio    <- PluginCompile.engineClass(zioTree)
+              zio    <- ReservedPackage.engineClass(zioTree)
             yield assertTrue(
               own.contains("histos.A"),
               other == None,
@@ -256,43 +209,7 @@ object LoaderLawSpec extends ZIOSpecDefault:
               zio.contains("zio.Task"),
             )
     ),
-    (suite("scanning the build file")(
-      test("a missing file, a directory, a bad header, and a well-formed header are different results"):
-        Workspace
-          .work("histos-scan")
-          .flatMap: root =>
-            val source = root.resolve("histos.scala")
-            val asDir  = root.resolve("directory")
-            for
-              missing <- ZIO.serviceWithZIO[Loader](_.scan(root)).either
-              _       <- Workspace.createDirectories(asDir).mapError(LoadError.Io(_))
-              _       <- ZIO
-                .attemptBlocking(Files.createDirectory(asDir.resolve("histos.scala")))
-                .mapError(_ => LoadError.Io(IoFailure(asDir.resolve("histos.scala"), IoFault.Create)))
-              directory <- ZIO.serviceWithZIO[Loader](_.scan(asDir)).either
-              _         <- Workspace.writeString(source, "plugin(foo)\n").mapError(LoadError.Io(_))
-              bad       <- ZIO.serviceWithZIO[Loader](_.scan(root)).either
-              _         <- Workspace
-                .writeString(source, "plugin(dep\"org::name:1.2.3\")\nobject Build\n")
-                .mapError(LoadError.Io(_))
-              good <- ZIO.serviceWithZIO[Loader](_.scan(root)).either
-            yield assertTrue(
-              missing == Left(LoadError.MissingFile(source)),
-              directory == Left(LoadError.MissingFile(asDir.resolve("histos.scala"))),
-              bad == Left(LoadError.Plugin(histos.plugin.PluginLoadError.Misplaced(1))),
-              good.map(_.requests) == Right(List(published)),
-            )
-    ) @@ TestAspect.sequential).provideSomeLayerShared[TestEnvironment & Scope](loaded),
   )
-
-  private val published =
-    PluginRequest.Dep(Dep.trusted("org", "name", "1.2.3", DepKind.Binary), LinkStrategy.BinaryOrSource)
-
-  private val PluginLoadErrorWrong =
-    histos.plugin.PluginLoadError.Misplaced(0)
-
-  private def failure(text: String): Either[histos.plugin.PluginLoadError, ScannedBuild] =
-    HeaderScan.scan(text)
 
   private def failed(message: String): PluginRunError =
     PluginRunError.Failed(PluginDetail.trusted(message))

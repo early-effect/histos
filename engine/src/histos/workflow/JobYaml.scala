@@ -32,7 +32,7 @@ import histos.plugin.{
   TaskName,
   WorkflowFile,
 }
-import histos.{BuildError, ProjectGraph}
+import histos.{BuildError, PluginGraphFault, ProjectGraph}
 
 /** Prints [[JobRender]]. The engine does not match a [[histos.plugin.CiJob]] class. */
 object JobYaml:
@@ -59,7 +59,8 @@ object JobYaml:
 
   def lift(error: BuildError): CiError =
     error match
-      case BuildError.DuplicateSite(first, second)                    => CiError.DuplicateSite(first, second)
+      case BuildError.PluginGraph(PluginGraphFault.DuplicateSite(first, second)) =>
+        CiError.DuplicateSite(first, second)
       case BuildError.Ci(histos.CiFault.IllegalSite(name))            => CiError.IllegalSite(name)
       case BuildError.Ci(histos.CiFault.UnknownNeed(job, need))       => CiError.UnknownNeed(job, need)
       case BuildError.Ci(histos.CiFault.DuplicateNeed(job, need))     => CiError.DuplicateNeed(job, need)
