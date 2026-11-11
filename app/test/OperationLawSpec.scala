@@ -23,7 +23,7 @@ object OperationLawSpec extends ZIOSpecDefault:
         Command.New("demo", false, false, None),
         Command.Init(false, false, None, None),
         Command.Init(false, false, Some(ImportSource.Sbt), None),
-        Command.Doctor(None, false, None, false, false),
+        Command.Doctor(None, false, None, false, false, false, Nil),
         Command.Explain("supply.pin"),
         Command.Deps(DepsAction.Check),
         Command.Setup(None, false, false),

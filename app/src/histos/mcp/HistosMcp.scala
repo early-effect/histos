@@ -18,6 +18,7 @@ import histos.server.{Call, LauncherAction, ResolveAction}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
+import histos.doctor.{DoctorLaunch, FaultText}
 import histos.ProjectName
 
 import ClientJson.given
@@ -74,6 +75,8 @@ object HistosMcp:
       preflight: Option[String] = None,
       fix: Boolean = false,
       yes: Boolean = false,
+      verbose: Boolean = false,
+      projects: List[String] = Nil,
   ) derives Schema,
         JsonCodec
   final case class DoctorText(text: String) derives Schema, JsonCodec
@@ -312,22 +315,42 @@ object HistosMcp:
       )(_ => Stored.read(repo))
       diagnosed <- observed.tool[DoctorArgs](
         Names.doctor,
-        "Run doctor. area limits the checks. json prints json. preflight runs that job's offline checks. fix applies local edits and never changes GitHub settings.",
+        "Run doctor. projects are the modules this run launches. An empty list launches nothing, so node.floor, node.shadowed, and clang.source do not probe. The text lists errors and warnings. verbose lists every check. area limits the checks. json prints json. preflight runs the offline checks and does not call GitHub. fix applies local edits and never changes GitHub settings.",
       )(args =>
         ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap {
           case Left(error)   => ZIO.succeed(DoctorText(error.message))
           case Right(loaded) =>
-            histos.supply.DoctorSurface
-              .run(
-                repo,
-                loaded.graph,
-                histos.supply.DoctorSurface.Request(args.area, args.json, args.preflight, args.fix, args.yes),
-                machine,
-              )
-              .map((_, text) => DoctorText(text))
+            launched(loaded.graph, args.projects) match
+              case Left(text)     => ZIO.succeed(DoctorText(text))
+              case Right(modules) =>
+                histos.supply.DoctorSurface
+                  .run(
+                    repo,
+                    loaded.graph,
+                    histos.supply.DoctorSurface.Request(
+                      args.area,
+                      args.json,
+                      args.preflight,
+                      args.fix,
+                      args.yes,
+                      modules,
+                      args.verbose,
+                    ),
+                    machine,
+                  )
+                  .map((_, text) => DoctorText(text))
         }
       )
     yield diagnosed
+
+  private def launched(graph: histos.ProjectGraph, raw: List[String]): Either[String, List[histos.Module]] =
+    val names = raw.foldLeft[Either[String, List[ProjectName]]](Right(Nil)): (acc, token) =>
+      acc.flatMap: parsed =>
+        ProjectName.from(token) match
+          case Left(error) => Left(error.message)
+          case Right(name) => Right(parsed :+ name)
+    names.flatMap: parsed =>
+      DoctorLaunch.modules(graph, parsed).left.map(error => FaultText.show(error.diagnose))
 
   def compileCall(projects: List[String]): Either[Rejection, Call] =
     names(projects).map(Call.Compile(_))

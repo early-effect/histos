@@ -56,13 +56,11 @@ object Runner:
 end Runner
 
 object Render:
-  def text(repo: String, report: DoctorReport): String =
-    val lines = report.outcomes.flatMap(line) ++ report.timedOut.map(late)
-    val tail  =
-      val base =
-        s"${report.errors} errors, ${report.warnings} warnings, ${report.oks} ok, ${report.skipped} skipped"
-      if report.timedOut.isEmpty then base else s"$base, ${report.timedOut.size} timed out"
-    ((s"histos doctor  $repo" :: lines) :+ tail).mkString("\n")
+  /** Errors and warnings, plus a timed-out check. `verbose` also prints ok, skipped, and info lines. */
+  def text(repo: String, report: DoctorReport, verbose: Boolean): String =
+    val shown = if verbose then report.outcomes.flatMap(line) else report.outcomes.flatMap(broken)
+    val lines = shown ++ report.timedOut.map(late)
+    ((s"histos doctor  $repo" :: lines) :+ counts(report, verbose)).mkString("\n")
 
   def annotations(report: DoctorReport): String =
     val found = report.found.map { diagnostic =>
@@ -95,6 +93,19 @@ object Render:
     }
     val late = report.timedOut.map(id => quote(id.value))
     s"""{"exit":${report.exit},"timedOut":[${late.mkString(",")}],"findings":[${items.mkString(",")}]}"""
+
+  private def counts(report: DoctorReport, verbose: Boolean): String =
+    val head = s"${report.errors} errors, ${report.warnings} warnings"
+    val body =
+      if verbose then s"$head, ${report.oks} ok, ${report.skipped} skipped" else head
+    if report.timedOut.isEmpty then body else s"$body, ${report.timedOut.size} timed out"
+
+  /** Info is not a failure. Ok and skipped stay off the default log. */
+  private def broken(outcome: Outcome): List[String] =
+    outcome match
+      case Outcome.Found(diagnostic) if diagnostic.level == Level.Error || diagnostic.level == Level.Warning =>
+        line(outcome)
+      case _ => Nil
 
   private def late(id: CheckId): String =
     s"  x timed out ${id.value}"

@@ -44,6 +44,27 @@ object WorkflowLawSpec extends ZIOSpecDefault:
           )
         case (_, _) => assertTrue(false)
     ,
+    test("workflow and supply-chain run doctor without installing Node, and the test job installs 25"):
+      val built = Projects
+        .organization(organization"example.com")
+        .runnerTools(RunnerTools(Some(NodeFloor(25)), None, None))(
+          module("core", Jvm)(scala3),
+          module("web", Js)(scala3),
+        )
+      built.flatMap(Workflow.render) match
+        case Right(text) =>
+          val workflow = job(text, "workflow")
+          val supply   = job(text, "supply-chain")
+          val suite    = job(text, "test")
+          assertTrue(
+            workflow.contains("./histos doctor"),
+            supply.contains("./histos doctor"),
+            !workflow.contains("node-version"),
+            !supply.contains("node-version"),
+            suite.contains("""node-version: "25""""),
+          )
+        case Left(error) => assertTrue(error.toString.isEmpty)
+    ,
     test("a versions job is present exactly when the catalog names a ship"):
       val open    = Projects.organization(organization"example.com")(module("core", Jvm)(scala3))
       val shipped = demo(module("core", Jvm)(scala3))

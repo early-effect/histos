@@ -19,12 +19,12 @@ object ToolchainChecks:
   val coverId: CheckId     = CheckId.trusted("runner-tools.cover")
   val agreeId: CheckId     = CheckId.trusted("runner-tools.agree")
 
-  def checks(machine: Machine, graph: ProjectGraph): List[DoctorCheck] =
+  def checks(machine: Machine, graph: ProjectGraph, launch: List[Module]): List[DoctorCheck] =
     List(
       check(jdkId)(jdk(machine)),
-      check(nodeFloorId)(nodeFloor(machine, graph)),
-      check(shadowId)(nodeShadow(machine)),
-      check(clangId)(clang(machine, graph)),
+      check(nodeFloorId)(nodeFloor(machine, graph, launch)),
+      check(shadowId)(nodeShadow(machine, graph, launch)),
+      check(clangId)(clang(machine, launch)),
       check(coverId)(ZIO.succeed(List(cover(graph)))),
       check(agreeId)(ZIO.succeed(agree(graph))),
     )
@@ -38,8 +38,13 @@ object ToolchainChecks:
         case JdkRead.Failed(error, source) =>
           List(Outcome.Found(ToolchainDiagnostic.Jdk(Toolchain.failure(error, source))))
 
-  def nodeFloor(machine: Machine, graph: ProjectGraph): UIO[List[Outcome]] =
-    if !histos.node.Node.required(graph) then ZIO.succeed(List(Outcome.Ok(nodeFloorId, "no Js module")))
+  /** Empty `launch` is a doctor run that starts no module, so the check does not probe. A non-empty list is the modules
+    * that run asked to launch. Only a Js module in that list probes, and a miss names those modules.
+    */
+  def nodeFloor(machine: Machine, graph: ProjectGraph, launch: List[Module]): UIO[List[Outcome]] =
+    val js = launch.filter(_.platforms.all.contains(Platform.Js))
+    if launch.isEmpty then ZIO.succeed(List(Outcome.Ok(nodeFloorId, "this run does not launch Node")))
+    else if js.isEmpty then ZIO.succeed(List(Outcome.Ok(nodeFloorId, "no Js module")))
     else
       NodeToolchain
         .choose(machine, graph.runnerTools.nodePath)
@@ -54,52 +59,79 @@ object ToolchainChecks:
               )
             )
           case Left(error) =>
-            List(Outcome.Found(ToolchainDiagnostic.NodeFloor(NodeToolchain.failure(error))))
+            List(Outcome.Found(ToolchainDiagnostic.NodeFloor(s"${launched(js)}. ${NodeToolchain.failure(error)}")))
 
-  def nodeShadow(machine: Machine): UIO[List[Outcome]] =
-    NodeToolchain
-      .sights(machine)
-      .map: found =>
-        NodeToolchain.shadow(found) match
+  private def launched(modules: List[Module]): String =
+    modules.map(_.name.value) match
+      case Nil       => "no module launches on Node"
+      case List(one) => s"$one launches on Node"
+      case many      => s"${many.mkString(", ")} launch on Node"
+
+  /** Empty `launch` does not walk `PATH`. A named binary (`HISTOS_NODE`, `runnerTools.nodePath`, or `node.local`) does
+    * not read `PATH`, so a warning about a later binary would be a lie. A Js launch that falls through to `PATH` warns
+    * when the first `node` is below the floor and a later one is newer.
+    */
+  def nodeShadow(machine: Machine, graph: ProjectGraph, launch: List[Module]): UIO[List[Outcome]] =
+    val js = launch.filter(_.platforms.all.contains(Platform.Js))
+    if launch.isEmpty then ZIO.succeed(List(Outcome.Ok(shadowId, "this run does not launch Node")))
+    else if js.isEmpty then ZIO.succeed(List(Outcome.Ok(shadowId, "no Js module")))
+    else
+      NodeToolchain
+        .abovePath(machine, graph.runnerTools.nodePath)
+        .flatMap:
+          case Some(source) =>
+            ZIO.succeed(
+              List(Outcome.Ok(shadowId, s"the launch uses ${NodeToolchain.origin(source)} and does not read PATH"))
+            )
           case None =>
-            List(Outcome.Ok(shadowId, "PATH does not hide a newer node"))
-          case Some(hidden) =>
-            val line    = exportLine(hidden.newer.binary)
-            val summary =
-              s"node ${hidden.first.version.value} at ${hidden.first.binary} is first on PATH and hides node ${hidden.newer.version.value} at ${hidden.newer.binary}."
-            List(Outcome.Found(ToolchainDiagnostic.NodeShadowed(line, summary)))
+            NodeToolchain
+              .sights(machine)
+              .map: found =>
+                NodeToolchain.shadow(found) match
+                  case None =>
+                    List(Outcome.Ok(shadowId, s"${launched(js)}. PATH does not hide a newer node"))
+                  case Some(hidden) =>
+                    val line    = exportLine(hidden.newer.binary)
+                    val summary =
+                      s"${launched(js)}. node ${hidden.first.version.value} at ${hidden.first.binary} is first on PATH and hides node ${hidden.newer.version.value} at ${hidden.newer.binary}."
+                    List(Outcome.Found(ToolchainDiagnostic.NodeShadowed(line, summary)))
 
-  def clang(machine: Machine, graph: ProjectGraph): UIO[List[Outcome]] =
-    NativeProject.declaration(graph) match
-      case NativeDeclaration.NotNative =>
-        ZIO.succeed(List(Outcome.Ok(clangId, "no Native module")))
-      case NativeDeclaration.Missing(name) =>
-        ZIO.succeed(
-          List(
-            Outcome.Found(
-              ToolchainDiagnostic.Clang(s"${NativeDeclaration.Missing(name).message} clang is resolved from PATH.")
-            )
-          )
-        )
-      case NativeDeclaration.Disagree(left, right) =>
-        ZIO.succeed(
-          List(
-            Outcome.Found(
-              ToolchainDiagnostic.Clang(
-                s"${NativeDeclaration.Disagree(left, right).message} clang is resolved from PATH."
-              )
-            )
-          )
-        )
-      case NativeDeclaration.Major(major) =>
-        ClangProbe
-          .resolve(major, machine.env)
-          .either
-          .map:
-            case Right(found) =>
-              List(Outcome.Ok(clangId, s"clang ${found.version.value} at ${found.clang} from PATH"))
-            case Left(error) =>
-              List(Outcome.Found(ToolchainDiagnostic.Clang(Survey.clangProblem(error))))
+  /** Empty `launch` links no module, so the check does not probe. A non-empty list is the modules that run asked to
+    * link. Only a Native module in that list probes, and a miss names those modules.
+    */
+  def clang(machine: Machine, launch: List[Module]): UIO[List[Outcome]] =
+    val native = launch.filter(_.platforms.all.contains(Platform.Native))
+    if launch.isEmpty then ZIO.succeed(List(Outcome.Ok(clangId, "this run does not link Native")))
+    else if native.isEmpty then ZIO.succeed(List(Outcome.Ok(clangId, "no Native module")))
+    else
+      NativeProject.declaration(ProjectGraph.trusted(native)) match
+        case NativeDeclaration.NotNative =>
+          ZIO.succeed(List(Outcome.Ok(clangId, "no Native module")))
+        case NativeDeclaration.Missing(name) =>
+          clangFound(native, s"${NativeDeclaration.Missing(name).message} clang is resolved from PATH.")
+        case NativeDeclaration.Disagree(left, right) =>
+          clangFound(native, s"${NativeDeclaration.Disagree(left, right).message} clang is resolved from PATH.")
+        case NativeDeclaration.Major(major) =>
+          ClangProbe
+            .resolve(major, machine.env)
+            .either
+            .map:
+              case Right(resolved) =>
+                List(Outcome.Ok(clangId, s"clang ${resolved.version.value} at ${resolved.clang} from PATH"))
+              case Left(error) =>
+                List(Outcome.Found(ToolchainDiagnostic.Clang(told(native, Survey.clangProblem(error)))))
+
+  private def clangFound(modules: List[Module], detail: String): UIO[List[Outcome]] =
+    ZIO.succeed(List(Outcome.Found(ToolchainDiagnostic.Clang(told(modules, detail)))))
+
+  private def told(modules: List[Module], detail: String): String =
+    s"${linked(modules)}. $detail"
+
+  private def linked(modules: List[Module]): String =
+    modules.map(_.name.value) match
+      case Nil       => "no module links with clang"
+      case List(one) => s"$one links with clang"
+      case many      => s"${many.mkString(", ")} link with clang"
 
   def cover(graph: ProjectGraph): Outcome =
     val native   = nativeModules(graph)
