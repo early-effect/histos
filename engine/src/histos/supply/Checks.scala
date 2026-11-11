@@ -108,6 +108,32 @@ object SupplyChecks:
           sightless(venue, Probe.GitHubRead, SupplyDiagnostic.RuleBlind(repo, why)),
         )
 
+  /** Preflight refused the network. An unseen fact is a skip on every venue. A known failure stays. The workflow-files
+    * warning belongs to the full doctor.
+    */
+  def unseenAsSkip(outcomes: List[Outcome]): List[Outcome] =
+    outcomes.flatMap:
+      case Outcome.Found(SupplyDiagnostic.WorkflowFiles)                     => Nil
+      case Outcome.Found(diagnostic: SupplyDiagnostic) if unseen(diagnostic) =>
+        List(Outcome.Skipped(diagnostic.check, probeFor(diagnostic), diagnostic.fixes.head))
+      case other => List(other)
+
+  private def unseen(diagnostic: SupplyDiagnostic): Boolean =
+    diagnostic match
+      case _: SupplyDiagnostic.SecretBlind            => true
+      case _: SupplyDiagnostic.AppBlind               => true
+      case _: SupplyDiagnostic.AppPermissionsBlind    => true
+      case _: SupplyDiagnostic.RuleBlind              => true
+      case _: SupplyDiagnostic.DefaultTokenBlind      => true
+      case _: SupplyDiagnostic.AllowPullRequestsBlind => true
+      case SupplyDiagnostic.AppTokenUnreported        => true
+      case _                                          => false
+
+  private def probeFor(diagnostic: SupplyDiagnostic): Probe =
+    diagnostic match
+      case SupplyDiagnostic.AppTokenUnreported => Probe.JobEnv
+      case _                                   => Probe.GitHubRead
+
   /** A fact this run could not see. Actions fails on it. A laptop skips it and prints the first fix. */
   private def sightless(venue: Venue, probe: Probe, diagnostic: SupplyDiagnostic): Outcome =
     venue match

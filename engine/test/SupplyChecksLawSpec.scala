@@ -14,6 +14,37 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
   private val job    = JobName("supply-chain")
 
   def spec = suite("supply check laws")(
+    test("preflight turns an unseen fact into a skip and drops the workflow-files warning"):
+      val outcomes = List(
+        Outcome.Found(SupplyDiagnostic.AppTokenUnreported),
+        Outcome.Found(SupplyDiagnostic.AppTokenFailed(StepOutcome.Failure)),
+        Outcome.Found(SupplyDiagnostic.WorkflowFiles),
+        Outcome.Found(SupplyDiagnostic.RuleBlind(None, Blind.NoCredential)),
+        Outcome.Ok(histos.doctor.CheckId.trusted("supply.dependabot-overlap"), "no overlapping ecosystem"),
+      )
+      val rewritten = SupplyChecks.unseenAsSkip(outcomes)
+      assertTrue(
+        rewritten.exists:
+          case Outcome.Skipped(id, Probe.JobEnv, _) => id.value == "supply.app-token"
+          case _                                    => false
+        ,
+        rewritten.exists:
+          case Outcome.Found(SupplyDiagnostic.AppTokenFailed(_)) => true
+          case _                                                 => false
+        ,
+        rewritten.exists:
+          case Outcome.Skipped(id, Probe.GitHubRead, _) => id.value == "supply.required-check"
+          case _                                        => false
+        ,
+        rewritten.exists:
+          case Outcome.Ok(id, _) => id.value == "supply.dependabot-overlap"
+          case _                 => false
+        ,
+        !rewritten.exists:
+          case Outcome.Found(SupplyDiagnostic.WorkflowFiles) => true
+          case _                                             => false,
+      )
+    ,
     test("an unread secret is not a pass, and a known missing secret is a finding"):
       val sights = Sight.values.toList
       assertTrue:

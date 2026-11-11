@@ -86,20 +86,37 @@ object NodeToolchain:
   /** The first binary is below [[Floor]] and a later binary is newer. The newer one is the highest version. */
   def shadow(sights: List[NodeSight]): Option[NodeShadow] =
     sights match
+      case Nil           => None
       case first :: rest =>
         val tooOld =
           !histos.toolchain.VersionOrder.atLeast(first.version.value, Floor.value, stripJavaOne = false)
         val newer =
           rest.filter(item => histos.toolchain.VersionOrder.compare(item.version.value, first.version.value) > 0)
-        if !tooOld || newer.isEmpty then None
-        else
-          val best = newer
-            .sortWith((left, right) =>
-              histos.toolchain.VersionOrder.compare(left.version.value, right.version.value) > 0
+        if !tooOld then None else highest(newer).map(best => NodeShadow(first, best))
+
+  /** `Some` wins over `PATH`. `None` means this launch reads `PATH`. An unreadable `node.local` is still `Some`,
+    * because [[choose]] fails and does not fall through.
+    */
+  def abovePath(machine: Machine, nodePath: Option[NodePath]): UIO[Option[NodeSource]] =
+    machine.env.get(Key) match
+      case Some(_) => ZIO.succeed(Some(NodeSource.Environment))
+      case None    =>
+        nodePath match
+          case Some(_) => ZIO.succeed(Some(NodeSource.Config))
+          case None    =>
+            readOverride(machine.repo).fold(
+              _ => Some(NodeSource.Local),
+              found => found.map(_ => NodeSource.Local),
             )
-            .head
-          Some(NodeShadow(first, best))
-      case Nil => None
+
+  private def highest(sights: List[NodeSight]): Option[NodeSight] =
+    sights match
+      case Nil          => None
+      case head :: tail =>
+        Some(
+          tail.foldLeft(head): (best, item) =>
+            if histos.toolchain.VersionOrder.compare(item.version.value, best.version.value) > 0 then item else best
+        )
 
   private def inherited(machine: Machine): IO[NodeMiss, NodeChoice] =
     readOverride(machine.repo)

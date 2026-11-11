@@ -110,7 +110,15 @@ enum Command:
       source: Option[ImportSource],
       branch: Option[String],
   )
-  case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
+  case Doctor(
+      area: Option[String],
+      json: Boolean,
+      preflight: Option[String],
+      fix: Boolean,
+      yes: Boolean,
+      verbose: Boolean,
+      projects: List[ProjectName],
+  )
   case Explain(id: String)
   case Deps(action: DepsAction)
   case Setup(from: Option[String], fix: Boolean, yes: Boolean)
@@ -240,7 +248,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -433,6 +441,8 @@ object Cli:
       preflight: Option[String],
       fix: Boolean,
       yes: Boolean,
+      verbose: Boolean,
+      projects: List[ProjectName],
       machine: histos.jdk.Machine,
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO
@@ -442,16 +452,20 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message, Playback.Held))
         case Right(loaded) =>
-          histos.supply.DoctorSurface
-            .run(
-              repo,
-              loaded.graph,
-              histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes),
-              machine,
-            )
-            .map: (code, text) =>
-              val exit = if code == 0 then CliExit.Success else CliExit.TaskFailed
-              Completed(exit, text, "", Playback.Held)
+          histos.doctor.DoctorLaunch.modules(loaded.graph, projects) match
+            case Left(error) =>
+              ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(error.diagnose), Playback.Held))
+            case Right(launch) =>
+              histos.supply.DoctorSurface
+                .run(
+                  repo,
+                  loaded.graph,
+                  histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes, launch, verbose),
+                  machine,
+                )
+                .map: (code, text) =>
+                  val exit = if code == 0 then CliExit.Success else CliExit.TaskFailed
+                  Completed(exit, text, "", Playback.Held)
 
   private def deps(
       repo: Path,
@@ -615,9 +629,9 @@ object Cli:
         fresh(repo, apiJar, Some(name), bare, yes, None, branch)
       case Command.Init(bare, yes, source, branch) =>
         fresh(repo, apiJar, None, bare, yes, source, branch)
-      case Command.Doctor(area, json, preflight, fix, yes) =>
+      case Command.Doctor(area, json, preflight, fix, yes, verbose, projects) =>
         ZIO.serviceWithZIO[histos.jdk.Machine](machine =>
-          doctor(repo, apiJar, area, json, preflight, fix, yes, machine)
+          doctor(repo, apiJar, area, json, preflight, fix, yes, verbose, projects, machine)
         )
       case Command.Explain(id) =>
         ZIO.succeed(explain(id))
@@ -2376,9 +2390,9 @@ object Cli:
         )
       case Command.Init(bare, yes, source, branch) =>
         inProcessReady(repo)((api, machine) => withLocal(machine)(fresh(repo, api, None, bare, yes, source, branch)))
-      case Command.Doctor(area, json, preflight, fix, yes) =>
+      case Command.Doctor(area, json, preflight, fix, yes, verbose, projects) =>
         inProcessReady(repo)((api, machine) =>
-          withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, machine))
+          withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, verbose, projects, machine))
         )
       case Command.Explain(id) =>
         ZIO.succeed(explain(id))

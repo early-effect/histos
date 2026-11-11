@@ -189,7 +189,16 @@ object GrammarLawSpec extends ZIOSpecDefault:
     test("doctor, deps, and setup keep the flags they were given"):
       held(
         List("doctor", "--area", "supply", "--json", "--preflight", "job", "--fix", "--yes") -> Right(
-          Command.Doctor(Some("supply"), true, Some("job"), true, true)
+          Command.Doctor(Some("supply"), true, Some("job"), true, true, false, Nil)
+        ),
+        List("doctor", "--verbose") -> Right(
+          Command.Doctor(None, false, None, false, false, true, Nil)
+        ),
+        List("doctor", "web") -> Right(
+          Command.Doctor(None, false, None, false, false, false, List(ProjectName("web")))
+        ),
+        List("doctor", "--area", "toolchain", "web") -> Right(
+          Command.Doctor(Some("toolchain"), false, None, false, false, false, List(ProjectName("web")))
         ),
         List("deps", "check")                         -> Right(Command.Deps(DepsAction.Check)),
         List("deps", "update", "--yes", "--security") -> Right(Command.Deps(DepsAction.Update(true, true))),

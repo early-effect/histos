@@ -133,7 +133,7 @@ object Provision:
     if UpgradeNotice.inCi(env) then ZIO.succeed("")
     else
       DoctorSurface
-        .run(dir, graph, DoctorSurface.Request(None, false, None, false, true), machine)
+        .run(dir, graph, DoctorSurface.Request(None, false, None, false, true, Nil, false), machine)
         .map(_._2)
 
   private def directoryName(dir: Path): String =

@@ -111,7 +111,7 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
         result <- DoctorSurface.runWith(
           repo,
           built,
-          DoctorSurface.Request(Some("supply-chain"), false, None, false, false),
+          DoctorSurface.Request(Some("supply-chain"), false, None, false, false, Nil, true),
           machine,
           FakeGitHub(installations),
           env,

@@ -76,7 +76,12 @@ object Help:
     Entry("resolve", "dependencies", "histos resolve [--update | --check]", "Check the lock, or write it."),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),
     Entry("workflow", "ci", "histos workflow [--check | --update]", "Check generated workflows, or write them."),
-    Entry("doctor", "ci", "histos doctor [--area <area>] [--json] [--fix] [--yes]", "Run the repository checks."),
+    Entry(
+      "doctor",
+      "ci",
+      "histos doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes]",
+      "Run the repository checks. The text lists errors and warnings. --verbose lists every check. Named projects are the modules that launch.",
+    ),
     Entry("setup", "ci", "histos setup supply-chain [--from zipx] [--fix] [--yes]", "Write the supply-chain files."),
     Entry("launcher", "ci", "histos launcher (--update | --latest)", "Rewrite the launcher pin."),
     Entry("cache", "cache", "histos cache path", "Print, list, clean, or promote the cache."),
@@ -174,6 +179,7 @@ object Help:
     "submit",
     "to",
     "update",
+    "verbose",
     "yes",
   )
 

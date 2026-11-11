@@ -69,7 +69,15 @@ object Grammar:
     case PreviewCleanFull(projects: List[String])
     case PreviewRun(name: String, platform: Option[String])
     case Observe
-    case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
+    case Doctor(
+        area: Option[String],
+        json: Boolean,
+        preflight: Option[String],
+        fix: Boolean,
+        yes: Boolean,
+        verbose: Boolean,
+        projects: List[String],
+    )
     case Deps(action: DepsAction)
     case Setup(from: Option[String], fix: Boolean, yes: Boolean)
     case Help(words: List[String])
@@ -208,9 +216,10 @@ object Grammar:
     CliCommand(
       "doctor",
       Options.text("area").optional ++ Options.boolean("json") ++ Options.text("preflight").optional ++
-        Options.boolean("fix") ++ Options.boolean("yes"),
-    ).map { case (area, json, preflight, fix, yes) =>
-      Wire.Doctor(area, json, preflight, fix, yes)
+        Options.boolean("fix") ++ Options.boolean("yes") ++ Options.boolean("verbose"),
+      Args.text("project").*,
+    ).map { case ((area, json, preflight, fix, yes, verbose), projects) =>
+      Wire.Doctor(area, json, preflight, fix, yes, verbose, projects.toList)
     }
   private val depsCheck  = CliCommand("check").map(_ => Wire.Deps(DepsAction.Check))
   private val depsUpdate =
@@ -364,9 +373,9 @@ object Grammar:
             ImportSource.from(raw) match
               case Some(source) => ZIO.succeed(Command.Init(bare, yes, Some(source), branch))
               case None         => ZIO.fail(CliParseError.Pattern("init --from is sbt or zipx"))
-      case Wire.Observe                                 => ZIO.succeed(Command.Observe)
-      case Wire.Doctor(area, json, preflight, fix, yes) =>
-        ZIO.succeed(Command.Doctor(area, json, preflight, fix, yes))
+      case Wire.Observe                                                    => ZIO.succeed(Command.Observe)
+      case Wire.Doctor(area, json, preflight, fix, yes, verbose, projects) =>
+        projectList("doctor", projects).map(names => Command.Doctor(area, json, preflight, fix, yes, verbose, names))
       case Wire.Deps(action)          => ZIO.succeed(Command.Deps(action))
       case Wire.Setup(from, fix, yes) =>
         ZIO.succeed(Command.Setup(from, fix, yes))
