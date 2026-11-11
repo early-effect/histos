@@ -77,36 +77,40 @@ enum BuildFault:
   case Watch(error: WatchError)
   case Format(error: FormatError)
   case Interrupted
+  case StaleApi(have: String, want: String)
   case Rejected(rejection: Rejection)
 
   def message: String = this match
-    case Load(error)         => error.message
-    case Resolve(error)      => error.message
-    case Toolchain(error)    => error.message
-    case Survey(error)       => error.message
-    case Select(error)       => error.message
-    case Pattern(error)      => error.message
-    case Compile(error)      => error.message
-    case Test(error)         => error.message
-    case Publish(error)      => error.message
-    case Release(detail)     => detail
-    case Workflow(error)     => error.message
-    case Program(error)      => error.message
-    case Platform(error)     => error.message
-    case Task(error)         => error.message
-    case Plugin(error)       => error.message
-    case PluginTask(error)   => error.message
-    case Preview(error)      => error.message
-    case Assemble(error)     => error.message
-    case Launcher(error)     => error.message
-    case Cache(error)        => error.message
-    case Remote(error)       => error.message
-    case Store(failure)      => failure.message
-    case Io(failure)         => failure.message
-    case Version(error)      => error.message
-    case Watch(error)        => error.message
-    case Format(error)       => error.message
-    case Interrupted         => "interrupted"
+    case Load(error)          => error.message
+    case Resolve(error)       => error.message
+    case Toolchain(error)     => error.message
+    case Survey(error)        => error.message
+    case Select(error)        => error.message
+    case Pattern(error)       => error.message
+    case Compile(error)       => error.message
+    case Test(error)          => error.message
+    case Publish(error)       => error.message
+    case Release(detail)      => detail
+    case Workflow(error)      => error.message
+    case Program(error)       => error.message
+    case Platform(error)      => error.message
+    case Task(error)          => error.message
+    case Plugin(error)        => error.message
+    case PluginTask(error)    => error.message
+    case Preview(error)       => error.message
+    case Assemble(error)      => error.message
+    case Launcher(error)      => error.message
+    case Cache(error)         => error.message
+    case Remote(error)        => error.message
+    case Store(failure)       => failure.message
+    case Io(failure)          => failure.message
+    case Version(error)       => error.message
+    case Watch(error)         => error.message
+    case Format(error)        => error.message
+    case Interrupted          => "interrupted"
+    case StaleApi(have, want) =>
+      val held = if have.isEmpty then "no snapshot id" else have
+      s"toolchain is $held; this checkout would publish $want. Run histos assembly."
     case Rejected(rejection) => rejection.message
 
   def diagnose: Finding = this match
@@ -124,7 +128,14 @@ enum BuildFault:
     case Rejected(reason) => reason.diagnose
     case Release(detail)  => Noted.carry("publish.release", detail, detail, "histos help publish")
     case Interrupted      => Noted.carry("build.interrupted", message, "The run was interrupted.", "histos help")
-    case other            => Noted.carry("build.failed", other.message, other.message, "histos help")
+    case StaleApi(_, _)   =>
+      Noted.carry(
+        "assembly.api",
+        message,
+        "this toolchain is not the revision this checkout would publish.",
+        "histos assembly",
+      )
+    case other => Noted.carry("build.failed", other.message, other.message, "histos help")
 end BuildFault
 
 /** A request the grammar refused. Tokens only. The CLI renders a usage banner for [[Rejection.CommandHelp]]. */

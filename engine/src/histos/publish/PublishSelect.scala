@@ -244,8 +244,8 @@ object PublishSelect:
   ): Option[String] =
     module.dependencies
       .collectFirst:
-        case dep if snapshotCoordinate(dep.revision) =>
-          s"${dep.organization}:${dep.name}:${dep.revision}"
+        case dep if snapshotCoordinate(dep.revision.value) =>
+          s"${dep.organization}:${dep.name}:${dep.revision.value}"
       .orElse:
         upstream(module).collectFirst:
           case name if owned.get(name).exists { other =>

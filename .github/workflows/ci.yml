@@ -161,7 +161,8 @@ jobs:
             node "$dir/node_modules/playwright/cli.js" install firefox
           fi
           test -d "$dir/node_modules/playwright"
-          node "$dir/node_modules/playwright/cli.js" install-deps firefox
+          find /etc/apt -type f -print0 | xargs -0 -r sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'
+          timeout 180s node "$dir/node_modules/playwright/cli.js" install-deps firefox
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
@@ -388,7 +389,8 @@ jobs:
             node "$dir/node_modules/playwright/cli.js" install firefox
           fi
           test -d "$dir/node_modules/playwright"
-          node "$dir/node_modules/playwright/cli.js" install-deps firefox
+          find /etc/apt -type f -print0 | xargs -0 -r sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'
+          timeout 180s node "$dir/node_modules/playwright/cli.js" install-deps firefox
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"

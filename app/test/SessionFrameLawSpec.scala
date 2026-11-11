@@ -83,7 +83,9 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           held        <- desk.held.get
           gone        <- closed.get
         yield assertTrue(
-          result == Left(Session.SessionError.DifferentVersion),
+          result == Left(
+            Session.SessionError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
+          ),
           held.isEmpty,
           gone,
         ),

@@ -89,7 +89,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
             stopped    <- running.done.either
             closed     <- ZIO.attempt(Files.exists(socket)).orDie
           yield assertTrue(
-            outs(versionFeeds) == version,
+            outs(versionFeeds) == s"$version\nserver $version\nno local assembly",
             done(versionFeeds).contains(CallResult.reported()),
             outs(cacheFeeds) == Path.of("/tmp").resolve("hd-store").toString,
             outs(cleanFeeds) == "cleaned",

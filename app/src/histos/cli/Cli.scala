@@ -1,6 +1,7 @@
 package histos.cli
 
 import heddle.LinePipe
+import histos.ApiClock
 import histos.doctor.FaultText
 import histos.bsp.{Bsp, Connection, Frame}
 import histos.central.{PortalServer, ReleaseFeed}
@@ -543,11 +544,13 @@ object Cli:
         versionText(repo).foldZIO(
           error => ZIO.succeed(held(Call.Version, "", CallResult.Fault(BuildFault.Launcher(error)))),
           text =>
-            attach(
-              repo,
-              Call.Version,
-              ZIO.succeed(held(Call.Version, text, CallResult.reported())),
-            ),
+            ApiClock.versionLines(repo, text).flatMap { shown =>
+              attach(
+                repo,
+                Call.Version,
+                ZIO.succeed(held(Call.Version, shown, CallResult.reported())),
+              )
+            },
         )
       case Command.Graph                  => graph(repo, apiJar)
       case Command.Run(id, platform)      => run(repo, apiJar, id, platform)
@@ -1072,9 +1075,15 @@ object Cli:
     versionOf(repo).orElseSucceed(None).flatMap {
       case None       => fallback
       case Some(text) =>
-        Attach.replace(repo, text, socket).flatMap {
-          case Some(next) => use(next)
-          case None       => fallback
+        ApiClock.rebootLine(repo).flatMap { line =>
+          sayError(line) *>
+            Attach.replace(repo, text, socket).flatMap {
+              case Some(next) => use(next)
+              case None       =>
+                ApiClock.restart(repo, socket).map { error =>
+                  Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+                }
+            }
         }
     }
 
@@ -1083,13 +1092,16 @@ object Cli:
       socket: Path,
       miss: => URIO[R, Completed],
   ): URIO[R, Completed] =
-    remote(repo, socket, Call.Reboot).foldZIO(
-      {
-        case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
-        case error                                                     => ZIO.succeed(stopped(error))
-      },
-      ZIO.succeed,
-    )
+    ApiClock.rebootLine(repo).flatMap { line =>
+      sayError(line) *>
+        remote(repo, socket, Call.Reboot).foldZIO(
+          {
+            case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
+            case error                                                     => ZIO.succeed(stopped(error))
+          },
+          done => ZIO.succeed(done.copy(out = if done.out.isEmpty then line else s"$line\n${done.out}")),
+        )
+    }
 
   /** Only the local path loads. A matching server already holds the graph. */
   private def loaded[R](repo: Path, apiJar: Path)(
@@ -1926,46 +1938,51 @@ object Cli:
       call: Call,
       local: => URIO[R, Completed],
   ): URIO[R, Completed] =
-    pinned(repo, call, local)(text =>
-      Attach
-        .decide(repo, text)
-        .flatMap {
-          case Decision.Open(socket) =>
-            remote(repo, socket, call).foldZIO(
-              {
-                case ServerError.Unreachable(_) => local
-                case error                      =>
-                  ZIO.succeed(
-                    Completed(
-                      CliExit.LoadFailed,
-                      "",
-                      error.message,
-                      Playback.Held,
-                    )
-                  )
-              },
-              done => ZIO.succeed(done),
-            )
-          case Decision.DifferentVersion(socket) =>
-            supplant(repo, socket, local)(next =>
-              remote(repo, next, call).foldZIO(
-                {
-                  case ServerError.Unreachable(_) => local
-                  case error                      =>
-                    ZIO.succeed(
-                      Completed(
-                        CliExit.LoadFailed,
-                        "",
-                        error.message,
-                        Playback.Held,
-                      )
-                    )
-                },
-                ZIO.succeed,
-              )
-            )
-          case Decision.Absent => local
+    ApiClock.admit(repo, call).flatMap {
+      case ApiClock.Admit.Stop(fault) =>
+        ZIO.succeed(held(call, "", CallResult.Fault(fault)))
+      case admitted =>
+        val noted = admitted match
+          case ApiClock.Admit.Warn(line) => sayError(line)
+          case _                         => ZIO.unit
+        noted *> ApiClock.drifted(repo).flatMap { stale =>
+          val hold = stale && ApiClock.skipsReboot(call)
+          pinned(repo, call, local)(text =>
+            Attach
+              .decide(repo, text)
+              .flatMap {
+                case Decision.Open(socket) =>
+                  speak(repo, socket, call, local)
+                case Decision.DifferentVersion(socket) if hold =>
+                  speak(repo, socket, call, local)
+                case Decision.DifferentVersion(socket) =>
+                  supplant(repo, socket, local)(next => speak(repo, next, call, local))
+                case Decision.Absent => local
+              }
+          )
         }
+    }
+
+  private def speak[R](
+      repo: Path,
+      socket: Path,
+      call: Call,
+      local: => URIO[R, Completed],
+  ): URIO[R, Completed] =
+    remote(repo, socket, call).foldZIO(
+      {
+        case ServerError.Unreachable(_) => local
+        case error                      =>
+          ZIO.succeed(
+            Completed(
+              CliExit.LoadFailed,
+              "",
+              error.message,
+              Playback.Held,
+            )
+          )
+      },
+      done => ZIO.succeed(done),
     )
 
   private def remote(

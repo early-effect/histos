@@ -2,7 +2,7 @@ package histos.resolve
 
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.Workspace
-import histos.{Dep, DepKind, Platform, ProjectName, ScalaVersion}
+import histos.{ArtifactBase, Dep, DepKind, Organization, Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -195,6 +195,41 @@ object CoursierLawSpec extends ZIOSpecDefault:
                 libHit.map(_.repository) == Some(origin),
                 found.evictions == List(Eviction("org.example", "lib", "1.0.0", "2.0.0")),
               )
+          program.provideSomeLayer[TestEnvironment](Resolve.live(root.resolve("cache")))
+    ,
+    test("an exclusion names the published artifact id and does not add the parent suffix"):
+      Workspace
+        .work("histos-coursier-exclude")
+        .flatMap: root =>
+          val repo   = root.resolve("repo")
+          val origin = Repository.Maven(RepoUrl.file(repo))
+          val repos  = Repositories(origin, Nil)
+          val kept   = Dep
+            .trusted("org.example", "widget", "1.0.0", DepKind.Binary)
+            .excluding(Organization.trusted("org.example"), ArtifactBase.trusted("lib"))
+          val open    = Dep.trusted("org.example", "widget", "1.0.0", DepKind.Binary)
+          val program =
+            for
+              _ <- publish(repo, "lib", "1.0.0", "lib", pom("lib", "1.0.0"))
+              _ <- publish(
+                repo,
+                "widget_3",
+                "1.0.0",
+                "widget",
+                pom("widget_3", "1.0.0", List("lib" -> "1.0.0")),
+              )
+              resolve <- ZIO.service[Resolve]
+              dropped <- resolve.resolve(ResolveCell(name, List(kept), scala3, Platform.Jvm, repos))
+              fetched <- resolve.resolve(ResolveCell(name, List(open), scala3, Platform.Jvm, repos))
+            yield assertTrue(
+              dropped.artifacts.map(hit => (hit.organization, hit.name, hit.revision)) == List(
+                ("org.example", "widget_3", "1.0.0")
+              ),
+              fetched.artifacts.map(hit => (hit.name, hit.revision)).toSet == Set(
+                ("widget_3", "1.0.0"),
+                ("lib", "1.0.0"),
+              ),
+            )
           program.provideSomeLayer[TestEnvironment](Resolve.live(root.resolve("cache"))),
   )
 

@@ -200,7 +200,8 @@ private[resolve] final class CoursierResolve(
       dependency(
         dep.organization,
         ArtifactName.of(dep, version, platform),
-        dep.revision,
+        dep.revision.value,
+        exclusionsOf(dep),
       )
     )
     val coursierRepositories =
@@ -300,7 +301,7 @@ private[resolve] final class CoursierResolve(
               ResolveError.NotFound(
                 dependency.organization,
                 ArtifactName.of(dependency, version, platform),
-                dependency.revision,
+                dependency.revision.value,
               )
             )
           case Nil => Right(Nil)
@@ -421,12 +422,21 @@ private[resolve] final class CoursierResolve(
       organization: String,
       name: String,
       revision: String,
+      exclusions: Set[(coursier.Organization, coursier.ModuleName)] = Set.empty,
   ): coursier.core.Dependency =
-    coursier.Dependency(
-      coursier
-        .Module(coursier.Organization(organization), coursier.ModuleName(name)),
-      coursier.version.VersionConstraint(revision),
-    )
+    coursier
+      .Dependency(
+        coursier
+          .Module(coursier.Organization(organization), coursier.ModuleName(name)),
+        coursier.version.VersionConstraint(revision),
+      )
+      .copy(minimizedExclusions = coursier.core.MinimizedExclusions(exclusions))
+
+  /** The published artifact id, as written. The parent coordinate's suffix is not applied. */
+  private def exclusionsOf(dep: Dep): Set[(coursier.Organization, coursier.ModuleName)] =
+    dep.exclusions
+      .map(item => (coursier.Organization(item.organization.value), coursier.ModuleName(item.artifact.value)))
+      .toSet
 
   private def toCoursier(repository: Repository): coursier.core.Repository =
     repository match

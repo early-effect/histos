@@ -92,18 +92,19 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
             drifted <- Resolve
               .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
               .either
-            fresh = ResolvedArtifact("org.example", published, plugin.revision, jar, other, Repository.Central)
+            fresh = ResolvedArtifact("org.example", published, plugin.revision.value, jar, other, Repository.Central)
             _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(fresh), Nil)))
             summed <- Resolve
               .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
               .either
-            kept = ResolvedArtifact("org.example", published, plugin.revision, jar, sha, Repository.Central)
+            kept = ResolvedArtifact("org.example", published, plugin.revision.value, jar, sha, Repository.Central)
             _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(kept), Nil)))
             agreed <- Resolve
               .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
               .either
             _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
-              ZIO.succeed(ResolvedArtifact("org.example", "plug", plugin.revision, jar, other, Repository.Central))
+              ZIO
+                .succeed(ResolvedArtifact("org.example", "plug", plugin.revision.value, jar, other, Repository.Central))
             )
             _       <- writePlugins(root, List(lockedPlugin(published, sha, Some(held(sha)))))
             sourced <- Resolve
@@ -111,11 +112,11 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
               .either
           yield assertTrue(
             idle == Right(()),
-            missing == Left(ResolveError.NotFound(plugin.organization, published, plugin.revision)),
+            missing == Left(ResolveError.NotFound(plugin.organization, published, plugin.revision.value)),
             drifted == Left(
               ResolveError.PluginDrift(
                 plugin,
-                List(s"lock org.example:$published:${plugin.revision}", s"graph org.example:$published:9.9.9"),
+                List(s"lock org.example:$published:${plugin.revision.value}", s"graph org.example:$published:9.9.9"),
               )
             ),
             summed == Left(ResolveError.Checksum(jar, sha, other)),
@@ -130,11 +131,11 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
         for
           compiler <- histos.toolchain.BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
           published = ArtifactName.of(plugin, compiler, Platform.Jvm)
-          kept      = ResolvedArtifact(plugin.organization, published, plugin.revision, jar, sha, Repository.Central)
+          kept = ResolvedArtifact(plugin.organization, published, plugin.revision.value, jar, sha, Repository.Central)
           _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(kept), Nil)))
           _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
             ZIO.succeed(
-              ResolvedArtifact(plugin.organization, published, plugin.revision, jar, other, Repository.Central)
+              ResolvedArtifact(plugin.organization, published, plugin.revision.value, jar, other, Repository.Central)
             )
           )
           planned <- Resolve.planPlugins(
@@ -153,7 +154,7 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
             case cell :: Nil =>
               cell.organization == plugin.organization &&
               cell.name == plugin.name &&
-              cell.revision == plugin.revision &&
+              cell.revision == plugin.revision.value &&
               cell.link == LinkStrategy.BinaryOrSource &&
               cell.artifacts.map(_.name) == List(published) &&
               cell.source.map(_.sha256) == Some(other)
@@ -207,10 +208,10 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
     LockedPlugin(
       plugin.organization,
       plugin.name,
-      plugin.revision,
+      plugin.revision.value,
       LinkStrategy.BinaryOrSource,
       Nil,
-      List(LockedArtifact(plugin.organization, published, plugin.revision, checksum, Repository.Central)),
+      List(LockedArtifact(plugin.organization, published, plugin.revision.value, checksum, Repository.Central)),
       source,
     )
 

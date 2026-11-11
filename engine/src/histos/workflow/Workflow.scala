@@ -855,11 +855,12 @@ object Workflow:
     * Playwright from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this
     * runner. A Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch
     * it. `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the
-    * package, and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. A step `if` that
-    * skips the download leaves a job that did not run. Coursier is the Linux default of `Resolve.coursier` when
-    * `COURSIER_CACHE` is unset. `hashFiles` names the build file while the build resolves, and the pin while it is
-    * locked. No step sets `restore-keys`. Every job that runs `./histos` uses the setup action and does not install a
-    * JDK or the `cs` binary.
+    * package, and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. The runner's Azure
+    * Ubuntu mirror hangs that apt with no output, so the step rewrites `azure.archive.ubuntu.com` to
+    * `archive.ubuntu.com` first and gives the command three minutes. A step `if` that skips the download leaves a job
+    * that did not run. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles`
+    * names the build file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every
+    * job that runs `./histos` uses the setup action and does not install a JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -1123,7 +1124,8 @@ object Workflow:
           "            node \"$dir/node_modules/playwright/cli.js\" install firefox",
           "          fi",
           "          test -d \"$dir/node_modules/playwright\"",
-          "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
+          "          find /etc/apt -type f -print0 | xargs -0 -r sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'",
+          "          timeout 180s node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
         ) ++ cell.toList.map(text => s"        if: $text")
 
   private def affectedJob(graph: ProjectGraph): String =

@@ -290,7 +290,12 @@ object PublishRun:
             module.javadoc,
             Chunk.fromIterable(
               module.dependencies.map(dependency =>
-                StagedDependency(dependency.group, dependency.name.value, dependency.version.value)
+                StagedDependency(
+                  dependency.group,
+                  dependency.name.value,
+                  dependency.version.value,
+                  dependency.exclusions,
+                )
               )
             ),
           )

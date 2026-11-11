@@ -93,13 +93,13 @@ private[load] object PluginShips:
         val expected = ArtifactName.of(dependency, version, Platform.Jvm)
         val found    = artifacts.find: artifact =>
           artifact.organization == dependency.organization &&
-            artifact.revision == dependency.revision &&
+            artifact.revision == dependency.revision.value &&
             (artifact.name == expected || artifact.name == dependency.name)
         found match
           case Some(artifact) => ZIO.succeed(artifact.path)
           case None           =>
             ZIO.fail(
-              LoadError.Resolve(ResolveError.NotFound(dependency.organization, expected, dependency.revision))
+              LoadError.Resolve(ResolveError.NotFound(dependency.organization, expected, dependency.revision.value))
             )
 
   private def stamped(path: Path, dependency: Dep, launcher: ApiDigest): IO[LoadError, Unit] =

@@ -238,6 +238,56 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program
     ,
+    test("a family member is not its own bump, and a lock child keeps its direct"):
+      val graph =
+        """dep"org.example:demo:1.0.0".module("member")
+          |dep"dev.zio::zio:2.1.27".module("zio-streams")
+          |dep"org.example:::sbt-plugin:1.0.0"
+          |dep"org.scala-lang::scala3-compiler:3.10.0"
+          |""".stripMargin
+      val family =
+        s"""cell core 3.3.7 jvm
+           |direct org.example demo 1.0.0 java
+           |exclude org.codehaus.plexus plexus-archiver
+           |series 2
+           |artifact org.example demo 1.0.0 $hex central
+           |direct org.example member 1.0.0 java
+           |artifact org.example member 1.0.0 $hex central
+           |direct dev.zio zio 2.1.27 scala
+           |artifact dev.zio zio_3 2.1.27 $hex central
+           |direct dev.zio zio-streams 2.1.27 scala
+           |artifact dev.zio zio-streams_3 2.1.27 $hex central
+           |direct org.example sbt-plugin 1.0.0 full
+           |artifact org.example sbt-plugin_2.12_1.0 1.0.0 $hex central
+           |direct org.scala-lang scala3-compiler 3.10 scala
+           |artifact org.scala-lang scala3-compiler_3 3.10 $hex central
+           |""".stripMargin
+      val seen   = Plan.directs(family).map(row => s"${row.coordinate.value}:${row.version}")
+      val kept   = Plan.roots(family, graph).map(row => s"${row.coordinate.value}:${row.version}")
+      val zio    = bump("dev.zio:zio", "2.0.0", "2.1.0")
+      val demo   = bump("org.example:demo", "1.0.0", "1.2.0")
+      val member = """dep"dev.zio::zio:2.0.0".module("zio-streams")"""
+      val plugin = """dep"org.example:::demo:1.0.0""""
+      assertTrue(
+        seen == List(
+          "org.example:demo:1.0.0",
+          "org.example:member:1.0.0",
+          "dev.zio:zio:2.1.27",
+          "dev.zio:zio-streams:2.1.27",
+          "org.example:sbt-plugin:1.0.0",
+          "org.scala-lang:scala3-compiler:3.10",
+        ),
+        kept == List(
+          "org.example:demo:1.0.0",
+          "dev.zio:zio:2.1.27",
+          "org.example:sbt-plugin:1.0.0",
+        ),
+        Plan.roots(family, "").isEmpty,
+        Plan.rewriteDep(member, zio) == """dep"dev.zio::zio:2.1.0".module("zio-streams")""",
+        Plan.rewriteDep(plugin, demo) == plugin,
+        Plan.rewriteDep(plugin, zio) == plugin,
+      )
+    ,
     test("the expected commit is the head already written, and a dry run does not send"):
       val planned = CommitSha.trusted("b" * 40)
       val program =
@@ -298,6 +348,16 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
 
   private def setting(url: String): Fix =
     Fix.Settings(HttpUrl.trusted(url), "open")
+
+  private def bump(coordinate: String, from: String, to: String): ChosenBump =
+    val where = Coordinate.trusted(coordinate)
+    val purl  = Purl.trusted(s"pkg:maven/${coordinate.replace(":", "/")}@$from")
+    ChosenBump(
+      BumpKind.Libraries,
+      LockedDependency(where, from, purl, true, false, "core"),
+      Release(where, to, Date.trusted("2026-01-10"), None, false),
+      false,
+    )
 
   private def lock(version: String): String =
     s"""cell core 3.3.7 jvm

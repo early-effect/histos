@@ -1,5 +1,6 @@
 package histos.client
 
+import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{CliExit, CompileConsole, Show}
@@ -39,10 +40,21 @@ object Main extends ZIOAppDefault:
 
   private def batch(call: Call): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
-    talk(repo, call).foldZIO(
-      error => ZIO.succeed(leave(CliExit.LoadFailed.code, Some(error.message))),
-      code => ZIO.succeed(leave(code, None)),
-    )
+    ApiClock.admit(repo, call).flatMap {
+      case ApiClock.Admit.Stop(fault) =>
+        ZIO.succeed(leave(CliExit.from(call, CallResult.Fault(fault)).code, Some(fault.message)))
+      case ApiClock.Admit.Warn(line) =>
+        ZIO.succeed(java.lang.System.err.println(line)) *>
+          talk(repo, call).foldZIO(
+            error => ZIO.succeed(leave(CliExit.LoadFailed.code, Some(error.message))),
+            code => ZIO.succeed(leave(code, None)),
+          )
+      case ApiClock.Admit.Go =>
+        talk(repo, call).foldZIO(
+          error => ZIO.succeed(leave(CliExit.LoadFailed.code, Some(error.message))),
+          code => ZIO.succeed(leave(code, None)),
+        )
+    }
 
   /** Print `line` when one is present, then `_exit`. `_exit` does not return. The code keeps the caller's type. */
   private def leave(code: Int, line: Option[String]): Int =
@@ -59,13 +71,16 @@ object Main extends ZIOAppDefault:
     readRecord(repo).flatMap:
       case None         => boot(repo).flatMap(socket => exchange(repo, socket, call))
       case Some(record) =>
-        agrees(repo, record).flatMap: ok =>
-          val socket = Path.of(record.socket)
-          if ok then
-            exchange(repo, socket, call).catchSome:
-              case ServerError.Unreachable(_) =>
-                boot(repo).flatMap(fresh => exchange(repo, fresh, call))
-          else replace(repo, socket, call)
+        agrees(repo, record)
+          .zip(ApiClock.drifted(repo))
+          .flatMap: (ok, stale) =>
+            val socket = Path.of(record.socket)
+            val hold   = stale && ApiClock.skipsReboot(call)
+            if ok || hold then
+              exchange(repo, socket, call).catchSome:
+                case ServerError.Unreachable(_) =>
+                  boot(repo).flatMap(fresh => exchange(repo, fresh, call))
+            else replace(repo, socket, call)
 
   private def exchange(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
     ZIO
@@ -130,17 +145,20 @@ object Main extends ZIOAppDefault:
       case _ => exit.code
 
   private def replace(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
-    exchange(repo, socket, Call.Reboot).ignore *>
-      boot(repo).flatMap { fresh =>
-        readRecord(repo).flatMap {
-          case Some(record) =>
-            agrees(repo, record).flatMap: ok =>
-              if ok then exchange(repo, fresh, call)
-              else ZIO.fail(ServerError.DifferentVersion)
-          case None =>
-            exchange(repo, fresh, call)
+    ApiClock.rebootLine(repo).flatMap { line =>
+      ZIO.succeed(java.lang.System.err.println(line)) *>
+        exchange(repo, socket, Call.Reboot).ignore *>
+        boot(repo).flatMap { fresh =>
+          readRecord(repo).flatMap {
+            case Some(record) =>
+              agrees(repo, record).flatMap: ok =>
+                if ok then exchange(repo, fresh, call)
+                else ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
+            case None =>
+              exchange(repo, fresh, call)
+          }
         }
-      }
+    }
 
   private def readRecord(repo: Path): IO[ServerError, Option[ServerFile]] =
     val file = repo.resolve(".histos").resolve("server.json")

@@ -68,6 +68,10 @@ object Plan:
       ._4
       .distinctBy(_.coordinate.value)
 
+  /** A lock direct the graph names as a root `dep"..."` literal. A `.module` member is not one. */
+  def roots(lock: String, graph: String): List[IndexedDirect] =
+    directs(lock).filter(row => literal(graph, row))
+
   def mavenUrl(group: String, artifact: String): String =
     val query = URLEncoder.encode(s"""g:"$group" AND a:"$artifact"""", StandardCharsets.UTF_8)
     s"https://search.maven.org/solrsearch/select?q=$query&rows=50&wt=json&core=gav"
@@ -114,6 +118,7 @@ object Plan:
 
   def propose(
       lock: String,
+      graph: String,
       catalog: Map[String, (String, String)],
       policy: SupplyChain,
       today: Date,
@@ -121,7 +126,7 @@ object Plan:
       net: Net,
       knownRepos: Map[String, RepoId],
   ): IO[SupplyFault, Proposal] =
-    val rows = directs(lock)
+    val rows = roots(lock, graph)
     for
       fetched <- ZIO.foreach(rows)(row => fetchMaven(row, security, net))
       actions <- ZIO.foreach(catalog.toList):
@@ -204,6 +209,26 @@ object Plan:
       .replace(s"${change.name}@${change.fromSha}", s"${change.name}@${change.sha}")
       .replace(s"# ${change.fromTag}", s"# ${change.toTag}")
       .replace(s""""${change.fromSha}", "${change.fromTag}"""", s""""${change.sha}", "${change.toTag}"""")
+
+  /** `:::` then `::` then `:`. A shorter revision is not a match for a longer one. */
+  private def literal(graph: String, row: IndexedDirect): Boolean =
+    val org  = row.coordinate.value.takeWhile(_ != ':')
+    val name = row.coordinate.value.drop(org.length + 1)
+    List(s"$org:::$name:${row.version}", s"$org::$name:${row.version}", s"$org:$name:${row.version}")
+      .exists(spell => occurs(graph, spell))
+
+  private def occurs(graph: String, spell: String): Boolean =
+    def loop(from: Int): Boolean =
+      val at = graph.indexOf(spell, from)
+      if at < 0 then false
+      else
+        val end = at + spell.length
+        if end == graph.length || !revisionContinues(graph.charAt(end)) then true
+        else loop(at + 1)
+    loop(0)
+
+  private def revisionContinues(char: Char): Boolean =
+    char.isLetterOrDigit || char == '.' || char == '-' || char == '+'
 
   private def fetchMaven(
       row: IndexedDirect,

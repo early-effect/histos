@@ -110,6 +110,45 @@ object LockLawSpec extends ZIOSpecDefault:
             tools.tools.length == 1,
             DependencyLock.parse(source) == Left(LockError.Missing(LockField.Plugin)),
           )
+        case _ => assertTrue(false)
+    ,
+    test("exclude and series belong to the preceding direct, and a direct without them stays empty"):
+      val marked =
+        s"""cell core 3.3.7 jvm
+           |direct org.example demo 1.0.0 binary
+           |exclude org.example other
+           |exclude com.acme gone
+           |series 2
+           |artifact org.example demo 1.0.0 $hex central
+           |""".stripMargin
+      val javaSeries = "cell core 3.3.7 jvm\ndirect org.example demo 1.0.0 java\nseries 2\n"
+      val twice      = "cell core 3.3.7 jvm\ndirect org.example demo 1.0.0 binary\nseries 2\nseries 1\n"
+      val loose      = "exclude org.example other\n"
+      val early      = "cell core 3.3.7 jvm\nexclude org.example other\n"
+      val badOrg     = "cell core 3.3.7 jvm\ndirect org.example demo 1.0.0 java\nexclude 1bad other\n"
+      val badSeries  = "cell core 3.3.7 jvm\ndirect org.example demo 1.0.0 binary\nseries 2.x\n"
+      val bare       = DependencyLock.parse(text)
+      val parsed     = DependencyLock.parse(marked)
+      (bare, parsed) match
+        case (Right(plain), Right(lock)) =>
+          val empty = plain.cells.flatMap(_.directs)
+          val held  = lock.cells.flatMap(_.directs)
+          assertTrue(
+            empty.map(direct => (direct.exclusions, direct.sbtSeries)) == List((Nil, None)),
+            held.map(direct =>
+              (
+                direct.exclusions.map(item => (item.organization.value, item.artifact.value)),
+                direct.sbtSeries.map(_.value),
+              )
+            ) == List((List(("org.example", "other"), ("com.acme", "gone")), Some("2"))),
+            DependencyLock.parse(DependencyLock.render(lock)) == Right(lock),
+            DependencyLock.parse(javaSeries) == Left(LockError.BadLine("series 2")),
+            DependencyLock.parse(twice) == Left(LockError.BadLine("series 1")),
+            DependencyLock.parse(loose) == Left(LockError.Missing(LockField.Direct)),
+            DependencyLock.parse(early) == Left(LockError.BadLine("exclude org.example other")),
+            DependencyLock.parse(badOrg) == Left(LockError.BadLine("exclude 1bad other")),
+            DependencyLock.parse(badSeries) == Left(LockError.BadLine("series 2.x")),
+          )
         case _ => assertTrue(false),
   )
 

@@ -113,7 +113,7 @@ object LoaderShipLawSpec extends ZIOSpecDefault:
           load(root, shipBuild, missing).either.map: found =>
             val missed = found match
               case Left(LoadError.Resolve(ResolveError.NotFound(org, name, revision))) =>
-                org == pin.organization && name == pin.name && revision == pin.revision
+                org == pin.organization && name == pin.name && revision == pin.revision.value
               case _ => false
             assertTrue(missed),
   )
@@ -173,14 +173,14 @@ object LoaderShipLawSpec extends ZIOSpecDefault:
     LockedPlugin(
       pin.organization,
       pin.name,
-      pin.revision,
+      pin.revision.value,
       LinkStrategy.BinaryOrSource,
-      List(LockedDirect(pin.organization, pin.name, pin.revision, pin.kind)),
+      List(LockedDirect(pin.organization, pin.name, pin.revision.value, pin.kind)),
       List(
         LockedArtifact(
           pin.organization,
           pin.name,
-          pin.revision,
+          pin.revision.value,
           Sha256.trusted("aa" * 32),
           histos.resolve.Repository.Central,
         )
@@ -230,7 +230,7 @@ object LoaderShipLawSpec extends ZIOSpecDefault:
             ResolvedArtifact(
               dependency.organization,
               dependency.name,
-              dependency.revision,
+              dependency.revision.value,
               jar,
               Sha256.trusted("aa"),
               histos.resolve.Repository.Central,
@@ -243,7 +243,7 @@ object LoaderShipLawSpec extends ZIOSpecDefault:
 
   private val missing: Resolve =
     ShipResolve(dependency =>
-      ZIO.fail(ResolveError.NotFound(dependency.organization, dependency.name, dependency.revision))
+      ZIO.fail(ResolveError.NotFound(dependency.organization, dependency.name, dependency.revision.value))
     )
 
   private val refused: Resolve =

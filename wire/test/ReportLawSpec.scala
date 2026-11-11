@@ -1,6 +1,7 @@
 package histos
 
 import histos.assembly.AssembleError
+
 import histos.build.BuildEvent
 import histos.cache.CacheCleanModeError
 import histos.load.{LoadError, PluginFault}
@@ -138,6 +139,7 @@ object ReportLawSpec extends ZIOSpecDefault:
     BuildFault.Watch(WatchError.Read(path)),
     BuildFault.Format(histos.format.FormatError.CoreDrift(Nil, List(histos.format.ScalafmtPackage("o", "a", "1")))),
     BuildFault.Interrupted,
+    BuildFault.StaleApi("0.2.9-0123456789ab-SNAPSHOT", "0.2.9-ba9876543210-SNAPSHOT"),
     BuildFault.Rejected(Rejection.NotATool),
   )
 

@@ -47,6 +47,7 @@ object Assemble:
       ordered  <- ZIO.fromEither(closure(app, index(graph)))
       resolved <- ZIO.service[ResolutionService]
       lock     <- resolved.current
+      _        <- ToolchainStamp.write(repo)
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, native, lock),
