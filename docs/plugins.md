@@ -37,7 +37,7 @@ Two coordinates, both typed.
 - In-repo: `PluginSources.module(moduleDef)`, the same module value as `dependsOn`. Its tests are normal tests. Other modules may `dependsOn` it.
 - Published: `PluginSources.ship(dep)`, a Ship pin. `.link(LinkStrategy)` selects `BinaryOrSource` or `ExactBinary`. The default is `BinaryOrSource`.
 
-Loose sources belong in a module. `dep"..."` literals stay. A coordinate is that module, or a Ship pin.
+Loose sources belong in a module. A third-party root stays a `dep"..."` literal, and a family member is `.module` on that root. A plugin coordinate is that module, or a Ship pin.
 
 `histos.scala` names the coordinates. The load then compiles each in-repo plugin module, and the modules it depends on, and resolves each ship pin. `histos.wiring.scala` defines `object HistosWiring` with `def layer`, compiled against those classes. The load builds that layer and reads `Plugins`. A requirement that is still open fails that compile. The wiring closes a requirement by providing the service. `LinkStrategy.Api` is refused. The load fails when a plugin module does not compile, a pin does not resolve, the wiring file does not compile, or building the layer fails. No wiring file means no plugins.
 

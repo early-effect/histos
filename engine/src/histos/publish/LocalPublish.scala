@@ -23,6 +23,7 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, Sources}
 import histos.{
   Dep,
+  DepExclusion,
   MainClass,
   Module,
   Organization,
@@ -660,7 +661,8 @@ object LocalPublish:
               externalCoordinate(
                 dependency.organization,
                 ArtifactName.of(dependency, cell.version, cell.platform),
-                dependency.revision,
+                dependency.revision.value,
+                dependency.exclusions,
               ).map(seen :+ _)
         for
           inside  <- internal
@@ -672,16 +674,18 @@ object LocalPublish:
       group: String,
       artifact: String,
       revision: String,
+      exclusions: List[DepExclusion],
   ): Either[LocalPublishError, MavenDependency] =
     Organization.from(group) match
       case Left(_) =>
         Left(LocalPublishError.BadDependency(group, artifact, revision))
-      case Right(parsed) => coordinate(parsed, artifact, revision)
+      case Right(parsed) => coordinate(parsed, artifact, revision, exclusions)
 
   private def coordinate(
       group: Organization,
       artifact: String,
       revision: String,
+      exclusions: List[DepExclusion] = Nil,
   ): Either[LocalPublishError, MavenDependency] =
     for
       name <- ArtifactId
@@ -692,7 +696,7 @@ object LocalPublish:
         .from(revision)
         .left
         .map(_ => LocalPublishError.BadDependency(group.value, artifact, revision))
-    yield MavenDependency(group, name, version)
+    yield MavenDependency(group, name, version, exclusions)
 
   private def artifactName(
       graph: ProjectGraph,

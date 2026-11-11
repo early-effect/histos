@@ -83,6 +83,26 @@ object Sources:
   def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
     collect(root, version, platform, Tree.Test)
 
+  /** Generated sources for one module. `target/` is gitignored. A file here replaces the committed source of the same
+    * entry.
+    */
+  def unmanagedRoot(repo: Path, module: String): Path =
+    repo.resolve("target").resolve("unmanaged").resolve(module).resolve("src")
+
+  /** Unmanaged wins on the sources-jar entry. An empty unmanaged list leaves the committed list in its original order.
+    */
+  def prefer(
+      committedRoot: Path,
+      committed: List[Path],
+      unmanagedRoot: Path,
+      unmanaged: List[Path],
+  ): List[Path] =
+    if unmanaged.isEmpty then committed
+    else
+      val replaced = unmanaged.map(path => entryName(unmanagedRoot, path)).toSet
+      val kept     = committed.filterNot(path => replaced.contains(entryName(committedRoot, path)))
+      (kept ++ unmanaged).sortBy(_.toString)
+
   private def collect(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): IO[CompileError, List[Path]] =
     ZIO
       .attemptBlocking(list(root, version, platform, tree))

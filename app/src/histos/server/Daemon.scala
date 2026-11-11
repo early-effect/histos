@@ -1,5 +1,6 @@
 package histos.server
 
+import histos.ApiClock
 import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
@@ -652,17 +653,22 @@ object Daemon:
                 ServerError,
                 Unit,
               ] =
-                if adopts(target) then withGraph(target, out)
-                else
-                  val chosen =
-                    target match
-                      case Call.Resolve(_) =>
-                        histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
-                      case _ =>
-                        ZIO.succeed(machine)
-                  chosen.flatMap { fresh =>
-                    occupy(permit, target)(execute(target, out, Right(None), fresh))
-                  }
+                ApiClock.admit(repo, target).flatMap {
+                  case ApiClock.Admit.Stop(fault) =>
+                    Calls.finish(out, CallResult.Fault(fault))
+                  case _ =>
+                    if adopts(target) then withGraph(target, out)
+                    else
+                      val chosen =
+                        target match
+                          case Call.Resolve(_) =>
+                            histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
+                          case _ =>
+                            ZIO.succeed(machine)
+                      chosen.flatMap { fresh =>
+                        occupy(permit, target)(execute(target, out, Right(None), fresh))
+                      }
+                }
 
               def watched(
                   inner: Call,

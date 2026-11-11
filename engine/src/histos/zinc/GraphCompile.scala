@@ -599,7 +599,10 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      sources  <- ZIO.serviceWithZIO[CompileMemo](_.sources(base, version, platform)).mapError(failed)
+      listed <- ZIO.serviceWithZIO[CompileMemo](_.sources(base, version, platform)).mapError(failed)
+      extraRoot = Sources.unmanagedRoot(plan.repo, module.name.value)
+      extra <- Sources.select(extraRoot, version, platform).mapError(failed)
+      sources = Sources.prefer(base, listed, extraRoot, extra)
       tests    <- ZIO.serviceWithZIO[CompileMemo](_.tests(base, version, platform)).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))

@@ -7,7 +7,12 @@ object Help:
   final case class Entry(name: String, group: String, usage: String, about: String)
 
   val entries: List[Entry] = List(
-    Entry("version", "info", "histos version", "Print the version this checkout runs."),
+    Entry(
+      "version",
+      "info",
+      "histos version",
+      "Print the launcher pin, the assembly checksum, and the snapshot id.",
+    ),
     Entry("help", "info", "histos help [command]", "List commands, or show one command."),
     Entry("graph", "info", "histos graph", "Print each module, platform, and Scala version."),
     Entry("observe", "info", "histos observe", "Print the stored compile tally."),

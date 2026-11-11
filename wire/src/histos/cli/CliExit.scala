@@ -101,6 +101,7 @@ object CliExit:
       case BuildFault.Format(FormatError.Selected(_))    => Usage
       case BuildFault.Format(_)                          => TaskFailed
       case BuildFault.Interrupted                        => Interrupted
+      case BuildFault.StaleApi(_, _)                     => LoadFailed
       case BuildFault.Rejected(rejection)                => rejectedExit(rejection)
 
   /** A missing default branch is a failed command. Other workflow faults stay on their own status. */

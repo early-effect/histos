@@ -23,10 +23,10 @@ object ShipPinLawSpec extends ZIOSpecDefault:
         release.revisionValue == Revision.Release(ReleaseVersion(number)),
         binary.organization == org.value,
         binary.name == name.value,
-        binary.revision == number.render,
+        binary.revision.value == number.render,
         binary.kind == DepKind.Binary,
-        pointer.dep(org, name).revision == pointer.revision,
-        commit.dep(org, name).revision == commit.revision,
+        pointer.dep(org, name).revision.value == pointer.revision,
+        commit.dep(org, name).revision.value == commit.revision,
         commit.dep(org, name).kind == DepKind.Binary,
       )
     ,

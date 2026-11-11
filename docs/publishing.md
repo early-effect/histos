@@ -23,7 +23,7 @@ Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are d
 Ship("histos").next(0, 2, 3).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
 ```
 
-Third-party Maven coordinates stay `dep"org::name:revision"`.
+Third-party Maven coordinates stay `dep"org::name:revision"`. That literal is one root. A family member is `.module("other")` on that value. `.module` copies organization, kind, and revision, and clears platforms, compile-only, exclusions, and an sbt series. An sbt plugin series is `.sbt(sbt"2")` on a `::` coordinate. An exclusion is `.excluding(organization"...", artifact"published-id")`. Ship pins stay `.pointer`, `.commit`, and `.released`.
 
 ## The effect
 

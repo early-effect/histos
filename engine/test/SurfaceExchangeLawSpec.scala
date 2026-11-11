@@ -26,6 +26,7 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
         for
           repo <- Workspace.work("surface-exchange-check")
           _    <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
+          _    <- Workspace.writeString(repo.resolve("histos.scala"), "dep\"org.example:demo:1.0.0\"\n")
           _    <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.succeed(Reply(200, maven))
           )

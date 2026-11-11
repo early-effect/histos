@@ -40,7 +40,12 @@ final case class PublishRequest(
     modules: Chunk[StagedModule],
 )
 
-final case class StagedDependency(group: Organization, artifact: String, revision: String)
+final case class StagedDependency(
+    group: Organization,
+    artifact: String,
+    revision: String,
+    exclusions: List[DepExclusion] = Nil,
+)
 
 final case class StagedModule(
     module: ProjectName,

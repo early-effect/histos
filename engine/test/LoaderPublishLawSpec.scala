@@ -110,7 +110,7 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
                 line.module == ProjectName("plugins"),
                 !gone,
                 stamp.contains(s"${digest.value}\n"),
-                pinnedDep.map(dep => (dep.organization, dep.name, dep.revision)) == List(
+                pinnedDep.map(dep => (dep.organization, dep.name, dep.revision.value)) == List(
                   ("example.com", "plugins", line.revision)
                 ),
                 consumed.plugins.links.isEmpty,
@@ -246,7 +246,7 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
                 ResolvedArtifact(
                   dependency.organization,
                   dependency.name,
-                  dependency.revision,
+                  dependency.revision.value,
                   jar,
                   Sha256.trusted("aa"),
                   histos.resolve.Repository.Central,

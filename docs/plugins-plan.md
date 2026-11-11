@@ -59,7 +59,7 @@ The proof is two graphs in one test. The producer wires the module coordinate an
 
 ## Stringly pins
 
-Builds and ships are values. A coordinate the build must accept is a `Dep`, a module, or a Ship pin. A literal `dep"org::name:1.2.3"` stays: `LiteralMacro.dep` checks it at compile time and produces a `Dep`. That is not a parse step.
+Builds and ships are values. A coordinate the build must accept is a `Dep`, a module, or a Ship pin. A literal `dep"org::name:1.2.3"` stays: `LiteralMacro.dep` checks it at compile time and produces a `Dep`. A family member is `.module` on that value. That is not a parse step.
 
 A coordinate on the build is a `Dep`, a module, or a Ship pin. `Dep.from` returns a typed error for a CLI or a lock line. A validated `dep"..."` literal stays.
 

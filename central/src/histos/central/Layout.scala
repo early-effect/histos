@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.{Developer, License, Scm}
+import histos.{DepExclusion, Developer, License, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -78,10 +78,23 @@ object Layout:
             s"""    <dependency>
                |      <groupId>${xml(dependency.group.value)}</groupId>
                |      <artifactId>${xml(dependency.name.value)}</artifactId>
-               |      <version>${xml(dependency.version.value)}</version>
+               |      <version>${xml(dependency.version.value)}</version>${exclusions(dependency.exclusions)}
                |    </dependency>""".stripMargin
           .mkString("\n")
         Some(s"  <dependencies>\n$rows\n  </dependencies>")
+
+  private def exclusions(listed: List[DepExclusion]): String =
+    listed match
+      case Nil => ""
+      case _   =>
+        val rows = listed
+          .map: item =>
+            s"""      <exclusion>
+               |        <groupId>${xml(item.organization.value)}</groupId>
+               |        <artifactId>${xml(item.artifact.value)}</artifactId>
+               |      </exclusion>""".stripMargin
+          .mkString("\n")
+        s"\n    <exclusions>\n$rows\n    </exclusions>"
 
   private def license(license: License): String =
     // Central requires the license to be distributed with the repository.

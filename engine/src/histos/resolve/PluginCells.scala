@@ -9,7 +9,7 @@ object PluginCells:
     lock.plugins.find(plugin =>
       plugin.organization == dependency.organization &&
         plugin.name == dependency.name &&
-        plugin.revision == dependency.revision
+        plugin.revision == dependency.revision.value
     ) match
       case None         => Left(PluginLoadError.Unlocked(PluginCoordinate.Published(dependency).render))
       case Some(plugin) =>

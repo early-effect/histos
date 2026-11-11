@@ -627,6 +627,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
             "artifact",
             "source",
             "evict",
+            "exclude",
+            "series",
           ),
           "cell",
           histos.resolve.LockField.Cell,
@@ -836,7 +838,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "Platform(error) | Task(error) | Plugin(error) | PluginTask(error) | " +
               "Preview(error) | Assemble(error) | Launcher(error) | Cache(error) | " +
               "Remote(error) | Store(failure) | Io(failure) | Version(error) | " +
-              "Watch(error) | Format(error) | Interrupted() | Rejected(rejection)"
+              "Watch(error) | Format(error) | Interrupted() | StaleApi(have,want) | Rejected(rejection)"
           ),
           """{"Interrupted":{}}""",
           histos.report.BuildFault.Interrupted,
@@ -984,7 +986,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         ) &&
         mixed[histos.DepError](
           "DepError",
-          "Empty() | BadShape(raw)",
+          "Empty() | BadShape(raw) | Ranged(raw)",
           """{"Empty":{}}""",
           histos.DepError.Empty,
         ) &&

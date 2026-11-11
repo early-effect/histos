@@ -207,7 +207,7 @@ object Perform:
           case Call.PreviewRun(id, platform) =>
             held(build => Calls.previewRun(build.graph, id, platform, say))
           case Call.Version =>
-            Calls.version(version, say)
+            Calls.version(repo, version, say)
           case Call.CachePath =>
             Calls.cachePath(say)
           case Call.CacheList =>

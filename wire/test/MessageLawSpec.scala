@@ -1233,10 +1233,12 @@ object MessageLawSpec extends ZIOSpecDefault:
         depErrors.map(_.message) == List(
           "a dependency coordinate is not empty",
           "'nope' is not an organization:name:revision coordinate\nUse organization:name:revision, organization::name:revision, or organization:::name:revision.",
+          "'org.example:demo:1.+' is not a single revision",
         ),
         depErrors.map(error => noted(error.diagnose)) == List(
           ("dep.empty", "histos help"),
           ("dep.shape", "histos help"),
+          ("dep.ranged", "histos help"),
         ),
       )
     ,

@@ -20,15 +20,32 @@ private object DepMacro:
       case Some(s) =>
         Dep.from(s) match
           case Left(err)  => report.errorAndAbort(err.message, raw)
-          case Right(dep) =>
-            val kind = kindExpr(dep.kind)
-            '{ Dep.trusted(${ Expr(dep.organization) }, ${ Expr(dep.name) }, ${ Expr(dep.revision) }, $kind) }
+          case Right(dep) => made(Expr(dep.organization), Expr(dep.name), Expr(dep.revision.value), dep.kind)
 
-  private def kindExpr(kind: DepKind)(using Quotes): Expr[DepKind] =
+  def module[K <: DepKind](dep: Expr[Dep { type Kind = K }], name: Expr[String])(using
+      Quotes,
+      Type[K],
+  ): Expr[Dep { type Kind = K }] =
+    import quotes.reflect.report
+    name.value match
+      case None =>
+        report.errorAndAbort(".module takes a literal artifact name. Write module(\"zio-test\").", name)
+      case Some(text) =>
+        ArtifactBase.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, name)
+          case Right(_)  => '{ $dep.member(${ Expr(text) }) }
+
+  private def made(
+      organization: Expr[String],
+      name: Expr[String],
+      revision: Expr[String],
+      kind: DepKind,
+  )(using Quotes): Expr[Dep] =
+    val parsed = '{ LibraryRevision.trusted($revision) }
     kind match
-      case DepKind.Java   => '{ DepKind.Java }
-      case DepKind.Binary => '{ DepKind.Binary }
-      case DepKind.Full   => '{ DepKind.Full }
+      case DepKind.Java   => '{ Dep.java($organization, $name, $parsed) }
+      case DepKind.Binary => '{ Dep.binary($organization, $name, $parsed) }
+      case DepKind.Full   => '{ Dep.full($organization, $name, $parsed) }
 end DepMacro
 
 private object NativeVersionMacro:

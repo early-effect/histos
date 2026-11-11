@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.version.ShipName
 import histos.workspace.Workspace
-import histos.{Organization, ProjectName, PublishFault, StagedDependency, StagedModule}
+import histos.{ArtifactBase, DepExclusion, Organization, ProjectName, PublishFault, StagedDependency, StagedModule}
 
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
@@ -48,6 +48,8 @@ object IvyLocalLawSpec extends ZIOSpecDefault:
                   Files.write(javadoc, bytes)
                 _       <- IvyLocal.install(staged)
                 written <- ZIO.attemptBlocking(read(root))
+                _       <- IvyLocal.install(staged.copy(dependencies = Chunk(excluded)))
+                marked  <- ZIO.attemptBlocking(find(root, "ivy.xml").map(path => Files.readString(path)).getOrElse(""))
                 _       <- IvyLocal.install(staged.copy(sources = None, javadoc = None, dependencies = Chunk.empty))
                 bare    <- ZIO.attemptBlocking(find(root, "ivy.xml").map(path => Files.readString(path)).getOrElse(""))
               yield assertTrue(
@@ -63,6 +65,12 @@ object IvyLocalLawSpec extends ZIOSpecDefault:
                 written.text.contains("""classifier="sources""""),
                 written.text.contains("""classifier="javadoc""""),
                 written.text.contains("a&amp;b"),
+                written.text.contains("""rev="1.0.0" conf="compile->compile;runtime->runtime"/>"""),
+                !written.text.contains("<exclude"),
+                marked.contains(
+                  """<exclude org="org.codehaus.plexus" name="plexus-archiver" matcher="exact"/>"""
+                ),
+                !marked.contains("plexus-archiver_3"),
                 written.text.contains("""conf name="default" visibility="public" extends="runtime""""),
                 !bare.contains("classifier="),
                 !bare.contains("<dependencies>"),
@@ -70,6 +78,14 @@ object IvyLocalLawSpec extends ZIOSpecDefault:
             program.ensuring(remove(root))
           }
   )
+
+  private val excluded =
+    StagedDependency(
+      Organization("org.example"),
+      "lib",
+      "1.0.0",
+      List(DepExclusion(Organization.trusted("org.codehaus.plexus"), ArtifactBase.trusted("plexus-archiver"))),
+    )
 
   private final case class Written(jarBytes: Option[List[Byte]], sha: Option[String], md5: Option[String], text: String)
 

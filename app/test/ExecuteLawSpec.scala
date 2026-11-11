@@ -119,7 +119,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
           s"launcher pin is absent: $absent\nfix  histos help",
           Playback.Held,
         )
-      val shown   = "histos 9.9.9"
+      val shown   = "histos 9.9.9\nserver 9.9.9\nno local assembly"
       val release =
         "launcher --update follows snapshots, and 9.9.9 is a release pin. Run 'histos update'."
       for
@@ -204,7 +204,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     Law(
       List("help", "version"),
       CliExit.Success,
-      "histos version\nPrint the version this checkout runs.\n",
+      "histos version\nPrint the launcher pin, the assembly checksum, and the snapshot id.\n",
       "",
       Playback.Held,
     ),

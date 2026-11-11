@@ -2,7 +2,7 @@ package histos.resolve
 
 import histos.jdk.Sha256
 import histos.plugin.LinkStrategy
-import histos.{DepKind, Platform, ProjectName, ScalaVersion}
+import histos.{ArtifactBase, DepExclusion, DepKind, Organization, Platform, ProjectName, SbtSeries, ScalaVersion}
 
 /** One direct dependency, in graph order. */
 final case class LockedDirect(
@@ -10,6 +10,8 @@ final case class LockedDirect(
     name: String,
     revision: String,
     kind: DepKind,
+    exclusions: List[histos.DepExclusion] = Nil,
+    sbtSeries: Option[histos.SbtSeries] = None,
 )
 
 /** One classpath jar. `name` is the name after the Scala and platform suffix.
@@ -127,7 +129,10 @@ object DependencyLock:
     (s"tool ${tool.id.token}" :: body).mkString("\n")
 
   private def renderDirect(direct: LockedDirect): String =
-    s"direct ${direct.organization} ${direct.name} ${direct.revision} ${kind(direct.kind)}"
+    val head     = s"direct ${direct.organization} ${direct.name} ${direct.revision} ${kind(direct.kind)}"
+    val excluded = direct.exclusions.map(item => s"exclude ${item.organization.value} ${item.artifact.value}")
+    val series   = direct.sbtSeries.toList.map(value => s"series ${value.value}")
+    (head :: excluded ::: series).mkString("\n")
 
   private def renderArtifact(artifact: LockedArtifact): String =
     s"artifact ${artifact.organization} ${artifact.name} ${artifact.revision} ${artifact.sha256.value} ${Repository.token(artifact.repository)}${artifact.classifier
@@ -209,6 +214,8 @@ object DependencyLock:
       case LockField.Artifact => 5
       case LockField.Source   => 5
       case LockField.Evict    => 4
+      case LockField.Exclude  => 2
+      case LockField.Series   => 1
 
   private def accept(
       state: Acc,
@@ -227,8 +234,10 @@ object DependencyLock:
       case LockField.Direct   => onOpen(state, line, directModule, directPlugin)
       case LockField.Artifact =>
         onOpen(state, line, artifactModule, artifactPlugin)
-      case LockField.Evict  => evictOnly(state, rest, line)
-      case LockField.Source => sourceOnly(state, rest, line)
+      case LockField.Evict   => evictOnly(state, rest, line)
+      case LockField.Source  => sourceOnly(state, rest, line)
+      case LockField.Exclude => onDirect(state, line, rest, excludeDirect)
+      case LockField.Series  => onDirect(state, line, rest, seriesDirect)
 
   private def onOpen(
       state: Acc,
@@ -464,6 +473,48 @@ object DependencyLock:
       rest: List[String],
   ): Either[LockError, PluginBuilding] =
     directOf(rest).map(direct => cell.copy(directs = cell.directs :+ direct))
+
+  private def onDirect(
+      state: Acc,
+      line: String,
+      rest: List[String],
+      amend: (LockedDirect, List[String], String) => Either[LockError, LockedDirect],
+  ): Either[LockError, Acc] =
+    def update(directs: List[LockedDirect]): Either[LockError, List[LockedDirect]] =
+      directs.reverse match
+        case Nil             => Left(LockError.BadLine(line))
+        case last :: earlier =>
+          amend(last, rest, line).map(next => (next :: earlier).reverse)
+    state.open match
+      case Some(Open.Module(cell)) =>
+        update(cell.directs).map(directs => state.copy(open = Some(Open.Module(cell.copy(directs = directs)))))
+      case Some(Open.Plugin(cell)) =>
+        update(cell.directs).map(directs => state.copy(open = Some(Open.Plugin(cell.copy(directs = directs)))))
+      case Some(Open.Tool(_)) => Left(LockError.BadLine(line))
+      case None               => Left(LockError.Missing(LockField.Direct))
+
+  private def excludeDirect(
+      direct: LockedDirect,
+      rest: List[String],
+      line: String,
+  ): Either[LockError, LockedDirect] =
+    rest match
+      case orgRaw :: artifactRaw :: Nil =>
+        for
+          organization <- Organization.from(orgRaw).left.map(_ => LockError.BadLine(line))
+          artifact     <- ArtifactBase.from(artifactRaw).left.map(_ => LockError.BadLine(line))
+        yield direct.copy(exclusions = direct.exclusions :+ DepExclusion(organization, artifact))
+      case _ => Left(LockError.BadLine(line))
+
+  private def seriesDirect(
+      direct: LockedDirect,
+      rest: List[String],
+      line: String,
+  ): Either[LockError, LockedDirect] =
+    rest match
+      case raw :: Nil if direct.kind == DepKind.Binary && direct.sbtSeries.isEmpty =>
+        SbtSeries.from(raw).left.map(_ => LockError.BadLine(line)).map(series => direct.copy(sbtSeries = Some(series)))
+      case _ => Left(LockError.BadLine(line))
 
   private def directOf(rest: List[String]): Either[LockError, LockedDirect] =
     rest match

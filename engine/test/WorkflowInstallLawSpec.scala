@@ -66,6 +66,8 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         """node-version: "25"""",
         "playwright@1.56.0",
         "install firefox",
+        "archive.ubuntu.com",
+        "timeout 180s",
         "needs.toolchain.outputs.built == 'true'",
       ).filterNot(ci.contains)
       assertTrue(
