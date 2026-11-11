@@ -12,7 +12,7 @@ object ToolRoots:
   ): ToolRoot = ToolRoot(
     dependency.organization,
     ArtifactName.of(dependency, version, platform),
-    dependency.revision,
+    dependency.revision.value,
     transitivity,
     origin,
   )

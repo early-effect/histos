@@ -184,9 +184,21 @@ object IvyLocal:
     s"""<artifact name="${xml(name)}" type="${xml(artifact.tpe)}" ext="${xml(artifact.ext)}"$classified/>"""
 
   private def dependency(item: StagedDependency): String =
-    s"""<dependency org="${xml(item.group.value)}" name="${xml(item.artifact)}" rev="${xml(
-        item.revision
-      )}" conf="compile->compile;runtime->runtime"/>"""
+    val head =
+      s"""<dependency org="${xml(item.group.value)}" name="${xml(item.artifact)}" rev="${xml(
+          item.revision
+        )}" conf="compile->compile;runtime->runtime""""
+    item.exclusions match
+      case Nil    => s"$head/>"
+      case listed =>
+        val body = listed
+          .map(exclusion =>
+            s"""<exclude org="${xml(exclusion.organization.value)}" name="${xml(
+                exclusion.artifact.value
+              )}" matcher="exact"/>"""
+          )
+          .mkString
+        s"$head>$body</dependency>"
 
   private def xml(raw: String): String =
     raw.flatMap {

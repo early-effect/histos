@@ -25,6 +25,7 @@ enum ServerError:
   case Resolve(error: histos.resolve.ResolveError)
   case Unreachable(path: Path)
   case DifferentVersion
+  case Restart(socket: Path, wanted: Option[String], got: Option[String])
   case NoServer
   case Protocol
   case Address(path: Path)
@@ -37,6 +38,10 @@ enum ServerError:
     case Unreachable(path) => s"histos server at $path is not listening"
     case DifferentVersion  =>
       "histos server is a different version and the restart did not finish"
+    case Restart(socket, wanted, got) =>
+      val want = wanted.fold("none")(hex => if hex.length <= 8 then hex else hex.take(8))
+      val have = got.fold("none")(hex => if hex.length <= 8 then hex else hex.take(8))
+      s"histos server at $socket did not record assembly $want; it has $have"
     case NoServer => "no histos server is running"
     case Protocol =>
       "histos server sent a frame this client does not understand"

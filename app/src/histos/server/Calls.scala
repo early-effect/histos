@@ -654,8 +654,8 @@ object Calls:
             LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
         rendered *> scripts.as(Workflow.path(repo))
 
-  def version(text: String, say: Say): IO[ServerError, Unit] =
-    told(say, text) *> ok(say)
+  def version(repo: Path, text: String, say: Say): IO[ServerError, Unit] =
+    histos.ApiClock.versionLines(repo, text).flatMap(shown => told(say, shown) *> ok(say))
 
   def cachePath(say: Say): ZIO[ContentStore, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>

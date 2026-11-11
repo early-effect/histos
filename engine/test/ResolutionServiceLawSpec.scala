@@ -4,7 +4,19 @@ import histos.jdk.Sha256
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.version.Catalog
-import histos.{Dep, DepKind, Platform, ProjectGraph, ProjectName, Resolution, ScalaVersion, Splits}
+import histos.{
+  ArtifactBase,
+  Dep,
+  DepKind,
+  Organization,
+  Platform,
+  ProjectGraph,
+  ProjectName,
+  Resolution,
+  SbtSeries,
+  ScalaVersion,
+  Splits,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -169,6 +181,46 @@ object ResolutionServiceLawSpec extends ZIOSpecDefault:
                 solvedN == 1,
                 fetched == 2,
               )
+          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Resolve])
+    ,
+    test("an exclusion or a series is a different solve, and the same cell is not"):
+      Workspace
+        .work("histos-resolution-key")
+        .flatMap: dir =>
+          val excluded = dep.excluding(Organization.trusted("org.example"), ArtifactBase.trusted("other"))
+          val binary   = Dep.binary("org.example", "plug", histos.LibraryRevision.trusted("1.0.0"))
+          val series   = binary.sbt(SbtSeries.trusted("2"))
+          val program  =
+            for
+              solves  <- Ref.make(0)
+              plugins <- Ref.make(0)
+              _       <- stub[Resolve](_.resolve(any[ResolveCell]))((_: ResolveCell) =>
+                solves.update(_ + 1) *> ZIO.succeed(Classpath(Nil, Nil))
+              )
+              _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))((_: Dep, _: Repositories) =>
+                plugins.update(_ + 1) *> ZIO.succeed(Classpath(Nil, Nil))
+              )
+              _ <- stub[Resolve](_.resolveTool(any[ToolRequest]))((_: ToolRequest) => ZIO.succeed(Classpath(Nil, Nil)))
+              _ <- stub[Resolve](_.fetch(any[LockedArtifact]))((_: LockedArtifact) => ZIO.dieMessage("fetch"))
+              _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+                (_: String, _: String, _: String, _: Repository) => ZIO.dieMessage("sources")
+              )
+              _       <- ZIO.attemptBlocking(Files.createDirectories(dir))
+              service <- ResolutionService.open(dir, Resolution.Solve)
+              _       <- service.module(asked)
+              _       <- service.module(asked)
+              _       <- service.module(asked.copy(dependencies = List(excluded)))
+              _       <- service.plugin(binary, LinkStrategy.ExactBinary, Repositories.central)
+              _       <- service.plugin(binary, LinkStrategy.ExactBinary, Repositories.central)
+              _       <- service.plugin(series, LinkStrategy.ExactBinary, Repositories.central)
+              _       <- service.plugin(
+                pluginDep.excluding(Organization.trusted("org.example"), ArtifactBase.trusted("other")),
+                LinkStrategy.ExactBinary,
+                Repositories.central,
+              )
+              solved <- solves.get
+              plugs  <- plugins.get
+            yield assertTrue(solved == 2, plugs == 3)
           program.provideSomeLayer[TestEnvironment & Scope](stubbed[Resolve])
     ,
     test("solve and lock name different files"):

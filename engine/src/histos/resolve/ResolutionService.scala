@@ -147,7 +147,7 @@ object ResolutionService:
             .zip(state.get)
             .flatMap: (selected, lock) =>
               PluginCells.locate(lock, dependency) match
-                case Right(held) if held.link == link =>
+                case Right(held) if held.link == link && sameFacts(held, dependency) =>
                   fetch(held.artifacts, Nil)
                     .flatMap(keep(key, _))
                     .catchSome:
@@ -162,6 +162,14 @@ object ResolutionService:
                     )
                   )
                 case _ => solvePlugin(dependency, link, repositories, key)
+
+    /** The locked direct is this dependency. A different kind, exclusion list, or series is a different solve. */
+    private def sameFacts(held: LockedPlugin, dependency: Dep): Boolean =
+      held.directs match
+        case direct :: Nil =>
+          direct.kind == dependency.kind && direct.exclusions == dependency.exclusions &&
+          direct.sbtSeries == dependency.sbtSeries
+        case _ => false
 
     private def solveModule(cell: ResolveCell, key: String): IO[ResolveError, Classpath] =
       gate.withPermit:
@@ -261,7 +269,11 @@ object ResolutionService:
 
   private def moduleKey(cell: ResolveCell): String =
     val directs = cell.dependencies
-      .map(dep => s"${dep.organization}:${dep.name}:${dep.revision}:${dep.kind}")
+      .map(dep =>
+        val excluded = dep.exclusions.map(item => s"${item.organization.value}:${item.artifact.value}").mkString(",")
+        val series   = dep.sbtSeries.fold("")(value => s":sbt${value.value}")
+        s"${dep.organization}:${dep.name}:${dep.revision.value}:${dep.kind}:[$excluded]$series"
+      )
       .mkString(",")
     s"module ${cell.module.value} ${cell.scalaVersion.value} ${cell.platform.token} ${cell.scope.header} $directs"
 
@@ -272,7 +284,9 @@ object ResolutionService:
     s"tool ${request.id.token} $roots"
 
   private def pluginKey(dependency: Dep, link: LinkStrategy): String =
-    s"plugin ${dependency.organization}:${dependency.name}:${dependency.revision}:${link}"
+    val excluded = dependency.exclusions.map(item => s"${item.organization.value}:${item.artifact.value}").mkString(",")
+    val series   = dependency.sbtSeries.fold("")(value => s":sbt${value.value}")
+    s"plugin ${dependency.organization}:${dependency.name}:${dependency.revision.value}:${link}:[$excluded]$series"
 
   private def putCell(lock: DependencyLock, cell: LockedCell): DependencyLock =
     val rest = lock.cells.filterNot: held =>

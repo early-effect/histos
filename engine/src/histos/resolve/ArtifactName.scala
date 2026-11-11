@@ -40,8 +40,11 @@ object ArtifactName:
   def of(dependency: Dep, version: ScalaVersion, platform: Platform): String =
     dependency.kind match
       case DepKind.Java   => dependency.name
-      case DepKind.Binary => published(dependency.name, version, platform)
-      case DepKind.Full   =>
+      case DepKind.Binary =>
+        dependency.sbtSeries match
+          case Some(series) => plugin(dependency.name, version, platform, series)
+          case None         => published(dependency.name, version, platform)
+      case DepKind.Full =>
         s"${dependency.name}${platformSuffix(platform)}_${version.value}"
 
   private def platformSuffix(platform: Platform): String =

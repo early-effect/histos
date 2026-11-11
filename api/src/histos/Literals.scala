@@ -8,7 +8,7 @@ package histos
   */
 extension (inline sc: StringContext)
   inline def scala(inline args: String*): ScalaVersion             = ${ LiteralMacro.scalaVersion('sc, 'args) }
-  inline def dep(inline args: String*): Dep                        = ${ LiteralMacro.dep('sc, 'args) }
+  transparent inline def dep(inline args: String*): Dep            = ${ LiteralMacro.dep('sc, 'args) }
   inline def ship(inline args: String*): histos.version.ShipNumber = ${ LiteralMacro.shipNumber('sc, 'args) }
   inline def organization(inline args: String*): Organization      = ${ LiteralMacro.organization('sc, 'args) }
   inline def artifact(inline args: String*): ArtifactBase          = ${ LiteralMacro.artifact('sc, 'args) }

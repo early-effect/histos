@@ -83,7 +83,7 @@ object DaemonMoreLawSpec extends ZIOSpecDefault:
           yield assertTrue(
             message.contains("no build file at"),
             message.contains("histos.scala"),
-            outs(versionFeeds) == version,
+            outs(versionFeeds) == s"$version\nserver $version\nno local assembly",
             done(versionFeeds).contains(CallResult.reported()),
           )
         }

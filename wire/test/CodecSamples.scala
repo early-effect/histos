@@ -869,7 +869,8 @@ object CodecSamples:
   val shipNameErrors: List[ShipNameError]     = List(ShipNameError.Empty, ShipNameError.Bad("1ship"))
   val shipNumberErrors: List[ShipNumberError] =
     List(ShipNumberError.Empty, ShipNumberError.NotAShip("01.2.3"))
-  val depErrors: List[DepError]              = List(DepError.Empty, DepError.BadShape("nope"))
+  val depErrors: List[DepError] =
+    List(DepError.Empty, DepError.BadShape("nope"), DepError.Ranged("org.example:demo:1.+"))
   val paramErrors: List[ParamNameError]      = List(ParamNameError.Empty, ParamNameError.Bad("1"))
   val flagErrors: List[FlagNameError]        = List(FlagNameError.Empty, FlagNameError.Bad("1flag"))
   val shaErrors: List[Sha256Error]           = List(Sha256Error.Bad("zz"))

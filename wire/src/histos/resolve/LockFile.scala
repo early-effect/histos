@@ -3,7 +3,7 @@ package histos.resolve
 import histos.{Platform, ProjectName, ScalaVersion}
 
 enum LockField:
-  case Cell, Test, Plugin, Tool, Root, Resolver, Direct, Artifact, Source, Evict
+  case Cell, Test, Plugin, Tool, Root, Resolver, Direct, Artifact, Source, Evict, Exclude, Series
 
 object LockField:
   def from(raw: String): Option[LockField] =
@@ -18,6 +18,8 @@ object LockField:
       case "artifact" => Some(LockField.Artifact)
       case "source"   => Some(LockField.Source)
       case "evict"    => Some(LockField.Evict)
+      case "exclude"  => Some(LockField.Exclude)
+      case "series"   => Some(LockField.Series)
       case _          => None
 
   def token(field: LockField): String =
@@ -32,6 +34,8 @@ object LockField:
       case LockField.Artifact => "artifact"
       case LockField.Source   => "source"
       case LockField.Evict    => "evict"
+      case LockField.Exclude  => "exclude"
+      case LockField.Series   => "series"
 end LockField
 
 enum LockError:

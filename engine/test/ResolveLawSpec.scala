@@ -3,9 +3,12 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.{
   Aggregate,
+  ArtifactBase,
   Dep,
+  DepExclusion,
   DepKind,
   Module,
+  Organization,
   Platform,
   Platforms,
   ProjectGraph,
@@ -49,6 +52,23 @@ object ResolveLawSpec extends ZIOSpecDefault:
         },
         ArtifactName.published("core", scala2, Platform.Jvm) == "core_2.13",
         ArtifactName.plugin("core", version, Platform.Jvm, SbtSeries.trusted("2")) == "core_sbt2_3",
+      )
+    ,
+    test("an sbt series is applied when the artifact is named, and the platform suffix stays in front"):
+      val series = Dep
+        .binary("org.example", "core", histos.LibraryRevision.trusted("1.0.0"))
+        .sbt(SbtSeries.trusted("2"))
+      val scala2 = ScalaVersion.trusted("2.13.14")
+      assertTrue(
+        ArtifactName.of(series, version, Platform.Jvm) == "core_sbt2_3",
+        ArtifactName.of(series, version, Platform.Js) == "core_sjs1_sbt2_3",
+        ArtifactName.of(series, version, Platform.Native) == "core_native0.5_sbt2_3",
+        ArtifactName.of(series, scala2, Platform.Jvm) == "core_sbt2_2.13",
+        ArtifactName.of(
+          Dep.binary("org.example", "core", histos.LibraryRevision.trusted("1.0.0")),
+          version,
+          Platform.Js,
+        ) == "core_sjs1_3",
       )
     ,
     test("an empty resolver list is central, and a listed central moves last"):
@@ -119,6 +139,50 @@ object ResolveLawSpec extends ZIOSpecDefault:
           (name, ClasspathScope.Test),
         ),
         cells.lastOption.exists(_.dependencies.length == 2),
+      )
+    ,
+    test("an exclusion or a series changes the direct, and the lock drifts"):
+      val exclusion = DepExclusion(Organization.trusted("org.example"), ArtifactBase.trusted("other"))
+      val excluded  = dep.excluding(exclusion.organization, exclusion.artifact)
+      val binary    = LockedDirect("org.example", "demo", "1.0.0", DepKind.Binary)
+      val held      = DependencyLock(
+        List(LockedCell(name, version, Platform.Jvm, List(binary), List(artifact(sha)), Nil))
+      )
+      val series = Dep
+        .binary("org.example", "demo", histos.LibraryRevision.trusted("1.0.0"))
+        .sbt(SbtSeries.trusted("2"))
+      val matched = lock(sha).copy(cells =
+        List(
+          LockedCell(
+            name,
+            version,
+            Platform.Jvm,
+            List(direct.copy(exclusions = List(exclusion))),
+            List(artifact(sha)),
+            Nil,
+          )
+        )
+      )
+      assertTrue(
+        Resolve.locate(cell(List(excluded)), lock(sha)) == Left(
+          ResolveError.LockDrift(
+            name,
+            version,
+            Platform.Jvm,
+            ClasspathScope.Compile,
+            List("lock org.example:demo:1.0.0", "graph org.example:demo:1.0.0-org.example:other"),
+          )
+        ),
+        Resolve.locate(cell(List(series)), held) == Left(
+          ResolveError.LockDrift(
+            name,
+            version,
+            Platform.Jvm,
+            ClasspathScope.Compile,
+            List("lock org.example::demo:1.0.0", "graph org.example::demo:1.0.0 sbt2"),
+          )
+        ),
+        Resolve.locate(cell(List(excluded)), matched).isRight,
       )
     ,
     test("a fingerprint changes when the lock sha changes"):

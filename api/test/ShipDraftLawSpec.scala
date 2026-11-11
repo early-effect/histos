@@ -34,11 +34,11 @@ object ShipDraftLawSpec extends ZIOSpecDefault:
         pointed.kind == DepKind.Binary,
         pointed.organization == org.value,
         pointed.name == api.value,
-        pointed.revision == pointer.revision,
+        pointed.revision.value == pointer.revision,
         stored.kind == DepKind.Binary,
         stored.organization == org.value,
         stored.name == app.value,
-        stored.revision == commit.revision,
+        stored.revision.value == commit.revision,
         release.revisionValue.render == release.revision,
         !release.revision.contains("SNAPSHOT"),
       )

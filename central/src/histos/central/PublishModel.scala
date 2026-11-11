@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.{Developer, HttpUrl, License, Organization, PomText, Scm}
+import histos.{DepExclusion, Developer, HttpUrl, License, Organization, PomText, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -29,7 +29,12 @@ enum DependencyVersionError:
 end DependencyVersionError
 
 /** One pom dependency. The artifact id already includes its Scala suffix. */
-final case class MavenDependency(group: Organization, name: ArtifactId, version: DependencyVersion)
+final case class MavenDependency(
+    group: Organization,
+    name: ArtifactId,
+    version: DependencyVersion,
+    exclusions: List[DepExclusion] = Nil,
+)
 
 /** The pom fields beyond the coordinate. `name` is the artifact id and is not stored here. */
 final case class PomDocument(

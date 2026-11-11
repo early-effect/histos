@@ -6,55 +6,74 @@ object build extends HistosBuild:
   def graph =
     val scala3     = scala"3.10.0"
     val zio        = dep"dev.zio::zio:2.1.27"
-    val zioTest    = dep"dev.zio::zio-test:2.1.27"
-    val zioTestSbt = dep"dev.zio::zio-test-sbt:2.1.27"
+    val zioTest    = zio.module("zio-test")
+    val zioTestSbt = zio.module("zio-test-sbt")
+    val zioStreams = zio.module("zio-streams")
+    val zioJson    = dep"dev.zio::zio-json:1.1.1"
     val api        = module("api", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
-    val zioJson = dep"dev.zio::zio-json:1.1.1"
-    val wire    = module("wire", Jvm, Native)(scala3)
+    val wire = module("wire", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
       .testDependencies(zioTest, zioTestSbt)
-    val central = module("central", Jvm)(scala3)
+    val heddle    = dep"rocks.earlyeffect::heddle:0.14.2"
+    val heddleMcp = heddle.module("heddle-mcp")
+    val central   = module("central", Jvm)(scala3)
       .dependsOn(api, wire)
-      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.14.2")
+      .libraryDependencies(zio, heddle)
       .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.2.0")
-    val engine = module("engine", Jvm)(scala3)
+    val scalaCompiler   = dep"org.scala-lang::scala3-compiler:3.10.0"
+    val scaladoc        = scalaCompiler.module("scaladoc")
+    val asm             = dep"org.ow2.asm:asm:9.11.1"
+    val asmTree         = asm.module("asm-tree")
+    val asmCommons      = asm.module("asm-commons")
+    val asmUtil         = asm.module("asm-util")
+    val asmAnalysis     = asm.module("asm-analysis")
+    val grpc            = dep"io.grpc:grpc-api:1.85.1"
+    val grpcNetty       = grpc.module("grpc-netty-shaded")
+    val grpcStub        = grpc.module("grpc-stub")
+    val jacksonCore     = dep"com.fasterxml.jackson.core:jackson-core:2.22.4"
+    val jacksonDatabind = jacksonCore.module("jackson-databind")
+    val jackson3        = dep"tools.jackson.core:jackson-core:3.2.4"
+    val jackson3Bind    = jackson3.module("jackson-databind")
+    val engine          = module("engine", Jvm)(scala3)
       .dependsOn(central, api, wire)
       .libraryDependencies(
         zio,
         zioJson,
-        dep"dev.zio::zio-streams:2.1.27",
-        dep"org.scala-lang::scala3-compiler:3.10.0",
-        dep"org.scala-lang::scaladoc:3.10.0",
+        zioStreams,
+        scalaCompiler,
+        scaladoc,
         dep"org.scala-sbt::zinc:2.0.5",
         // Zinc still requests jars whose lazy vals call Unsafe.
         dep"org.scala-sbt::sbinary:0.6.0",
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
         dep"io.get-coursier::coursier:2.1.26",
-        dep"org.ow2.asm:asm:9.11.1",
-        dep"org.ow2.asm:asm-tree:9.11.1",
+        asm,
+        asmTree,
         // scala3-compiler 3.10.0 still requests the rest of ASM at 9.10.1.
-        dep"org.ow2.asm:asm-commons:9.11.1",
-        dep"org.ow2.asm:asm-util:9.11.1",
-        dep"org.ow2.asm:asm-analysis:9.11.1",
+        asmCommons,
+        asmUtil,
+        asmAnalysis,
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
         // The stable Java API `histos fmt` loads scalafmt-dynamic-core through. The rest of scalafmt is a locked tool.
         dep"org.scalameta:scalafmt-interfaces:3.11.5",
         // heddle has no gRPC, and the remote-execution stubs are not published.
-        dep"io.grpc:grpc-api:1.85.1",
-        dep"io.grpc:grpc-netty-shaded:1.85.1",
+        grpc,
+        grpcNetty,
         // scaladoc and flexmark still request Jackson and jsoup below the GHSA fixes.
         dep"com.fasterxml.jackson.core:jackson-annotations:2.22",
-        dep"com.fasterxml.jackson.core:jackson-core:2.22.4",
-        dep"com.fasterxml.jackson.core:jackson-databind:2.22.4",
+        jacksonCore,
+        jacksonDatabind,
+        // A different organization, so this revision is its own root.
         dep"com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.4",
-        dep"tools.jackson.core:jackson-core:3.2.4",
-        dep"tools.jackson.core:jackson-databind:3.2.4",
+        jackson3,
+        jackson3Bind,
+        // A different organization, so this revision is its own root.
         dep"tools.jackson.dataformat:jackson-dataformat-yaml:3.2.4",
         dep"org.jsoup:jsoup:1.24.1",
         // gRPC 1.85.1 still requests guava 33.6.0-android, inside GHSA-xxph-c9ww-hj94.
@@ -64,7 +83,7 @@ object build extends HistosBuild:
         zioTest,
         zioTestSbt,
         dep"rocks.earlyeffect::slayer:0.2.0",
-        dep"io.grpc:grpc-stub:1.85.1",
+        grpcStub,
       )
     val client = module("client", Native)(scala3)
       .clang(ClangMajor(21))
@@ -79,7 +98,7 @@ object build extends HistosBuild:
       .dependsOn(engine, central, api, wire)
       .libraryDependencies(
         zio,
-        dep"rocks.earlyeffect::heddle-mcp:0.14.2",
+        heddleMcp,
         dep"dev.zio::zio-cli:0.8.2",
         // zio-cli 0.8.2 still requests zio-process 0.7.1, whose lazy vals call Unsafe.
         dep"dev.zio::zio-process:0.8.1",
@@ -88,8 +107,8 @@ object build extends HistosBuild:
         zioTest,
         zioTestSbt,
         dep"rocks.earlyeffect::slayer:0.2.0",
-        dep"org.ow2.asm:asm:9.11.1",
-        dep"org.ow2.asm:asm-tree:9.11.1",
+        asm,
+        asmTree,
       )
     Projects
       .organization(organization"rocks.earlyeffect")

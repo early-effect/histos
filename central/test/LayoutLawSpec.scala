@@ -1,7 +1,19 @@
 package histos.central
 
 import histos.version.{CiVersion, ReleaseVersion, ShipNumber, SnapshotPointer}
-import histos.{Developer, DeveloperId, HttpUrl, License, LicenseName, Organization, PomText, Scm, ScmConnection}
+import histos.{
+  ArtifactBase,
+  DepExclusion,
+  Developer,
+  DeveloperId,
+  HttpUrl,
+  License,
+  LicenseName,
+  Organization,
+  PomText,
+  Scm,
+  ScmConnection,
+}
 
 import zio.Chunk
 import zio.test.*
@@ -66,6 +78,45 @@ object LayoutLawSpec extends ZIOSpecDefault:
             pom.contains("<id>ada</id>"),
             pom.contains("<dependencies>"),
             pom.contains("<version>1.2.3</version>"),
+          )
+    ,
+    test("an exclusion is the published artifact id, and an empty list writes no exclusions block"):
+      val rendered =
+        for
+          name    <- ArtifactId.from("widget")
+          kept    <- ArtifactId.from("widget_3")
+          plain   <- ArtifactId.from("lib")
+          version <- DependencyVersion.from("1.0.0")
+        yield
+          val exclusion =
+            DepExclusion(Organization.trusted("org.codehaus.plexus"), ArtifactBase.trusted("plexus-archiver"))
+          val revision = Revision.Release(ReleaseVersion(ship))
+          val marked   = Artifact(
+            Organization("demo"),
+            name,
+            revision,
+            pk,
+            dependencies = List(MavenDependency(Organization("org.example"), kept, version, List(exclusion))),
+          )
+          val open = Artifact(
+            Organization("demo"),
+            name,
+            revision,
+            pk,
+            dependencies = List(MavenDependency(Organization("org.example"), plain, version)),
+          )
+          (Layout.pom(marked), Layout.pom(open))
+      rendered match
+        case Left(_)               => assertTrue(false)
+        case Right((marked, open)) =>
+          assertTrue(
+            marked.contains("<artifactId>widget_3</artifactId>"),
+            marked.contains("<groupId>org.codehaus.plexus</groupId>"),
+            marked.contains("<artifactId>plexus-archiver</artifactId>"),
+            marked.contains("<exclusions>"),
+            !marked.contains("plexus-archiver_3"),
+            open.contains("<artifactId>lib</artifactId>"),
+            !open.contains("<exclusions>"),
           )
     ,
     test("an empty dependency list omits the dependencies wrapper"):

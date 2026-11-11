@@ -3,7 +3,7 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
-import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Aggregate, Dep, DepKind, LibraryRevision, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
@@ -296,14 +296,14 @@ object Resolve:
           lock.plugins.find(plugin =>
             plugin.organization == dependency.organization &&
               plugin.name == dependency.name &&
-              plugin.revision == dependency.revision
+              plugin.revision == dependency.revision.value
           ) match
             case None =>
               ZIO.fail(
                 ResolveError.NotFound(
                   dependency.organization,
                   ArtifactName.of(dependency, pluginVersion, Platform.Jvm),
-                  dependency.revision,
+                  dependency.revision.value,
                 )
               )
             case Some(locked) =>
@@ -416,8 +416,10 @@ object Resolve:
       LockedDirect(
         dependency.organization,
         dependency.name,
-        dependency.revision,
+        dependency.revision.value,
         dependency.kind,
+        dependency.exclusions,
+        dependency.sbtSeries,
       )
     )
 
@@ -441,7 +443,11 @@ object Resolve:
       case DepKind.Java   => ":"
       case DepKind.Binary => "::"
       case DepKind.Full   => ":::"
-    s"${direct.organization}$separator${direct.name}:${direct.revision}"
+    val excluded = direct.exclusions
+      .map(item => s"-${item.organization.value}:${item.artifact.value}")
+      .mkString
+    val series = direct.sbtSeries.fold("")(value => s" sbt${value.value}")
+    s"${direct.organization}$separator${direct.name}:${direct.revision}$excluded$series"
 
   /** `lock` lines are in the file. `graph` lines are what this resolve computed. */
   private def moved(locked: List[String], fresh: List[String]): List[String] =
@@ -493,14 +499,16 @@ object Resolve:
       LockedPlugin(
         dependency.organization,
         dependency.name,
-        dependency.revision,
+        dependency.revision.value,
         link,
         List(
           LockedDirect(
             dependency.organization,
             dependency.name,
-            dependency.revision,
+            dependency.revision.value,
             dependency.kind,
+            dependency.exclusions,
+            dependency.sbtSeries,
           )
         ),
         classpath.artifacts.map(artifact =>
@@ -531,14 +539,14 @@ object Resolve:
           classpath.artifacts.find(artifact =>
             artifact.organization == dependency.organization &&
               artifact.name == published &&
-              artifact.revision == dependency.revision
+              artifact.revision == dependency.revision.value
           ) match
             case None =>
               ZIO.fail(
                 ResolveError.NotFound(
                   dependency.organization,
                   published,
-                  dependency.revision,
+                  dependency.revision.value,
                 )
               )
             case Some(direct) =>
@@ -635,11 +643,7 @@ object Resolve:
     histos.toolchain.BuildCompiler.version
 
   private[histos] def ranged(dependency: Dep): Boolean =
-    val revision = dependency.revision
-    revision.startsWith("latest") || revision.exists(marked)
-
-  private def marked(character: Char): Boolean =
-    character == '[' || character == ']' || character == '(' || character == ')' || character == '+' || character == ','
+    LibraryRevision.isRange(dependency.revision.value)
 
   private[resolve] def write(path: Path, lock: DependencyLock): IO[ResolveError, Unit] =
     Option(path.getParent) match

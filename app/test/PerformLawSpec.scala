@@ -91,7 +91,7 @@ object PerformLawSpec extends ZIOSpecDefault:
         for heard <- drive(Right(None), Call.Version)
         yield assertTrue(
           heard == Chunk(
-            Message.Event(BuildEvent.Out(version)),
+            Message.Event(BuildEvent.Out(s"$version\nserver $version\nno local assembly")),
             Message.Done(CallResult.reported()),
           )
         )

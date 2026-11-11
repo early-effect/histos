@@ -182,7 +182,7 @@ object SonaStock:
     for
       name    <- ArtifactId.from(item.artifact).left.map(_ => PublishFault.Artifact(item.artifact))
       version <- DependencyVersion.from(item.revision).left.map(_ => PublishFault.Dependency(item.revision))
-    yield MavenDependency(item.group, name, version)
+    yield MavenDependency(item.group, name, version, item.exclusions)
 
   private def read(path: Path): IO[PublishFault, Chunk[Byte]] =
     ZIO

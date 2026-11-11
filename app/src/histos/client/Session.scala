@@ -1,5 +1,6 @@
 package histos.client
 
+import histos.ApiClock
 import histos.build.{Beat, Build, BuildEvent}
 import histos.cli.{Cli, Operation, Show}
 import histos.jdk.Machine
@@ -73,19 +74,54 @@ object Session:
             ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
         },
         text =>
-          Attach.decide(repo, text).flatMap {
-            case Decision.DifferentVersion(socket) =>
-              drop(desk) *>
-                Attach.replace(repo, text, socket).flatMap {
-                  case Some(fresh) => ask(repo, apiJar, machine, desk, call, text, fresh)
-                  case None        => ZIO.fail(SessionError.DifferentVersion)
+          ApiClock.admit(repo, call).flatMap {
+            case ApiClock.Admit.Stop(fault) => ZIO.succeed(CallResult.Fault(fault))
+            case admitted                   =>
+              val warned = admitted match
+                case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
+                case _                         => ZIO.unit
+              warned *> ApiClock.drifted(repo).flatMap { stale =>
+                val hold = stale && ApiClock.skipsReboot(call)
+                Attach.decide(repo, text).flatMap {
+                  case Decision.DifferentVersion(socket) if hold =>
+                    drop(desk) *>
+                      ask(repo, apiJar, machine, desk, call, text, socket).flatMap(withProcess(repo, call, _))
+                  case Decision.DifferentVersion(socket) =>
+                    drop(desk) *>
+                      ApiClock.rebootLine(repo).flatMap { line =>
+                        ZIO.succeed(java.lang.System.err.println(line)) *>
+                          Attach.replace(repo, text, socket).flatMap {
+                            case Some(fresh) =>
+                              ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
+                            case None =>
+                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(SessionError.Remote(error)))
+                          }
+                      }
+                  case Decision.Open(socket) =>
+                    drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
+                      .flatMap(withProcess(repo, call, _))
+                  case Decision.Absent =>
+                    locally(repo, apiJar, machine, desk, call, text).flatMap(withProcess(repo, call, _))
                 }
-            case Decision.Open(socket) =>
-              drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
-            case Decision.Absent =>
-              locally(repo, apiJar, machine, desk, call, text)
+              }
           },
       )
+
+  /** Version names this MCP process. Reboot returns the line and the socket instead of an empty tool result. */
+  private def withProcess(repo: Path, call: Call, result: CallResult): UIO[CallResult] =
+    call match
+      case Call.Version =>
+        ApiClock.mcpLine(repo).map(line => note(result, line, front = false))
+      case Call.Reboot =>
+        ApiClock.rebootLine(repo).map(line => note(result, line, front = true))
+      case _ => ZIO.succeed(result)
+
+  private def note(result: CallResult, line: String, front: Boolean): CallResult =
+    result match
+      case CallResult.Reported(report) =>
+        val out = if front then line +: report.out else report.out :+ line
+        CallResult.Reported(report.copy(out = out))
+      case other => other
 
   private def ask(
       repo: Path,

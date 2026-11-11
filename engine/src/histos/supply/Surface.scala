@@ -394,16 +394,16 @@ object DepsSurface:
     lock(repo) match
       case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
       case Some(text) =>
+        val graph = read(repo.resolve("histos.scala"))
         Plan
-          .propose(text, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
           .flatMap: proposal =>
             if !yes then ZIO.succeed(DepsResult(0, proposal.text))
             else
               ZIO
                 .attempt:
-                  val histos = read(repo.resolve("histos.scala"))
-                  val files  = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
-                  val wrote  = Plan.write(repo, proposal, histos, files)
+                  val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
+                  val wrote = Plan.write(repo, proposal, graph, files)
                   proposal.text + wrote.map(name => s"wrote $name\n").mkString
                 .map(body => DepsResult(0, body))
                 .orElseSucceed(DepsResult(1, "could not write the plan\n"))
@@ -517,8 +517,9 @@ object DepsSurface:
     lock(repo) match
       case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
       case Some(text) =>
+        val graph = read(repo.resolve("histos.scala"))
         Plan
-          .propose(text, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
           .map(proposal => DepsResult(0, proposal.text))
           .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
