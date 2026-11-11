@@ -25,7 +25,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           off  <- DoctorSurface.applyReported(
             repo,
             List(command("true")),
-            DoctorSurface.Request(None, false, None, false, false),
+            DoctorSurface.Request(None, false, None, false, false, Nil, false),
             true,
             _ => ZIO.die(new IllegalStateException("asked")),
             _ => ZIO.die(new IllegalStateException("ran")),
@@ -34,7 +34,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           secret <- DoctorSurface.applyReported(
             repo,
             List(command("echo secret")),
-            DoctorSurface.Request(None, false, None, true, false),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
             true,
             _ => ZIO.die(new IllegalStateException("asked")),
             _ => ZIO.die(new IllegalStateException("ran")),
@@ -43,7 +43,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           yes <- DoctorSurface.applyReported(
             repo,
             List(setting("https://example.test/settings")),
-            DoctorSurface.Request(None, false, None, true, true),
+            DoctorSurface.Request(None, false, None, true, true, Nil, false),
             true,
             _ => ZIO.die(new IllegalStateException("asked")),
             _ => ZIO.succeed(()),
@@ -65,7 +65,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           skipped <- DoctorSurface.applyReported(
             repo,
             List(setting("https://example.test/settings")),
-            DoctorSurface.Request(None, false, None, true, false),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
             true,
             _ => ZIO.succeed(FixApply.Answer.No),
             _ => ZIO.succeed(()),
@@ -74,7 +74,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           applied <- DoctorSurface.applyReported(
             repo,
             List(setting("https://example.test/rules")),
-            DoctorSurface.Request(None, false, None, true, false),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
             true,
             _ => ZIO.succeed(FixApply.Answer.Yes),
             _ => ZIO.succeed(()),
@@ -83,7 +83,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           wrote <- DoctorSurface.applyReported(
             repo,
             List(Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after"))),
-            DoctorSurface.Request(None, false, None, true, false),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
             false,
             _ => ZIO.succeed(FixApply.Answer.No),
             _ => ZIO.succeed(()),

@@ -43,10 +43,12 @@ Release checks read the catalog, `releases`, `histos.version`, and the newest re
 
 ```text
 ./histos doctor
+./histos doctor web
 ./histos doctor --area supply-chain
 ./histos doctor --area toolchain
 ./histos doctor --json
 ./histos doctor --preflight supply-chain
+./histos doctor --verbose
 ./histos doctor --fix
 ./histos doctor --fix --yes
 ./histos --explain node.floor
@@ -57,18 +59,18 @@ Release checks read the catalog, `releases`, `histos.version`, and the newest re
 Toolchain checks report where the JDK, Node, and clang came from.
 
 - `jdk.source` is an error when the JDK is missing or older than 21. The home is `.histos/toolchain.local` when that file exists, and otherwise `java.home`.
-- `node.floor` is an error on a Js graph when Node is missing or older than 25. The message names `HISTOS_NODE`, `.histos/node.local`, and how to install Node 25. The binary is `HISTOS_NODE`, then `runnerTools.nodePath`, then `.histos/node.local`, then `PATH`.
-- `node.shadowed` is a warning when a node older than 25 is first on `PATH` and a newer node sits further along. The fix is `export HISTOS_NODE=<newer path>`.
-- `clang.source` is an error on a Native graph when clang is missing or the major is not the modules' `ClangMajor`. Clang comes from `PATH`.
+- `node.floor` is an error when this run launches a Js module and Node is missing or older than 25. The finding names every Js module in that launch set. `histos doctor` with no project launches nothing and does not probe, even when the graph has a Js module. `histos doctor <project>` asks about that project. A JVM module and a Native module do not launch Node. An aggregate is its modules, and those children decide. A launch set with no Js module reports `no Js module`. The message names `HISTOS_NODE`, `.histos/node.local`, and how to install Node 25. The binary is `HISTOS_NODE`, then `runnerTools.nodePath`, then `.histos/node.local`, then `PATH`. `histos toolchain` still probes whenever the graph has a Js module.
+- `node.shadowed` is a warning when this run launches a Js module from `PATH`, a node older than 25 is first, and a newer node sits further along. The finding names every Js module in that launch set. `histos doctor` with no project does not walk `PATH`. A JVM module and a Native module do not. `HISTOS_NODE`, `runnerTools.nodePath`, and `.histos/node.local` do not read `PATH`, so the check does not walk it, including when `.histos/node.local` is unreadable. The fix is `export HISTOS_NODE=<newer path>`. A warning does not change the exit.
+- `clang.source` is an error when this run links a Native module and clang is missing or the major is not that module's `ClangMajor`. The finding names every Native module in that launch set. `histos doctor` with no project links nothing and does not probe, even when the graph has a Native module. A JVM module and a Js module do not link Native. An aggregate is its modules, and those children decide. A launch set with no Native module reports `no Native module`. Clang comes from `PATH`. `histos toolchain` still probes whenever the graph has a Native module.
 - `runner-tools.cover` is an error when a Native module has no `runnerTools.llvm`, or a Js module has no `runnerTools.node`. The fix is the `.runnerTools(RunnerTools(...))` call to add. Without it, the generated job drops the install step.
 - `runner-tools.agree` is an error when `NodeFloor` is below 25, or the LLVM revision's major is not the modules' `ClangMajor`. The fix raises that value. It does not open a pull request.
 
 `histos toolchain` probes JDK, Node, and clang together. A failure of one does not hide the others.
 
-`--preflight <job>` is offline. It reads the job environment and does not call GitHub. Generated jobs run it after checkout and setup when `DoctorPlacement` is `PreflightPlusWorkflowJob`. `WorkflowJobOnly` omits that step. Neither placement adds a job. The full doctor runs on the `workflow` job.
+`--preflight <job>` does not open a socket. The job name is a label. The checks are the local ones (sha pins, format, the toolchain launch checks, `ship.session`, and `ship.releases`) plus the supply checks and any plugin preflight check. `ship.should-bump` and `ship.pin` do not run, because they call the registry. A GitHub fact this step did not read is a skip on every venue. The generated step runs before the mint and does not export `HISTOS_STEP_APP` or `HISTOS_SECRET_PRESENT_*`. A known failure still fails: the token step finished `failure`, `skipped`, or `cancelled`, a secret the job reported as absent, an App the probe saw as missing, or a Dependabot overlap in `.github/dependabot.yml`. The workflow-files warning is left to the full doctor. Generated jobs run this step after checkout and setup when `DoctorPlacement` is `PreflightPlusWorkflowJob`. `WorkflowJobOnly` omits that step. Neither placement adds a job. The full doctor runs on the `workflow` job and still fails an unseen fact in Actions.
 
 `--fix` applies local edits. `--yes` confirms those edits and histos commands. A GitHub setting is applied only after an interactive confirmation, which does not happen in CI or when there is no terminal. `--yes` never confirms a GitHub setting.
 
 Process status is 0, 1, or 2, including doctor, deps, and setup.
 
-The same report is the `doctor` MCP tool. `--json` prints one object with `exit`, `timedOut`, and `findings`. In GitHub Actions the text renderer also has an annotation line and a step-summary table. The JSON, the annotations, and the summary table list findings and timed-out checks only. A skipped check appears in the text output, and the last text line counts it (`N errors, N warnings, N ok, N skipped`).
+The same report is the `doctor` MCP tool. The text lists errors and warnings, and a timed-out check. `--verbose` also lists ok, skipped, and info lines, and the tail counts those. The default tail is `N errors, N warnings`, and `, N timed out` when a check timed out. `--json` prints one object with `exit`, `timedOut`, and `findings`. Findings include info. `--verbose` does not change JSON. A warning alone stays exit 0.

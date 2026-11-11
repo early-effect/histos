@@ -34,7 +34,9 @@ object ToolchainExplain:
       |Install a JDK 21 (or newer). Write its home, one absolute path, to .histos/toolchain.local. Remove that file to use java.home.""".stripMargin
 
   val nodeFloor: String =
-    """A Js graph launches on Node 25 or newer. Scala.js Wasm does not run on the Node 22 that many PATH entries still install.
+    """A module that launches on Node needs Node 25 or newer. Scala.js Wasm does not run on the Node 22 that many PATH entries still install. A JVM module and a Native module do not launch Node. An aggregate is its modules, and those children decide.
+      |
+      |histos doctor with no project launches nothing, so this check does not probe, even when the graph has a Js module. histos doctor <project> asks about that project. A Js module fails when Node is missing or older than 25, and the finding names every Js module in the launch set. histos toolchain still probes whenever the graph has a Js module.
       |
       |The binary is chosen in this order. HISTOS_NODE is an absolute path to the node binary and wins over everything else. Then runnerTools.nodePath. Then the Node home written in .histos/node.local. Then the first node on PATH. A named binary that is missing or older than 25 fails. Histos does not fetch Node and does not try the next source.
       |
@@ -43,12 +45,16 @@ object ToolchainExplain:
       |A generated test job installs Node only when runnerTools names a NodeFloor. See runner-tools.cover.""".stripMargin
 
   val nodeShadowed: String =
-    """PATH is searched from front to back. A node older than 25 earlier in PATH hides a newer node later in PATH. The launch uses the first one, so the newer binary is never tried.
+    """PATH is searched from front to back. When this run launches a Js module from PATH, a node older than 25 earlier in PATH hides a newer node later in PATH. The launch uses the first one, so the newer binary is never tried. The finding names every Js module in that launch set.
       |
-      |export HISTOS_NODE to the absolute path of the newer node binary. HISTOS_NODE wins over PATH, .histos/node.local, and runnerTools.nodePath.""".stripMargin
+      |histos doctor with no project launches nothing, so this check does not walk PATH. A JVM module and a Native module do not launch Node. HISTOS_NODE, runnerTools.nodePath, and .histos/node.local win over PATH. This check does not walk PATH when one of those names the binary, including an unreadable .histos/node.local, because that file does not fall through to PATH.
+      |
+      |export HISTOS_NODE to the absolute path of the newer node binary. HISTOS_NODE wins over PATH, .histos/node.local, and runnerTools.nodePath. A warning does not change the exit.""".stripMargin
 
   val clang: String =
-    """A Native module is linked with the clang and clang++ pair on PATH. The major must be the ClangMajor the module names. clang and clang++ must report the same version and sit side by side. Histos does not fetch clang.
+    """A Native module is linked with the clang and clang++ pair on PATH. The major must be the ClangMajor that module names. clang and clang++ must report the same version and sit side by side. Histos does not fetch clang.
+      |
+      |histos doctor with no project links nothing, so this check does not probe, even when the graph has a Native module. histos doctor <project> asks about that project. A JVM module and a Js module do not link Native. An aggregate is its modules, and those children decide. A launch set with no Native module reports `no Native module`. A miss names every Native module in the launch set. histos toolchain still probes whenever the graph has a Native module.
       |
       |Install that major and put its bin directory on PATH ahead of any older clang.""".stripMargin
 

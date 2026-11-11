@@ -21,7 +21,7 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
       val notes    = Render.annotations(report)
       val table    = Render.summary("ci", report)
       val encoded  = Render.json(report)
-      val shown    = Render.text("repo", report)
+      val shown    = Render.text("repo", report, true)
       assertTrue(
         report.infos == 2,
         report.exit == 1,
@@ -49,6 +49,26 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
         shown.contains("1 errors, 1 warnings, 0 ok, 0 skipped, 1 timed out"),
       )
     ,
+    test("the default text keeps errors, warnings, and timeouts"):
+      val error   = found(Level.Error, Fix.Command(ShellLine.trusted("histos doctor")))
+      val warning = found(Level.Warning, Fix.Command(ShellLine.trusted("export HISTOS_NODE=/bin/node")))
+      val info    = found(Level.Info, Fix.Steps(::("note", Nil)))
+      val skipped = Outcome.Skipped(mark, Probe.Local, Fix.Command(ShellLine.trusted("histos test")))
+      val fine    = Outcome.Ok(mark, "fine")
+      val quiet   = Render.text("repo", DoctorReport(List(fine, skipped), Nil), false)
+      val broken  = Render.text("repo", DoctorReport(List(error, warning, info, skipped, fine), List(late)), false)
+      assertTrue(
+        quiet == "histos doctor  repo\n0 errors, 0 warnings",
+        broken.contains("  x error    demo.mark"),
+        broken.contains("  ! warning  demo.mark"),
+        broken.contains("  x timed out demo.late"),
+        !broken.contains("  i info"),
+        !broken.contains("skipped"),
+        !broken.contains("fine"),
+        broken.contains("1 errors, 1 warnings, 1 timed out"),
+        !broken.contains("0 ok"),
+      )
+    ,
     test("a skipped check names the probe it needs and prints the command, the settings url, the file, or every step"):
       val command  = Outcome.Skipped(mark, Probe.Local, Fix.Command(ShellLine.trusted("histos test")))
       val settings =
@@ -56,7 +76,7 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
       val config =
         Outcome.Skipped(mark, Probe.JobEnv, Fix.Config(RepoPath.trusted(".github/workflows/ci.yml"), Edit("a", "b")))
       val steps = Outcome.Skipped(mark, Probe.GitHubRead, Fix.Steps(::("gh auth login", List("gh auth status"))))
-      val shown = Render.text("repo", DoctorReport(List(command, settings, config, steps), Nil))
+      val shown = Render.text("repo", DoctorReport(List(command, settings, config, steps), Nil), true)
       assertTrue(
         shown.contains("histos test"),
         shown.contains("https://example.test/s"),

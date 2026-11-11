@@ -3,9 +3,20 @@ package histos.doctor
 import histos.jdk.{JdkRead, JdkSource, Machine, Toolchain, ToolchainError}
 import histos.native.NativeOrigin
 import histos.plugin.RepoPath
-import histos.supply.{ApiCall, Net, OutageStrategy, Reply, RepoName, SourceName, SupplyDiagnostic, SupplyFault}
+import histos.select.SelectError
+import histos.supply.{
+  ApiCall,
+  DoctorSurface,
+  Net,
+  OutageStrategy,
+  Reply,
+  RepoName,
+  SourceName,
+  SupplyDiagnostic,
+  SupplyFault,
+}
 import histos.toolchain.Architecture
-import histos.central.FeedError
+import histos.central.{FeedError, ReleaseFeed}
 import histos.publish.{LauncherChannel, LauncherChoice}
 import histos.version.{
   BumpReason,
@@ -21,7 +32,26 @@ import histos.version.{
   TagRelation,
 }
 import histos.workspace.Workspace
-import histos.{HttpUrl, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
+import histos.{
+  Aggregate,
+  HttpUrl,
+  Module,
+  NodeFloor,
+  NodePath,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  RunnerTools,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+  Splits,
+  ToolRevision,
+}
+
+import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
 
 import slayer.{any, stub, stubbed}
 
@@ -349,10 +379,10 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
             for
               jdk     <- ToolchainChecks.jdk(machine)
               read    <- Toolchain.read(machine)
-              node    <- ToolchainChecks.nodeFloor(machine, ProjectGraph.trusted(List(jvm)))
-              clang   <- ToolchainChecks.clang(machine, ProjectGraph.trusted(List(jvm)))
-              missing <- ToolchainChecks.clang(machine, ProjectGraph.trusted(List(native(histos.ClangPin.Unused))))
-              split   <- ToolchainChecks.clang(machine, ProjectGraph.trusted(List(left, right)))
+              node    <- ToolchainChecks.nodeFloor(machine, ProjectGraph.trusted(List(jvm)), List(jvm))
+              clang   <- ToolchainChecks.clang(machine, List(jvm))
+              missing <- ToolchainChecks.clang(machine, List(native(histos.ClangPin.Unused)))
+              split   <- ToolchainChecks.clang(machine, List(left, right))
             yield assertTrue(
               jdk.exists(found),
               read == JdkRead.Failed(ToolchainError.Absent(Toolchain.Floor), Some(JdkSource.Running)),
@@ -360,7 +390,269 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
               clang == List(Outcome.Ok(ToolchainChecks.clangId, "no Native module")),
               missing.exists(found),
               split.exists(found),
-            ),
+            )
+    ,
+    test("node.floor probes only the modules this run launches"):
+      val program =
+        ZIO.scoped:
+          Workspace
+            .work("histos-doctor-node-floor")
+            .flatMap: repo =>
+              val binary = repo.resolve("bin").resolve("node")
+              val core   = jvm
+              val web    = core.copy(name = ProjectName.trusted("web"), platforms = Platforms(Platform.Js, Nil))
+              val ui     = core.copy(name = ProjectName.trusted("ui"), platforms = Platforms(Platform.Js, Nil))
+              val batch  = Aggregate(ProjectName.trusted("batch"), List(core.name), SourcePos("histos.scala", 4, 1))
+              val site   = Aggregate(ProjectName.trusted("site"), List(web.name), SourcePos("histos.scala", 5, 1))
+              val tools  = RunnerTools(Some(NodeFloor(25)), None, None)
+              val mixed  = ProjectGraph.trusted(
+                List(core, web, ui, batch, site),
+                Splits.aggregate,
+                Catalog.empty,
+                None,
+                Nil,
+                runnerTools = tools,
+              )
+              val typo                                                  = ProjectName.trusted("webx")
+              def launched(names: List[ProjectName]): UIO[List[Module]] =
+                DoctorLaunch.modules(mixed, names) match
+                  case Left(error)    => ZIO.dieMessage(error.message)
+                  case Right(modules) => ZIO.succeed(modules)
+              for
+                _    <- script(binary)
+                home <- ZIO
+                  .attempt(Option(java.lang.System.getProperty("java.home")).filter(_.nonEmpty))
+                  .orDie
+                  .flatMap:
+                    case Some(value) => ZIO.succeed(Path.of(value))
+                    case None        => ZIO.dieMessage("java.home is unset")
+                machine = Machine(
+                  Map("HISTOS_NODE" -> binary.toAbsolutePath.normalize.toString),
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  Some(home),
+                  NativeOrigin.Central,
+                )
+                batchModules <- launched(List(batch.name))
+                siteModules  <- launched(List(site.name))
+                pairModules  <- launched(List(web.name, ui.name))
+                jvmFloor     <- ToolchainChecks.nodeFloor(machine, mixed, batchModules)
+                jsFloor      <- ToolchainChecks.nodeFloor(machine, mixed, siteModules)
+                pairFloor    <- ToolchainChecks.nodeFloor(machine, mixed, pairModules)
+                idle         <- ToolchainChecks.nodeFloor(machine, mixed, Nil)
+                jvmDoctor    <- doctor(repo, mixed, batchModules, machine)
+                jsDoctor     <- doctor(repo, mixed, siteModules, machine)
+                open         <- doctor(repo, mixed, Nil, machine)
+              yield
+                val unknown = DoctorLaunch.modules(mixed, List(typo))
+                assertTrue(
+                  DoctorLaunch.modules(mixed, Nil) == Right(Nil),
+                  batchModules == List(core),
+                  siteModules == List(web),
+                  pairModules == List(web, ui),
+                  (
+                    unknown match
+                      case Left(SelectError.Unknown(name, near)) =>
+                        name == typo && near.contains("web")
+                      case _ => false
+                  ),
+                  jvmFloor == List(Outcome.Ok(ToolchainChecks.nodeFloorId, "no Js module")),
+                  idle == List(Outcome.Ok(ToolchainChecks.nodeFloorId, "this run does not launch Node")),
+                  jsFloor.length == 1,
+                  pairFloor.length == 1,
+                  floorText(jsFloor).contains("web launches on Node"),
+                  floorText(jsFloor).contains("24.22.2"),
+                  floorText(jsFloor).contains("older than 25"),
+                  floorText(pairFloor).contains("web, ui launch on Node"),
+                  floorText(pairFloor).contains("24.22.2"),
+                  floorText(pairFloor).contains("older than 25"),
+                  !floorText(jvmFloor).contains("24.22.2"),
+                  !floorText(idle).contains("24.22.2"),
+                  jvmDoctor._1 == 0,
+                  jsDoctor._1 == 1,
+                  jsDoctor._2.contains("web launches on Node"),
+                  jsDoctor._2.contains("node.floor"),
+                  open._1 == 0,
+                  open._2.contains("this run does not launch Node"),
+                  !open._2.contains("x error"),
+                )
+      program.provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed])
+    @@ TestAspect.withLiveSystem,
+    test("node.shadowed walks PATH only when this run launches Node from PATH"):
+      val program =
+        ZIO.scoped:
+          Workspace
+            .work("histos-doctor-node-shadow")
+            .flatMap: repo =>
+              val oldDir = repo.resolve("old")
+              val newDir = repo.resolve("new")
+              val older  = oldDir.resolve("node")
+              val newer  = newDir.resolve("node")
+              val core   = jvm
+              val web    = core.copy(name = ProjectName.trusted("web"), platforms = Platforms(Platform.Js, Nil))
+              val tools  = RunnerTools(Some(NodeFloor(25)), None, None)
+              val named  = tools.copy(nodePath = Some(NodePath("/usr/bin/node")))
+              val plain  = ProjectGraph.trusted(
+                List(core, web),
+                Splits.aggregate,
+                Catalog.empty,
+                None,
+                Nil,
+                runnerTools = tools,
+              )
+              val pinned = ProjectGraph.trusted(
+                List(core, web),
+                Splits.aggregate,
+                Catalog.empty,
+                None,
+                Nil,
+                runnerTools = named,
+              )
+              val path =
+                s"${oldDir.toAbsolutePath}${java.io.File.pathSeparator}${newDir.toAbsolutePath}"
+              def box(env: Map[String, String]): Machine =
+                Machine(
+                  env,
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  None,
+                  NativeOrigin.Central,
+                )
+              def versioned(path: Path, version: String): UIO[Unit] =
+                ZIO
+                  .attempt:
+                    Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+                    Files.writeString(path, s"#!/bin/sh\necho $version\n")
+                    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwxr-xr-x"))
+                    ()
+                  .orDie
+              val shadowed = Map("PATH" -> path)
+              for
+                _ <- versioned(older, "v20.18.0")
+                _ <- versioned(newer, "v26.1.0")
+                _ <- ZIO.attempt {
+                  Files.createDirectories(repo.resolve(".histos"))
+                  Files.writeString(repo.resolve(".histos").resolve("node.local"), "/opt/node-home\n")
+                }.orDie
+                idle  <- ToolchainChecks.nodeShadow(box(shadowed), plain, Nil)
+                jvmOn <- ToolchainChecks.nodeShadow(box(shadowed), plain, List(core))
+                envOn <- ToolchainChecks.nodeShadow(box(shadowed + ("HISTOS_NODE" -> newer.toString)), plain, List(web))
+                blank <- ToolchainChecks.nodeShadow(box(shadowed + ("HISTOS_NODE" -> "")), plain, List(web))
+                local <- ToolchainChecks.nodeShadow(box(shadowed), plain, List(web))
+                _   <- ZIO.attempt(Files.writeString(repo.resolve(".histos").resolve("node.local"), "relative\n")).orDie
+                bad <- ToolchainChecks.nodeShadow(box(shadowed), plain, List(web))
+                _   <- ZIO.attempt(Files.delete(repo.resolve(".histos").resolve("node.local"))).orDie
+                config <- ToolchainChecks.nodeShadow(box(shadowed), pinned, List(web))
+                walked <- ToolchainChecks.nodeShadow(box(shadowed), plain, List(web))
+              yield assertTrue(
+                idle == List(Outcome.Ok(ToolchainChecks.shadowId, "this run does not launch Node")),
+                jvmOn == List(Outcome.Ok(ToolchainChecks.shadowId, "no Js module")),
+                envOn == List(
+                  Outcome.Ok(ToolchainChecks.shadowId, "the launch uses HISTOS_NODE and does not read PATH")
+                ),
+                blank == envOn,
+                local == List(
+                  Outcome.Ok(ToolchainChecks.shadowId, "the launch uses .histos/node.local and does not read PATH")
+                ),
+                bad == local,
+                config == List(
+                  Outcome.Ok(ToolchainChecks.shadowId, "the launch uses runnerTools.nodePath and does not read PATH")
+                ),
+                !floorText(idle).contains("26.1.0"),
+                !floorText(envOn).contains("26.1.0"),
+                !floorText(local).contains("26.1.0"),
+                !floorText(config).contains("26.1.0"),
+                (
+                  walked match
+                    case List(Outcome.Found(ToolchainDiagnostic.NodeShadowed(_, summary))) =>
+                      summary.contains("web launches on Node") &&
+                      summary.contains("hides") &&
+                      summary.contains("20.18.0") &&
+                      summary.contains("26.1.0")
+                    case _ => false
+                ),
+              )
+      program
+    ,
+    test("clang.source probes only the modules this run links"):
+      val program =
+        ZIO.scoped:
+          Workspace
+            .work("histos-doctor-clang")
+            .flatMap: repo =>
+              val core  = jvm
+              val link  = native(histos.ClangPin.Major(histos.ClangMajor(21))).copy(name = ProjectName.trusted("link"))
+              val other = link.copy(name = ProjectName.trusted("other"))
+              val batch = Aggregate(ProjectName.trusted("batch"), List(link.name), SourcePos("histos.scala", 4, 1))
+              val tools = RunnerTools(None, Some(ToolRevision("21.1.8")), None)
+              val mixed = ProjectGraph.trusted(
+                List(core, link, other, batch),
+                Splits.aggregate,
+                Catalog.empty,
+                None,
+                Nil,
+                runnerTools = tools,
+              )
+              def launched(names: List[ProjectName]): UIO[List[Module]] =
+                DoctorLaunch.modules(mixed, names) match
+                  case Left(error)    => ZIO.dieMessage(error.message)
+                  case Right(modules) => ZIO.succeed(modules)
+              for
+                home <- ZIO
+                  .attempt(Option(java.lang.System.getProperty("java.home")).filter(_.nonEmpty))
+                  .orDie
+                  .flatMap:
+                    case Some(value) => ZIO.succeed(Path.of(value))
+                    case None        => ZIO.dieMessage("java.home is unset")
+                machine = Machine(
+                  Map.empty,
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  Some(home),
+                  NativeOrigin.Central,
+                )
+                batchModules <- launched(List(batch.name))
+                idle         <- ToolchainChecks.clang(machine, Nil)
+                jvmClang     <- ToolchainChecks.clang(machine, List(core))
+                one          <- ToolchainChecks.clang(machine, List(link))
+                pair         <- ToolchainChecks.clang(machine, List(link, other))
+                fromBatch    <- ToolchainChecks.clang(machine, batchModules)
+                open         <- doctor(repo, mixed, Nil, machine)
+                jvmDoctor    <- doctor(repo, mixed, List(core), machine)
+                nativeDoctor <- doctor(repo, mixed, List(link), machine)
+              yield assertTrue(
+                DoctorLaunch.modules(mixed, Nil) == Right(Nil),
+                batchModules == List(link),
+                idle == List(Outcome.Ok(ToolchainChecks.clangId, "this run does not link Native")),
+                jvmClang == List(Outcome.Ok(ToolchainChecks.clangId, "no Native module")),
+                one.length == 1,
+                pair.length == 1,
+                fromBatch.length == 1,
+                floorText(one).contains("link links with clang"),
+                floorText(one).contains("clang is not on PATH"),
+                floorText(pair).contains("link, other link with clang"),
+                floorText(fromBatch).contains("link links with clang"),
+                !floorText(idle).contains("clang is not on PATH"),
+                !floorText(jvmClang).contains("clang is not on PATH"),
+                open._1 == 0,
+                open._2.contains("this run does not link Native"),
+                !open._2.contains("x error"),
+                jvmDoctor._1 == 0,
+                jvmDoctor._2.contains("no Native module"),
+                nativeDoctor._1 == 1,
+                nativeDoctor._2.contains("link links with clang"),
+                nativeDoctor._2.contains("clang.source"),
+              )
+      program.provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]),
   )
 
   private def central(env: Map[String, String], reply: IO[SupplyFault, Reply]): UIO[(CentralProbe.Auth, List[String])] =
@@ -445,4 +737,48 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
 
   private def native(pin: histos.ClangPin): Module =
     jvm.copy(platforms = Platforms(Platform.Native, Nil), clang = pin)
+
+  private def doctor(
+      repo: Path,
+      graph: ProjectGraph,
+      launch: List[Module],
+      machine: Machine,
+  ): URIO[ReleaseFeed, (Int, String)] =
+    DoctorSurface.runWith(
+      repo,
+      graph,
+      DoctorSurface.Request(Some("toolchain"), false, None, false, false, launch, true),
+      machine,
+      Quiet,
+      Map.empty,
+      None,
+      false,
+      _ => ZIO.dieMessage("doctor asked"),
+      line => ZIO.dieMessage(s"doctor ran $line"),
+      url => ZIO.dieMessage(s"doctor wrote $url"),
+    )
+
+  private def floorText(outcomes: List[Outcome]): String =
+    outcomes match
+      case Outcome.Found(diagnostic) :: Nil => diagnostic.summary
+      case Outcome.Ok(_, text) :: Nil       => text
+      case other                            => other.toString
+
+  private def script(path: Path): UIO[Unit] =
+    ZIO
+      .attempt:
+        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+        Files.writeString(path, "#!/bin/sh\necho v24.22.2\n")
+        Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwxr-xr-x"))
+        ()
+      .orDie
 end DoctorProbeLawSpec
+
+private object Quiet extends Net:
+  def send(
+      method: String,
+      url: String,
+      body: String,
+      headers: List[(String, String)],
+  ): zio.IO[SupplyFault, Reply] =
+    ZIO.succeed(Reply(404, ""))

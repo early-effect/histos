@@ -36,6 +36,8 @@ object DoctorSurface:
       preflight: Option[String],
       fix: Boolean,
       yes: Boolean,
+      launch: List[histos.Module],
+      verbose: Boolean,
   )
 
   def run(repo: Path, graph: ProjectGraph, request: Request, machine: histos.jdk.Machine): UIO[(Int, String)] =
@@ -71,10 +73,11 @@ object DoctorSurface:
       exec: String => UIO[Unit],
       setting: String => UIO[Unit],
   ): URIO[ReleaseFeed, (Int, String)] =
-    val job = JobEnv.from(env)
+    val job        = JobEnv.from(env)
+    val credential = if request.preflight.isDefined then None else token
     for
       feed               <- ZIO.service[ReleaseFeed]
-      located            <- github(repo, net, env, token, job, graph)
+      located            <- github(repo, net, env, credential, job, graph)
       (auth, pgp, pages) <- probes(repo, graph, request, net, env, token, located)
       report             <- Runner.run(
         selected(repo, graph, request, machine, env, feed, located, auth, pgp, pages),
@@ -83,7 +86,8 @@ object DoctorSurface:
       )
       written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, tty, ask, exec, setting)
     yield
-      val body = if request.json then Render.json(report) else Render.text(repoName(repo), report)
+      val body =
+        if request.json then Render.json(report) else Render.text(repoName(repo), report, request.verbose)
       val note = if written.isEmpty then "" else written.mkString("\n", "\n", "")
       (report.exit, body + note)
 
@@ -128,7 +132,7 @@ object DoctorSurface:
       pages: histos.doctor.PagesProbe.Hit,
   ): List[DoctorCheck] =
     val pins   = pinCheck(repo, graph)
-    val github = githubCheck(repo, graph, located)
+    val github = githubCheck(repo, graph, located, request.preflight.isDefined)
     val listed = located.hit match
       case histos.doctor.GitHubProbe.Hit.Ready(read)
           if read.covered.contains("supply.secret-missing") && read.view.secretsSight == Sight.Known =>
@@ -145,27 +149,13 @@ object DoctorSurface:
     )
     val core =
       pins :: github :: release ++ histos.doctor.ShipChecks.checks(repo, graph, env, feed) ++
-        histos.doctor.ToolchainChecks.checks(machine, graph) ++ histos.doctor.FormatChecks.checks(repo, graph)
-    val all = histos.doctor.Registry.collect(graph, core)
-    request.preflight match
-      case Some(job) => preflight(job)
-      case None      =>
-        request.area.fold(all)(name => all.filter(check => areaName(check.area) == name))
-
-  /** Offline. A token failure is reported only when the job exports `HISTOS_TOKEN_STEP=failure`. */
-  private def preflight(job: String): List[DoctorCheck] =
-    List(
-      new DoctorCheck:
-        def id                      = CheckId.trusted("supply.app-token")
-        def area                    = Area.SupplyChain
-        def needs                   = Set(Probe.JobEnv)
-        def run(ctx: DoctorContext) =
-          sys.env.get("HISTOS_TOKEN_STEP") match
-            case Some("failure") =>
-              ZIO.succeed(List(Outcome.Found(SupplyDiagnostic.AppTokenFailed(StepOutcome.Failure))))
-            case _ =>
-              ZIO.succeed(List(Outcome.Ok(id, s"$job preflight")))
-    )
+        histos.doctor.ToolchainChecks.checks(machine, graph, request.launch) ++
+        histos.doctor.FormatChecks.checks(repo, graph)
+    val all     = histos.doctor.Registry.collect(graph, core)
+    val dropped = Set(histos.doctor.ShipChecks.bumpId.value, histos.doctor.ShipChecks.pinId.value)
+    val kept    =
+      if request.preflight.isDefined then all.filterNot(check => dropped.contains(check.id.value)) else all
+    request.area.fold(kept)(name => kept.filter(check => areaName(check.area) == name))
 
   private def closed(raw: String, where: Area, outcome: Outcome): DoctorCheck =
     new DoctorCheck:
@@ -192,22 +182,27 @@ object DoctorSurface:
           case Nil => ZIO.succeed(List(Outcome.Ok(id, "every uses is pinned")))
           case _ => ZIO.succeed(List(Outcome.Found(SupplyDiagnostic.ShaPinPolicyOff(RepoName.trusted(repoName(repo))))))
 
-  private def githubCheck(repo: Path, graph: ProjectGraph, located: Located): DoctorCheck =
+  private def githubCheck(
+      repo: Path,
+      graph: ProjectGraph,
+      located: Located,
+      preflight: Boolean,
+  ): DoctorCheck =
     new DoctorCheck:
       def id                      = CheckId.trusted("supply.app-installed")
       def area                    = Area.SupplyChain
       def needs                   = Set.empty
       def run(ctx: DoctorContext) =
-        ZIO.succeed:
-          located.hit match
-            case histos.doctor.GitHubProbe.Hit.Absent =>
-              SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential, located.venue)
-            case histos.doctor.GitHubProbe.Hit.Unreachable =>
-              SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable, located.venue)
-            case histos.doctor.GitHubProbe.Hit.Ready(read) =>
-              val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
-              val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
-              SupplyChecks.run(view, graph.supply, read.covered)
+        val outcomes = located.hit match
+          case histos.doctor.GitHubProbe.Hit.Absent =>
+            SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential, located.venue)
+          case histos.doctor.GitHubProbe.Hit.Unreachable =>
+            SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable, located.venue)
+          case histos.doctor.GitHubProbe.Hit.Ready(read) =>
+            val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
+            val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
+            SupplyChecks.run(view, graph.supply, read.covered)
+        ZIO.succeed(if preflight then SupplyChecks.unseenAsSkip(outcomes) else outcomes)
 
   /** Local edits and histos commands run when `--fix` is set. A GitHub setting runs only after a yes on a terminal. */
   def applyReported(

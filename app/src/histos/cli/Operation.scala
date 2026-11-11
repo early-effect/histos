@@ -34,7 +34,7 @@ object Operation:
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
       case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.New(_, _, _, _) |
-          Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _) | Command.Explain(_) | Command.Deps(_) |
+          Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _, _, _) | Command.Explain(_) | Command.Deps(_) |
           Command.Setup(_, _, _) | Command.Help(_) | Command.Coverage(_, _, _) =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
