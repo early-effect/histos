@@ -204,7 +204,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     Law(
       List("help", "version"),
       CliExit.Success,
-      "histos version\nPrint the version this checkout runs.\n",
+      "histos version\nPrint the launcher pin, the assembly checksum, and the snapshot id.\n",
       "",
       Playback.Held,
     ),
