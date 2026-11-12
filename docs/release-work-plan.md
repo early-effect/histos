@@ -114,7 +114,7 @@ Authorization is `Bearer` with the base64 of `SONATYPE_USERNAME:SONATYPE_PASSWOR
 
 `./histos portal` is a heddle server bound to loopback. It speaks those routes, requires the Bearer token, and keeps deployments on disk so promote can be a second process. It fails a bundle Central would fail, and the deployment carries the validation report: Maven layout, the jar, sources, and javadoc, `.md5` and `.sha1`, `.asc` on the artifacts, a pom with the required fields, checksums that match, no snapshot version, no snapshot dependency, a zip under the 1GB cap, and a GAV the fake has not already published. `.sha256` and `.sha512` are optional, and one that is present has to match. An empty pom is `FAILED`, and so is a zip with no files.
 
-Tests start that server in a `Scope` and pass the URL into the layer. They do not call Central.
+Tests start that server in a `Scope` and pass the URL into the layer. They run on the live clock, because a heddle server shuts down on the clock it was installed under. They do not call Central.
 
 On a real portal, two reads run before an upload. A HEAD to repo1 refuses a GAV Central already has. A lookup of the signing key on `keyserver.ubuntu.com` refuses a key Central cannot fetch. Either miss fails before a deployment is opened. A rehearsal skips both reads. The fake is the only registry for that run, so a public version can be rehearsed. Histos does not upload the public key. Sending it remains `gpg --send-keys`, once.
 
