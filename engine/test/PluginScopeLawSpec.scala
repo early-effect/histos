@@ -29,7 +29,7 @@ import java.nio.charset.StandardCharsets
 
 import slayer.{any, stub, stubbed}
 
-import zio.{Scope, ZIO, ZLayer, durationInt}
+import zio.{Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 
 /** A generation acquire answers after `run` returns and dies with the runtime. An invocation acquire dies with `run`.
@@ -128,11 +128,23 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
       val life = if request.id.name == held then ResourceLife.Generation else ResourceLife.Invocation
       ZIO.serviceWithZIO[PluginScopes] { scopes =>
         scopes(life)
-          .extend(ZIO.acquireRelease(ZIO.attemptBlocking(bind))(socket => ZIO.attemptBlocking(socket.close()).ignore))
-          .mapBoth(_ => PluginRunError.Defect("bind"), socket => PluginOutput(socket.getLocalPort.toString, Nil))
+          .extend(ZIO.acquireRelease(ZIO.attemptBlocking(bind))(release))
+          .mapBoth(_ => PluginRunError.Defect("bind"), bound => PluginOutput(bound.socket.getLocalPort.toString, Nil))
       }
 
-  private def bind: ServerSocket =
+  private final case class Bound(socket: ServerSocket, accept: Thread)
+
+  /** `close` does not stop the listener while `accept` is in flight: the JDK defers the close to the accepting thread,
+    * and Linux keeps accepting until that thread wakes. The release waits for the thread, so the port is gone once the
+    * scope closes.
+    */
+  private def release(bound: Bound): UIO[Unit] =
+    ZIO.attemptBlocking {
+      bound.socket.close()
+      bound.accept.join()
+    }.ignore
+
+  private def bind: Bound =
     val socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress)
     // A named Runnable: scalafmt 3.11.5 rewrites a try/catch lambda argument into code that does not parse.
     val serve: Runnable = () =>
@@ -144,5 +156,5 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
     val accept = new Thread(serve, "histos-plugin-scope")
     accept.setDaemon(true)
     accept.start()
-    socket
+    Bound(socket, accept)
 end PluginScopeLawSpec
