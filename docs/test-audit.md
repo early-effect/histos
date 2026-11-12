@@ -108,6 +108,7 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] A41 `SupplyFault.Advisory` prints a severity through enum `toString`. Render it with an explicit, total match, and pin the text.
 - [x] A42 `JobCheck` uses `isInstanceOf` for its event tests. Use a pattern match or an exhaustive function.
 - [x] A43 `BuilderMacro.module` widens its `Expr` with `asInstanceOf`. `asExprOf` checks the type and keeps the tree, so `module(...)` still carries its platforms.
+- [x] A44 WEAK. `GraphShapeLawSpec`'s `fault` helper and `GraphLawSpec`'s `kind` helper compare error names as `productPrefix` strings, so the wrong project, platform, or position passes. Assert exact error values, as A37 did.
 
 ## wire
 

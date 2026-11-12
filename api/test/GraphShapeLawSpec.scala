@@ -36,9 +36,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       assertTrue(
         Projects(a, b, c, d).map(chainOf("a")) == Right(Some(List("d", "b", "c"))),
         Projects(a, b, c, d).map(closureOf("c")) == Right(Some(List("c", "d"))),
-        fault(Projects(left, right)) == "Cycle",
-        cyclePlatform(Projects(left, right)) == Some(Js),
-        cycleCloses(Projects(left, right)),
+        Projects(left, right) ==
+          Left(BuildError.Cycle(Js, List(ProjectName("left"), ProjectName("right"), ProjectName("left")))),
       )
     ,
     test("a chain drops a name that is not a module and does not include itself"):
@@ -60,53 +59,75 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       )
     ,
     test("repeated platforms, scala versions, children, and directories are refused"):
-      val core = jvm("core")
+      val core      = jvm("core")
+      val twoJvm    = module("core", Jvm, Jvm)(scala3)
+      val twoScala  = module("core", Jvm)(scala3, scala3)
+      val twice     = aggregate("root", core, core)
+      val itself    = aggregate("core", core)
+      val unnamed   = module("", Jvm)(scala3)
+      val dotted    = module("core.name", Jvm)(scala3)
+      val coreName  = ProjectName("core")
+      val shadowing = jvm("app").in(path"core")
       assertTrue(
-        fault(Projects(module("core", Jvm, Jvm)(scala3))) == "DuplicatePlatform",
-        fault(Projects(module("core", Jvm)(scala3, scala3))) == "DuplicateScalaVersion",
-        fault(Projects(aggregate("root", core, core), core)) == "DuplicateChild",
-        fault(Projects(aggregate("core", core))) == "AggregateIncludesItself",
-        fault(Projects(core, jvm("app").in(path"core"))) == "DuplicateDirectory",
-        fault(Projects(module("", Jvm)(scala3))) == "EmptyName",
-        fault(Projects(module("core.name", Jvm)(scala3))) == "BadName",
+        Projects(twoJvm) == Left(BuildError.DuplicatePlatform(coreName, Jvm, twoJvm.position)),
+        Projects(twoScala) == Left(BuildError.DuplicateScalaVersion(coreName, scala3, twoScala.position)),
+        Projects(twice, core) == Left(BuildError.DuplicateChild(ProjectName("root"), coreName, twice.position)),
+        Projects(itself) == Left(BuildError.AggregateIncludesItself(coreName, itself.position)),
+        Projects(core, shadowing) == Left(BuildError.DuplicateDirectory(ProjectName("app"), coreName, "core")),
+        Projects(unnamed) == Left(BuildError.EmptyName(unnamed.position)),
+        Projects(dotted) == Left(BuildError.BadName("core.name", dotted.position)),
       )
     ,
     test("an edge must name a module, on a platform both sides build"):
-      val core   = jvm("core")
-      val lib    = js("lib")
-      val shared = jvm("shared")
-      val root   = aggregate("root", core)
-      val mid    = aggregate("mid", core)
-      val hole   = AggregateDef.make("root", List(module("mid", Jvm)(scala3)), here)
+      val core     = jvm("core")
+      val lib      = js("lib")
+      val shared   = jvm("shared")
+      val ghost    = jvm("ghost")
+      val root     = aggregate("root", core)
+      val mid      = aggregate("mid", core)
+      val hole     = AggregateDef.make("root", List(module("mid", Jvm)(scala3)), here)
+      val repeated = jvm("app").dependsOn(shared, shared)
+      val coreName = ProjectName("core")
+      val libName  = ProjectName("lib")
       assertTrue(
-        fault(Projects(core.dependsOn(jvm("ghost")))) == "MissingProject",
-        fault(Projects(core.dependsOn(root), root)) == "DependsOnAggregate",
-        fault(Projects(jvm("app").dependsOn(shared, shared), shared)) == "DuplicateDependency",
-        fault(Projects(core.dependsOn(Js)(lib), lib)) == "EdgeWithoutPlatform",
-        fault(Projects(core.dependsOn(lib), lib)) == "UpstreamMissingPlatform",
-        fault(Projects(hole, mid, core)) == "AggregateChild",
+        Projects(core.dependsOn(ghost)) == Left(BuildError.MissingProject("ghost", ghost.position)),
+        Projects(core.dependsOn(root), root) ==
+          Left(BuildError.DependsOnAggregate(coreName, ProjectName("root"), core.position)),
+        Projects(repeated, shared) ==
+          Left(BuildError.DuplicateDependency(ProjectName("app"), ProjectName("shared"), repeated.position)),
+        Projects(core.dependsOn(Js)(lib), lib) == Left(BuildError.EdgeWithoutPlatform(coreName, Js, core.position)),
+        Projects(core.dependsOn(lib), lib) ==
+          Left(BuildError.UpstreamMissingPlatform(coreName, libName, Jvm, core.position)),
+        Projects(hole, mid, core) ==
+          Left(BuildError.AggregateChild(ProjectName("root"), ProjectName("mid"), hole.position)),
       )
     ,
     test("native without a clang major is refused, and a major is kept"):
       val bare   = module("native", Native)(scala3)
       val pinned = bare.clang(ClangMajor(21)).nativeVersion(NativeVersion("0.5.13"))
       assertTrue(
-        fault(Projects(bare)) == "MissingClang",
+        Projects(bare) == Left(BuildError.MissingClang(ProjectName("native"), bare.position)),
         Projects(pinned).map(at("native")(_.clang)) == Right(Some(ClangPin.Major(ClangMajor(21)))),
         Projects(js("core")).map(at("core")(_.clang)) == Right(Some(ClangPin.Unused)),
       )
     ,
     test("one publication is kept, and an assembly is one jvm jar with at most one asset"):
-      val main  = MainClass("app.Main")
-      val jar   = asset"dist/app.jar"
-      val again = asset"dist/other.jar"
-      val built = Projects(jvm("app").assembly(main).asset(jar))
+      val main      = MainClass("app.Main")
+      val jar       = asset"dist/app.jar"
+      val again     = asset"dist/other.jar"
+      val built     = Projects(jvm("app").assembly(main).asset(jar))
+      val app       = ProjectName("app")
+      val two       = jvm("app").library.application
+      val onJs      = js("app").assembly(main)
+      val twoScalas = module("app", Jvm)(scala3, scala2).assembly(main)
+      val loose     = jvm("app").library.asset(jar)
+      val assets    = jvm("app").assembly(main).asset(jar).asset(again)
       assertTrue(
-        fault(Projects(jvm("app").library.application)) == "TwoPublications",
-        fault(Projects(js("app").assembly(main))) == "AssemblyShape",
-        fault(Projects(module("app", Jvm)(scala3, scala2).assembly(main))) == "AssemblyShape",
-        fault(Projects(jvm("app").library.asset(jar))) == "AssetWithoutAssembly",
-        fault(Projects(jvm("app").assembly(main).asset(jar).asset(again))) == "TwoAssets",
+        Projects(two) == Left(BuildError.TwoPublications(app, two.position)),
+        Projects(onJs) == Left(BuildError.AssemblyShape(app, onJs.position)),
+        Projects(twoScalas) == Left(BuildError.AssemblyShape(app, twoScalas.position)),
+        Projects(loose) == Left(BuildError.AssetWithoutAssembly(app, loose.position)),
+        Projects(assets) == Left(BuildError.TwoAssets(app, assets.position)),
         built.map(at("app")(_.publication)) == Right(Some(Publication.Assembly(main))),
         built.map(at("app")(_.asset)) == Right(Some(Some(jar))),
         Projects(jvm("core")).map(at("core")(_.publication)) == Right(Some(Publication.Library)),
@@ -116,12 +137,16 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a generated resource is kept, and the same name twice is refused"):
-      val note  = GeneratedAsset.Text(ResourceName("note.txt"), "hello")
-      val again = GeneratedAsset.Text(ResourceName("note.txt"), "again")
-      val other = GeneratedAsset.Text(ResourceName("other.txt"), "other")
+      val note                          = GeneratedAsset.Text(ResourceName("note.txt"), "hello")
+      val again                         = GeneratedAsset.Text(ResourceName("note.txt"), "again")
+      val other                         = GeneratedAsset.Text(ResourceName("other.txt"), "other")
+      val together                      = jvm("core").resources(note, again)
+      val apart                         = jvm("core").resources(note).resources(again)
+      def repeated(found: ModuleDef[?]) =
+        Left(BuildError.DuplicateResource(ProjectName("core"), ResourceName("note.txt"), found.position))
       assertTrue(
-        fault(Projects(jvm("core").resources(note, again))) == "DuplicateResource",
-        fault(Projects(jvm("core").resources(note).resources(again))) == "DuplicateResource",
+        Projects(together) == repeated(together),
+        Projects(apart) == repeated(apart),
         Projects(jvm("core").resources(note)).map(at("core")(_.resources)) == Right(Some(List(note))),
         Projects(jvm("core").resources(note).resources(other)).map(at("core")(_.resources)) ==
           Right(Some(List(note, other))),
@@ -131,8 +156,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val remote = jvm("core").testStore(TestStore.Remote).needs(Need.Network)
       val mixed  = jvm("core").test(TestMain("app.Test")).testProvider(TestProvider.Zio)
       assertTrue(
-        fault(Projects(remote)) == "RemoteNeeds",
-        fault(Projects(mixed)) == "MixedTest",
+        Projects(remote) == Left(BuildError.RemoteNeeds(ProjectName("core"), Set(Need.Network), remote.position)),
+        Projects(mixed) == Left(BuildError.MixedTest(ProjectName("core"), mixed.position)),
         Projects(jvm("core").testStore(TestStore.Remote)).map(at("core")(_.testStore)) ==
           Right(Some(TestStore.Remote)),
         Projects(jvm("core").needs(Need.Network, Need.Docker, Need.Network)).map(at("core")(_.needs)) ==
@@ -179,8 +204,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val replaced = Projects.jobTimeout(JobTimeout.Minutes(12)).ci(plugin.CiSettings.empty)
       val kept     = Projects.ci(plugin.CiSettings.empty).jobTimeout(JobTimeout.Minutes(12))
       assertTrue(
-        fault(Projects.resolvers(central, central)(jvm("core"))) == "DuplicateResolver",
-        fault(Projects.resolvers(repo, repo)(jvm("core"))) == "DuplicateResolver",
+        Projects.resolvers(central, central)(jvm("core")) == Left(BuildError.DuplicateResolver("central")),
+        Projects.resolvers(repo, repo)(jvm("core")) == Left(BuildError.DuplicateResolver("https://example.com/repo")),
         organized(jvm("core")).map(settingsOf) == Right(
           Settings(
             Some(organization"rocks.earlyeffect"),
@@ -206,19 +231,38 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         .next(1, 4, 2)(core)
         .description(pom"library")
         .url(url"https://example.com/histos")
-      val root = aggregate("root", core)
+      val root     = aggregate("root", core)
+      val ghost    = jvm("ghost")
+      val histos   = version.ShipName.trusted("histos")
+      val coreName = ProjectName("core")
+      val first    = Ship("histos").next(1, 4, 2)(core)
+      val again    = Ship("histos").next(1, 4, 3)(core)
+      val doubled  = Ship("histos").next(1, 4, 2)(core, core)
+      val left     = Ship("left").next(1, 4, 2)(core)
+      val right    = Ship("right").next(1, 4, 2)(core)
+      val grouped  = Ship("histos").next(1, 4, 2)(root)
+      val missing  = Ship("histos").next(1, 4, 2)(ghost)
       assertTrue(
-        shipNumber(Projects(ships(row), core)) == Right(number),
-        shipText(Projects(ships(row), core)) == Right(("library", "https://example.com/histos")),
-        fault(Projects(ships(Ship("histos").next(1, 4, 2)(core), Ship("histos").next(1, 4, 3)(core)), core)) ==
-          "DuplicateShip",
-        fault(Projects(ships(Ship("histos").next(1, 4, 2)(core, core)), core)) == "RepeatedShipMember",
-        fault(Projects(ships(Ship("left").next(1, 4, 2)(core), Ship("right").next(1, 4, 2)(core)), core)) ==
-          "MemberInTwoShips",
-        fault(Projects(ships(Ship("histos").next(1, 4, 2)(root)), root, core)) == "AggregateShipMember",
-        fault(Projects(ships(Ship("histos").next(1, 4, 2)(jvm("ghost"))), core)) == "MissingProject",
-        fault(Projects(ships(ShipDef.line("", number, ::(core, Nil), here)), core)) == "EmptyShipName",
-        fault(Projects(ships(ShipDef.line("1bad", number, ::(core, Nil), here)), core)) == "BadShipName",
+        Projects(ships(row), core).map(shipLine(_).map(_.number)) == Right(Some(number)),
+        Projects(ships(row), core)
+          .map(shipLine(_).map(line => (line.description.map(_.value), line.url.map(_.value)))) ==
+          Right(Some((Some("library"), Some("https://example.com/histos")))),
+        Projects(ships(first, again), core) == Left(BuildError.DuplicateShip(histos, first.position, again.position)),
+        Projects(ships(doubled), core) == Left(BuildError.RepeatedShipMember(histos, coreName, doubled.position)),
+        Projects(ships(left, right), core) == Left(
+          BuildError.MemberInTwoShips(
+            coreName,
+            version.ShipName.trusted("left"),
+            version.ShipName.trusted("right"),
+            right.position,
+          )
+        ),
+        Projects(ships(grouped), root, core) ==
+          Left(BuildError.AggregateShipMember(histos, ProjectName("root"), grouped.position)),
+        Projects(ships(missing), core) == Left(BuildError.MissingProject("ghost", ghost.position)),
+        Projects(ships(ShipDef.line("", number, ::(core, Nil), here)), core) == Left(BuildError.EmptyShipName(here)),
+        Projects(ships(ShipDef.line("1bad", number, ::(core, Nil), here)), core) ==
+          Left(BuildError.BadShipName("1bad", here)),
       )
     ,
     test("an unnamed tool catalog is the default, and tools replaces that catalog"):
@@ -236,22 +280,6 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
   private def js(name: String) = module(name, Js)(scala3)
 
   private def both(name: String) = module(name, Jvm, Js)(scala3)
-
-  private def fault(built: Either[BuildError, ProjectGraph]): String =
-    built match
-      case Left(err) => err.productPrefix
-      case Right(_)  => "graph"
-
-  private def cyclePlatform(built: Either[BuildError, ProjectGraph]): Option[Platform] =
-    built match
-      case Left(BuildError.Cycle(platform, _)) => Some(platform)
-      case _                                   => None
-
-  private def cycleCloses(built: Either[BuildError, ProjectGraph]): Boolean =
-    built match
-      case Left(BuildError.Cycle(_, first :: rest)) =>
-        rest.lastOption.contains(first) && rest.nonEmpty
-      case _ => false
 
   private def modules(graph: ProjectGraph): List[Module] =
     graph.projects.collect { case found: Module => found }
@@ -294,17 +322,4 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
 
   private def shipLine(graph: ProjectGraph): Option[version.Ship.Line] =
     graph.catalog.ships.collectFirst { case line: version.Ship.Line => line }
-
-  private def shipNumber(built: Either[BuildError, ProjectGraph]): Either[BuildError, version.ShipNumber] =
-    built.flatMap(graph => shipLine(graph).map(_.number).toRight(BuildError.EmptyShipName(here)))
-
-  private def shipText(built: Either[BuildError, ProjectGraph]): Either[BuildError, (String, String)] =
-    built.flatMap: graph =>
-      shipLine(graph) match
-        case Some(line) =>
-          (line.description.map(_.value), line.url.map(_.value)) match
-            case (Some(text), Some(site)) => Right((text, site))
-            case _                        => Left(BuildError.EmptyShipName(here))
-        case None => Left(BuildError.EmptyShipName(here))
-
 end GraphShapeLawSpec
