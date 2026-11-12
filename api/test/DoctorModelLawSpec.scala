@@ -31,7 +31,7 @@ object DoctorModelLawSpec extends ZIOSpecDefault:
         (true, true, FixMode.Apply(Set(FixKind.LocalEdit, FixKind.HistosCommand))),
         (true, false, FixMode.Apply(Set(FixKind.LocalEdit, FixKind.HistosCommand, FixKind.GitHubSetting))),
       )
-      assertTrue(modes.forall((fix, yes, expected) => FixMode.from(fix, yes) == expected))
+      assertTrue(modes.filterNot((fix, yes, expected) => FixMode.from(fix, yes) == expected) == Nil)
     ,
     test("a noted error is that check, and a bad path does not invent a location"):
       val command = Fix.Command(ShellLine.trusted("histos help"))

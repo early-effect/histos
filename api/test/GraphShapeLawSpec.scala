@@ -16,14 +16,15 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val lib   = js("lib")
       val app   = both("app").dependsOn(Js)(lib).dependsOn(Jvm, Jvm)(jvm("support"))
       val built = Projects(app, lib, jvm("support"))
-      assertTrue:
-        built.map(upstream("app", Js)) == Right(List("lib")) &&
-        built.map(upstream("app", Jvm)) == Right(List("support")) &&
-        built.map(edgePlatforms("app")) == Right(List(Some(List(Js)), Some(List(Jvm)))) &&
-        built.map(_.docCheck) == Right(DocCheck.Off) &&
-        built.map(_.resolution) == Right(Resolution.Solve) &&
-        built.map(_.promote) == Right(Promote.Rebuild) &&
-        built.map(_.testLog) == Right(false)
+      assertTrue(
+        built.map(at("app")(_.upstream(Js).map(_.value))) == Right(Some(List("lib"))),
+        built.map(at("app")(_.upstream(Jvm).map(_.value))) == Right(Some(List("support"))),
+        built.map(at("app")(_.dependsOn.map(_.platforms))) == Right(Some(List(Some(List(Js)), Some(List(Jvm))))),
+        built.map(_.docCheck) == Right(DocCheck.Off),
+        built.map(_.resolution) == Right(Resolution.Solve),
+        built.map(_.promote) == Right(Promote.Rebuild),
+        built.map(_.testLog) == Right(false),
+      )
     ,
     test("a diamond is not a cycle, and a cycle names the platform it closes on"):
       val d     = jvm("d")
@@ -33,8 +34,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val left  = both("left").dependsOn(Js)(both("right"))
       val right = both("right").dependsOn(Js)(both("left"))
       assertTrue(
-        Projects(a, b, c, d).map(chainOf("a")) == Right(List("d", "b", "c")),
-        Projects(a, b, c, d).map(closureOf("c")) == Right(List("c", "d")),
+        Projects(a, b, c, d).map(chainOf("a")) == Right(Some(List("d", "b", "c"))),
+        Projects(a, b, c, d).map(closureOf("c")) == Right(Some(List("c", "d"))),
         fault(Projects(left, right)) == "Cycle",
         cyclePlatform(Projects(left, right)) == Some(Js),
         cycleCloses(Projects(left, right)),
@@ -91,8 +92,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val pinned = bare.clang(ClangMajor(21)).nativeVersion(NativeVersion("0.5.13"))
       assertTrue(
         fault(Projects(bare)) == "MissingClang",
-        Projects(pinned).map(clangOf("native")) == Right(Some(ClangPin.Major(ClangMajor(21)))),
-        Projects(js("core")).map(clangOf("core")) == Right(Some(ClangPin.Unused)),
+        Projects(pinned).map(at("native")(_.clang)) == Right(Some(ClangPin.Major(ClangMajor(21)))),
+        Projects(js("core")).map(at("core")(_.clang)) == Right(Some(ClangPin.Unused)),
       )
     ,
     test("one publication is kept, and an assembly is one jvm jar with at most one asset"):
@@ -106,11 +107,12 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         fault(Projects(module("app", Jvm)(scala3, scala2).assembly(main))) == "AssemblyShape",
         fault(Projects(jvm("app").library.asset(jar))) == "AssetWithoutAssembly",
         fault(Projects(jvm("app").assembly(main).asset(jar).asset(again))) == "TwoAssets",
-        built.map(publicationOf("app")) == Right(Some(Publication.Assembly(main))),
-        built.map(assetOf("app")) == Right(Some(jar)),
-        Projects(jvm("core")).map(publicationOf("core")) == Right(Some(Publication.Library)),
-        Projects(js("app").application).map(publicationOf("app")) == Right(Some(Publication.Application)),
-        Projects(jvm("sbt").sbtPlugin(sbt"2")).map(publicationOf("sbt")) == Right(Some(Publication.SbtPlugin(sbt"2"))),
+        built.map(at("app")(_.publication)) == Right(Some(Publication.Assembly(main))),
+        built.map(at("app")(_.asset)) == Right(Some(Some(jar))),
+        Projects(jvm("core")).map(at("core")(_.publication)) == Right(Some(Publication.Library)),
+        Projects(js("app").application).map(at("app")(_.publication)) == Right(Some(Publication.Application)),
+        Projects(jvm("sbt").sbtPlugin(sbt"2")).map(at("sbt")(_.publication)) ==
+          Right(Some(Publication.SbtPlugin(sbt"2"))),
       )
     ,
     test("a generated resource is kept, and the same name twice is refused"):
@@ -120,8 +122,9 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       assertTrue(
         fault(Projects(jvm("core").resources(note, again))) == "DuplicateResource",
         fault(Projects(jvm("core").resources(note).resources(again))) == "DuplicateResource",
-        Projects(jvm("core").resources(note)).map(resourcesOf("core")) == Right(List(note)),
-        Projects(jvm("core").resources(note).resources(other)).map(resourcesOf("core")) == Right(List(note, other)),
+        Projects(jvm("core").resources(note)).map(at("core")(_.resources)) == Right(Some(List(note))),
+        Projects(jvm("core").resources(note).resources(other)).map(at("core")(_.resources)) ==
+          Right(Some(List(note, other))),
       )
     ,
     test("a remote store with a need is refused, and a test main excludes a provider"):
@@ -130,12 +133,14 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       assertTrue(
         fault(Projects(remote)) == "RemoteNeeds",
         fault(Projects(mixed)) == "MixedTest",
-        Projects(jvm("core").testStore(TestStore.Remote)).map(storeOf("core")) == Right(TestStore.Remote),
-        Projects(jvm("core").needs(Need.Network, Need.Docker, Need.Network)).map(needsOf("core")) == Right(
-          Set(Need.Network, Need.Docker)
-        ),
-        Projects(jvm("core").test(TestMain("app.Test"))).map(testOf("core")) == Right(Some("app.Test")),
-        Projects(jvm("core").testProvider(TestProvider.Zio)).map(providerOf("core")) == Right(true),
+        Projects(jvm("core").testStore(TestStore.Remote)).map(at("core")(_.testStore)) ==
+          Right(Some(TestStore.Remote)),
+        Projects(jvm("core").needs(Need.Network, Need.Docker, Need.Network)).map(at("core")(_.needs)) ==
+          Right(Some(Set(Need.Network, Need.Docker))),
+        Projects(jvm("core").test(TestMain("app.Test"))).map(at("core")(_.test.map(_.value))) ==
+          Right(Some(Some("app.Test"))),
+        Projects(jvm("core").testProvider(TestProvider.Zio)).map(at("core")(_.provider)) ==
+          Right(Some(Some(TestProvider.Zio))),
       )
     ,
     test("a second scalac call replaces the list, and js settings stay on the js module"):
@@ -147,10 +152,10 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       val refused    = typeCheckErrors("""module("core", Jvm)(scala"3.10.0").jsEnv(JsEnv.Node)""")
       val clangOnJvm = typeCheckErrors("""module("core", Jvm)(scala"3.10.0").clang(ClangMajor(21))""")
       assertTrue(
-        Projects(flagsOn).map(canonicalOf("core")) == Right("unused-all"),
-        Projects(script).map(jsOf("ui")) == Right(("firefox", "commonjs", Some("1.22.0"))),
-        Projects(js("ui")).map(jsOf("ui")) == Right(("node", "nomodule", None)),
-        Projects(jvm("core").in(path"modules/core")).map(baseOf("core")) == Right("modules/core"),
+        Projects(flagsOn).map(at("core")(_.flags.canonical)) == Right(Some("unused-all")),
+        Projects(script).map(at("ui")(jsOf)) == Right(Some(("firefox", "commonjs", Some("1.22.0")))),
+        Projects(js("ui")).map(at("ui")(jsOf)) == Right(Some(("node", "nomodule", None))),
+        Projects(jvm("core").in(path"modules/core")).map(at("core")(_.baseDirectory)) == Right(Some("modules/core")),
         refused.map(_.message) == List("jsEnv is a Js setting, and this module does not build Js"),
         clangOnJvm.map(_.message) == List("clang is a Native setting, and this module does not build Native"),
       )
@@ -251,57 +256,18 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
   private def modules(graph: ProjectGraph): List[Module] =
     graph.projects.collect { case found: Module => found }
 
-  private def named(graph: ProjectGraph, name: String): Option[Module] =
-    modules(graph).find(_.name.value == name)
+  /** Reads the named module. A missing module is `None`, so a law that expects a value fails on it. */
+  private def at[A](name: String)(read: Module => A)(graph: ProjectGraph): Option[A] =
+    modules(graph).find(_.name.value == name).map(read)
 
-  private def resourcesOf(name: String)(graph: ProjectGraph): List[GeneratedAsset] =
-    named(graph, name).toList.flatMap(_.resources)
+  private def chainOf(name: String)(graph: ProjectGraph): Option[List[String]] =
+    at(name)(found => Module.chain(found, modules(graph), Jvm).map(_.name.value))(graph)
 
-  private def upstream(name: String, platform: Platform)(graph: ProjectGraph): List[String] =
-    named(graph, name).toList.flatMap(_.upstream(platform).map(_.value))
+  private def closureOf(name: String)(graph: ProjectGraph): Option[List[String]] =
+    at(name)(found => Module.closure(modules(graph), Set(found.name)).map(_.name.value))(graph)
 
-  private def edgePlatforms(name: String)(graph: ProjectGraph): List[Option[List[Platform]]] =
-    named(graph, name).toList.flatMap(_.dependsOn.map(_.platforms))
-
-  private def chainOf(name: String)(graph: ProjectGraph): List[String] =
-    named(graph, name).toList.flatMap: found =>
-      Module.chain(found, modules(graph), Jvm).map(_.name.value)
-
-  private def closureOf(name: String)(graph: ProjectGraph): List[String] =
-    named(graph, name).toList.flatMap: found =>
-      Module.closure(modules(graph), Set(found.name)).map(_.name.value)
-
-  private def clangOf(name: String)(graph: ProjectGraph): Option[ClangPin] =
-    named(graph, name).map(_.clang)
-
-  private def publicationOf(name: String)(graph: ProjectGraph): Option[Publication] =
-    named(graph, name).map(_.publication)
-
-  private def assetOf(name: String)(graph: ProjectGraph): Option[plugin.RepoPath] =
-    named(graph, name).flatMap(_.asset)
-
-  private def needsOf(name: String)(graph: ProjectGraph): Set[Need] =
-    named(graph, name).map(_.needs).getOrElse(Set.empty)
-
-  private def storeOf(name: String)(graph: ProjectGraph): TestStore =
-    named(graph, name).map(_.testStore).getOrElse(TestStore.Off)
-
-  private def testOf(name: String)(graph: ProjectGraph): Option[String] =
-    named(graph, name).flatMap(_.test.map(_.value))
-
-  private def providerOf(name: String)(graph: ProjectGraph): Boolean =
-    named(graph, name).exists(_.provider.contains(TestProvider.Zio))
-
-  private def canonicalOf(name: String)(graph: ProjectGraph): String =
-    named(graph, name).map(_.flags.canonical).getOrElse("")
-
-  private def jsOf(name: String)(graph: ProjectGraph): (String, String, Option[String]) =
-    named(graph, name) match
-      case Some(found) => (found.jsEnv.token, found.jsModule.token, found.jsVersion.map(_.value))
-      case None        => ("", "", None)
-
-  private def baseOf(name: String)(graph: ProjectGraph): String =
-    named(graph, name).map(_.baseDirectory).getOrElse("")
+  private def jsOf(found: Module): (String, String, Option[String]) =
+    (found.jsEnv.token, found.jsModule.token, found.jsVersion.map(_.value))
 
   private final case class Settings(
       organization: Option[Organization],

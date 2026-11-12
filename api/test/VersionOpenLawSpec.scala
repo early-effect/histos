@@ -112,8 +112,16 @@ object VersionOpenLawSpec extends ZIOSpecDefault:
         ShipAdvice.development(histos, CiVersion(one)) ==
           "publishing histos 1.4.2 needs export HISTOS_SESSION=release. Then run histos run versions.",
         ShipAdvice.incomplete(SessionError.MissingBranch) ==
-          "a snapshot session needs HISTOS_BRANCH, default or other " +
-          "export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "a snapshot session needs HISTOS_BRANCH, default or other. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "or export HISTOS_SESSION=release. Then run histos run versions.",
+        ShipAdvice.incomplete(SessionError.Unknown("nope")) ==
+          "'nope' is not a session. Sessions are development, snapshot, pr, and release. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "or export HISTOS_SESSION=release. Then run histos run versions.",
+        ShipAdvice.incomplete(SessionError.BadBranch(BranchError.Unknown("main"))) ==
+          "'main' is not a branch. A branch is default or other. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
           "or export HISTOS_SESSION=release. Then run histos run versions.",
         ShipAdvice.shouldBump(histos, one, BumpReason.Shadowed) ==
           "histos 1.4.2 is released and has changes since its tag. Run histos bump.",

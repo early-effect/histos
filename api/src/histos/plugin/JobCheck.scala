@@ -200,17 +200,41 @@ object JobCheck:
   private def reachable(name: JobName, cond: Cond, picture: Picture): Either[BuildError, Unit] =
     if covers(cond, picture) then Right(()) else Left(BuildError.Ci(CiFault.UnreachableCond(name)))
 
+  /** Can `cond` be true on some run of this file. */
   private def covers(cond: Cond, picture: Picture): Boolean =
     cond match
       case Cond.True | Cond.Affected(_) | Cond.AffectedAll | Cond.NoUpstreamFailed => true
-      case Cond.Event(kind)                                                        => heard(picture, kind)
-      case Cond.DefaultBranch | Cond.DefaultBranchPush                             => pushes(picture)
-      case Cond.TagMatches(_)                                                      => tagged(picture)
-      case Cond.HasLabel(_)                                                        => labeled(picture)
-      case Cond.InputIs(name, _) => picture.inputs.exists(_.name == name)
-      case Cond.All(parts)       => parts.forall(covers(_, picture))
-      case Cond.AnyOf(parts)     => parts.exists(covers(_, picture))
-      case Cond.Not(inner)       => covers(inner, picture)
+      case Cond.Event(kind)                                                        => picture.kinds.contains(kind)
+      case Cond.DefaultBranchPush => picture.kinds.contains(EventKind.Push)
+      case Cond.DefaultBranch     => picture.kinds.exists(onDefault.contains)
+      case Cond.TagMatches(_)     => picture.kinds.contains(EventKind.Tag)
+      case Cond.HasLabel(_)       => labeled(picture)
+      case Cond.InputIs(name, _)  => picture.inputs.exists(_.name == name)
+      case Cond.All(parts)        => parts.forall(covers(_, picture))
+      case Cond.AnyOf(parts)      => parts.exists(covers(_, picture))
+      case Cond.Not(inner)        => !always(inner, picture)
+
+  /** Is `cond` true on every run of this file. The event and the kind of ref decide it. A tag glob, a label, an input,
+    * the affected list, and an upstream result can each be false on some run.
+    */
+  private def always(cond: Cond, picture: Picture): Boolean =
+    cond match
+      case Cond.True                      => true
+      case Cond.Event(EventKind.Schedule) => picture.cron && picture.events.isEmpty
+      case Cond.Event(EventKind.Tag)      => !picture.cron && picture.events.forall(tagPush)
+      case Cond.Event(kind)               => !picture.cron && picture.events.forall(kindsOf(_).contains(kind))
+      case Cond.DefaultBranchPush         => !picture.cron && picture.events.forall(defaultPush)
+      case Cond.DefaultBranch             => picture.events.forall(defaultRef)
+      case Cond.All(parts)                => parts.forall(always(_, picture))
+      case Cond.AnyOf(parts)              => parts.exists(always(_, picture))
+      case Cond.Not(inner)                => !covers(inner, picture)
+      case Cond.TagMatches(_) | Cond.HasLabel(_) | Cond.InputIs(_, _) | Cond.Affected(_) | Cond.AffectedAll |
+          Cond.NoUpstreamFailed =>
+        false
+
+  /** The events whose run can be on the default branch. A schedule and a workflow run always are. */
+  private val onDefault: Set[EventKind] =
+    Set(EventKind.Push, EventKind.Dispatch, EventKind.Schedule, EventKind.WorkflowRun)
 
   private def inputs(picture: Picture): Either[BuildError, Unit] =
     picture.inputs
@@ -260,30 +284,46 @@ object JobCheck:
         Picture(List(On.Dispatch(Nil)), cron = false)
       case WorkflowFile.Named(_) =>
         val events = jobs.flatMap(job => eventsOf(job.render))
-        val cron   = jobs.exists(job => job.render.isInstanceOf[JobRender.Schedule])
-        Picture(events, cron)
+        Picture(events, jobs.exists(job => scheduled(job.render)))
 
   private val base: List[On] =
     List(On.pullRequest, On.pushDefault, On.Dispatch(Nil))
 
-  private def heard(picture: Picture, kind: EventKind): Boolean =
-    kind match
-      case EventKind.PullRequest => picture.events.exists(_.isInstanceOf[On.PullRequest])
-      case EventKind.Push        => pushes(picture)
-      case EventKind.Dispatch    => picture.events.exists(_.isInstanceOf[On.Dispatch])
-      case EventKind.Schedule    => picture.cron
-      case EventKind.MergeGroup  => picture.events.contains(On.MergeGroup)
-      case EventKind.Release     => picture.events.contains(On.Release)
-      case EventKind.WorkflowRun => picture.workflows.nonEmpty
-      case EventKind.Tag         => tagged(picture)
+  private def scheduled(render: JobRender): Boolean =
+    render match
+      case JobRender.Schedule(_, _)                                       => true
+      case JobRender.Task(_) | JobRender.Fan(_, _) | JobRender.Site(_, _) => false
 
-  private def pushes(picture: Picture): Boolean =
-    picture.events.exists(_.isInstanceOf[On.Push])
+  /** The events one trigger starts this file with. A push that names a tag can also start it as a tag. */
+  private def kindsOf(on: On): Set[EventKind] =
+    on match
+      case On.Push(_, Nil, _)   => Set(EventKind.Push)
+      case On.Push(_, _, _)     => Set(EventKind.Push, EventKind.Tag)
+      case On.PullRequest(_, _) => Set(EventKind.PullRequest)
+      case On.Dispatch(_)       => Set(EventKind.Dispatch)
+      case On.MergeGroup        => Set(EventKind.MergeGroup)
+      case On.WorkflowRun(Nil)  => Set.empty
+      case On.WorkflowRun(_)    => Set(EventKind.WorkflowRun)
+      case On.Release           => Set(EventKind.Release)
 
-  private def tagged(picture: Picture): Boolean =
-    picture.events.exists:
-      case On.Push(_, tags, _) => tags.nonEmpty
-      case _                   => false
+  /** Every run of this trigger is a tag push. */
+  private def tagPush(on: On): Boolean =
+    on match
+      case On.Push(branches, tags, _) => branches.isEmpty && tags.nonEmpty
+      case On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.WorkflowRun(_) | On.Release => false
+
+  /** Every run of this trigger is a push to the default branch. */
+  private def defaultPush(on: On): Boolean =
+    on match
+      case On.Push(branches, tags, _) =>
+        tags.isEmpty && branches.nonEmpty && branches.forall(_ == PushBranch.Default)
+      case On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.WorkflowRun(_) | On.Release => false
+
+  /** Every run of this trigger is on the default branch. A schedule is too, and it is not an `On`. */
+  private def defaultRef(on: On): Boolean =
+    on match
+      case On.WorkflowRun(_)                                                                     => true
+      case On.Push(_, _, _) | On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.Release => defaultPush(on)
 
   private def labeled(picture: Picture): Boolean =
     picture.events.exists:
@@ -412,6 +452,9 @@ object JobCheck:
   )
 
   private final case class Picture(events: List[On], cron: Boolean):
+    def kinds: Set[EventKind] =
+      events.flatMap(kindsOf).toSet ++ (if cron then Set(EventKind.Schedule) else Set.empty)
+
     def inputs: List[DispatchInput] =
       events.collect { case On.Dispatch(found) => found }.flatten
 

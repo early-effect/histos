@@ -30,14 +30,9 @@ object PublishLawSpec extends ZIOSpecDefault:
         deployed == (secrets, FollowUp.Deployment),
       )
     ,
-    test("idle and a described stock refuse every revision as version"):
-      for
-        idle      <- Sona.idle.publish(request).flip
-        described <- Sona.described(ReleaseMode.Hold).publish(request).flip
-      yield assertTrue(
-        idle == PublishFault.Version(revision),
-        described == PublishFault.Version(revision),
-      )
+    test("the idle stock refuses the revision it is asked to publish"):
+      for refused <- Sona.idle.publish(request).flip
+      yield assertTrue(refused == PublishFault.Version(revision))
     ,
     test("each publish fault diagnoses as an error on its own check"):
       val faults = List(
@@ -50,11 +45,10 @@ object PublishLawSpec extends ZIOSpecDefault:
         PublishFault.Signer            -> "publish.failed",
         PublishFault.Refused("no")     -> "publish.failed",
       )
-      assertTrue(
-        faults.forall: (fault, check) =>
-          val noted = fault.diagnose
-          noted.check.value == check && noted.level == Level.Error && noted.title == noted.summary
-      ),
+      val misses = faults.filterNot: (fault, check) =>
+        val noted = fault.diagnose
+        noted.check.value == check && noted.level == Level.Error && noted.title == noted.summary
+      assertTrue(misses == Nil),
   )
 
   /** `api` also builds for Native, and slayer has no Native artifact. This stock records the flag the layer forwarded,

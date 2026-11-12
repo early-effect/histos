@@ -54,8 +54,9 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
         PluginLoadError.Io(PluginIo.Compile(Path.of("compile.bin"))) -> "plugin compile failed at compile.bin",
         PluginLoadError.Io(PluginIo.Open(Path.of("open.bin")))       -> "plugin open failed at open.bin",
       )
+      val misses = rows.collect { case (error, sentence) if error.message != sentence => (error, error.message) }
       assertTrue(
-        rows.forall((error, sentence) => error.message == sentence),
+        misses == Nil,
         java.render == "dev.earlyeffect:specular:0.2.0",
         binary.render == "dev.earlyeffect::specular:0.2.0",
         full.render == "dev.earlyeffect:::specular:0.2.0",
@@ -77,7 +78,8 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
         PluginRunError.EngineLeak("histos.Graph")           -> "plugin task links 'histos.Graph'",
         PluginRunError.Linkage("histos.Missing")            -> "plugin task is missing class histos.Missing",
       )
-      assertTrue(rows.forall((error, sentence) => error.message == sentence))
+      val misses = rows.collect { case (error, sentence) if error.message != sentence => (error, error.message) }
+      assertTrue(misses == Nil)
     ,
     test("note text and a plugin detail hide the raw line, and a key or env name shows it"):
       assertTrue(

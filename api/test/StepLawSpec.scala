@@ -34,7 +34,7 @@ object StepLawSpec extends ZIOSpecDefault:
         (RuntimeKind.Mixed, RuntimeKind.Hermetic, RuntimeKind.Mixed),
         (RuntimeKind.Mixed, RuntimeKind.Mixed, RuntimeKind.Mixed),
       )
-      assertTrue(joined.forall((left, right, expected) => RuntimeKind.join(left, right) == expected))
+      assertTrue(joined.filterNot((left, right, expected) => RuntimeKind.join(left, right) == expected) == Nil)
     ,
     test("map keeps the mirror, zip joins it, and run visits both"):
       val left  = Step.local[Int](info)(ZIO.succeed(2))

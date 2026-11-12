@@ -30,7 +30,7 @@ object VersionLawSpec extends ZIOSpecDefault:
         val stored = s"${number.render}-${abbrev.value}-SNAPSHOT"
         val bare   = s"${number.render}-${abbrev.value}"
         assertTrue(
-          forms.forall(form => Revision.parse(form.render) == Right(form)),
+          forms.filterNot(form => Revision.parse(form.render) == Right(form)) == Nil,
           Pin.from(number.render) == Right(Pin.Release(ReleaseVersion(number))),
           Pin.from(stored) == Right(Pin.Snapshot(SnapshotCoordinate(number, abbrev))),
           Pin.from(s"${number.render}-ci") == Left(PinError.CompileOnly(CiVersion(number))),

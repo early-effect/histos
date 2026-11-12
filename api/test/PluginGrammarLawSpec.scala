@@ -3,8 +3,6 @@ package histos.plugin
 import zio.test.*
 
 object PluginGrammarLawSpec extends ZIOSpecDefault:
-  private val samples = List("", "a/b", "1ab", "has_under", "echo", "ab-c")
-
   def spec = suite("plugin grammar laws")(
     test("every simple name agrees on empty, a bad token, and a kept token"):
       val expected = List(
@@ -15,11 +13,14 @@ object PluginGrammarLawSpec extends ZIOSpecDefault:
         "echo"      -> "echo",
         "ab-c"      -> "ab-c",
       )
-      assertTrue(
-        samples.forall: raw =>
-          val want = expected.collectFirst { case (sample, tag) if sample == raw => tag }.getOrElse("missing")
-          parsers.forall(parse => parse(raw) == want)
-      )
+      val misses =
+        for
+          (raw, want)   <- expected
+          (name, parse) <- parsers
+          got = parse(raw)
+          if got != want
+        yield (name, raw, got)
+      assertTrue(misses == Nil)
     ,
     test("an environment name and a secret name are the env token, and an input key has no whitespace"):
       assertTrue(
@@ -81,18 +82,18 @@ object PluginGrammarLawSpec extends ZIOSpecDefault:
       ),
   )
 
-  private val parsers: List[String => String] = List(
-    raw => mark(CommandName.from(raw))(_.value),
-    raw => mark(JobName.from(raw))(_.value),
-    raw => mark(OutputName.from(raw))(_.value),
-    raw => mark(ParamName.from(raw))(_.value),
-    raw => mark(FlagName.from(raw))(_.value),
-    raw => mark(NoteKey.from(raw))(_.value),
-    raw => mark(GroupName.from(raw))(_.value),
-    raw => mark(RunnerName.from(raw))(_.value),
-    raw => mark(EnvironmentName.from(raw))(_.value),
-    raw => mark(TargetName.from(raw))(_.value),
-    raw => mark(TaskName.from(raw))(_.value),
+  private val parsers: List[(String, String => String)] = List(
+    ("CommandName", raw => mark(CommandName.from(raw))(_.value)),
+    ("JobName", raw => mark(JobName.from(raw))(_.value)),
+    ("OutputName", raw => mark(OutputName.from(raw))(_.value)),
+    ("ParamName", raw => mark(ParamName.from(raw))(_.value)),
+    ("FlagName", raw => mark(FlagName.from(raw))(_.value)),
+    ("NoteKey", raw => mark(NoteKey.from(raw))(_.value)),
+    ("GroupName", raw => mark(GroupName.from(raw))(_.value)),
+    ("RunnerName", raw => mark(RunnerName.from(raw))(_.value)),
+    ("EnvironmentName", raw => mark(EnvironmentName.from(raw))(_.value)),
+    ("TargetName", raw => mark(TargetName.from(raw))(_.value)),
+    ("TaskName", raw => mark(TaskName.from(raw))(_.value)),
   )
 
   private def mark[E <: Product, A](parsed: Either[E, A])(value: A => String): String =

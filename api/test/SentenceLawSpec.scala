@@ -57,6 +57,7 @@ object SentenceLawSpec extends ZIOSpecDefault:
           "actions/checkout moved from old/repo to new/repo",
         SupplyFault.CrossVersionSplit(dep, cells).message == "org.example:demo would split core, app",
         SupplyFault.Advisory(finding).message == "ghsa-1234-abcd-ef09 High demo",
+        SupplyFault.Advisory(finding.copy(severity = Severity.Unknown)).message == "ghsa-1234-abcd-ef09 Unknown demo",
         SupplyFault.IgnoreExpired(id, day).message == "ignore ghsa-1234-abcd-ef09 expired on 2020-01-02",
         SupplyFault.IgnoreNeedsExpiry(id).message == "ignore ghsa-1234-abcd-ef09 needs an expiry",
         SupplyFault.IgnoreTooLong(id, Days.trusted(14)).message ==

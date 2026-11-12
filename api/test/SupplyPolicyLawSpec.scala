@@ -19,9 +19,9 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         OutageStrategy.FailClosed,
       )
       assertTrue(
-        Event.values.forall(event =>
+        Event.values.toList.filterNot(event =>
           OutageStrategy.forEvent(OutageStrategy.FailOpen, event) == OutageStrategy.FailOpen
-        ),
+        ) == Nil,
         OutageStrategy.forEvent(OutageStrategy.default, Event.PullRequest) == OutageStrategy.Cached(Hours(24)),
         OutageStrategy.forEvent(OutageStrategy.default, Event.Push) == OutageStrategy.FailClosed,
         OutageStrategy.forEvent(OutageStrategy.default, Event.Schedule) == OutageStrategy.FailClosed,
@@ -64,7 +64,7 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         PrAuthor.Pat(pat)            -> List(pat),
       )
       assertTrue(
-        authors.forall((author, secrets) => author.secretNames == secrets),
+        authors.filterNot((author, secrets) => author.secretNames == secrets) == Nil,
         PrAuthor.histosDeps == PrAuthor.App(id, key),
       )
     ,

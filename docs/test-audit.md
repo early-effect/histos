@@ -41,6 +41,7 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] B7 The MCP `run` tool accepts an empty id (`runCall("", None, empty) == Right(Call.Run("", None))`), while CLI `run ""` is `BadTaskId` and MCP preview is `MissingRunName`. Parity: reject it. Owner: app (`SessionLawSpec:22`).
 - [ ] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
 - [ ] B9 `Perform.jdkMissed` has a `Test` branch that is the same as every other call, and its scaladoc claims a distinction that does not exist. Delete it. Owner: app (`PerformLawSpec:46`).
+- [x] B10 `JobCheck` reads `Not(c)` as reachable exactly when `c` is. `Not(Event(Schedule))` in `ci.yml`, which has no schedule and so is always true, is refused as `UnreachableCond`, and `Not(True)`, which never runs, is accepted. `Not(c)` is reachable when `c` can be false for the file's events, and refused when `c` is always true. The same model found `DefaultBranch` refused on a schedule, which always runs on the default branch. Rendering is B1. Owner: api (`JobCheckLawSpec`).
 
 ## Decisions for Russ
 
@@ -96,7 +97,17 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] A30 `ToolPinLawSpec:66` WEAK. L82-84 repeat enum `values`. Delete them.
 - [x] A31 `VersionDecisionLawSpec:147` WEAK. `Gen.int(0, 3)` cannot tell string order from number order. Widen, and add `1.9.0 < 1.10.0`.
 - [x] A32 `VersionOpenLawSpec:99` REWRITE. Builds the expected text from `ShipAdvice`'s own parts. Assert literal sentences.
-- [ ] A33 `JobCheckLawSpec:108` Check `Not(Event(Schedule))` against B1.
+- [x] A33 `JobCheckLawSpec:108` Check `Not(Event(Schedule))` against B1. Closed by B10: the row asserted the reachability rule, not the rendering, and that rule was wrong.
+- [x] A34 B10.
+- [x] A35 `ShipAdvice.incomplete` runs its parts together ("default or other export HISTOS_SESSION=…"). Each part is its own sentence, and exactly one period ends each, even when a `SessionError` message already ends with one. Pin the literal text.
+- [x] A36 WEAK. Table laws assert `forall` and never name the failing row: `PluginMessageLawSpec`, `PluginGrammarLawSpec`, `ToolPinLawSpec`, `PublishLawSpec`, `SupplyPolicyLawSpec`, `SupplyNameLawSpec`, `SupplyDiagnosticLawSpec`, and also `DoctorModelLawSpec`, `GraphLawSpec`, `HygieneLawSpec`, `StepLawSpec`, `VersionLawSpec`. Collect the misses and assert `misses == Nil`.
+- [x] A37 WEAK. `JobCheckLawSpec` compares `productPrefix` strings through its `fault` helper. Assert exact error values.
+- [x] A38 WEAK. `GraphShapeLawSpec` helpers fall back to `getOrElse("")` and `TestStore.Off`, so a missing module can pass. A missing module fails the law.
+- [x] A39 DELETE. `ShipDraftLawSpec` `asked.description == row.description` reads back `copy`.
+- [x] A40 `Sona.described` has no production caller. Move it into the engine test sources that use it, and delete it from production.
+- [x] A41 `SupplyFault.Advisory` prints a severity through enum `toString`. Render it with an explicit, total match, and pin the text.
+- [x] A42 `JobCheck` uses `isInstanceOf` for its event tests. Use a pattern match or an exhaustive function.
+- [x] A43 `BuilderMacro.module` widens its `Expr` with `asInstanceOf`. `asExprOf` checks the type and keeps the tree, so `module(...)` still carries its platforms.
 
 ## wire
 

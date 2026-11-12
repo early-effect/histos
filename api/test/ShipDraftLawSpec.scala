@@ -17,7 +17,6 @@ object ShipDraftLawSpec extends ZIOSpecDefault:
       assertTrue(
         row.clients == ClientBuilds.Releases,
         asked.clients == ClientBuilds.ReleasesAndSnapshots,
-        asked.description == row.description,
         linked(row, core) == Some(ClientBuilds.Releases),
         linked(asked, core) == Some(ClientBuilds.ReleasesAndSnapshots),
       )

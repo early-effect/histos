@@ -39,8 +39,8 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
       )
       val kept = List("main", "histos/deps", "feature")
       assertTrue(
-        refused.forall(raw => BranchName.from(raw) == Left(BranchNameError.Bad(raw))),
-        kept.forall(raw => BranchName.from(raw).map(_.value) == Right(raw)),
+        refused.filterNot(raw => BranchName.from(raw) == Left(BranchNameError.Bad(raw))) == Nil,
+        kept.filterNot(raw => BranchName.from(raw).map(_.value) == Right(raw)) == Nil,
       )
     ,
     test("a day count and an hour count refuse only a negative"):
@@ -82,7 +82,7 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         Purl.from("maven/dev.zio/zio@2") == Left(PurlError.Bad("maven/dev.zio/zio@2")),
       )
     ,
-    test("a severity word maps onto the rank, and at least follows that rank"):
+    test("a severity word maps onto the rank, a finding prints a word that reads back, and at least follows that rank"):
       val order = List(Severity.Unknown, Severity.Low, Severity.Moderate, Severity.High, Severity.Critical)
       val words = List(
         "low"      -> Severity.Low,
@@ -92,11 +92,23 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         "Critical" -> Severity.Critical,
         "none"     -> Severity.Unknown,
       )
+      val printed = List(
+        Severity.Unknown  -> "Unknown",
+        Severity.Low      -> "Low",
+        Severity.Moderate -> "Moderate",
+        Severity.High     -> "High",
+        Severity.Critical -> "Critical",
+      )
+      val ranks =
+        for
+          (low, left)   <- order.zipWithIndex
+          (high, right) <- order.zipWithIndex
+          if low.atLeast(high) != (left >= right)
+        yield (low, high)
       assertTrue(
-        words.forall((word, severity) => Severity.fromWord(word) == severity),
-        order.indices.forall: left =>
-          order.indices.forall: right =>
-            order(left).atLeast(order(right)) == (left >= right),
+        words.filterNot((word, severity) => Severity.fromWord(word) == severity) == Nil,
+        printed.filterNot((severity, word) => severity.word == word && Severity.fromWord(word) == severity) == Nil,
+        ranks == Nil,
       )
     ,
     test("a label, a source, a person, an email, a cell, and a repository id keep their own refusal"):

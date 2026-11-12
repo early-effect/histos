@@ -127,21 +127,19 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         PrAuthor.OwnerOpens(secret, secret) -> "An App",
         PrAuthor.Pat(secret)                -> "A PAT",
       )
-      val methods = Set(MergeMethod.Squash, MergeMethod.Rebase)
-      assertTrue(
-        signing.forall: (arm, token) =>
-          val found = SupplyDiagnostic.SignedCommitsConflict(RuleSource.Absent, arm, methods)
-          val ssh   = found.summary.contains("SshSigned")
-          found.level == Level.Error &&
-          found.check.value == "supply.signing" &&
-          found.summary.contains(token) &&
-          (token != "CommitSigning.GitPush" || !ssh) &&
-          commands(found) == List("switch to CommitSigning.ApiSigned, or allow squash only")
-        ,
-        authors.forall: (author, token) =>
-          val found = SupplyDiagnostic.AllowActionsToCreatePrs(repo, author)
-          found.level == Level.Info && found.explain.contains(token),
-      )
+      val methods  = Set(MergeMethod.Squash, MergeMethod.Rebase)
+      val unsigned = signing.filterNot: (arm, token) =>
+        val found = SupplyDiagnostic.SignedCommitsConflict(RuleSource.Absent, arm, methods)
+        val ssh   = found.summary.contains("SshSigned")
+        found.level == Level.Error &&
+        found.check.value == "supply.signing" &&
+        found.summary.contains(token) &&
+        (token != "CommitSigning.GitPush" || !ssh) &&
+        commands(found) == List("switch to CommitSigning.ApiSigned, or allow squash only")
+      val unexplained = authors.filterNot: (author, token) =>
+        val found = SupplyDiagnostic.AllowActionsToCreatePrs(repo, author)
+        found.level == Level.Info && found.explain.contains(token)
+      assertTrue(unsigned == Nil, unexplained == Nil)
     ,
     test("a blind finding tells the reader what fits that blindness, and offers no command to run"):
       def blinds(why: Blind): List[SupplyDiagnostic] =
@@ -156,16 +154,16 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         SupplyDiagnostic.AppBlind(Some(repo), Blind.Refused),
         SupplyDiagnostic.AppPermissionsBlind(Some(repo), Blind.Refused),
       )
+      val tokened = List(Blind.Refused, Blind.Unreadable, Blind.Unreachable).flatMap(blinds)
       assertTrue(
-        Blind.values.forall(why => blinds(why).forall(commands(_).isEmpty)),
-        blinds(Blind.NoCredential).forall(lead(_).contains("GH_TOKEN")),
-        List(Blind.Refused, Blind.Unreadable, Blind.Unreachable).forall: why =>
-          blinds(why).forall(diagnostic => lead(diagnostic).nonEmpty && !lead(diagnostic).contains("GH_TOKEN")),
-        blinds(Blind.Unreachable).forall(lead(_).contains("api.github.com")),
-        blinds(Blind.Unreadable).forall(lead(_).contains("early-effect/histos")),
-        apps.forall(lead(_).contains("generated workflow job")),
-        apps.forall(allSteps(_).exists(_.contains("admin:read:org"))),
-        apps.forall(allSteps(_).exists(_.contains("selected repositories"))),
+        Blind.values.toList.flatMap(blinds).filterNot(commands(_).isEmpty) == Nil,
+        blinds(Blind.NoCredential).filterNot(lead(_).contains("GH_TOKEN")) == Nil,
+        tokened.filterNot(diagnostic => lead(diagnostic).nonEmpty && !lead(diagnostic).contains("GH_TOKEN")) == Nil,
+        blinds(Blind.Unreachable).filterNot(lead(_).contains("api.github.com")) == Nil,
+        blinds(Blind.Unreadable).filterNot(lead(_).contains("early-effect/histos")) == Nil,
+        apps.filterNot(lead(_).contains("generated workflow job")) == Nil,
+        apps.filterNot(allSteps(_).exists(_.contains("admin:read:org"))) == Nil,
+        apps.filterNot(allSteps(_).exists(_.contains("selected repositories"))) == Nil,
         allSteps(SupplyDiagnostic.AppTokenUnreported).length == 2,
       )
     ,
@@ -183,13 +181,18 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         Blind.Unreadable   -> "GitHub returned a document we do not understand for",
         Blind.Unreachable  -> "GitHub could not be reached for",
       )
+      val unswapped = Blind.values.toList.filterNot: why =>
+        val swapped = s"${why.lead} on ${repo.value}."
+        val token   = SupplyDiagnostic.DefaultTokenBlind(repo, why).summary
+        val allow   = SupplyDiagnostic.AllowPullRequestsBlind(repo, why).summary
+        token.contains("workflow permissions") && token.contains(repo.value) && token != swapped && allow == token
       assertTrue(
         AppPermission.values.map(_.wire).toSet == Set("contents", "pull-requests", "workflows"),
         Access.values.map(_.wire).toSet == Set("read", "write"),
         StepOutcome.Success.wire == "success",
         StepOutcome.Failure.wire == "failure",
         StepOutcome.Skipped.wire == "skipped",
-        outcomes.forall((raw, parsed) => StepOutcome.parse(raw) == parsed),
+        outcomes.filterNot((raw, parsed) => StepOutcome.parse(raw) == parsed) == Nil,
         MergeMethod.values.map(_.wire).toSet == Set("merge", "squash", "rebase"),
         Ecosystem.values.map(_.wire).toSet == Set("github-actions", "maven", "npm", "docker"),
         ApiCall.Pulls.wire == "POST /pulls",
@@ -199,12 +202,8 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         ApiCall.Rules.wire == "rulesets",
         RuleSource.Absent.wire == "no branch rule",
         RuleSource.BranchProtection(branch).wire.contains(branch.value),
-        leads.forall((blind, lead) => blind.lead == lead),
-        Blind.values.forall: why =>
-          val swapped = s"${why.lead} on ${repo.value}."
-          val token   = SupplyDiagnostic.DefaultTokenBlind(repo, why).summary
-          val allow   = SupplyDiagnostic.AllowPullRequestsBlind(repo, why).summary
-          token.contains("workflow permissions") && token.contains(repo.value) && token != swapped && allow == token,
+        leads.filterNot((blind, lead) => blind.lead == lead) == Nil,
+        unswapped == Nil,
       ),
   )
 
