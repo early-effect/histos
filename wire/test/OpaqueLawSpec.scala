@@ -217,6 +217,8 @@ object OpaqueLawSpec extends ZIOSpecDefault:
         NodeVersion.from("v22.14.0") == Right(node),
         NodeVersion.from("V22.14.0") == Right(node),
         NodeVersion.from("25") == Left(NodeVersionError.Bad("25")),
+        "\"v25.0.0-rc.1\"".fromJson[NodeVersion] ==
+          Right(NodeVersion.trusted("25.0.0-rc.1", NodeMajor.trusted(25))),
         "\"22.14.0\"".fromJson[NodeVersion] == Right(node),
         "\"v22.14.0\"".fromJson[NodeVersion] == Right(node),
         "\"25\"".fromJson[NodeVersion] == Right(NodeVersion.trusted("25", NodeMajor.trusted(25))),

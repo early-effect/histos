@@ -47,6 +47,6 @@ These four rows are closed.
 
 `CiJob(name, task)` becomes `TaskJob(name, task)`. The default trigger is still `Trigger.Ci` (a pull request, or a push to the default branch). `JobWhen.Schedule(cron)` becomes `TaskJob(..., cron = Some(cron))`, which renders a cron-only file. `TaskJob.nightly(name, task, cron)` is that cron plus `workflow_dispatch`. `JobPermissions.ContentsWrite` becomes `JobPermissions.write`. `site = Some(Site(...))` becomes `SiteJob(name, task, site)`.
 
-`BuildError.ScheduledSite` and `CiError.ScheduledSite` are removed. New faults live on `CiFault` and, on the wire, as flat `CiError` cases: `IllegalSite`, `UnknownNeed`, `DuplicateNeed`, `UnknownModule`, `DuplicateTarget`, `UnpinnedAction`, `GrantMissing`, `UnknownRunner`, `UnknownSecret`, `UnreachableCond`, `DispatchInputConflict`, `ConcurrencyConflict`, `UnpinnedWorkflowRun`.
+`BuildError.ScheduledSite` and `CiError.ScheduledSite` are removed. New faults live on `CiFault`. On the wire a workflow render carries the fault itself as `CiError.Fault(fault)`, so its sentence is the `CiFault` sentence.
 
 Reserved job ids add `affected` and `cache-seed`. The command name `affected` is reserved.

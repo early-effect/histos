@@ -17,6 +17,9 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
   private val sha = CommitSha.trusted("a" * 40)
   private val hex = "ab" * 32
 
+  /** Bytes that are not UTF-8, so `readString` refuses them. */
+  private val notText = Array[Byte](0xc3.toByte, 0x28)
+
   def spec = suite("supply surface laws")(
     test("fix off applies nothing, a secret command is not run, and --yes does not confirm a GitHub setting"):
       val program =
@@ -98,6 +101,35 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program
     ,
+    test("a local edit whose file is not text is that read failure, leaves the bytes, and the readable edit lands"):
+      val program =
+        for
+          repo <- Workspace.work("surface-unread-fix")
+          kept = repo.resolve("histos.scala")
+          bad  = repo.resolve(".scalafmt.conf")
+          _     <- Workspace.writeString(kept, "before")
+          _     <- ZIO.attemptBlocking(Files.write(bad, notText)).orDie
+          notes <- DoctorSurface.applyReported(
+            repo,
+            List(
+              Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("before", "after")),
+              Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")),
+            ),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
+            false,
+            _ => ZIO.succeed(FixApply.Answer.No),
+            _ => ZIO.succeed(()),
+            _ => ZIO.succeed(()),
+          )
+          text  <- Workspace.readString(kept)
+          bytes <- ZIO.attemptBlocking(Files.readAllBytes(bad).toList).orDie
+        yield assertTrue(
+          notes == List(s"not applied: could not read $bad", "wrote histos.scala"),
+          text == "after",
+          bytes == notText.toList,
+        )
+      program
+    ,
     test("a missing lock is a failure, and an audit that cannot reach osv does not pretend the scan passed"):
       val program =
         for
@@ -106,7 +138,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net     <- ZIO.service[Net]
-          missing <- DepsSurface.check(repo, SupplyChain(), net, Date.trusted("2026-01-10"))
+          missing <- DepsSurface.check(repo, SupplyChain(), net)
           audit   <- DepsSurface.audit(repo, false, net)
           _       <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
           _       <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
@@ -121,25 +153,76 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
-    test("an empty token is not a pull request, and Actions does not commit a workflow file"):
-      val dry     = sys.env.get("HISTOS_DRY_RUN").exists(value => value == "true" || value == "1")
+    test("a lock, a build file, or a changed file that is not text is that read failure, and nothing is sent"):
       val program =
         for
+          repo <- Workspace.work("surface-unread")
+          path  = repo.resolve("dependencies.lock")
+          build = repo.resolve("histos.scala")
+          _ <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
+            (_: String, url: String, _: String, _: List[(String, String)]) => ZIO.dieMessage(s"sent $url")
+          )
+          net      <- ZIO.service[Net]
+          _        <- TestSystem.putEnv("GH_TOKEN", "token")
+          _        <- ZIO.attemptBlocking(Files.write(path, notText)).orDie
+          checked  <- DepsSurface.check(repo, SupplyChain(), net)
+          updated  <- DepsSurface.update(repo, SupplyChain(), net, true, false)
+          audited  <- DepsSurface.audit(repo, false, net)
+          alerted  <- DepsSurface.alert(repo, SupplyChain(), net)
+          snapshot <- DepsSurface.snapshot(repo, net, false)
+          _        <- Workspace.writeString(path, lock("1.0.0"))
+          _        <- ZIO.attemptBlocking(Files.write(build, notText)).orDie
+          planned  <- DepsSurface.check(repo, SupplyChain(), net)
+          pulled   <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
+        yield
+          val unread = DepsSurface.DepsResult(1, s"could not read $path\n")
+          assertTrue(
+            checked == unread,
+            updated == unread,
+            audited == unread,
+            alerted == unread,
+            snapshot == unread,
+            planned == DepsSurface.DepsResult(1, s"could not read $build\n"),
+            pulled == DepsSurface.DepsResult(1, s"could not read $build\n"),
+          )
+      program.provideSomeLayer[TestEnvironment & Scope](
+        stubbed[Net] ++ GitAnswers(remote = Some(RepoName.trusted("acme/demo")), diff = List("histos.scala")).layer
+      )
+    ,
+    test("an empty token is not a pull request unless the run is dry, and Actions does not commit a workflow file"):
+      val workflow = ".github/workflows/ci.yml"
+      val nothing  = DepsSurface.DepsResult(0, "deps pr: nothing to commit\n")
+      val program  =
+        for
           repo <- Workspace.work("surface-pr")
+          _    <- Workspace.writeString(repo.resolve(workflow), "name: ci")
           _    <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net <- ZIO.service[Net]
           policy = SupplyChain(updates = UpdatePolicy(author = PrAuthor.Actions))
-          files  = Some(List(".github/workflows/ci.yml" -> "name: ci"))
-          empty <- DepsSurface.pullRequest(repo, policy, net, None, false, true, files)
-          kept  <- DepsSurface.pullRequest(repo, policy, net, Some("token"), false, true, files)
+          _     <- TestSystem.putEnv("GH_TOKEN", "")
+          empty <- DepsSurface.pullRequest(repo, policy, net, false, true)
+          _     <- TestSystem.putEnv("HISTOS_DRY_RUN", "true")
+          dry   <- DepsSurface.pullRequest(repo, policy, net, false, true)
+          _     <- TestSystem.clearEnv("HISTOS_DRY_RUN")
+          _     <- TestSystem.putEnv("GH_TOKEN", "token")
+          kept  <- DepsSurface.pullRequest(repo, policy, net, false, true)
         yield assertTrue(
-          if dry then empty.code == 0 && empty.text.contains("nothing to commit")
-          else empty.code == 1 && empty.text.contains("GH_TOKEN is not set"),
-          kept.code == 0 && kept.text.contains("nothing to commit"),
+          empty == DepsSurface.DepsResult(1, "GH_TOKEN is not set\n"),
+          kept == nothing,
+          dry == nothing,
         )
-      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(diff = List(workflow)).layer)
+    ,
+    test("an origin names its GitHub repository over https or ssh, and anything else names none"):
+      assertTrue(
+        GitRead.repository("https://github.com/acme/demo.git\n") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("git@github.com:acme/demo.git") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("acme/demo") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("https://github.com/acme") == None,
+        GitRead.repository("") == None,
+      )
     ,
     test("a snapshot that is not submitted renders the purl and does not send it"):
       val program =
@@ -150,12 +233,13 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net    <- ZIO.service[Net]
-          result <- DepsSurface.snapshot(repo, net, None, false)
+          result <- DepsSurface.snapshot(repo, net, false)
         yield assertTrue(
           result.code == 0,
+          result.text.contains(s""""sha":"${sha.value}","ref":"refs/heads/main""""),
           result.text.contains("pkg:maven/org.example/demo@1.0.0"),
         )
-      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(commit = Some(sha)).layer)
     ,
     test("setup writes the policy once, and a zipx import asks before it deletes"):
       val program =
@@ -237,6 +321,39 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           again.isEmpty,
         )
       program
+    ,
+    test("a pinned action moves to its newest cooled tag, and the plan reads only the tags and their commits"):
+      val older   = "a" * 40
+      val newer   = "b" * 40
+      val tags    = "https://api.github.com/repos/example/demo/tags?per_page=30"
+      val commits = "https://api.github.com/repos/example/demo/commits/"
+      val listed  = s"""[{"name":"v1.0.0","commit":{"sha":"$older"}},{"name":"v1.1.0","commit":{"sha":"$newer"}}]"""
+      val program =
+        for
+          sent <- Ref.make(List.empty[String])
+          _    <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
+            (_: String, url: String, _: String, _: List[(String, String)]) =>
+              sent.update(_ :+ url) *>
+                (if url == tags then ZIO.succeed(Reply(200, listed))
+                 else if url.startsWith(commits) then ZIO.succeed(Reply(200, """{"date":"2026-01-01T00:00:00Z"}"""))
+                 else ZIO.dieMessage(s"sent $url"))
+          )
+          net      <- ZIO.service[Net]
+          proposal <- Plan.propose(
+            "",
+            "",
+            Map("example/demo" -> (older, "v1.0.0")),
+            SupplyChain(),
+            Date("2026-01-10"),
+            false,
+            net,
+          )
+          urls <- sent.get
+        yield assertTrue(
+          proposal.actions == List(ActionChange("example/demo", "v1.0.0", "v1.1.0", older, newer, false)),
+          urls.sorted == List(s"$commits$older", s"$commits$newer", tags).sorted,
+        )
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
     test("a family member is not its own bump, and a lock child keeps its direct"):
       val graph =

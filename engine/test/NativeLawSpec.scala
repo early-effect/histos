@@ -111,18 +111,7 @@ object NativeLawSpec extends ZIOSpecDefault:
         split == NativeDeclaration.Disagree(left.name, right.name),
         same == NativeDeclaration.Major(ClangMajor(21)),
         same.message == "clang 21",
-      )
-    ,
-    test("a missing path and a file that is not a jar contribute no class shapes"):
-      ZIO.scoped:
-        Workspace
-          .work("histos-shapes")
-          .flatMap: root =>
-            val note = root.resolve("note.txt")
-            for
-              _      <- Workspace.writeString(note, "x")
-              shapes <- ClassShapes.read(List(root.resolve("gone"), note))
-            yield assertTrue(shapes == Nil),
+      ),
   )
 
   private def failed[A](exit: Exit[ClangMiss, A], error: ClangMiss): Boolean =

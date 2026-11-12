@@ -150,6 +150,7 @@ object ResolutionServiceLawSpec extends ZIOSpecDefault:
               fresh    <- ResolutionService.open(repo, Resolution.Solve)
               retried  <- fresh.module(asked)
               again    <- fresh.module(asked)
+              locked   <- ZIO.attemptBlocking(Files.exists(Resolve.lockPath(repo))).orDie
               compiled <- service.tool(ToolRequest(id, List(root), Repositories.central))
               linked   <- service.plugin(pluginDep, LinkStrategy.ExactBinary, Repositories.central)
               _        <- Resolve.write(Resolve.lockPath(repo), DependencyLock(List(held(other, "demo"))))
@@ -172,6 +173,7 @@ object ResolutionServiceLawSpec extends ZIOSpecDefault:
                 ),
                 retried.artifacts.map(_.sha256) == List(sha),
                 again == retried,
+                !locked,
                 compiled.artifacts.map(_.name) == List("demo"),
                 linked.artifacts.map(_.name) == List("plug"),
                 plugs == 1,
@@ -221,15 +223,7 @@ object ResolutionServiceLawSpec extends ZIOSpecDefault:
               solved <- solves.get
               plugs  <- plugins.get
             yield assertTrue(solved == 2, plugs == 3)
-          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Resolve])
-    ,
-    test("solve and lock name different files"):
-      val repo = Path.of("/repo")
-      assertTrue(
-        ResolutionService.file(repo, Resolution.Solve) == repo.resolve(".histos").resolve("resolution"),
-        ResolutionService.file(repo, Resolution.Lock) == repo.resolve("dependencies.lock"),
-        ResolutionService.reportPath(repo) == repo.resolve(".histos").resolve("resolution"),
-      ),
+          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Resolve]),
   )
 
   private def held(checksum: Sha256, artifactName: String): LockedCell =

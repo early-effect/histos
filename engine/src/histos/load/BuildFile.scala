@@ -50,23 +50,8 @@ private[load] object BuildFile:
         .mapError(_ => LoadError.Io(IoFailure(Path.of("histos-build.scala"), IoFault.Temp)))
     )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).ignore)
 
-  private[load] def compile(
-      source: Path,
-      classpath: List[Path],
-      out: Path,
-      label: String = "histos.scala",
-  ): IO[LoadError, Unit] =
-    drive(List(source), classpath, out).flatMap: reporter =>
-      if reporter.hasErrors then
-        ZIO.fail(
-          LoadError.CompileFailed(
-            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source, label)))
-          )
-        )
-      else ZIO.unit
-
   /** Each path is rewritten to its label in a diagnostic, which is `label:line:column: error: message` when the
-    * compiler placed it. The generated wiring file is not a repo path.
+    * compiler placed it. The build file compiles from a temp copy, and the generated wiring file is not a repo path.
     */
   private[load] def compileLabeled(
       labeled: List[(Path, String)],

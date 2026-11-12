@@ -1,17 +1,16 @@
 package histos.publish
 
-import histos.central.{Fingerprint, PortalBase, ReleaseMode, RepositorySecret, RepositoryUser}
-import histos.jdk.{Sha256, Sha256Digest}
+import histos.central.{Fingerprint, PortalBase, ReleaseMode, RepositorySecret, RepositoryUser, SnapshotRepository}
+import histos.jdk.Sha256Digest
 import histos.version.{CiVersion, Revision, ShipName, SnapshotPointer}
+import histos.workspace.Workspace
 import histos.{PublishFault, PublishRequest, SonaPublish, organization, ship}
 
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
-
 import slayer.{any, stub, stubbed}
 
-import zio.{Chunk, Clock, Config, Scope, ZIO}
+import zio.{Chunk, Config, Scope, ZIO, ZLayer}
 import zio.test.*
 
 object SignerLawSpec extends ZIOSpecDefault:
@@ -22,7 +21,6 @@ object SignerLawSpec extends ZIOSpecDefault:
   def spec = suite("signer laws")(
     test("a missing secret, a bad secret, and an unknown signer are typed errors"):
       for
-        _       <- Clock.instant
         missing <- Signer.fromEnv(Map.empty).either
         blank   <- Signer.fromEnv(Map("HISTOS_SIGNER" -> " ")).either
         empty   <- Signer.fromEnv(Map("PGP_SECRET" -> "%%%")).either
@@ -37,30 +35,25 @@ object SignerLawSpec extends ZIOSpecDefault:
       )
     ,
     test("gpg that is not on the given path is missing, and a fingerprint is not asked of gpg"):
-      ZIO.acquireRelease(directory("histos-gpg-missing"))(delete).flatMap { root =>
+      Workspace.work("histos-gpg-missing").flatMap { root =>
         val bin = root.resolve("bin")
         for
-          _       <- Clock.instant
           _       <- install(bin, failScript)
           absent  <- Signer.fromEnv(Map("HISTOS_SIGNER" -> "gpg", "PATH" -> "")).either
           signer  <- Signer.fromEnv(gpgEnv(bin, hex = None))
           unnamed <- signer.fingerprint.either
           named   <- Signer.fromEnv(gpgEnv(bin, hex = Some("0123456789abcdef"))).flatMap(_.fingerprint)
-        yield (named, Fingerprint.from("0123456789abcdef")) match
-          case (found, Right(want)) =>
-            assertTrue(
-              absent == Left(SignerError.GpgMissing),
-              unnamed == Left(SignerError.NoFingerprint),
-              found == want,
-            )
-          case _ => assertTrue(false)
+        yield assertTrue(
+          absent == Left(SignerError.GpgMissing),
+          unnamed == Left(SignerError.NoFingerprint),
+          named == Fingerprint("0123456789abcdef"),
+        )
       }
     ,
     test("a gpg signer returns the armor the key source wrote, and the child does not see the secret"):
-      ZIO.acquireRelease(directory("histos-gpg-ok"))(delete).flatMap { root =>
+      Workspace.work("histos-gpg-ok").flatMap { root =>
         val bin = root.resolve("bin")
         for
-          _      <- Clock.instant
           _      <- install(bin, keepScript)
           signer <- Signer.fromEnv(gpgEnv(bin, hex = None) ++ Map("PGP_SECRET" -> "secret", "PGP_PASSPHRASE" -> "pw"))
           armor  <- signer.sign(Chunk.single(1.toByte)).either
@@ -68,10 +61,9 @@ object SignerLawSpec extends ZIOSpecDefault:
       }
     ,
     test("a key source that exits is a gpg failure"):
-      ZIO.acquireRelease(directory("histos-gpg-fail"))(delete).flatMap { root =>
+      Workspace.work("histos-gpg-fail").flatMap { root =>
         val bin = root.resolve("bin")
         for
-          _      <- Clock.instant
           _      <- install(bin, failScript)
           signer <- Signer.fromEnv(gpgEnv(bin, hex = None))
           failed <- signer.sign(Chunk.single(1.toByte)).either
@@ -82,17 +74,19 @@ object SignerLawSpec extends ZIOSpecDefault:
       val ci      = Revision.Ci(CiVersion(number))
       val pointer = Revision.Pointer(SnapshotPointer(number))
       for
-        _            <- Clock.instant
+        loop         <- RefusingLoopback.bound
         credsFirst   <- SonaStock.gate(Map.empty).either
         noSecret     <- SonaStock.gate(creds).either
         unknown      <- SonaStock.gate(creds + ("HISTOS_SIGNER" -> "nope")).either
         missing      <- SonaStock.gate(creds ++ Map("HISTOS_SIGNER" -> "gpg", "PATH" -> "")).either
-        ciFault      <- publish(Map.empty, ci)
-        pointerFault <- publish(Map.empty, pointer)
+        ciFault      <- publish(loop, Map.empty, ci)
+        pointerFault <- publish(loop, Map.empty, pointer)
         signerFault  <- publish(
+          loop,
           creds + ("HISTOS_SIGNER" -> "nope"),
           Revision.Release(histos.version.ReleaseVersion(number)),
         )
+        reached <- loop.connections
       yield assertTrue(
         credsFirst == Left(ReleaseError.Credentials),
         noSecret == Left(ReleaseError.Signer(SignerError.NoSecret)),
@@ -101,64 +95,72 @@ object SignerLawSpec extends ZIOSpecDefault:
         ciFault == Left(PublishFault.Version(ci)),
         pointerFault == Left(PublishFault.Credentials),
         signerFault == Left(PublishFault.Signer),
+        reached == 0,
       )
     ,
     test("a signature failure is a failed ship, and the portal stays closed"):
-      ZIO
-        .acquireRelease(directory("histos-sign-upload"))(delete)
+      Workspace
+        .work("histos-sign-upload")
         .flatMap { repo =>
           val stage = repo.resolve("stage")
           val jar   = stage.resolve("app.jar")
           for
-            _      <- Clock.instant
+            loop   <- RefusingLoopback.bound
             _      <- stub[Signer](_.sign(any[Chunk[Byte]]))(ZIO.fail(SignerError.GpgFailed(7)))
             signer <- ZIO.service[Signer]
             _      <- ZIO.attemptBlocking {
               Files.createDirectories(stage)
               Files.write(jar, Array[Byte](1))
             }.orDie
-            report <- upload(repo, stage, jar, signer)
-          yield report match
-            case None        => assertTrue(false)
-            case Some(found) =>
-              assertTrue(found.failed == List(s"demo ${SignerError.GpgFailed(7).message}"), found.deployed.isEmpty)
+            found   <- upload(repo, stage, jar, signer, loop)
+            reached <- loop.connections
+          yield assertTrue(
+            found.failed == List(s"demo ${SignerError.GpgFailed(7).message}"),
+            found.deployed.isEmpty,
+            reached == 0,
+          )
         }
         .provideSomeLayer[TestEnvironment & Scope](stubbed[Signer]),
   )
 
   private def publish(
+      loop: RefusingLoopback,
       env: Map[String, String],
       revision: Revision,
-  ): ZIO[Any, Nothing, Either[PublishFault, histos.PublishReceipt]] =
+  ): ZIO[Any, SnapshotRepository.Error, Either[PublishFault, histos.PublishReceipt]] =
     val request = PublishRequest(revision, false, Path.of("stage"), Path.of("checkout"), Chunk.empty)
     ZIO
-      .serviceWithZIO[SonaPublish](_.publish(request))
-      .provide(SonaStock.layer(env, _ => ZIO.unit))
-      .either
+      .serviceWithZIO[SonaPublish](_.publish(request).either)
+      .provide(
+        ZLayer.fromZIO(ZIO.fromEither(SnapshotRepository.from(s"${loop.url}/repository"))) >>>
+          SonaStock.layer(env, _ => ZIO.unit)
+      )
 
   private def upload(
       repo: Path,
       stage: Path,
       jar: Path,
       signer: Signer,
-  ): ZIO[Any, ReleaseError, Option[ReleaseReport]] =
-    (RepositoryUser.from("user"), PortalBase.from("http://127.0.0.1:9"), Fingerprint.from("0123456789abcdef")) match
-      case (Right(user), Right(base), Right(fingerprint)) =>
-        val secret = RepositorySecret(user, Config.Secret(Chunk.fromArray("pw".toCharArray)))
-        val ready  = ReleaseStage(
-          stage,
-          List(published(jar)),
-          Nil,
-          Nil,
-          Nil,
-          signer,
-          base,
-          secret,
-          fingerprint,
-          Map.empty,
-        )
-        ReleaseRun.upload(repo, ready, ReleaseMode.Hold, _ => ZIO.unit).map(Some(_))
-      case _ => ZIO.succeed(None)
+      loop: RefusingLoopback,
+  ) =
+    for
+      user <- ZIO.fromEither(RepositoryUser.from("user"))
+      base <- ZIO.fromEither(PortalBase.from(loop.url))
+      secret = RepositorySecret(user, Config.Secret(Chunk.fromArray("pw".toCharArray)))
+      ready  = ReleaseStage(
+        stage,
+        List(published(jar)),
+        Nil,
+        Nil,
+        Nil,
+        signer,
+        base,
+        secret,
+        Fingerprint("0123456789abcdef"),
+        Map.empty,
+      )
+      report <- ReleaseRun.upload(repo, ready, ReleaseMode.Hold, _ => ZIO.unit)
+    yield report
 
   private def published(jar: Path): PublishedModule =
     PublishedModule(
@@ -213,18 +215,5 @@ object SignerLawSpec extends ZIOSpecDefault:
       Files.writeString(script, text)
       script.toFile.setExecutable(true)
       script
-    }.orDie
-
-  private def directory(prefix: String): ZIO[Any, Nothing, Path] =
-    ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie
-
-  private def delete(root: Path): zio.UIO[Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(root) then
-        val walk  = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.orDie
 end SignerLawSpec

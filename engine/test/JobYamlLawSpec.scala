@@ -4,9 +4,6 @@ import histos.plugin.*
 import histos.version.CommitSha
 import histos.workflow.*
 
-import _root_.scala.compiletime.constValue
-import _root_.scala.deriving.Mirror
-
 import zio.{Scope, ZIO}
 import zio.test.*
 
@@ -76,30 +73,9 @@ object JobYamlLawSpec extends ZIOSpecDefault:
             )
             assertTrue(
               yaml(wired(List(TaskJob(nightly, TaskName("echo"), needs = List(docs))))) ==
-                Right(Left(CiError.UnknownNeed(nightly, docs))),
+                Right(Left(CiError.Fault(CiFault.UnknownNeed(nightly, docs)))),
               yaml(wired(sites)) == Right(Left(CiError.DuplicateSite(docs, guide))),
             )
-    ,
-    test("each ci fault lifts to the ci error that says the same sentence"):
-      jobName("docs"): docs =>
-        jobName("guide"): guide =>
-          val faults = List(
-            CiFault.IllegalSite(docs),
-            CiFault.UnknownNeed(docs, guide),
-            CiFault.DuplicateNeed(docs, guide),
-            CiFault.UnknownModule(docs, ProjectName("core")),
-            CiFault.DuplicateTarget(docs, TargetName("one")),
-            CiFault.UnpinnedAction(docs, action),
-            CiFault.GrantMissing(docs, action),
-            CiFault.UnknownRunner(docs, large),
-            CiFault.UnknownSecret(token),
-            CiFault.UnreachableCond(docs),
-            CiFault.DispatchInputConflict("mode"),
-            CiFault.ConcurrencyConflict("ci.yml"),
-            CiFault.UnpinnedWorkflowRun("missing.yml"),
-          )
-          val misses = faults.filterNot(fault => JobYaml.lift(fault).message == fault.message)
-          assertTrue(faults.map(_.ordinal).sorted == List.range(0, caseCount[CiFault]), misses == Nil)
     ,
     test("a pinned action is the name, the sha, and the tag, and a local action is the path"):
       val custom = ActionName("example/setup")
@@ -284,9 +260,6 @@ object JobYamlLawSpec extends ZIOSpecDefault:
       graph: Either[BuildError, ProjectGraph]
   ): Either[BuildError, Either[CiError | BuildError, JobYaml.Rendered]] =
     graph.map(found => JobYaml.render(found, branch))
-
-  private inline def caseCount[A](using sum: Mirror.SumOf[A]): Int =
-    constValue[Tuple.Size[sum.MirroredElemTypes]]
 
   private def jobName(raw: String)(use: JobName => TestResult): TestResult =
     JobName.from(raw) match

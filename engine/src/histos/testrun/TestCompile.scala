@@ -108,14 +108,7 @@ private[histos] object TestCompile:
             .select(root, version, platform)
             .mapError(error => ModuleTestError.Sources(module.name, version, error))
         case None => ZIO.succeed(Nil)
-    yield distinct(inside ++ outside)
-
-  private[testrun] def distinct(paths: List[Path]): List[Path] =
-    paths
-      .foldLeft((List.empty[Path], Set.empty[Path])):
-        case ((kept, seen), path) if seen.contains(path) => (kept, seen)
-        case ((kept, seen), path)                        => (kept :+ path, seen + path)
-      ._1
+    yield (inside ++ outside).distinct
 
   /** `<module>/test` wins. The repository `test` is only for a graph with one module.
     */

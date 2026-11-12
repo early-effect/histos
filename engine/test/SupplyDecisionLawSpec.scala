@@ -1,6 +1,6 @@
 package histos.supply
 
-import histos.plugin.{ActionName, SecretName}
+import histos.plugin.SecretName
 import histos.version.CommitSha
 import histos.{Developer, DeveloperId, PomText}
 
@@ -144,8 +144,15 @@ object SupplyDecisionLawSpec extends ZIOSpecDefault:
         true,
         TransitiveFix.ParentOnly,
       )
-      val split = Bump.choose(
-        List(locked, locked.copy(version = "1.1.0", cell = "other")),
+      val parent = Coordinate.trusted("org.example:parent")
+      val split  = Bump.choose(
+        List(
+          locked.copy(coordinate = parent, cell = "app"),
+          locked,
+          locked.copy(version = "1.1.0", cell = "other"),
+          locked.copy(cell = "web"),
+          locked.copy(coordinate = parent, version = "2.0.0", cell = "core"),
+        ),
         Nil,
         versions(),
         today,
@@ -154,10 +161,18 @@ object SupplyDecisionLawSpec extends ZIOSpecDefault:
       )
       assertTrue(
         applied(picked) == List("1.0.2"),
-        split match
-          case Left(SupplyFault.CrossVersionSplit(dep, cells)) =>
-            dep == coord && cells.map(_.value).toSet == Set(coord.value)
-          case _ => false,
+        split == Left(
+          SupplyFault.CrossVersionSplit(parent, List(CellName.trusted("app"), CellName.trusted("core")))
+        ),
+        Bump.choose(
+          List(locked, locked.copy(version = "1.1.0", cell = "other")),
+          Nil,
+          versions(),
+          today,
+          false,
+          TransitiveFix.ParentOnly,
+        ) ==
+          Left(SupplyFault.CrossVersionSplit(coord, List(CellName.trusted("core"), CellName.trusted("other")))),
       )
     ,
     test("a release published today waits out a cooldown unless it is a security fix"):
@@ -250,16 +265,6 @@ object SupplyDecisionLawSpec extends ZIOSpecDefault:
         forcedFlag(directFix).contains(false),
         forcedFlag(caught).contains(false),
         listedOnly(reported) == List("1.0.1"),
-      )
-    ,
-    test("a moved action repository and an unreachable tag are typed faults"):
-      val action = ActionName.trusted("example/checkout")
-      val was    = RepoId.trusted("1")
-      val now    = RepoId.trusted("2")
-      assertTrue(
-        Bump.verify(action, "v1", main, true, was, now) == Left(SupplyFault.ActionRepoMoved(action, was, now)),
-        Bump.verify(action, "v1", main, false, was, was) == Left(SupplyFault.TagNotReachable(action, "v1", main)),
-        Bump.verify(action, "v1", main, true, was, was) == Right(()),
       )
     ,
     test("a severity word wins over a vector, and an unread word is low"):

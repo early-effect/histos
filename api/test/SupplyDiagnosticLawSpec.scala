@@ -65,6 +65,10 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         identity(SupplyDiagnostic.RuleBlind(None, Blind.Unreachable)) == ("supply.required-check", Level.Error),
         identity(overlap) == ("supply.dependabot-overlap", Level.Warning),
         commands(overlap) == List("./histos setup supply-chain --fix"),
+        identity(SupplyDiagnostic.DependabotUnread(RepoPath("dependabot.yml"))) ==
+          ("supply.dependabot-overlap", Level.Warning),
+        steps(SupplyDiagnostic.DependabotUnread(RepoPath("dependabot.yml"))) ==
+          List("Make dependabot.yml a readable UTF-8 file, then run histos doctor again."),
         identity(SupplyDiagnostic.DependabotSecurityPrsOn(::(Ecosystem.Npm, Nil))) ==
           ("supply.dependabot-security", Level.Warning),
         settings(SupplyDiagnostic.DependabotSecurityPrsOn(::(Ecosystem.Npm, Nil))) == List(

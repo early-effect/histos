@@ -16,14 +16,16 @@ import histos.doctor.{
   Runner,
 }
 import histos.central.ReleaseFeed
+import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.workflow.PinScan
+import histos.workspace.{IoFailure, Workspace}
 import histos.ProjectGraph
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.time.ZoneOffset
 
-import zio.{durationInt, UIO, URIO, ZIO}
+import zio.{durationInt, Clock, IO, UIO, URIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -40,25 +42,36 @@ object DoctorSurface:
       verbose: Boolean,
   )
 
-  def run(repo: Path, graph: ProjectGraph, request: Request, machine: histos.jdk.Machine): UIO[(Int, String)] =
-    val env = sys.env
-    val tty = System.console() != null
-    GitHubCredential
-      .resolve(env, GitHubCredential.gh)
-      .flatMap: token =>
-        runWith(
-          repo,
-          graph,
-          request,
-          machine,
-          Net.live,
-          env,
-          token,
-          tty,
-          prompt(tty),
-          command(repo),
-          applySetting(token.map(_.value)),
-        ).provideLayer(ReleaseFeed.live)
+  /** What the terminal doctor reads besides the environment: the registry feed, git, and the terminal. */
+  type Needs = ReleaseFeed & GitRead & Terminal
+
+  /** The terminal's doctor. The environment comes from `zio.System`, and the edge provides the live `Needs`. Only a
+    * `--fix` run asks the terminal, because only a fix can prompt.
+    */
+  def run(
+      repo: Path,
+      graph: ProjectGraph,
+      request: Request,
+      machine: histos.jdk.Machine,
+  ): URIO[Needs, (Int, String)] =
+    for
+      env    <- zio.System.envs.orElseSucceed(Map.empty)
+      tty    <- if request.fix then ZIO.serviceWithZIO[Terminal](_.attached) else ZIO.succeed(false)
+      token  <- GitHubCredential.resolve(env, GitHubCredential.gh)
+      result <- runWith(
+        repo,
+        graph,
+        request,
+        machine,
+        Net.live,
+        env,
+        token,
+        tty,
+        prompt(tty),
+        command(repo),
+        applySetting(token.map(_.value)),
+      )
+    yield result
 
   def runWith(
       repo: Path,
@@ -72,7 +85,7 @@ object DoctorSurface:
       ask: Fix => UIO[FixApply.Answer],
       exec: String => UIO[Unit],
       setting: String => UIO[Unit],
-  ): URIO[ReleaseFeed, (Int, String)] =
+  ): URIO[ReleaseFeed & GitRead, (Int, String)] =
     val job        = JobEnv.from(env)
     val credential = if request.preflight.isDefined then None else token
     for
@@ -142,7 +155,7 @@ object DoctorSurface:
       closed(
         "central.credentials",
         Area.Release,
-        histos.doctor.HygieneChecks.credentials(graph.catalog, sys.env, listed, auth),
+        histos.doctor.HygieneChecks.credentials(graph.catalog, env, listed, auth),
       ),
       closed("pgp.key", Area.Release, histos.doctor.HygieneChecks.key(pgp)),
       closedPages(graph, pages),
@@ -195,14 +208,19 @@ object DoctorSurface:
       def run(ctx: DoctorContext) =
         val outcomes = located.hit match
           case histos.doctor.GitHubProbe.Hit.Absent =>
-            SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential, located.venue)
+            ZIO.succeed(SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential, located.venue))
           case histos.doctor.GitHubProbe.Hit.Unreachable =>
-            SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable, located.venue)
+            ZIO.succeed(SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable, located.venue))
           case histos.doctor.GitHubProbe.Hit.Ready(read) =>
-            val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
-            val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
-            SupplyChecks.run(view, graph.supply, read.covered)
-        ZIO.succeed(if preflight then SupplyChecks.unseenAsSkip(outcomes) else outcomes)
+            readFile(repo.resolve(dependabot.value)).fold(
+              _ =>
+                Outcome.Found(SupplyDiagnostic.DependabotUnread(dependabot)) ::
+                  SupplyChecks.run(read.view, graph.supply, read.covered - "supply.dependabot-overlap"),
+              text =>
+                val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
+                SupplyChecks.run(view, graph.supply, read.covered),
+            )
+        outcomes.map(found => if preflight then SupplyChecks.unseenAsSkip(found) else found)
 
   /** Local edits and histos commands run when `--fix` is set. A GitHub setting runs only after a yes on a terminal. */
   def applyReported(
@@ -216,23 +234,27 @@ object DoctorSurface:
   ): UIO[List[String]] =
     if !request.fix then ZIO.succeed(Nil)
     else
-      val mode  = FixMode.from(request.fix, request.yes)
-      val files = fixes.collect { case Fix.Config(file, _) =>
-        file.value -> readFile(repo.resolve(file.value))
-      }.toMap
-      val (next, commands) = FixApply.applyAll(fixes, mode, _ => FixApply.Answer.No, files)
-      val settings         = fixes.collect { case fix: Fix.Settings => fix }
+      val mode     = FixMode.from(request.fix, request.yes)
+      val targets  = fixes.collect { case Fix.Config(file, _) => file.value }.distinct
+      val settings = fixes.collect { case fix: Fix.Settings => fix }
       for
+        read <- ZIO.foreach(targets)(name => readFile(repo.resolve(name)).either.map(name -> _))
+        files  = read.collect { case (name, Right(text)) => name -> text }.toMap
+        unread = read.collect { case (_, Left(failure)) => s"not applied: ${failure.message}" }
+        kept   = fixes.filter:
+          case Fix.Config(file, _) => files.contains(file.value)
+          case _                   => true
+        (next, commands) = FixApply.applyAll(kept, mode, _ => FixApply.Answer.No, files)
+        changed          = next.toList.filterNot((name, body) => files.get(name).contains(body))
         wrote <- ZIO
           .attempt {
-            next.foreach: (name, body) =>
-              if !files.get(name).contains(body) then Files.writeString(repo.resolve(name), body)
-            next.keys.filterNot(name => files.get(name).contains(next(name))).toList
+            changed.foreach((name, body) => Files.writeString(repo.resolve(name), body))
+            changed.map(_._1)
           }
           .orElseSucceed(Nil)
         ran   <- ZIO.foreach(commands)(line => runCommand(line, exec))
         asked <- ZIO.foreach(settings)(fix => confirmSetting(fix, request.yes, tty, ask, setting))
-      yield wrote.map(name => s"wrote $name") ++ ran ++ asked
+      yield unread ++ wrote.map(name => s"wrote $name") ++ ran ++ asked
 
   private def runCommand(line: String, exec: String => UIO[Unit]): UIO[String] =
     if line.toLowerCase.contains("secret") then ZIO.succeed(s"not applied (secret): $line")
@@ -263,15 +285,17 @@ object DoctorSurface:
       token: Option[GitHubCredential.Token],
       job: JobEnv,
       graph: ProjectGraph,
-  ): UIO[Located] =
+  ): URIO[GitRead, Located] =
     val needed = graph.supply.updates.author.secretNames.map(_.value)
-    githubRepo(repo, env) match
-      case None       => ZIO.succeed(Located(None, histos.doctor.GitHubProbe.Hit.Absent, job.venue))
-      case Some(name) =>
-        val api = token.fold("https://api.github.com")(_.api)
-        histos.doctor.GitHubProbe
-          .read(net, name, BranchName.trusted("main"), token.map(_.value), api, job, needed)
-          .map(hit => Located(Some(name), hit, job.venue))
+    GitRead
+      .github(repo, env.get("GITHUB_REPOSITORY"))
+      .flatMap:
+        case None       => ZIO.succeed(Located(None, histos.doctor.GitHubProbe.Hit.Absent, job.venue))
+        case Some(name) =>
+          val api = token.fold("https://api.github.com")(_.api)
+          histos.doctor.GitHubProbe
+            .read(net, name, BranchName.trusted("main"), token.map(_.value), api, job, needed)
+            .map(hit => Located(Some(name), hit, job.venue))
 
   private def prompt(tty: Boolean)(fix: Fix): UIO[FixApply.Answer] =
     if !tty then ZIO.succeed(FixApply.Answer.NonTty)
@@ -330,29 +354,11 @@ object DoctorSurface:
         )
     else None
 
-  private def readFile(path: Path): String =
-    if Files.isRegularFile(path) then Files.readString(path) else ""
+  /** The file's text, or no text when there is no file. */
+  private def readFile(path: Path): IO[IoFailure, String] =
+    Workspace.readIfPresent(path).map(_.getOrElse(""))
 
-  private def githubRepo(repo: Path, env: Map[String, String]): Option[RepoName] =
-    env.get("GITHUB_REPOSITORY").flatMap(raw => RepoName.from(raw).toOption).orElse(origin(repo))
-
-  private def origin(repo: Path): Option[RepoName] =
-    val text = git(repo, "remote", "get-url", "origin").trim.stripSuffix(".git")
-    val name =
-      if text.contains("github.com/") then text.split("github.com/").lastOption.getOrElse("")
-      else if text.contains(":") then text.split(":").lastOption.getOrElse("")
-      else text
-    RepoName.from(name).toOption
-
-  private def git(repo: Path, args: String*): String =
-    try
-      val process = new ProcessBuilder((List("git", "-C", repo.toString) ++ args)*)
-        .redirectError(ProcessBuilder.Redirect.DISCARD)
-        .start()
-      val text = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
-      process.waitFor()
-      text
-    catch case _: Exception => ""
+  private val dependabot: RepoPath = RepoPath.trusted(".github/dependabot.yml")
 
   private def areaName(area: Area): String =
     area match
@@ -373,107 +379,122 @@ end DoctorSurface
 object DepsSurface:
   final case class DepsResult(code: Int, text: String)
 
-  def check(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      today: Date,
-      known: Map[String, RepoId] = Map.empty,
-  ): UIO[DepsResult] =
-    propose(repo, policy, net, today, false, known)
+  /** Why a command ends before its own work: no lock, a file it could not read, or a supply fault. */
+  private enum Stop:
+    case NoLock
+    case Unread(failure: IoFailure)
+    case Fault(fault: SupplyFault)
 
-  def update(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      today: Date,
-      yes: Boolean,
-      security: Boolean,
-      known: Map[String, RepoId] = Map.empty,
-  ): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val graph = read(repo.resolve("histos.scala"))
-        Plan
-          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
-          .flatMap: proposal =>
-            if !yes then ZIO.succeed(DepsResult(0, proposal.text))
-            else
-              ZIO
-                .attempt:
-                  val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
-                  val wrote = Plan.write(repo, proposal, graph, files)
-                  proposal.text + wrote.map(name => s"wrote $name\n").mkString
-                .map(body => DepsResult(0, body))
-                .orElseSucceed(DepsResult(1, "could not write the plan\n"))
-          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+    def result: DepsResult = this match
+      case NoLock          => DepsResult(1, "dependencies.lock is missing\n")
+      case Unread(failure) => DepsResult(1, failure.message + "\n")
+      case Fault(fault)    => DepsResult(1, fault.message + "\n")
+  end Stop
+
+  /** A cooldown counts days to today in UTC on the caller's clock. */
+  def check(repo: Path, policy: SupplyChain, net: Net): UIO[DepsResult] =
+    propose(repo, policy, net, false).fold(_.result, (proposal, _) => DepsResult(0, proposal.text))
+
+  def update(repo: Path, policy: SupplyChain, net: Net, yes: Boolean, security: Boolean): UIO[DepsResult] =
+    propose(repo, policy, net, security).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      (proposal, graph) =>
+        if !yes then ZIO.succeed(DepsResult(0, proposal.text))
+        else
+          ZIO
+            .attempt:
+              val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
+              val wrote = Plan.write(repo, proposal, graph, files)
+              proposal.text + wrote.map(name => s"wrote $name\n").mkString
+            .map(body => DepsResult(0, body))
+            .orElseSucceed(DepsResult(1, "could not write the plan\n")),
+    )
 
   def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val packages = purls(text, directOnly = false)
-        query(net, packages)
-          .map: body =>
-            cache(body)
-            val ids  = Scan.strings(body, "id").filter(_.startsWith("GHSA-")).distinct
-            val head = if report then "deps audit --report" else "deps audit"
-            DepsResult(0, s"$head\n${ids.map(id => s"  $id").mkString("\n")}\n")
-          .catchAll(_ => ZIO.succeed(DepsResult(1, "osv is down\n")))
+    lock(repo).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      text =>
+        query(net, purls(text, directOnly = false))
+          .foldZIO(
+            _ => ZIO.succeed(DepsResult(1, "osv is down\n")),
+            body =>
+              cache(body).as:
+                val ids  = Scan.strings(body, "id").filter(_.startsWith("GHSA-")).distinct
+                val head = if report then "deps audit --report" else "deps audit"
+                DepsResult(0, s"$head\n${ids.map(id => s"  $id").mkString("\n")}\n"),
+          ),
+    )
 
+  /** The branch commits the files `git diff` lists. A dry run, `HISTOS_DRY_RUN`, prints the calls and sends none. */
   def pullRequest(
       repo: Path,
       policy: SupplyChain,
       net: Net,
-      token: Option[String],
       security: Boolean,
       open: Boolean,
-      files: Option[List[(String, String)]] = None,
-  ): UIO[DepsResult] =
-    val dry = dryRun
-    if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
-    else
-      val present = PrFlow.keep(policy.updates.author, files.getOrElse(changed(repo)))
-      if present.isEmpty then ZIO.succeed(DepsResult(0, "deps pr: nothing to commit\n"))
+  ): URIO[GitRead, DepsResult] =
+    (dryRun <*> githubToken).flatMap: (dry, token) =>
+      if token.isEmpty && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
       else
-        val branch  = if security then BranchName.trusted("histos/security") else policy.updates.branch
-        val main    = sha(repo, "rev-parse", "HEAD")
-        val head    = sha(repo, "rev-parse", branch.value)
-        val request = PrRequest(
-          policy.updates,
-          branch,
-          main,
-          if head == main then None else Some(head),
-          group(present),
-          Nil,
-          open,
-          None,
+        changed(repo).foldZIO(
+          stop => ZIO.succeed(stop.result),
+          files =>
+            val present = PrFlow.keep(policy.updates.author, files)
+            val branch  = if security then BranchName.trusted("histos/security") else policy.updates.branch
+            if present.isEmpty then ZIO.succeed(DepsResult(0, "deps pr: nothing to commit\n"))
+            else
+              githubName(repo).flatMap:
+                case None       => ZIO.succeed(unnamed)
+                case Some(name) =>
+                  for
+                    git  <- ZIO.service[GitRead]
+                    main <- git.head(repo).map(_.getOrElse(zero))
+                    head <- git.tip(repo, branch).map(_.getOrElse(zero))
+                    sent <- PrFlow.plan(
+                      PrRequest(
+                        policy.updates,
+                        branch,
+                        main,
+                        if head == main then None else Some(head),
+                        group(present),
+                        Nil,
+                        open,
+                        None,
+                      )
+                    ) match
+                      case Left(fault)  => ZIO.succeed(DepsResult(1, fault.message + "\n"))
+                      case Right(calls) =>
+                        val kept = calls.filter:
+                          case GhCall.OpenOrUpdate(_, _) => opens(policy, open)
+                          case _                         => true
+                        GhRun
+                          .execute(net, name, token.getOrElse(""), kept, dry)
+                          .map(text => DepsResult(0, text))
+                          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+                  yield sent,
         )
-        PrFlow.plan(request) match
-          case Left(fault)  => ZIO.succeed(DepsResult(1, fault.message + "\n"))
-          case Right(calls) =>
-            val kept = calls.filter:
-              case GhCall.OpenOrUpdate(_, _) => opens(policy, open)
-              case _                         => true
-            val name = githubName(repo)
-            GhRun
-              .execute(net, name, token.getOrElse(""), kept, dry)
-              .map(text => DepsResult(0, text))
-              .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
-  def alert(repo: Path, policy: SupplyChain, net: Net, token: Option[String]): UIO[DepsResult] =
-    val dry = dryRun
-    if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
-    else
-      val packages = lock(repo).fold(List.empty[String])(text => purls(text, directOnly = false))
-      query(net, packages)
-        .orElseSucceed("")
-        .flatMap: body =>
-          GhRun
-            .alert(net, githubName(repo), token.getOrElse(""), policy, findingsOf(body), dry)
-            .map(text => DepsResult(0, text))
-            .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+  def alert(repo: Path, policy: SupplyChain, net: Net): URIO[GitRead, DepsResult] =
+    (dryRun <*> githubToken).flatMap: (dry, token) =>
+      if token.isEmpty && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
+      else
+        githubName(repo).flatMap:
+          case None       => ZIO.succeed(unnamed)
+          case Some(name) =>
+            lock(repo)
+              .map(text => purls(text, directOnly = false))
+              .catchSome { case Stop.NoLock => ZIO.succeed(Nil) }
+              .foldZIO(
+                stop => ZIO.succeed(stop.result),
+                packages =>
+                  query(net, packages)
+                    .orElseSucceed("")
+                    .flatMap: body =>
+                      GhRun
+                        .alert(net, name, token.getOrElse(""), policy, findingsOf(body), dry)
+                        .map(text => DepsResult(0, text))
+                        .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n"))),
+              )
 
   private def findingsOf(body: String): List[Finding] =
     Scan
@@ -491,45 +512,48 @@ object DepsSurface:
           "",
         )
 
-  def snapshot(repo: Path, net: Net, token: Option[String], submit: Boolean): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val commit = sys.env.get("GITHUB_SHA").filter(_.nonEmpty).getOrElse(git(repo, "rev-parse", "HEAD").trim)
-        val ref    = sys.env.get("GITHUB_REF").filter(_.nonEmpty).getOrElse("refs/heads/main")
-        val body   = SnapshotSubmit.json(SnapshotSubmit.fromLock(text), commit, ref)
-        if !submit then ZIO.succeed(DepsResult(0, body + "\n"))
-        else if token.forall(_.isEmpty) then ZIO.succeed(DepsResult(1, "GITHUB_TOKEN is not set\n"))
-        else
-          GhRun
-            .snapshot(net, githubName(repo), token.getOrElse(""), body, dryRun)
-            .map(text => DepsResult(0, text + body + "\n"))
-            .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+  /** The commit is `GITHUB_SHA`, else HEAD. The ref is `GITHUB_REF`, else `refs/heads/main`. */
+  def snapshot(repo: Path, net: Net, submit: Boolean): URIO[GitRead, DepsResult] =
+    lock(repo).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      text =>
+        for
+          commit <- env("GITHUB_SHA").flatMap:
+            case Some(named) => ZIO.succeed(named)
+            case None        => ZIO.serviceWithZIO[GitRead](_.head(repo)).map(_.fold("")(_.value))
+          ref   <- env("GITHUB_REF").map(_.getOrElse("refs/heads/main"))
+          dry   <- dryRun
+          token <- githubToken
+          body = SnapshotSubmit.json(SnapshotSubmit.fromLock(text), commit, ref)
+          result <-
+            if !submit then ZIO.succeed(DepsResult(0, body + "\n"))
+            else if token.isEmpty then ZIO.succeed(DepsResult(1, "GITHUB_TOKEN is not set\n"))
+            else
+              githubName(repo).flatMap:
+                case None       => ZIO.succeed(unnamed)
+                case Some(name) =>
+                  GhRun
+                    .snapshot(net, name, token.getOrElse(""), body, dry)
+                    .map(text => DepsResult(0, text + body + "\n"))
+                    .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+        yield result,
+    )
 
-  private def propose(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      today: Date,
-      security: Boolean,
-      known: Map[String, RepoId],
-  ): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val graph = read(repo.resolve("histos.scala"))
-        Plan
-          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
-          .map(proposal => DepsResult(0, proposal.text))
-          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+  /** The plan the lock and the build file propose today, with the build file's text. */
+  private def propose(repo: Path, policy: SupplyChain, net: Net, security: Boolean): IO[Stop, (Proposal, String)] =
+    for
+      text     <- lock(repo)
+      graph    <- buildFile(repo)
+      day      <- today
+      proposal <- Plan
+        .propose(text, graph, Plan.catalog(policy.extraActions), policy, day, security, net)
+        .mapError(Stop.Fault(_))
+    yield (proposal, graph)
 
   private def opens(policy: SupplyChain, open: Boolean): Boolean =
     policy.updates.author match
       case PrAuthor.OwnerOpens(_, _)                               => open
       case PrAuthor.Actions | PrAuthor.App(_, _) | PrAuthor.Pat(_) => true
-
-  private def dryRun: Boolean =
-    sys.env.get("HISTOS_DRY_RUN").exists(value => value == "true" || value == "1")
 
   private def group(files: List[(String, String)]): List[KindChange] =
     files
@@ -543,48 +567,21 @@ object DepsSurface:
     else if path == "histos" || path.endsWith("build.properties") then BumpKind.Launcher
     else BumpKind.Libraries
 
-  private def changed(repo: Path): List[(String, String)] =
-    git(repo, "diff", "--name-only", "HEAD")
-      .split('\n')
-      .toList
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .flatMap: name =>
-        val path = repo.resolve(name)
-        if Files.isRegularFile(path) then Some(name -> Files.readString(path)) else None
+  /** The files `git diff` lists that are still in the checkout, with their text. */
+  private def changed(repo: Path): ZIO[GitRead, Stop, List[(String, String)]] =
+    ZIO
+      .serviceWithZIO[GitRead](_.changed(repo))
+      .flatMap: names =>
+        ZIO
+          .foreach(names)(name => Workspace.readIfPresent(repo.resolve(name)).map(_.map(name -> _)))
+          .mapBoth(Stop.Unread(_), _.flatten)
 
-  private def sha(repo: Path, args: String*): CommitSha =
-    CommitSha.from(git(repo, args*).trim).getOrElse(CommitSha.trusted("0" * 40))
+  private def lock(repo: Path): IO[Stop, String] =
+    Workspace.readIfPresent(repo.resolve("dependencies.lock")).mapError(Stop.Unread(_)).someOrFail(Stop.NoLock)
 
-  private def githubName(repo: Path): RepoName =
-    sys.env
-      .get("GITHUB_REPOSITORY")
-      .flatMap(raw => RepoName.from(raw).toOption)
-      .orElse:
-        val text = git(repo, "remote", "get-url", "origin").trim.stripSuffix(".git")
-        val name =
-          if text.contains("github.com/") then text.split("github.com/").lastOption.getOrElse("")
-          else if text.contains(":") then text.split(":").lastOption.getOrElse("")
-          else text
-        RepoName.from(name).toOption
-      .getOrElse(RepoName.trusted("early-effect/histos"))
-
-  private def git(repo: Path, args: String*): String =
-    try
-      val process = new ProcessBuilder((List("git", "-C", repo.toString) ++ args)*)
-        .redirectError(ProcessBuilder.Redirect.DISCARD)
-        .start()
-      val text = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
-      process.waitFor()
-      text
-    catch case _: Exception => ""
-
-  private def lock(repo: Path): Option[String] =
-    val path = repo.resolve("dependencies.lock")
-    if Files.isRegularFile(path) then Some(Files.readString(path)) else None
-
-  private def read(path: Path): String =
-    if Files.isRegularFile(path) then Files.readString(path) else ""
+  /** `histos.scala`, or no text when the checkout has none. */
+  private def buildFile(repo: Path): IO[Stop, String] =
+    Workspace.readIfPresent(repo.resolve("histos.scala")).mapError(Stop.Unread(_)).map(_.getOrElse(""))
 
   private def purls(text: String, directOnly: Boolean): List[String] =
     val rows = text.split('\n').toList.map(_.trim).filter(_.nonEmpty)
@@ -612,13 +609,43 @@ object DepsSurface:
       )
       .map(_.body)
 
-  private def cache(body: String): Unit =
-    try
-      val home = sys.props.get("user.home").getOrElse(".")
-      val dir  = Path.of(home, ".cache", "histos", "advisories")
-      Files.createDirectories(dir)
-      Files.writeString(dir.resolve("querybatch.json"), body)
-    catch case _: Exception => ()
+  /** `~/.cache/histos/advisories`, the directory the generated supply workflow caches. A failed write is not an audit
+    * failure.
+    */
+  private def cache(body: String): UIO[Unit] =
+    zio.System
+      .property("user.home")
+      .orElseSucceed(None)
+      .flatMap:
+        case None       => ZIO.unit
+        case Some(home) =>
+          ZIO.attemptBlocking {
+            val dir = Path.of(home, ".cache", "histos", "advisories")
+            Files.createDirectories(dir)
+            Files.writeString(dir.resolve("querybatch.json"), body)
+          }.ignore
+
+  private def env(name: String): UIO[Option[String]] =
+    zio.System.env(name).orElseSucceed(None).map(_.filter(_.nonEmpty))
+
+  private def dryRun: UIO[Boolean] =
+    env("HISTOS_DRY_RUN").map(_.exists(value => value == "true" || value == "1"))
+
+  private def today: UIO[Date] =
+    Clock.instant.map(now => Date.trusted(now.atOffset(ZoneOffset.UTC).toLocalDate.toString))
+
+  /** The github.com token `gh` reads: `GH_TOKEN`, then `GITHUB_TOKEN`. An empty one is unset. */
+  private def githubToken: UIO[Option[String]] =
+    zio.System.envs.orElseSucceed(Map.empty).map(GitHubCredential.fromEnv(_, "github.com"))
+
+  private def githubName(repo: Path): URIO[GitRead, Option[RepoName]] =
+    env("GITHUB_REPOSITORY").flatMap(GitRead.github(repo, _))
+
+  /** The commit a pull request names when git has no answer. */
+  private val zero: CommitSha = CommitSha.trusted("0" * 40)
+
+  private val unnamed: DepsResult =
+    DepsResult(1, "no GitHub repository: set GITHUB_REPOSITORY or add a github.com origin\n")
 end DepsSurface
 
 /** Inserts the default policy. A second run changes nothing. */

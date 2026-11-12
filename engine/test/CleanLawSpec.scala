@@ -28,7 +28,7 @@ object CleanLawSpec extends ZIOSpecDefault:
   private val all   = Aggregate(ProjectName.trusted("all"), List(core.name), SourcePos("histos.scala", 2, 1))
   private val graph = ProjectGraph.trusted(List(core, all, extra))
 
-  /** Where compile, test, pack, link, and run write one module's products. */
+  /** Where compile, test, pack, link, run, doc, and coverage write one module's products. */
   private val moduleRoots =
     List(
       "classes",
@@ -41,10 +41,13 @@ object CleanLawSpec extends ZIOSpecDefault:
       "jars",
       "link",
       "run",
+      "doc",
+      "coverage/classes",
+      "coverage/analysis",
     )
 
-  /** Products every module shares. */
-  private val sharedRoots = List("provider", "provider-src")
+  /** Products every module shares, including the coverage report. */
+  private val sharedRoots = List("provider", "provider-src", "coverage")
 
   def spec = suite("clean laws")(
     test("an empty selection wipes every module root, every shared root, and the observation, and keeps the rest"):

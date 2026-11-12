@@ -12,7 +12,7 @@ import java.nio.file.{Files, Path}
 
 import slayer.{any, stub, stubbed}
 
-import zio.{Chunk, Promise, Ref, Schedule, Scope, ZIO, ZLayer}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 import Histos.given
@@ -38,14 +38,9 @@ object ScheduleLawSpec extends ZIOSpecDefault:
 
   def spec = suite("schedule laws")(
     suite("who may leave the machine")(
-      test("a declared need keeps every runner on this machine"):
-        val cases = runners.flatMap(runner => Need.values.toList.map(runner -> _))
-        check(Gen.fromIterable(cases)): (runner, need) =>
-          assertTrue(Sendable.decide(runner, Set(need)) == Verdict.Stay(Hold.Needs(Set(need))))
-      ,
-      test("both declared needs stay on the hold"):
-        val needs = Set(Need.Network, Need.Docker)
-        assertTrue(Sendable.decide(Runner.Compile, needs) == Verdict.Stay(Hold.Needs(needs)))
+      test("any declared needs keep every runner on this machine, and the hold names them all"):
+        check(Gen.fromIterable(runners), Gen.setOf1(Gen.fromIterable(Need.values.toList))): (runner, needs) =>
+          assertTrue(Sendable.decide(runner, needs) == Verdict.Stay(Hold.Needs(needs)))
       ,
       test("an empty need set sends only compile and a hermetic plugin"):
         assertTrue(
@@ -128,9 +123,6 @@ object ScheduleLawSpec extends ZIOSpecDefault:
         ),
     ),
     suite("the remote target is data")(
-      test("the remote mode is off, read, or write"):
-        assertTrue(RemoteMode.values.toList == List(RemoteMode.Off, RemoteMode.Read, RemoteMode.Write))
-      ,
       test("a blank uri still rejects a bad mode or namespace and otherwise stays off"):
         assertTrue(
           CacheConfig.decide(Map.empty) == Right(None),
@@ -224,14 +216,16 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           ),
         )
       ,
-      test("http and https need a host and do not invent a grpc target"):
-        val shown = List("https://cache.example/objects", "http://cache.example").map { raw =>
+      test("http and https keep the address they were given, and do not invent a grpc target"):
+        val urls  = List("https://cache.example/objects", "http://cache.example")
+        val shown = urls.map { raw =>
           CacheConfig.decide(Map(CacheConfig.UriKey -> raw, CacheConfig.ModeKey -> "write")) match
             case Right(Some(CacheConfig.Selected(CacheConfig.Target.Http(url), mode, namespace))) =>
-              s"${url.absolute} $mode $namespace"
-            case other => other.toString
+              Some((url.render, mode, namespace))
+            case _ => None
         }
-        assertTrue(shown == List("true Write Main", "true Write Main"))
+        val rendered = List("https://cache.example/objects", "http://cache.example/")
+        assertTrue(shown == rendered.map(url => Some((url, RemoteMode.Write, CacheNamespace.Main))))
       ,
       test("main, a pull request, and a dev name read themselves and then main"):
         assertTrue(
@@ -352,19 +346,12 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           ActionResult.decode(seven.dropRight(1)) == None,
         )
       ,
-      test("rebuild does not copy the index"):
-        for
-          copied <- Ref.make(false)
-          _      <- IndexPromote.run(Promote.Rebuild, copied.set(true) *> ZIO.die(new IllegalStateException("copy")))
-          ran    <- copied.get
-        yield assertTrue(ran == false)
-      ,
-      test("copy index runs the copy"):
-        for
-          copied <- Ref.make(false)
-          _      <- IndexPromote.run(Promote.CopyIndex, copied.set(true))
-          ran    <- copied.get
-        yield assertTrue(ran),
+      test("copy index runs the copy, and rebuild does not"):
+        val rows = List(Promote.CopyIndex -> true, Promote.Rebuild -> false)
+        ZIO
+          .foreach(rows): (promote, _) =>
+            Ref.make(false).flatMap(copied => IndexPromote.run(promote, copied.set(true)) *> copied.get)
+          .map(ran => assertTrue(rows.map(_._1).toSet == Promote.values.toSet, ran == rows.map(_._2))),
     ),
     suite("one permit per need")(
       test("cpu permits exclude, including a zero cpu limit"):
@@ -397,7 +384,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
             runs <- Ref.make(0)
             info = StepInfo(StepId.Work("a"), Chunk.empty, Set(StepNeed.Cpu))
             step = Step.cached[String](info)(runs.updateAndGet(_ + 1).map(_.toString))
-            pair <- observe(step.zip(step))
+            pair <- observe(step.zip(step), StepId.Work("a"))
             (outcome, events) = pair
             called <- runs.get
             sources = finished(events)
@@ -416,7 +403,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
             down = up.andThenHermetic[String](StepInfo(StepId.Work("down"), Chunk.empty, Set(StepNeed.Cpu)))(_ =>
               ZIO.die(new IllegalStateException("continued"))
             )
-            pair <- observe(down)
+            pair <- observe(down, StepId.Work("down"))
           yield assertTrue(
             shown(
               pair._1,
@@ -616,7 +603,6 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           read  <- once(RemoteMode.Read)
           write <- once(RemoteMode.Write)
         yield assertTrue(
-          RemoteMode.values.toList == List(RemoteMode.Off, RemoteMode.Read, RemoteMode.Write),
           off == ("out", Chunk("out"), Chunk.empty[Chunk[Byte]], 0),
           read == ("out", Chunk("out"), Chunk.empty[Chunk[Byte]], 1),
           write == ("out", Chunk("out"), Chunk(utf8("out")), 1),
@@ -684,61 +670,38 @@ object ScheduleLawSpec extends ZIOSpecDefault:
             _.cached(action, ActionDigest.of(action, Map.empty), runs.updateAndGet(_ + 1).as("fresh"))
           )
           called <- runs.get
-        yield assertTrue(value == "fresh", called == 1, value != stored)
-      ,
-      test("an empty output list returns the raw blob, and a missing file is a miss"):
-        val digest   = Digest.trusted("ef" * 32)
-        val sha      = Sha256Digest.of(utf8("x"))
-        val manifest = PluginManifest.store("task", List(RepoPath("a.txt") -> sha))
-        val empty    = plugin(Seal.Hermetic)
-        val missing  =
-          plugin(Seal.Hermetic, root = Some(Path.of("/missing-plugin-root")), outputs = List(RepoPath("a.txt")))
-        for
-          cache <- ZIO.service[ActionCache]
-          _     <- arm(RemoteMode.Off, _ => ZIO.none, _ => ZIO.some(manifest))
-          whole <- ScheduleAspects.cached(cache, empty, digest)
-          gone  <- ScheduleAspects.cached(cache, missing, digest)
-          _     <- stub[ActionCache](_.get(any[Digest]))((_: Digest) => ZIO.none)
-          none  <- ScheduleAspects.cached(cache, core("a"), digest)
-        yield assertTrue(
-          whole == Some(manifest),
-          PluginManifest.text(manifest) == "task",
-          gone == None,
-          none == None,
-        ),
+        yield assertTrue(value == "fresh", called == 1, value != stored),
     ) @@ TestAspect.sequential).provideSomeLayerShared[TestEnvironment & Scope](scheduled),
   )
 
   private def runnerLayer(limits: Parallelism): ZLayer[Any, Nothing, Histos] =
     ZLayer.succeed(limits) >>> Histos.live
 
+  /** Two steps with these needs. The first to enter waits up to a second for the other, and the law adjusts the clock a
+    * second. The adjust returns only once every fiber the law started is suspended or done, so a step that a permit
+    * wrongly admits has met the first before the wait can end. True when the steps never met and both finished.
+    */
   private def exclude(needs: Set[StepNeed], limits: Parallelism): ZIO[TestEnvironment & Scope, Nothing, Boolean] =
     val program =
       for
-        inside  <- Ref.make(0)
-        peak    <- Ref.make(0)
-        held    <- Promise.make[Nothing, Unit]
-        release <- Promise.make[Nothing, Unit]
-        enter =
-          inside.updateAndGet(_ + 1).flatMap { n =>
-            peak.update(high => if n > high then n else high) *>
-              held.succeed(()).unit *>
-              release.await *>
-              inside.update(_ - 1).unit
-          }
+        entries <- Ref.make(0)
+        partner <- Promise.make[Nothing, Unit]
+        met     <- Promise.make[Nothing, Boolean]
+        enter = entries.updateAndGet(_ + 1).flatMap {
+          case 1 => partner.await.timeout(1.second).flatMap(found => met.succeed(found.isDefined)).unit
+          case _ => partner.succeed(()).unit
+        }
         first  = Step.local[Unit](StepInfo(StepId.Work("a"), Chunk.empty, needs))(enter)
         second = Step.local[Unit](StepInfo(StepId.Work("b"), Chunk.empty, needs))(enter)
-        high <- ZIO.serviceWithZIO[Histos]: histos =>
+        excluded <- ZIO.serviceWithZIO[Histos]: histos =>
           ZIO.scoped:
             for
               running <- histos.start(first.zip(second).map(_ => ()))
-              _       <- held.await
-              _       <- ZIO.yieldNow.repeat(Schedule.recurs(32))
-              found   <- peak.get
-              _       <- release.succeed(())
+              _       <- TestClock.adjust(1.second)
               outcome <- running.outcome
-            yield found == 1 && outcome == Outcome.Done(())
-      yield high
+              overlap <- met.await
+            yield !overlap && outcome == Outcome.Done(())
+      yield excluded
     program.provideSomeLayer[TestEnvironment & Scope](runnerLayer(limits))
 
   private def overlap(need: StepNeed, limits: Parallelism): ZIO[TestEnvironment & Scope, Nothing, TestResult] =
@@ -762,19 +725,33 @@ object ScheduleLawSpec extends ZIOSpecDefault:
       yield assertTrue(called == 2, pair == Outcome.Done(()))
     program.provideSomeLayer[TestEnvironment & Scope](runnerLayer(limits))
 
+  /** The outcome, and every event up to the one that ends `last`. The goal's own step ends last, so nothing follows. */
   private def observe[E, A](
-      step: Step[Any, E, A]
+      step: Step[Any, E, A],
+      last: StepId,
   ): ZIO[Histos, Nothing, (Outcome[E, A], Chunk[StepEvent[E]])] =
     ZIO.serviceWithZIO[Histos]: histos =>
       ZIO.scoped:
         for
-          running <- histos.start(step)
-          found   <- Ref.make(Chunk.empty[StepEvent[E]])
-          _       <- running.events.tap(event => found.update(_ :+ event)).runDrain.fork
+          running  <- histos.start(step)
+          found    <- Ref.make(Chunk.empty[StepEvent[E]])
+          recorded <- Promise.make[Nothing, Chunk[StepEvent[E]]]
+          _        <- running.events
+            .tap(event =>
+              found.updateAndGet(_ :+ event).flatMap(chunk => ZIO.when(ends(event, last))(recorded.succeed(chunk)))
+            )
+            .runDrain
+            .fork
           outcome <- running.outcome
-          _       <- ZIO.yieldNow.repeat(Schedule.recurs(32))
-          events  <- found.get
+          events  <- recorded.await
         yield (outcome, events)
+
+  private def ends[E](event: StepEvent[E], id: StepId): Boolean =
+    event match
+      case StepEvent.Started(_)                               => false
+      case StepEvent.Finished(finished, _, _)                 => finished == id
+      case StepEvent.Stopped(StepFailure.Failed(failed, _))   => failed == id
+      case StepEvent.Stopped(StepFailure.Skipped(skipped, _)) => skipped == id
 
   private def shown[E](outcome: Outcome[E, String], events: Chunk[StepEvent[E]]): String =
     val result = outcome match

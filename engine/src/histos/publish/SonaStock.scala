@@ -31,11 +31,12 @@ import histos.{
 
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, IO, UIO, ULayer, ZIO, ZLayer}
+import zio.{Chunk, IO, UIO, URLayer, ZIO, ZLayer}
 
 object SonaStock:
-  def layer(env: Map[String, String], note: String => UIO[Unit]): ULayer[SonaPublish] =
-    ZLayer.succeed(Live(env, note))
+  /** A snapshot or pointer revision deploys to the [[SnapshotRepository]]. A release goes to the portal `env` names. */
+  def layer(env: Map[String, String], note: String => UIO[Unit]): URLayer[SnapshotRepository, SonaPublish] =
+    ZLayer(ZIO.serviceWith[SnapshotRepository](Live(env, _, note)))
 
   /** Credentials, then the signing key, then the portal base. No socket. */
   def gate(env: Map[String, String]): IO[ReleaseError, Unit] =
@@ -64,7 +65,8 @@ object SonaStock:
   private def mode(automatic: Boolean): CentralRelease =
     if automatic then CentralRelease.Automatic else CentralRelease.Hold
 
-  private final class Live(env: Map[String, String], note: String => UIO[Unit]) extends SonaPublish:
+  private final class Live(env: Map[String, String], repository: SnapshotRepository, note: String => UIO[Unit])
+      extends SonaPublish:
     def publish(request: PublishRequest): IO[PublishFault, PublishReceipt] =
       request.revision match
         case ShipRevision.Ci(_) =>
@@ -85,7 +87,7 @@ object SonaStock:
           val revision = central(request.revision)
           ZIO
             .foreach(request.modules)(module => put(request, revision, module))
-            .provide(Publisher.snapshots(SnapshotRepository.central, secret).mapError(centralFault(request, _)))
+            .provide(Publisher.snapshots(repository, secret).mapError(centralFault(request, _)))
             .map(lines => PublishReceipt(lines, Chunk.empty))
 
     private def put(

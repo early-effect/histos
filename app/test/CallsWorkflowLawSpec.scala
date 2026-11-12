@@ -8,7 +8,7 @@ import histos.report.CallResult
 import histos.supply.{AdvisoryPolicy, DailyAudit, PrAuthor, SecurityFixes, SupplyChain, UpdatePolicy}
 import histos.workflow.{SupplyYaml, Workflow, WorkflowAction}
 import histos.workspace.Workspace
-import histos.{Jvm, Projects, module, organization, `scala`}
+import histos.{HistosBuild, Jvm, Projects, module, organization, `scala`}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -31,7 +31,7 @@ object CallsWorkflowLawSpec extends ZIOSpecDefault:
             .supplyChain(chain)(module("wflowlaw", Jvm)(scala"3.10.0"))
           for
             graph <- ZIO.fromEither(built).catchAll(error => ZIO.dieMessage(error.message))
-            loaded = LoadedBuild(graph, idle)
+            loaded = LoadedBuild(graph, idle, HistosBuild.fixed(graph))
             _                       <- origin(dir)
             (missing, missingHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
             (updated, updatedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Update, say))

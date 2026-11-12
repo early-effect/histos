@@ -1,7 +1,7 @@
 package histos.schedule
 
 import zio.Chunk
-import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
+import zio.test.{Gen, ZIOSpecDefault, assertTrue, check, suite, test}
 
 object ReapiLawSpec extends ZIOSpecDefault:
   private val action = Digest.trusted("ab" * 32)
@@ -9,12 +9,42 @@ object ReapiLawSpec extends ZIOSpecDefault:
   private val bytes  = Chunk[Byte](1, 2, 3)
   private val wrong  = Chunk[Byte](9, 8)
 
+  private val instances = Gen.stringBounded(1, 300)(Gen.unicodeChar)
+  private val digests   = Gen.stringN(64)(Gen.elements("0123456789abcdef".toSeq*)).map(Digest.trusted)
+  private val payloads  = Gen.chunkOfBounded(1, 300)(Gen.byte)
+
   def spec = suite("remote execution messages")(
-    test("an action, a blob query, and a bytestream frame round-trip, and an empty field is omitted"):
-      val result   = Chunk[Byte](9, 8, 7)
+    test("every request and response round-trips for any instance, digest, size, and payload"):
+      check(instances, digests, payloads, Gen.long(0L, Long.MaxValue), Gen.listOf(digests)):
+        (instance, digest, payload, size, listed) =>
+          assertTrue(
+            Reapi.decodeGet(Reapi.getAction(instance, digest)) == Some((instance, digest)),
+            Reapi.decodeUpdate(Reapi.updateAction(instance, digest, payload)) == Some((instance, digest, payload)),
+            Reapi.decodeFind(Reapi.findMissing(instance, digest, size)) == Some((instance, List(digest))),
+            Reapi.missingDigests(Reapi.missingResponse(listed)) == Some(listed),
+            Reapi.decodeRead(Reapi.readRequest(instance)) == Some(instance),
+            Reapi.readData(Reapi.readResponse(payload) ++ Reapi.readResponse(payload)) == Some(payload ++ payload),
+            Reapi.decodeWrite(Reapi.writeFrame(Some(instance), size, true, payload)) ==
+              Some(Reapi.WriteFrame(Some(instance), size, true, payload)),
+          )
+    ,
+    test("frames carry the resource once, count the offset, finish last, and join back to the payload"):
+      val sizes = Gen.int(0, 3 * Reapi.WriteChunk + 1)
+      check(instances, sizes, Gen.byte): (resource, length, byte) =>
+        val payload = Chunk.fill(length)(byte)
+        val frames  = Reapi.frames(resource, payload).map(Reapi.decodeWrite).flatten
+        val offsets = frames.map(_.data.length.toLong).scanLeft(0L)(_ + _).dropRight(1)
+        assertTrue(
+          frames.length == math.max(1, (length + Reapi.WriteChunk - 1) / Reapi.WriteChunk),
+          frames.map(_.resource) == Chunk(Some(resource)) ++ Chunk.fill(frames.length - 1)(None),
+          frames.map(_.offset) == offsets,
+          frames.map(_.finish) == Chunk.fill(frames.length - 1)(false) :+ true,
+          frames.flatMap(_.data) == payload,
+          frames.forall(_.data.length <= Reapi.WriteChunk),
+        )
+    ,
+    test("the service names are the wire contract, and an empty field is omitted"):
       val resource = "main/uploads/job"
-      val wide     = Chunk.fill(Reapi.WriteChunk + 1)(7.toByte)
-      val frames   = Reapi.frames(resource, wide).map(Reapi.decodeWrite)
       val empty    = Digest.trusted("zz")
       assertTrue(
         Reapi.ActionKeySize == 1L,
@@ -27,18 +57,12 @@ object ReapiLawSpec extends ZIOSpecDefault:
         Reapi.FindMissingBlobs == "build.bazel.remote.execution.v2.ContentAddressableStorage/FindMissingBlobs",
         Reapi.Read == "google.bytestream.ByteStream/Read",
         Reapi.Write == "google.bytestream.ByteStream/Write",
-        Reapi.decodeGet(Reapi.getAction("main", action)) == Some(("main", action)),
         Reapi.decodeGet(Reapi.getAction("", action)) == None,
         Reapi.decodeGet(Reapi.getAction("main", empty)) == None,
-        Reapi.decodeUpdate(Reapi.updateAction("main", action, result)) == Some(("main", action, result)),
-        Reapi.decodeFind(Reapi.findMissing("main", action, 4L)) == Some(("main", List(action))),
-        Reapi.decodeFind(Reapi.findMissing("main", action, 0L)) == Some(("main", List(action))),
+
         Reapi.findMissing("main", action, 0L).length < Reapi.findMissing("main", action, 4L).length,
         Reapi.decodeFind(Reapi.findMissing("main", empty, 4L)) == None,
-        Reapi.missingDigests(Reapi.missingResponse(List(action, other))) == Some(List(action, other)),
-        Reapi.missingDigests(Reapi.missingResponse(Nil)) == Some(Nil),
         Reapi.missingDigests(Reapi.missingResponse(List(empty))) == None,
-        Reapi.decodeRead(Reapi.readRequest("main/blobs/ab/1")) == Some("main/blobs/ab/1"),
         Reapi.decodeRead(Reapi.readRequest("")) == None,
         Reapi.readData(Reapi.readResponse(bytes) ++ Reapi.readResponse(wrong)) == Some(bytes ++ wrong),
         Reapi.readData(Chunk.empty) == Some(Chunk.empty),
@@ -50,12 +74,6 @@ object ReapiLawSpec extends ZIOSpecDefault:
         Reapi.decodeWrite(Reapi.writeFrame(None, 5L, true, bytes)) ==
           Some(Reapi.WriteFrame(None, 5L, true, bytes)),
         Reapi.decodeWrite(Chunk.empty) == Some(Reapi.WriteFrame(None, 0L, false, Chunk.empty)),
-        Reapi.frames(resource, Chunk.empty).map(Reapi.decodeWrite) ==
-          Chunk(Some(Reapi.WriteFrame(Some(resource), 0L, true, Chunk.empty))),
-        frames == Chunk(
-          Some(Reapi.WriteFrame(Some(resource), 0L, false, wide.take(Reapi.WriteChunk))),
-          Some(Reapi.WriteFrame(None, Reapi.WriteChunk.toLong, true, wide.drop(Reapi.WriteChunk))),
-        ),
       )
     ,
     test("a blob path is the hash and size after the first blobs segment"):

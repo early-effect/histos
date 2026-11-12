@@ -11,11 +11,6 @@ import zio.test.*
 
 object ProcessLawSpec extends ZIOSpecDefault:
   def spec = suite("child process laws")(
-    test("the classpath is the classes directory and then the artifacts"):
-      val classes = Path.of("/classes")
-      val jar     = Path.of("/lib.jar")
-      assertTrue(ChildClasspath(classes, List(jar)).entries == List(classes, jar))
-    ,
     test("javascript and native fail before a program is required"):
       check(Gen.fromIterable(List(Platform.Js, Platform.Native))): platform =>
         ChildProcess

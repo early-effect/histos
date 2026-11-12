@@ -48,6 +48,8 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
   private val boom     = TaskName.trusted("boom")
   private val filed    = TaskName.trusted("filed")
   private val absent   = TaskName.trusted("absent")
+  private val plain    = TaskName.trusted("plain")
+  private val spill    = TaskName.trusted("spill")
   private val out      = OutputName("out")
   private val path     = RepoPath.trusted("notes/out.txt")
   private val missing  = RepoPath.trusted("notes/missing.txt")
@@ -102,7 +104,7 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
         run.provideSomeLayer[Scope](layers(root, ActionCache.miss))
       }
     ,
-    test("a declared file is the manifest the cache stores, and a missing file is refused"):
+    test("a declared file is the manifest the cache stores, and a missing or an undeclared file is refused"):
       Workspace.work("histos-plugin-file").catchAll(error => ZIO.dieMessage(error.message)).flatMap { root =>
         Ref.make(List.empty[String]).flatMap { kept =>
           val run =
@@ -115,13 +117,17 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
                   List(
                     task(filed, List(DeclaredOutput(out, path))),
                     task(absent, List(DeclaredOutput(out, missing))),
+                    task(plain, Nil),
+                    task(spill, Nil),
                   ),
                   FilePlugin,
                 ).flatMap { runtime =>
                   for
                     wrote   <- runtime.run(PluginTaskId(pluginId, filed), PluginArgs.empty).either
                     missing <- runtime.run(PluginTaskId(pluginId, absent), PluginArgs.empty).either
-                  yield (wrote, missing)
+                    text    <- runtime.run(PluginTaskId(pluginId, plain), PluginArgs.empty).either
+                    spilled <- runtime.run(PluginTaskId(pluginId, spill), PluginArgs.empty).either
+                  yield (wrote, missing, text, spilled)
                 }
               }
               stored <- kept.get
@@ -130,9 +136,11 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
               val line = s"${sha.value} ${path.value}"
               assertTrue(
                 found._1 == Right(PluginOutput("wrote", List(WrittenFile(out, path)))),
-                stored == List(PluginManifest.store("wrote", List(path -> sha))),
+                stored.headOption.contains(PluginManifest.store("wrote", List(path -> sha))),
                 stored.headOption.contains(s"${PluginManifest.Header}\n1\n$line\nwrote"),
                 found._2 == Left(PluginFault.Task(PluginRunError.MissingOutput(out))),
+                found._3 == Right(PluginOutput("ran", Nil)),
+                found._4 == Left(PluginFault.Task(PluginRunError.ExtraOutput(path.value))),
               )
           run.provideSomeLayer[Scope](layers(root, remembering(kept)))
         }
@@ -216,8 +224,10 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
             }
             .orElseFail(PluginRunError.Defect("write"))
         else ZIO.unit
-      val declared = if request.id.name == filed then path else missing
-      write.as(
-        PluginOutput(if request.id.name == filed then "wrote" else "missing", List(WrittenFile(out, declared)))
-      )
+      val output =
+        if request.id.name == filed then PluginOutput("wrote", List(WrittenFile(out, path)))
+        else if request.id.name == plain then PluginOutput("ran", Nil)
+        else if request.id.name == spill then PluginOutput("spilled", List(WrittenFile(out, path)))
+        else PluginOutput("missing", List(WrittenFile(out, missing)))
+      write.as(output)
 end PluginOutcomeLawSpec
