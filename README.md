@@ -125,7 +125,7 @@ object build extends HistosBuild:
 
 `histos clean [project ...]` deletes products. No name wipes every product root under `.histos`, including the scaladoc and coverage output, without reading the build. A name wipes that module, and an aggregate expands. `histos cleanFull` wipes the products, removes this project's keep file from the content store, and then deletes every store entry no remaining project keeps.
 
-`histos fmt` formats with the scalafmt the build declares (`.scalafmt` reads `.scalafmt.conf`, `.scalafmt(RepoPath("config/scalafmt.conf"))` another file). The `version` in that configuration is the scalafmt that runs, locked with its sha256 by `resolve --update`. No name formats every module's `src` and `test` trees and `histos.scala`. A name formats that module. `--file <path>` formats repository-relative files. The configuration's include and exclude filters apply, and `project.git` applies except with `--file`. `histos fmt --check` writes no source, names each unformatted file, and fails. It records known-formatted files in `.histos/format/ledger`.
+`histos fmt` formats with the scalafmt the build declares (`.scalafmt` reads `.scalafmt.conf`, `.scalafmt(RepoPath("config/scalafmt.conf"))` another file). The `version` in that configuration is the scalafmt that runs, locked with its sha256 by `resolve --update`. No name formats every module's `src` and `test` trees and `histos.scala`. A name formats that module. `--file <path>` formats repository-relative files. The configuration's include and exclude filters apply, and `project.git` applies except with `--file`. `histos fmt --check` writes no source, names each unformatted file, and fails. It records known-formatted files in `.histos/format/ledger`. On a server, `fmt` holds the lock a compile holds, so a format and a compile in one checkout run one after the other.
 
 ### Test
 
@@ -139,7 +139,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Watch
 
-`histos ~ compile` runs a command again after a source save, on the server when one is up. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program, compiles after each change, and restarts the program when that compile succeeds and the change is one of its sources. A failed compile prints its errors and leaves the program running. On a server, the program holds the compile lock only until it has compiled, so the next compile does not wait for the program to exit.
+`histos ~ compile` runs a command again after a source save, on the server when one is up. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A `publishLocal` or `publish snapshots` watch covers the modules its tokens select, as `preview` does: a ship's modules, an aggregate's modules, or the module named. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program, compiles after each change, and restarts the program when that compile succeeds and the change is one of its sources. A failed compile prints its errors and leaves the program running. On a server, the program holds the compile lock only until it has compiled, so the next compile does not wait for the program to exit.
 
 ### Preview
 
@@ -240,7 +240,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publ
 
 `histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement.
 
-`histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed.
+`histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
 The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `cleanFull`, and `fmt` to the server itself, without starting a JVM to enter the tool. Every other command, and any of those with a flag the client does not read, runs `java -jar` on the toolchain jar.
 

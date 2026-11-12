@@ -2,13 +2,15 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.cache.ContentStore
-import histos.jdk.Machine
-import histos.report.CallResult
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.program.ProgramError
+import histos.report.{BuildFault, CallResult}
+import histos.resolve.{ResolutionService, Resolve}
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.{
+  CompilerClosure,
+  LawMachine,
   MainClass,
   Module,
   Platform,
@@ -21,88 +23,100 @@ import histos.{
   SourcePos,
   Splits,
 }
+import slayer.stubbed
 
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
-import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
+import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 
 /** A named main prints and exits, and signals once its compile is done. A missing name and an unbuilt platform never
   * start and never signal.
   */
 object CallsRunLawSpec extends ZIOSpecDefault:
-  private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("runlaw")
 
   def spec = suite("calls run laws")(
-    test("a main prints and its exit is the report, and a missing platform is a fault"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace
-          .work("histos-calls-run")
-          .flatMap: dir =>
-            val probe =
-              dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
-            val program =
-              for
-                loaded  <- Machine.load(dir).either
-                machine <- loaded match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                found <- GraphCompile.jdk(machine).either
-                jdk   <- found match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                signals <- Ref.make(0)
-                compiled = signals.update(_ + 1)
-                (missed, missedHeard) <- speak(say =>
-                  Calls.run(dir, graph, jdk, machine, "missing", None, say, compiled)
+    test("a missing name and an unbuilt platform are faults that never start and never signal"):
+      Workspace
+        .work("histos-calls-refuse")
+        .flatMap: dir =>
+          val program =
+            for
+              machine <- LawMachine.at(dir)
+              signals <- Ref.make(0)
+              compiled = signals.update(_ + 1)
+              law      = graph(uncompiled)
+              (missed, missedHeard) <- speak(say =>
+                Calls.run(dir, law, LawMachine.fixtureJdk, machine, "missing", None, say, compiled)
+              )
+              (unbuilt, unbuiltHeard) <- speak(say =>
+                Calls.run(dir, law, LawMachine.fixtureJdk, machine, lawName.value, Some(Platform.Js), say, compiled)
+              )
+              unstarted <- signals.get
+            yield assertTrue(
+              missed == Right(()),
+              done(missedHeard) == Some(CallResult.Fault(BuildFault.Program(ProgramError.Absent("missing")))),
+              unbuilt == Right(()),
+              done(unbuiltHeard) == Some(
+                CallResult.Fault(
+                  BuildFault.Program(ProgramError.Unbuilt(lawName, Platform.Js, List(Platform.Jvm)))
                 )
-                (unbuilt, unbuiltHeard) <- speak(say =>
-                  Calls.run(dir, graph, jdk, machine, lawName.value, Some(Platform.Js), say, compiled)
-                )
-                unstarted <- signals.get
-                _         <- Workspace.createDirectories(parentOf(probe))
-                _         <- Workspace.writeString(
-                  probe,
-                  "object Probe:\n  def main(args: Array[String]): Unit = println(\"ran-law\")\n",
-                )
-                (ran, heard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say, compiled))
-                started      <- signals.get
-                clazz = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
-                wrote <- ZIO.attempt(Files.isRegularFile(clazz)).orDie
-                _     <- Workspace.writeString(
-                  probe,
-                  "object Probe:\n  def main(args: Array[String]): Unit =\n    println(\"ran-law\")\n    System.exit(4)\n",
-                )
-                (stopped, stoppedHeard) <- speak(say =>
-                  Calls.run(dir, graph, jdk, machine, lawName.value, None, say, compiled)
-                )
-              yield
-                val text        = outs(heard)
-                val stoppedText = outs(stoppedHeard)
-                assertTrue(
-                  missed == Right(()),
-                  done(missedHeard).exists(faultHas("'missing' is not a module")),
-                  unbuilt == Right(()),
-                  done(unbuiltHeard).exists(faultHas("does not build js")),
-                  unstarted == 0,
-                  started == 1,
-                  ran == Right(()),
-                  programOf(done(heard)) == Some(0),
-                  text.contains("runlaw 3.10.0 jvm"),
-                  text.contains("ran-law"),
-                  wrote,
-                  stopped == Right(()),
-                  programOf(done(stoppedHeard)) == Some(4),
-                  stoppedText.contains("ran-law"),
-                )
-            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+              ),
+              unstarted == 0,
+            )
+          program.provideSomeLayer[Scope](stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[ResolutionService])
+    ,
+    test("a main prints and its exit is the report, and it signals once its compile is done"):
+      ran.provideSomeLayer[Scope](CompilerClosure.layer),
+  )
 
-  private def faultHas(text: String)(result: CallResult): Boolean =
-    result match
-      case CallResult.Fault(fault) => fault.message.contains(text)
-      case _                       => false
+  private def ran =
+    ZIO.serviceWithZIO[CompilerClosure]: closure =>
+      val scala3 = closure.scalaVersion
+      Workspace
+        .work("histos-calls-run")
+        .flatMap: dir =>
+          val probe =
+            dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
+          val program =
+            for
+              machine <- LawMachine.at(dir)
+              jdk     <- LawMachine.jdk(machine)
+              signals <- Ref.make(0)
+              compiled = signals.update(_ + 1)
+              _ <- Workspace.writeString(
+                probe,
+                "object Probe:\n  def main(args: Array[String]): Unit = println(\"ran-law\")\n",
+              )
+              (ran, heard) <- speak(say =>
+                Calls.run(dir, graph(scala3), jdk, machine, lawName.value, None, say, compiled)
+              )
+              started <- signals.get
+              clazz = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
+              wrote <- ZIO.attempt(Files.isRegularFile(clazz)).orDie
+              _     <- Workspace.writeString(
+                probe,
+                "object Probe:\n  def main(args: Array[String]): Unit =\n    println(\"ran-law\")\n    System.exit(4)\n",
+              )
+              (stopped, stoppedHeard) <- speak(say =>
+                Calls.run(dir, graph(scala3), jdk, machine, lawName.value, None, say, compiled)
+              )
+            yield assertTrue(
+              ran == Right(()),
+              programOf(done(heard)) == Some(0),
+              outs(heard).contains(s"runlaw ${scala3.value} jvm"),
+              outs(heard).contains("ran-law"),
+              started == 1,
+              wrote,
+              stopped == Right(()),
+              programOf(done(stoppedHeard)) == Some(4),
+              outs(stoppedHeard).contains("ran-law"),
+            )
+          program.provideSomeLayer[Resolve & Scope](session(dir, closure))
+
+  /** The refusals never compile, so the cell's Scala version is never read from a lock. */
+  private val uncompiled = ScalaVersion("3.10.0")
 
   private def programOf(result: Option[CallResult]): Option[Int] =
     result match
@@ -123,7 +137,7 @@ object CallsRunLawSpec extends ZIOSpecDefault:
       heard  <- messages.get
     yield (result, heard)
 
-  private def graph: ProjectGraph =
+  private def graph(scala3: ScalaVersion): ProjectGraph =
     val law = Module(
       lawName,
       Platforms(Platform.Jvm, Nil),
@@ -142,30 +156,7 @@ object CallsRunLawSpec extends ZIOSpecDefault:
       resolution = Resolution.Lock,
     )
 
-  private def session(dir: Path, lock: DependencyLock) =
+  private def session(dir: Path, closure: CompilerClosure) =
     ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
-      ResolutionService.pinned(pinned(lock))
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
-
-  private def parentOf(path: Path): Path =
-    Option(path.getParent).getOrElse(path)
+      ResolutionService.pinned(closure.pinning(lawName))
 end CallsRunLawSpec

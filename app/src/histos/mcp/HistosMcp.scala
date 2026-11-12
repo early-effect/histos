@@ -13,13 +13,15 @@ import WireSchema.given
 import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.server.{Call, LauncherAction, ResolveAction}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
 import histos.doctor.{DoctorLaunch, FaultText}
-import histos.ProjectName
+import histos.select.SelectError
+import histos.{ProjectName, ProjectNameError}
 
 import ClientJson.given
 
@@ -95,7 +97,7 @@ object HistosMcp:
       apiJar: Path,
       pipe: LinePipe,
       machine: Machine,
-  ): ZIO[Loader & Scope & Resolve & ContentStore, ServeError, Unit] =
+  ): ZIO[Loader & Scope & Resolve & ContentStore & IvyRoot, ServeError, Unit] =
     for
       desk <- Session.desk
       _    <- ZIO.addFinalizer(
@@ -177,7 +179,7 @@ object HistosMcp:
       desk: Session.Desk,
   ): Either[
     NonEmptyChunk[McpBuildError],
-    Mcp[Loader & Scope & Resolve & ContentStore],
+    Mcp[Loader & Scope & Resolve & ContentStore & IvyRoot],
   ] =
     val ask     = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
     val refused = (reason: Rejection) => Session.CallProblem.Fault(BuildFault.Rejected(reason))
@@ -321,7 +323,7 @@ object HistosMcp:
           case Left(error)   => ZIO.succeed(DoctorText(error.message))
           case Right(loaded) =>
             launched(loaded.graph, args.projects) match
-              case Left(text)     => ZIO.succeed(DoctorText(text))
+              case Left(error)    => ZIO.succeed(notLaunched(error))
               case Right(modules) =>
                 histos.supply.DoctorSurface
                   .run(
@@ -344,14 +346,20 @@ object HistosMcp:
       )
     yield diagnosed
 
-  private def launched(graph: histos.ProjectGraph, raw: List[String]): Either[String, List[histos.Module]] =
-    val names = raw.foldLeft[Either[String, List[ProjectName]]](Right(Nil)): (acc, token) =>
-      acc.flatMap: parsed =>
-        ProjectName.from(token) match
-          case Left(error) => Left(error.message)
-          case Right(name) => Right(parsed :+ name)
-    names.flatMap: parsed =>
-      DoctorLaunch.modules(graph, parsed).left.map(error => FaultText.show(error.diagnose))
+  /** The modules a doctor run launches. The first bad name or selection is the refusal. */
+  private[mcp] def launched(
+      graph: histos.ProjectGraph,
+      raw: List[String],
+  ): Either[ProjectNameError | SelectError, List[histos.Module]] =
+    val names = raw.foldLeft[Either[ProjectNameError, List[ProjectName]]](Right(Nil)): (acc, token) =>
+      acc.flatMap(parsed => ProjectName.from(token).map(parsed :+ _))
+    names.flatMap(DoctorLaunch.modules(graph, _))
+
+  /** A refused launch is the doctor tool's text. A selection fault reads as the command line's doctor prints it. */
+  private[mcp] def notLaunched(error: ProjectNameError | SelectError): DoctorText =
+    error match
+      case found: ProjectNameError => DoctorText(found.message)
+      case found: SelectError      => DoctorText(FaultText.show(found.diagnose))
 
   def compileCall(projects: List[String]): Either[Rejection, Call] =
     names(projects).map(Call.Compile(_))

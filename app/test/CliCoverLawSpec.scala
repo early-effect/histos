@@ -1,24 +1,23 @@
 package histos.cli
 
+import histos.cache.ContentStore
+import histos.load.{BuildClasspath, Loader}
+import histos.publish.IvyRoot
+import histos.resolve.{DependencyLock, Resolve}
 import histos.workspace.Workspace
+import histos.{CompilerClosure, HistosBuild, LawMachine, ProjectName}
 
 import java.nio.file.{Files, Path}
+import java.time.Instant
 
-import zio.ZIO
-import zio.test.{TestSystem, ZIOSpecDefault, assertTrue, suite, test}
+import zio.{Scope, ZIO, ZLayer}
+import zio.test.{TestClock, TestConsole, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
-/** `coverage` on a Scala 3 module writes the report and does not fetch a coverage plugin. */
+/** `coverage` on a Scala 3 module writes the report and does not fetch a coverage plugin. Resolve reads the Coursier
+  * cache offline, so a cold cache is the closure's precondition and never a download.
+  */
 object CliCoverLawSpec extends ZIOSpecDefault:
-  private val version = "9.9.9-test"
-
-  private val build =
-    """import histos.*
-      |
-      |object build extends HistosBuild:
-      |  def graph =
-      |    val coverlaw = module("coverlaw", Jvm)(scala"3.10.0").test(TestMain("Probe"))
-      |    Projects.locked(coverlaw)
-      |""".stripMargin
+  private val coverlaw = ProjectName.trusted("coverlaw")
 
   private val hello =
     """object Hello:
@@ -28,73 +27,67 @@ object CliCoverLawSpec extends ZIOSpecDefault:
 
   private val probe =
     """object Probe:
-      |  def main(args: Array[String]): Unit = ()
+      |  def main(args: Array[String]): Unit = println("probe ran")
       |""".stripMargin
 
+  private val started = Instant.ofEpochMilli(1700000000123L)
+
   def spec = suite("cli coverage laws")(
-    test("a passing test main meets an empty floor and writes both reports"):
-      Workspace
-        .work("histos-cli-cover")
-        .flatMap: dir =>
-          val source = dir.resolve("coverlaw").resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-          val test   = dir.resolve("coverlaw").resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
-          val report = dir.resolve(".histos").resolve("coverage")
-          for
-            _    <- standIn(dir)
-            lock <- ZIO.attempt(Files.readString(checkout.resolve("dependencies.lock"))).orDie
-            _    <- Workspace.createDirectories(parentOf(source)).catchAll(error => ZIO.dieMessage(error.message))
-            _    <- Workspace.createDirectories(parentOf(test)).catchAll(error => ZIO.dieMessage(error.message))
-            _    <- Workspace
-              .writeString(dir.resolve("histos.scala"), build)
-              .catchAll(error => ZIO.dieMessage(error.message))
-            _ <- Workspace
-              .writeString(dir.resolve("dependencies.lock"), s"cell coverlaw 3.10.0 jvm\n$lock")
-              .catchAll(error => ZIO.dieMessage(error.message))
-            _    <- Workspace.writeString(source, hello).catchAll(error => ZIO.dieMessage(error.message))
-            _    <- Workspace.writeString(test, probe).catchAll(error => ZIO.dieMessage(error.message))
-            ran  <- Cli.launch(List("coverage"), dir)
-            xml  <- ZIO.attempt(Files.isRegularFile(report.resolve("scoverage.xml"))).orDie
-            html <- ZIO.attempt(Files.isRegularFile(report.resolve("index.html"))).orDie
-            text <- ZIO
-              .attempt(
-                if Files.isRegularFile(report.resolve("scoverage.xml")) then
-                  Files.readString(report.resolve("scoverage.xml"))
-                else ""
-              )
-              .orDie
-          yield assertTrue(
-            ran.exit == CliExit.Success,
-            ran.err == "",
-            ran.out.contains("statements"),
-            xml,
-            html,
-            text.contains("coverlaw"),
-          )
-  )
+    test("a test main meets an empty floor, prints through the console, and the report is stamped by the clock"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        Workspace
+          .work("histos-cli-cover")
+          .flatMap: dir =>
+            val source = dir.resolve("coverlaw").resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val test   = dir.resolve("coverlaw").resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
+            val report = dir.resolve(".histos").resolve("coverage")
+            val build  =
+              s"""import histos.*
+                 |
+                 |object build extends HistosBuild:
+                 |  def graph =
+                 |    val coverlaw = module("coverlaw", Jvm)(scala"${closure.scalaVersion.value}").test(TestMain("Probe"))
+                 |    Projects.locked(coverlaw)
+                 |""".stripMargin
+            for
+              _ <- Workspace.writeString(dir.resolve("histos.scala"), build)
+              _ <- Workspace
+                .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(closure.pinning(coverlaw)))
+              _       <- Workspace.writeString(source, hello)
+              _       <- Workspace.writeString(test, probe)
+              api     <- apiJar(dir.resolve("cache"))
+              _       <- TestClock.setTime(started)
+              ran     <- Cli.execute(List("coverage"), dir, api).provideSomeLayer[Resolve & Scope](services(dir))
+              xml     <- ZIO.attempt(Files.readString(report.resolve("scoverage.xml"))).orDie
+              html    <- ZIO.attempt(Files.isRegularFile(report.resolve("index.html"))).orDie
+              printed <- TestConsole.output
+            yield assertTrue(
+              ran.exit == CliExit.Success,
+              ran.err == "",
+              ran.out.linesIterator.toList.take(2) == List("statements 0/4 0.00", "branches 0/0 0.00"),
+              html,
+              xml.contains("coverlaw"),
+              xml.contains(s"timestamp=\"${started.toEpochMilli}\""),
+              printed.contains("probe ran\n"),
+            )
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
-  private def parentOf(path: Path): Path =
-    Option(path.getParent).getOrElse(path)
+  /** The api jar the build file compiles against, packed from this test JVM's classes under `cache`. */
+  private def apiJar(cache: Path) =
+    ZIO
+      .fromOption(
+        Option(classOf[HistosBuild].getProtectionDomain)
+          .flatMap(domain => Option(domain.getCodeSource))
+          .flatMap(source => Option(source.getLocation))
+      )
+      .flatMap(url => ZIO.attempt(Path.of(url.toURI)))
+      .flatMap(BuildClasspath(_, cache))
+      .orDieWith(error => IllegalStateException(s"the histos api classes are not on this law's classpath: $error"))
 
-  private def standIn(dir: Path) =
-    for
-      _ <- TestSystem.putProperty("java.home", java.lang.System.getProperty("java.home"))
-      _ <- TestSystem.putProperty("os.name", java.lang.System.getProperty("os.name"))
-      _ <- TestSystem.putProperty("os.arch", java.lang.System.getProperty("os.arch"))
-      _ <- TestSystem.putProperty("user.home", dir.toString)
-      _ <- TestSystem.putEnv("XDG_CACHE_HOME", "")
-      _ <- TestSystem.putEnv("HISTOS_VERSION", version)
-    yield ()
-
-  private def checkout: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
+  private def services(dir: Path) =
+    Loader.live ++
+      ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+      ZLayer.fromZIO(LawMachine.at(dir)) ++
+      ZLayer.succeed(IvyRoot.at(dir.resolve("ivy"))) ++
+      LawMachine.redirected
 end CliCoverLawSpec

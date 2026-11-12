@@ -3,7 +3,7 @@ package histos.cli
 import histos.client.Batch
 import histos.format.{FormatMode, FormatTargets}
 import histos.server.Call
-import histos.ProjectName
+import histos.{ProjectName, ProjectNameError}
 
 import java.nio.file.Path
 
@@ -44,7 +44,7 @@ object FmtGrammarSpec extends ZIOSpecDefault:
         late == Command.Fmt(FormatTargets.Files(NonEmptyChunk(Path.of("api/src/A.scala"))), FormatMode.Check),
       )
     ,
-    test("--all, an unknown flag, --file with nothing, and an absolute file are usage"):
+    test("--all, an unknown flag, --file with nothing, an absolute file, and a bad module name are usage"):
       for
         all      <- Grammar.parse(List("fmt", "--all")).either
         unknown  <- Grammar.parse(List("fmt", "api", "--diff")).either
@@ -56,8 +56,7 @@ object FmtGrammarSpec extends ZIOSpecDefault:
         unknown == Left(CliParseError.Fmt(FmtUsage.Flag("--diff"))),
         nothing == Left(CliParseError.Fmt(FmtUsage.NoFiles)),
         absolute == Left(CliParseError.Fmt(FmtUsage.Absolute("/tmp/A.scala"))),
-        badName.isLeft,
-        CliExit.from(histos.report.CallResult.reported("unformatted")) == CliExit.Failed,
+        badName == Left(CliParseError.ProjectName(ProjectNameError.Bad("1api"))),
       )
     ,
     test("the native client batches the build and project forms, and leaves --file to the JVM client"):

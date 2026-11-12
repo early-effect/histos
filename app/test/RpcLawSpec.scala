@@ -92,18 +92,14 @@ object RpcLawSpec extends ZIOSpecDefault:
           case None        => false,
       )
     ,
-    test("a reply and a note carry json-rpc 2.0 and the incoming id"):
+    test("a reply and a note are the json-rpc 2.0 documents a client reads, with the incoming id"):
       val failed = Rpc.fail(Rpc.RpcId.Num(3), -32601, "bsp does not handle nope")
       val ok     = Rpc.ok(Rpc.RpcId.Absent, Rpc.NullResult())
       val noted  = Rpc.note("window/logMessage", Rpc.LogMessage(1, "hi"))
       assertTrue(
-        failed.fromJson[Rpc.RpcErr] == Right(
-          Rpc.RpcErr("2.0", Rpc.RpcId.Num(3), Rpc.ErrBody(-32601, "bsp does not handle nope"))
-        ),
-        ok.fromJson[Rpc.RpcOk[Rpc.NullResult]] == Right(Rpc.RpcOk("2.0", Rpc.RpcId.Absent, Rpc.NullResult())),
-        noted.fromJson[Rpc.RpcNote[Rpc.LogMessage]] == Right(
-          Rpc.RpcNote("2.0", "window/logMessage", Rpc.LogMessage(1, "hi"))
-        ),
+        failed == """{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"bsp does not handle nope"}}""",
+        ok == """{"jsonrpc":"2.0","id":null,"result":null}""",
+        noted == """{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":1,"message":"hi"}}""",
         Rpc.idOf(Rpc.Incoming(Some("build/exit"), None, None)) == Rpc.RpcId.Absent,
         Rpc.idOf(Rpc.Incoming(None, Some(Rpc.RpcId.Num(3)), None)) == Rpc.RpcId.Num(3),
       ),

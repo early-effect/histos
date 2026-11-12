@@ -1,8 +1,13 @@
 package histos.cli
 
-import zio.{UIO, ZIO}
+import zio.{UIO, URIO, ZIO}
 
-/** Color on status words. Plain text stays plain. A pipe, a file, and `NO_COLOR` stay plain.
+/** Whether status words take colour. */
+enum Ink:
+  case Colour
+  case Plain
+
+/** Color on status words. Plain text stays plain. A redirected output and a non-empty `NO_COLOR` stay plain.
   */
 object Paint:
   private val Reset  = "\u001b[0m"
@@ -12,14 +17,26 @@ object Paint:
   private val Dim    = "\u001b[2m"
   private val Bold   = "\u001b[1m"
 
-  def paint(line: String, tty: Boolean, noColor: Option[String]): String =
-    // A pipe and NO_COLOR both leave the line as it arrived.
-    if !tty || noColor.isDefined then line
-    else if total(line) then bold(line)
-    else words(line)
+  def paint(line: String, ink: Ink): String =
+    ink match
+      case Ink.Plain                 => line
+      case Ink.Colour if total(line) => bold(line)
+      case Ink.Colour                => words(line)
 
-  def render(line: String): UIO[String] =
-    ZIO.succeed(paint(line, terminal, Option(System.getenv("NO_COLOR"))))
+  /** no-color.org: a present, non-empty `NO_COLOR` turns colour off. An empty one does not. */
+  def ink(output: Attached, noColor: Option[String]): Ink =
+    (output, noColor) match
+      case (Attached.Redirected, _)                       => Ink.Plain
+      case (Attached.Terminal, Some(set)) if set.nonEmpty => Ink.Plain
+      case (Attached.Terminal, _)                         => Ink.Colour
+
+  /** `NO_COLOR` is read through `zio.System`. */
+  def chosen(output: Attached): UIO[Ink] =
+    zio.System.env("NO_COLOR").orElseSucceed(None).map(ink(output, _))
+
+  /** Paints for the output of the environment's [[Stdio]]. */
+  def render(line: String): URIO[Stdio, String] =
+    ZIO.serviceWithZIO[Stdio](stdio => chosen(stdio.output)).map(paint(line, _))
 
   private def words(line: String): String =
     val painted = List(
@@ -39,13 +56,4 @@ object Paint:
       line.startsWith("test files compiled:") ||
       line.startsWith("tests passed:") ||
       line.startsWith("modules:")
-
-  private lazy val terminal: Boolean =
-    try
-      val probe = new ProcessBuilder("/bin/sh", "-c", "test -t 1")
-        .redirectOutput(ProcessBuilder.Redirect.INHERIT)
-        .redirectError(ProcessBuilder.Redirect.INHERIT)
-        .start()
-      probe.waitFor() == 0
-    catch case _: java.io.IOException => false
 end Paint

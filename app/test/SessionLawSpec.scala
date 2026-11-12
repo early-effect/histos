@@ -3,7 +3,7 @@ package histos.client
 import histos.build.BuildEvent
 import histos.plugin.{NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
-import histos.server.{Call, Feed, Message, ServerError, ServerIo}
+import histos.server.{Call, Feed, Message, ServerError}
 import histos.{Platform, PlatformError}
 
 import java.nio.file.Path
@@ -11,8 +11,6 @@ import java.nio.file.Path
 import zio.{Chunk, ZIO}
 import zio.json.*
 import zio.test.*
-
-import ClientJson.given
 
 object SessionLawSpec extends ZIOSpecDefault:
   private val repo = Path.of("repo")
@@ -34,9 +32,10 @@ object SessionLawSpec extends ZIOSpecDefault:
         Session.runCall("demo/pack", Some("jvm"), PluginArgs.empty) -> Left(
           BuildFault.Rejected(Rejection.TaskPlatform("demo/pack"))
         ),
-        Session.runCall("demo/pack", None, args)    -> Right(Call.Task("demo/pack", args)),
-        Session.runCall("", None, PluginArgs.empty) -> Right(Call.Run("", None)),
-        Session.runCall("", None, args)             -> Left(BuildFault.Rejected(Rejection.TaskArguments(""))),
+        Session.runCall("demo/pack", None, args)           -> Right(Call.Task("demo/pack", args)),
+        Session.runCall("", None, PluginArgs.empty)        -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
+        Session.runCall("", Some("jvm"), PluginArgs.empty) -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
+        Session.runCall("", None, args)                    -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
       )
       val bad = rows.filter { (got, expected) => got != expected }
       assertTrue(bad == Nil)
@@ -53,21 +52,20 @@ object SessionLawSpec extends ZIOSpecDefault:
         Feed.Done(kept),
       )
       assertTrue(
-        Session.spoken(repo, Nil) == Left(Session.SessionError.DidNotFinish),
+        Session.spoken(repo, Nil) == Left(Session.TransportError.DidNotFinish),
         Session.spoken(repo, List(Feed.Done(fault))) == Right(fault),
         Session.spoken(repo, live) == Right(CallResult.Reported(Report.empty.copy(out = Chunk("live")))),
         Session.spoken(repo, mixed) == Right(
           CallResult.Reported(Report.empty.copy(out = Chunk("kept", "live"), err = Chunk("e0", "e1")))
         ),
-        Session.SessionError.DidNotFinish.message == "the call did not finish",
-        Session.SessionError.DifferentVersion.message == ServerError.DifferentVersion.message,
+        Session.TransportError.DidNotFinish.message == "the call did not finish",
       )
     ,
     test("a report is the tool value and a fault or a transport error is the problem"):
       for
         reported <- Session.deliver(ZIO.succeed(CallResult.reported(summary = "boom"))).either
         faulted  <- Session.deliver(ZIO.succeed(CallResult.Fault(BuildFault.Interrupted))).either
-        closed   <- Session.deliver(ZIO.fail(Session.SessionError.DidNotFinish)).either
+        closed   <- Session.deliver(ZIO.fail(Session.TransportError.DidNotFinish)).either
       yield assertTrue(
         reported == Right(CallResult.reported(summary = "boom") match
           case CallResult.Reported(report) => report
@@ -77,7 +75,7 @@ object SessionLawSpec extends ZIOSpecDefault:
           case Left(_)       => false
         ,
         faulted == Left(Session.CallProblem.Fault(BuildFault.Interrupted)),
-        closed == Left(Session.CallProblem.Transport(Session.SessionError.DidNotFinish)),
+        closed == Left(Session.CallProblem.Transport(Session.TransportError.DidNotFinish)),
       )
     ,
     test("an event continues, a done stops, and any other frame is protocol"):
@@ -89,27 +87,9 @@ object SessionLawSpec extends ZIOSpecDefault:
         Remote.event(wire(Message.Ready)) == Left(ServerError.Protocol),
         Remote.event(wire(Message.Marker(0))) == Left(ServerError.Protocol),
         Remote.event("nope") == Left(ServerError.Protocol),
-      )
-    ,
-    test("a client error and a version call round-trip and an empty object is not a call"):
-      val socket = Path.of("sock")
-      val values = List(
-        round(Session.SessionError.DidNotFinish: Session.SessionError),
-        round(Session.SessionError.DifferentVersion: Session.SessionError),
-        round(ServerError.Protocol: ServerError),
-        round(ServerError.NoServer: ServerError),
-        round(ServerError.Unreachable(socket): ServerError),
-        round(ServerError.Io(ServerIo.Read(socket)): ServerError),
-        round(Call.Version: Call),
-      )
-      "{}".fromJson[Call] match
-        case Left(_)  => assertTrue(values.forall(identity))
-        case Right(_) => assertTrue(false),
+      ),
   )
 
   private def wire(message: Message): String =
     message.toJson
-
-  private def round[A: JsonCodec](value: A): Boolean =
-    value.toJson.fromJson[A] == Right(value)
 end SessionLawSpec

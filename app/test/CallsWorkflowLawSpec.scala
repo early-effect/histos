@@ -8,9 +8,8 @@ import histos.report.CallResult
 import histos.supply.{AdvisoryPolicy, DailyAudit, PrAuthor, SecurityFixes, SupplyChain, UpdatePolicy}
 import histos.workflow.{SupplyYaml, Workflow, WorkflowAction}
 import histos.workspace.Workspace
-import histos.{HistosBuild, Jvm, Projects, module, organization, `scala`}
+import histos.{HistosBuild, Jvm, LawGit, Projects, module, organization, `scala`}
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Ref, ZIO}
@@ -91,25 +90,10 @@ object CallsWorkflowLawSpec extends ZIOSpecDefault:
       ZIO.dieMessage("plugin was not asked")
     def links = Nil
 
+  /** `origin/HEAD` names `main`, so the workflow's default branch is `main`. */
   private def origin(repo: Path): ZIO[Any, Nothing, Unit] =
-    ZIO.foreachDiscard(
-      List(
-        List("git", "-C", repo.toString, "init", "-b", "main"),
-        List("git", "-C", repo.toString, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"),
-      )
-    )(command)
-
-  private def command(args: List[String]): ZIO[Any, Nothing, Unit] =
-    ZIO
-      .attemptBlocking {
-        val process = new ProcessBuilder(args*).redirectErrorStream(true).start()
-        val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-        (process.waitFor(), text)
-      }
-      .orDie
-      .flatMap: (code, text) =>
-        if code == 0 then ZIO.unit
-        else ZIO.dieMessage(s"${args.mkString(" ")} ($code) $text")
+    LawGit.git(repo, "init", "-b", "main") *>
+      LawGit.git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main").unit
 
   private def faultHas(text: String)(result: CallResult): Boolean =
     result match

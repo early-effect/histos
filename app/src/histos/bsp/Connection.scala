@@ -1,5 +1,6 @@
 package histos.bsp
 
+import histos.Resolution
 import histos.publish.LauncherPin
 import histos.server.Fingerprint
 import histos.watch.SourceWatch
@@ -28,7 +29,7 @@ object Connection:
       case None        => ZIO.unit
       case Some(value) =>
         Fingerprint
-          .read(repo)
+          .read(repo, Resolution.Solve)
           .foldZIO(_ => ZIO.unit, fingerprint => write(repo, value, fingerprint.value))
 
   /** While a BSP session is up, rewrite the connection file once the fingerprint changes. */
@@ -47,8 +48,9 @@ object Connection:
   def here(argv: List[String], version: String, graph: String): Connection =
     Connection(Bsp.ServerName, argv, version, Bsp.BspVersion, List("scala"), graph)
 
+  /** The connection file's fingerprint does not hash the lock, so the lock is not a root. */
   private def watch(repo: Path): UIO[Unit] =
-    Fingerprint.roots(repo).flatMap { paths =>
+    Fingerprint.roots(repo, Resolution.Solve).flatMap { paths =>
       SourceWatch
         .take(paths)
         .foldZIO(
