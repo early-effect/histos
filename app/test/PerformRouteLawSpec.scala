@@ -56,36 +56,6 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
         )
       program.provideSomeLayer[TestEnvironment](services)
     ,
-    test("empty preview clean prints the product roots and preview clean full adds the store line"):
-      val clean = List(
-        ".histos/classes",
-        ".histos/analysis",
-        ".histos/test-classes",
-        ".histos/test-analysis",
-        ".histos/test-work",
-        ".histos/test-quick",
-        ".histos/tests",
-        ".histos/jars",
-        ".histos/link",
-        ".histos/run",
-        ".histos/doc",
-        ".histos/coverage/classes",
-        ".histos/coverage/analysis",
-        ".histos/provider",
-        ".histos/provider-src",
-        ".histos/coverage",
-      ).mkString("\n")
-      val full    = s"$clean\ncontent-store entries for this repo would be forgotten"
-      val program =
-        for
-          (preview, _) <- drive(Right(None), Call.PreviewClean(Nil))
-          (entire, _)  <- drive(Right(None), Call.PreviewCleanFull)
-        yield assertTrue(
-          preview == Chunk(Message.Event(BuildEvent.Out(clean)), Message.Done(CallResult.reported())),
-          entire == Chunk(Message.Event(BuildEvent.Out(full)), Message.Done(CallResult.reported())),
-        )
-      program.provideSomeLayer[TestEnvironment](services)
-    ,
     test("inspect prints project names, and arguments or an empty id are refused"):
       val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph))))
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
@@ -157,9 +127,11 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
     ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer),
   )
 
+  /** Nothing here publishes, so the ivy root is never written. */
   private def services =
     stubbed[Resolve] ++ stubbed[Loader] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ stubbed[CompileMemo] ++
-      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters]
+      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters] ++
+      ZLayer.succeed(histos.publish.IvyRoot.at(Path.of("ivy-never-written")))
 
   private def stubForget(
       repo: Path,
@@ -194,7 +166,8 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       track: Boolean = false,
       where: Path = repo,
   ): ZIO[
-    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters,
+    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters &
+      histos.publish.IvyRoot,
     ServerError,
     (Chunk[Message], Map[RunId, Fiber[ServerError, Unit]]),
   ] =

@@ -13,6 +13,7 @@ import WireSchema.given
 import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.server.{Call, LauncherAction, ResolveAction}
 import histos.task.RunId
@@ -95,7 +96,7 @@ object HistosMcp:
       apiJar: Path,
       pipe: LinePipe,
       machine: Machine,
-  ): ZIO[Loader & Scope & Resolve & ContentStore, ServeError, Unit] =
+  ): ZIO[Loader & Scope & Resolve & ContentStore & IvyRoot, ServeError, Unit] =
     for
       desk <- Session.desk
       _    <- ZIO.addFinalizer(
@@ -177,7 +178,7 @@ object HistosMcp:
       desk: Session.Desk,
   ): Either[
     NonEmptyChunk[McpBuildError],
-    Mcp[Loader & Scope & Resolve & ContentStore],
+    Mcp[Loader & Scope & Resolve & ContentStore & IvyRoot],
   ] =
     val ask     = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
     val refused = (reason: Rejection) => Session.CallProblem.Fault(BuildFault.Rejected(reason))

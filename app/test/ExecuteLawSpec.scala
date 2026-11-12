@@ -4,6 +4,7 @@ import histos.cache.ContentStore
 import histos.jdk.{Machine, Os}
 import histos.load.{LoadError, Loader}
 import histos.native.NativeOrigin
+import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.toolchain.Architecture
 import histos.LawDir
@@ -68,6 +69,9 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     test("version and the launcher print the pin or its absence"):
       pins
     ,
+    test("an empty affected list runs nothing"):
+      batch("affected", List(Law(List("test", "--affected", "[]"), CliExit.Success, "", "", Playback.Held)))
+    ,
     test("reload and reboot with no server say no histos server is running"):
       batch(
         "absent",
@@ -109,6 +113,9 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     test("cache, clean, preview, setup, and observe print their own sentences"):
       files
     ,
+    test("setup supply-chain writes the build only with --fix"):
+      setup
+    ,
     test("bare new and init print the directory and histos test"):
       scaffold,
   ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer)
@@ -127,19 +134,50 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       val shown   = "histos 9.9.9\nserver 9.9.9\nno local assembly"
       val release =
         "launcher --update follows snapshots, and 9.9.9 is a release pin. Run 'histos update'."
+      val moving   = "histos.version=0.1.0-SNAPSHOT"
+      val noLatest = Law(List("launcher", "--latest"), CliExit.Failed, "", missing.err, Playback.Held)
       for
-        _       <- failLoad
-        before  <- Cli.execute(missing.args, repo, apiJar)
-        _       <- ZIO.attemptBlocking(Files.writeString(absent, pinText)).orDie
-        version <- Cli.execute(List("version"), repo, apiJar)
-        latest  <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
-        update  <- Cli.execute(List("launcher", "--update"), repo, apiJar)
-        latestLaw = Law(List("launcher", "--latest"), CliExit.Success, "histos.version=9.9.9", "", Playback.Held)
-        updateLaw = Law(List("launcher", "--update"), CliExit.Failed, "", fix(release), Playback.Held)
+        _         <- failLoad
+        before    <- Cli.execute(missing.args, repo, apiJar)
+        unpinned  <- Cli.execute(noLatest.args, repo, apiJar)
+        _         <- ZIO.attemptBlocking(Files.writeString(absent, "histos.version=0.1.0-20260101.120000-1\n")).orDie
+        pointer   <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
+        rewritten <- ZIO.attemptBlocking(Files.readString(absent)).orDie
+        _         <- ZIO.attemptBlocking(Files.writeString(absent, pinText)).orDie
+        version   <- Cli.execute(List("version"), repo, apiJar)
+        latest    <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
+        update    <- Cli.execute(List("launcher", "--update"), repo, apiJar)
+        kept      <- ZIO.attemptBlocking(Files.readString(absent)).orDie
+        latestLaw  = Law(List("launcher", "--latest"), CliExit.Success, "histos.version=9.9.9", "", Playback.Held)
+        pointerLaw = Law(List("launcher", "--latest"), CliExit.Success, moving, "", Playback.Held)
+        updateLaw  = Law(List("launcher", "--update"), CliExit.Failed, "", fix(release), Playback.Held)
       yield matches(missing, before) &&
+        matches(noLatest, unpinned) &&
+        matches(pointerLaw, pointer) &&
+        assertTrue(rewritten == s"$moving\n", kept == pinText) &&
         matches(Law(List("version"), CliExit.Success, shown, "", Playback.Held), version) &&
         matches(latestLaw, latest) &&
         matches(updateLaw, update)
+    }
+
+  private def setup: ZIO[Path & TestEnvironment & Scope, Nothing, TestResult] =
+    open("setup") { repo =>
+      val build  = repo.resolve("histos.scala")
+      val source = "object Build\n"
+      for
+        _     <- ZIO.attemptBlocking(Files.writeString(build, source)).orDie
+        dry   <- Cli.execute(List("setup", "supply-chain"), repo, apiJar)
+        kept  <- ZIO.attemptBlocking(Files.readString(build)).orDie
+        fixed <- Cli.execute(List("setup", "supply-chain", "--fix"), repo, apiJar)
+        wrote <- ZIO.attemptBlocking(Files.readString(build)).orDie
+      yield assertTrue(
+        dry.exit == CliExit.Success,
+        dry.out.contains("would write .supplyChain(SupplyChain())"),
+        kept == source,
+        fixed.exit == CliExit.Success,
+        fixed.out.contains("wrote histos.scala"),
+        wrote.contains(".supplyChain(SupplyChain())"),
+      )
     }
 
   private def files: ZIO[Path & TestEnvironment & Scope, Nothing, TestResult] =
@@ -202,6 +240,8 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     usage(List("setup", "zzzzzzzzzz"), unknown("zzzzzzzzzz")),
     usage(List("~"), fix("watch needs a command")),
     usage(List("~", "bsp"), "usage: histos help\nhistos help lists the commands.\nfix  histos help"),
+    usage(List("~", "mcp"), "usage: histos help\nhistos help lists the commands.\nfix  histos help"),
+    usage(List("test", "--affected", "nope"), fix("affected is a JSON list of module names")),
   )
 
   private val helpLaws: List[Law] = List(
@@ -340,7 +380,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
   private def run(
       repo: Path,
       laws: List[Law],
-  ): ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & Scope, Nothing, TestResult] =
+  ): ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Scope, Nothing, TestResult] =
     for
       _       <- failLoad
       results <- ZIO.foreach(laws)(law => Cli.execute(law.args, repo, apiJar).map(done => matches(law, done)))
@@ -372,7 +412,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       )
 
   private def open[A](prefix: String)(
-      use: Path => ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & Scope, Nothing, A]
+      use: Path => ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Scope, Nothing, A]
   ): ZIO[Path & TestEnvironment & Scope, Nothing, A] =
     for
       root <- ZIO.service[Path]
@@ -385,7 +425,8 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     stubbed[Loader] ++
       stubbed[Resolve] ++
       ZLayer.succeed(ContentStore.in(store)) ++
-      ZLayer.succeed(machine(repo, store))
+      ZLayer.succeed(machine(repo, store)) ++
+      ZLayer.succeed(IvyRoot.at(repo.resolve("ivy")))
 
   private def machine(repo: Path, store: Path): Machine =
     Machine(Map.empty, "/home", Os.Mac, Architecture.X86_64, store, repo, None, NativeOrigin.Central)

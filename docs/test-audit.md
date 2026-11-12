@@ -42,10 +42,14 @@ Each bug gets a law that fails on today's code, then the fix.
   - Red: `compare("1.2.3-RC1", "1.2.3")` was 1, `atLeast("25.0.0-rc.1", "25")` was true, and `shadow` chose `/rc/bin/node` in either PATH order. Green: a version is the numbers before `-`, the pre-release numbers, then the `+` build, so a pre-release sorts below its release and above the one before it, `RC10` sorts above `RC2`, and `shadow` chooses `25.0.0`. A JDK floor reads `JAVA_VERSION`, which carries no pre-release, so the JDK check does not move. A Node `25.0.0-rc.1` is now below the Node floor of 25.
 - [x] B5 `DeploymentId.from` fails a mistyped id with `PortalError.Unnamed`, the portal-response error, so the operator reads "the portal upload did not name a deployment". It gets its own error case. Owner: central, and engine M-Z updates `ReleaseRunLawSpec:168`.
   - Proof: `PublishIdentityLawSpec` "a deployment id names an empty or spaced id" was red on the old parser (`"  "` and `" a b "` both read "the portal upload did not name a deployment"). Green with `DeploymentId.Error` (`Empty`, `Spaced(text)`). `ReleaseError.Deployment` carries it, so `publish drop "has space"` prints "deployment id 'has space' contains whitespace" (`ReleaseRunLawSpec`, edited only to keep engine green). The portal client still maps an unparseable upload body to `PortalError.Unnamed`.
-- [ ] B6 The daemon outbox `close` is `outbound.shutdown *> fiber.join`. A shut-down queue does not hand its remaining lines to the sender, so the BSP exit `Marker` that `Daemon.scala` offers just before `close` can be dropped. Prove the queue behavior in a miniature spec first. Owner: app (`DaemonOutboxLawSpec`).
-- [ ] B7 The MCP `run` tool accepts an empty id (`runCall("", None, empty) == Right(Call.Run("", None))`), while CLI `run ""` is `BadTaskId` and MCP preview is `MissingRunName`. Parity: reject it. Owner: app (`SessionLawSpec:22`).
-- [ ] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
-- [ ] B9 `Perform.jdkMissed` has a `Test` branch that is the same as every other call, and its scaladoc claims a distinction that does not exist. Delete it. Owner: app (`PerformLawSpec:46`).
+- [x] B6 The daemon outbox `close` is `outbound.shutdown *> fiber.join`. A shut-down queue does not hand its remaining lines to the sender, so the BSP exit `Marker` that `Daemon.scala` offers just before `close` can be dropped. Prove the queue behavior in a miniature spec first. Owner: app (`DaemonOutboxLawSpec`).
+  - Miniature (scala-cli, deleted): with the first send held on the test clock and two lines queued behind it, `fromQueueWithShutdown` then `shutdown *> join` sent `Chunk("one")`, 50 of 50 runs, and a queue of `Option[String]` ended by `None` sent all three, 50 of 50. The outbox now offers `Some(line)`, `close` offers `None` and joins, and the scope shuts the queue. Red: `DaemonOutboxLawSpec` got `Chunk("one")` for `Chunk("one", "two", "marker")`. Green, and green under `nonFlaky(50)`.
+- [x] B7 The MCP `run` tool accepts an empty id (`runCall("", None, empty) == Right(Call.Run("", None))`), while CLI `run ""` is `BadTaskId` and MCP preview is `MissingRunName`. Parity: reject it. Owner: app (`SessionLawSpec:22`).
+  - `Session.runCall` parses the id with `TaskId.from` first and refuses an empty one with `Rejection.MissingRunName`, the MCP preview's refusal, with or without a platform or arguments. Red: the rows got `Right(Run("", None))`, `Right(Run("", Some(Jvm)))`, and `TaskArguments("")`. Green.
+- [x] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
+  - `Paint.ink(Stdout, Option[String]): Ink` decides, `Paint.chosen` reads `NO_COLOR` through `zio.System`, and `paint` takes the `Ink`, so the boolean and the string parameter are gone. Red: `paint(line, tty = true, Some(""))` was the plain line. Green: the table over `Stdout` and `NO_COLOR`, and `TestSystem.putEnv` of `""` and `"1"`. The terminal probe is still a lazy val that starts `/bin/sh` once.
+- [x] B9 `Perform.jdkMissed` has a `Test` branch that is the same as every other call, and its scaladoc claims a distinction that does not exist. Delete it. Owner: app (`PerformLawSpec:46`).
+  - `Faults.testStopped(ModuleTestError.Compile(e))` is `Faults.compileStopped(e)` by definition, so the branch had no behaviour of its own and no law could fail on it. The table law passed before the deletion and passes after it, over test, preview test, compile, format, drop, and version. The scaladoc now says what the function does.
 - [x] B10 `JobCheck` reads `Not(c)` as reachable exactly when `c` is. `Not(Event(Schedule))` in `ci.yml`, which has no schedule and so is always true, is refused as `UnreachableCond`, and `Not(True)`, which never runs, is accepted. `Not(c)` is reachable when `c` can be false for the file's events, and refused when `c` is always true. The same model found `DefaultBranch` refused on a schedule, which always runs on the default branch. Rendering is B1. Owner: api (`JobCheckLawSpec`).
 - [x] B11 `PortalServerLawSpec` runs a real heddle server on TestClock, and the suite can hang forever (PR #165 CI hit its 30-minute timeout). heddle halts a server on the Clock it was installed under (`ServerPlatform.scala:36`). The halt polls a busy connection with `Schedule.spaced(10.millis)` up to `gracefulShutdownTimeout` (`LiveConnections.scala:62`). A connection clears `busy` only after `writeResponse` returns (`Http1.scala:56-75`), so the client can read the last response and close the scope first. The uninterruptible finalizer then sleeps on a TestClock nobody advances. heddle documents that contract (`ServerHaltSpec`), so the fault is the law's. Owner: central.
   - Proof: an idle machine ran `nonFlaky(200)` clean. Under 36 CPU burners on 12 cores it hung at iteration 81 with the CI warnings, and the fiber dump showed the halt in `LiveConnections.waitUntilIdle`. A miniature that holds the server's write open after the client has the whole response stayed open on TestClock after the connection went idle until `TestClock.adjust(10.millis)`, and returned on the live clock. With `TestAspect.withLiveClock` on the suite, `nonFlaky(200)` and `nonFlaky(1000)` ran clean under the same load.
@@ -57,11 +61,17 @@ Each bug gets a law that fails on today's code, then the fix.
 - [x] B15 `DepsSurface.githubName` fell back to `early-effect/histos` when neither `GITHUB_REPOSITORY` nor `origin` named a GitHub repository, so `deps pr`, `deps alert`, and `deps snapshot --submit` in any other checkout wrote to this repository. With no name, each one fails with "no GitHub repository: set GITHUB_REPOSITORY or add a github.com origin" and sends nothing. Owner: engine M-Z (`SurfaceExchangeLawSpec`).
   - Red: `snapshot` returned `submitted early-effect/histos` and POSTed `repos/early-effect/histos/dependency-graph/snapshots`. Green: the snapshot and the pull request are that refusal, and no URL is sent.
 - [x] B16 `NodeVersion.from` refused `v25.0.0-rc.1`, so a Node release candidate failed as an unreadable version before B4's ordering applied. A version takes an optional pre-release and build, and sorts below its release. Owner: engine M-Z (E82).
+- [x] B17 A client that exits does not end its run on the server. A hung suite kept running after its client was killed, held the writer permit, and blocked the next run. A connection's call now races a read of its socket, which ends when the peer closes, so the run is interrupted and its locks are released. `bsp` reads the socket itself, and `reboot` starts its successor after the client heard it, so those two are not raced. Owner: app (`DaemonOpenLawSpec`).
+  - Red: a law opens a server whose first build load runs until it is interrupted, changes `histos.scala`, sends `graph`, waits for the load, and closes its socket. The load was never interrupted, and the law hit its 30 s timeout. Green: the load's interrupt fires, and the next `graph` loads again and answers `daemonlaw jvm 3.10.0`, under `nonFlaky(10)`.
 
 ## Decisions for Russ
 
-- [ ] D1 `fmt` rewrites sources a compile reads. Does it hold the writer permit? The recommendation is yes. Today `Call.Format` is missing from the permit and `Perform` tables (`DaemonWatchLawSpec:37`, `PerformLawSpec:42`). Owner: app.
-- [ ] D2 `~ publishLocal <x>` watches every module, and `preview publishLocal <x>` watches only the build file, because `PublishLocal` and `PublishSnapshots` fall through `case _ => Every` in `Watching`. The recommendation is to route both through `publish(graph, tokens)`. Owner: app (`DaemonWatchLawSpec:41`).
+- [x] D1 `fmt` rewrites sources a compile reads. Does it hold the writer permit? The recommendation is yes. Today `Call.Format` is missing from the permit and `Perform` tables (`DaemonWatchLawSpec:37`, `PerformLawSpec:42`). Owner: app.
+  - Russ: fmt holds the writer permit.
+  - Proof: `Call.Format` is in `Daemon.writesOutputs`, and both tables have a format row. `DaemonWatchLawSpec` "a format and a compile in one checkout run one after the other" leases a format that holds for a second of test clock and then a compile. Red: `List("compile", "format")`. Green: `List("format", "compile")`, under `nonFlaky(50)`.
+- [x] D2 `~ publishLocal <x>` watches every module, and `preview publishLocal <x>` watches only the build file, because `PublishLocal` and `PublishSnapshots` fall through `case _ => Every` in `Watching`. The recommendation is to route both through `publish(graph, tokens)`. Owner: app (`DaemonWatchLawSpec:41`).
+  - Russ: the watch follows the selection.
+  - Proof: `Watching` routes `PublishLocal` and `PublishSnapshots` through `publish(graph, tokens)`. `DaemonWatchLawSpec` "a publish watch follows the selection the preview shows" compares both calls with their preview over no tokens, a module, a ship, a module in no ship, two modules, an unknown token, and a ship with an unknown token. Red: every non-empty selection watched every module. Green, with `publishLocal api` watching api and the shared roots, and `publish snapshots lib` watching the ship's two modules.
 - [x] D3 The rehearsal portal reports no finding for an empty bundle, so it marks an empty upload `VALIDATED`. The recommendation is that an empty bundle is a layout finding. Owner: central (`PortalReportLawSpec:42`).
   - Russ: an empty bundle is a layout finding, and the rehearsal portal must not mark an empty upload `VALIDATED`.
   - Proof: `PortalReportLawSpec` "a non-zip, an empty zip, ..." was red (`Report(Chunk(), Chunk())`), and `PortalServerLawSpec` "an empty bundle fails in either mode" was red (`VALIDATED` in hold, `PUBLISHED` in automatic). Both are green with a layout finding for the whole upload when a zip has no files, which also covers a zip of directory entries only. C13 made that finding `Finding.Layout(LayoutPlace.Upload)`.
@@ -79,7 +89,8 @@ A law that touches the machine because the product does needs a seam in the prod
   - `histos.CompilerClosure` (`engine/test/CompilerClosure.scala`): `CompilerClosure.layer: ZLayer[Any, CompilerClosure.Missing, Resolve & CompilerClosure]` is Coursier's cache read offline, the checkout's lock, and every jar of its compiler rows fetched before the first law. `scalaVersion` is the newest locked Scala 3 compiler, `older` the newest of an older series, `pinning(modules*)` the lock with empty JVM cells for a law's modules, and `held(role)` the same offline check for another tool. `Scenario.tools` and the seven per-spec walks in A-L are gone. Proof: `CompilerClosureLawSpec`, where an empty cache is `Missing.Jar` on a compiler row and its message ends with `./histos resolve`. The seven specs and `ScenarioSpec` pass on it.
 - [x] S2 `IvyLocal` writes Coursier's static `LocalRepositories.ivy2Local`, so `FilePublishLawSpec`, `IvyLocalLawSpec`, and `PublishInstallLawSpec` write and wipe the real `~/.ivy2/local`, and two worktrees delete each other's install. `IvyLocal` and `LocalStock.layer` take the root. Owner: engine A-L.
   - `IvyLocal.install(root, module)`, and `LocalStock.layer(note): URLayer[IvyRoot, LocalPublish]`. `PublishRun.local` needs `IvyRoot`, and `Calls.publishLocal` provides `IvyRoot.ivy2Local`. Red: `IvyLocalLawSpec` wrote `user.home/.ivy2/local/histos.law`. Green: the three laws install under `IvyRoot.at` their own directory, and `~/.ivy2/local` has no `histos.law`, `histos.filelaw`, or `histos.runlaw` after the run.
-- [ ] S3 `Cli.launch` provides `ReleaseFeed.live` inline. Once a law writes a pin, every launch fetches `repo1.maven.org` and writes `$HOME/.histos/upgrade`. `launch` requires `ReleaseFeed` and `Main` provides the live layer. Owner: app.
+- [x] S3 `Cli.launch` provides `ReleaseFeed.live` inline. Once a law writes a pin, every launch fetches `repo1.maven.org` and writes `$HOME/.histos/upgrade`. `launch` requires `ReleaseFeed` and `Main` provides the live layer. Owner: app.
+  - `Cli.launch: URIO[Scope & ReleaseFeed, Completed]`, and `Main` provides `ReleaseFeed.live`. The four specs that launch (`CliClasspathLawSpec`, `CliGapLawSpec`, `CliPlanLawSpec`, `CliReadyLawSpec`) provide `stubbed[ReleaseFeed]`, which dies if it is read, and set `user.home` to the law's directory through `TestSystem`. The two that launched with a pin under `withLiveSystem` (`CliLaunchLawSpec`, `CliLocalLawSpec`) are gone (P12 to P15), so no law reads the feed or the real home.
 - [x] S4 `SonaStock`'s snapshot repository is fixed to `SnapshotRepository.central`, so only validation order keeps `SonaPublishLawSpec` off central.sonatype.com. The repository becomes a seam, and the law points it at a loopback that fails any request. Owner: engine M-Z.
   - `SonaStock.layer(env, note): URLayer[SnapshotRepository, SonaPublish]`, and `PublishRun` provides `SnapshotRepository.central`. `RefusingLoopback` (`engine/test`) holds a loopback port for the law's scope and closes every connection unread. The sona laws assert the loopback saw no connection, and a staged module that passes every check is a `PublishFault.Transport` with a connection counted, which fails if the stock ignores its repository. `SignerLawSpec` and `ReleaseRunLawSpec` use the same loopback where they named `127.0.0.1:9`. The red run was not taken: a stock that ignores the layer would send that request to Central.
 - [x] S5 The supply surface reads `sys.env` (`GITHUB_REPOSITORY`, `HISTOS_DRY_RUN`) and runs `git` synchronously outside ZIO (`Surface.scala`). The laws test whichever branch the shell selects. Both go through `zio.System` and a git reader. Owner: engine M-Z.
@@ -333,46 +344,69 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## app
 
-- [ ] P1 Checkout fixture. `BspRemainLawSpec:37`, `BspSuiteLawSpec:38`, `BspTargetLawSpec:42, :98`, `CallsAssemblyLawSpec:39`, `CallsCompileLawSpec:38`, `CallsRunLawSpec:38`, `CallsTaskLawSpec:38`, `CallsTestLawSpec:38`, `DaemonOpenLawSpec:38, :112, :135`, and `DaemonMoreLawSpec:38` each copy the `opened` and `repository` block: this checkout's lock, the developer's Coursier cache, `Machine.load` under `withLiveSystem`, and a fixed `/tmp/hd-store`. Laws that compile use one shared fixture on the S1 shape. Laws that never compile (`BspRemainLawSpec`, `CallsTaskLawSpec`, and the refusals in `CallsAssemblyLawSpec`, `CallsRunLawSpec`, `CallsPublishLawSpec`) use stubs and a fixture JDK.
-- [ ] P2 `BspSuiteLawSpec:113` WEAK. `forall` over a list that is empty on a cold cache. Assert the named sources jar.
-- [ ] P3 `CallsAssemblyLawSpec:39` MERGE. The jar-entry asserts repeat `AssembleLawSpec:66`.
-- [ ] P4 `CallsCompileLawSpec:86`, `CallsTestLawSpec:93` WEAK. `contains("missing")`. Assert `'missing' is not a project`.
-- [ ] P5 `CallsProductLawSpec:34` WEAK. The cleanFull leg runs on an empty store and compares the formatter to itself. Seed two projects and assert only one is named and gone.
-- [ ] P6 `CallsPublishLawSpec:43` HOST and WEAK. Runs `git` and copies this checkout's lock, and the receipt is never compared. Split the refusals onto a fixture JDK, and assert the receipt.
-- [ ] P7 `CallsResolveLawSpec:20` HOST. Solves against the developer's cache and hard-codes resolver facts. Seed a temp offline cache.
-- [ ] P8 `CallsSnapshotLawSpec:23` WEAK. `reported()` fields are always empty. Assert the `Out` lines, and drop the promote leg.
-- [ ] P9 `CliCancelLawSpec:10` DELETE. `ExecuteLawSpec:76` proves it with the exact exit.
-- [ ] P10 `CliCoverLawSpec:35` HOST. Retain mode downloads on a miss. Use an offline resolve, and assert the statements line.
-- [ ] P11 `CliGapLawSpec:46` HOST. `git commit` honours the developer's `commit.gpgsign` and hooks. One shared git helper with `--no-gpg-sign` and `GIT_CONFIG_GLOBAL=/dev/null`.
-- [ ] P12 `CliLaunchLawSpec:13` HOST, MERGE. S3. Every leg has an exact-text law elsewhere. Delete, or move the setup legs into `ExecuteLawSpec`.
-- [ ] P13 `CliLaunchLawSpec:48` HOST, MERGE. Writes the real `~/.cache/histos`. Fold into `CliPlanLawSpec:25`.
-- [ ] P14 `CliLocalLawSpec:14` DELETE. Reads the real content store with asserts that fit any store. `ExecuteLawSpec:140` covers it.
-- [ ] P15 `CliLocalLawSpec:43` HOST, MERGE. S3. Move the pin legs into `ExecuteLawSpec.pins`.
-- [ ] P16 `CliParseLawSpec:15` REWRITE. `.head` at L107 and L111, echo rows, and forwarding rows. Pattern-match, keep the literal sentences.
-- [ ] P17 `CliRouteLawSpec:52` MERGE. One `CliExitLawSpec` row.
-- [ ] P18 `ConnectionLawSpec:13` WEAK. Echoes constructor arguments, and `Connection.ensure` has no law. A law that `ensure` writes the decoded file, writes nothing without a pin, and leaves an equal file untouched.
-- [ ] P19 `ConnectionLawSpec:27` MERGE. `LauncherPinTextLawSpec:10` has the table. Keep one missing and one bad row.
-- [ ] P20 `DaemonOutboxLawSpec:9` WEAK. B6.
-- [ ] P21 `DaemonOpenLawSpec:112` WEAK. `waiting.isEmpty` can never fail. Relaunch completes an `entered` promise.
-- [ ] P22 `DaemonMoreLawSpec:38` MERGE into `DaemonOpenLawSpec` on the shared fixture.
-- [ ] P23 `DaemonWatchLawSpec:37` WEAK. D1.
-- [ ] P24 `DaemonWatchLawSpec:41` REWRITE. D2.
-- [ ] P25 `FmtGrammarSpec:47` WEAK. `isLeft`. Pin the exact `CliParseError`, and move the exit assert.
-- [ ] P26 `GrammarLawSpec:220` MERGE. `ExecuteLawSpec:187` pins the shim messages.
-- [ ] P27 `GrammarLawSpec:269` MERGE. `HelpLawSpec:30`.
-- [ ] P28 `McpLawSpec:97` WEAK. `isLeft`, and `Call` round trips test zio-json. Assert `Rejection.ProjectName`.
-- [ ] P29 `McpLawSpec:124` WEAK. Counts a literal. Build `HistosMcp.tools(...)` and assert its names equal `toolNames`.
-- [ ] P30 `McpLawSpec:154` WEAK. Decodes what the server only encodes. Assert `Level.Info.toJson` and `Level.Error.toJson`.
-- [ ] P31 `OperationLawSpec:16` WEAK. Either of two `Left`s passes. Rows of (command, exact `Left`).
-- [ ] P32 `PaintLawSpec:14` REWRITE. B8.
-- [ ] P33 `PerformLawSpec:42` MERGE. Derive `readers` from `needed`, add `Format` (D1).
-- [ ] P34 `PerformLawSpec:46` WEAK. B9.
-- [ ] P35 `PerformRouteLawSpec:49` MERGE. `ExecuteLawSpec:155`.
-- [ ] P36 `RebootLawSpec:23` FLAKY, WEAK. Real `sh`, 5 s of wall clock, and `Right(None) == Right(None)`. Require `Right(Some(_))`, and inject the spawn.
-- [ ] P37 `ReportLawSpec:19` DELETE. `WireSchemaLawSpec:1881` has the `required` lists.
-- [ ] P38 `RestartLawSpec:18` FLAKY, WEAK. Real processes, unbounded polling, a live sleep, and `!gone` that cannot fail. A Promise-backed fake child under `TestClock`.
-- [ ] P39 `RpcLawSpec:95` WEAK. Decodes with the same codecs, and nothing pins `"jsonrpc"`. Compare to literal JSON.
-- [ ] P40 `SessionLawSpec:22` REWRITE. B7.
-- [ ] P41 `SessionLawSpec:94` DELETE. Derived round trips. Replace with WireSchema laws for `CallProblem`, `ServerError`, and `SessionError`.
-- [ ] P42 `WireSchemaLawSpec:1968-1986` REWRITE. Strip the zio-json text, keep the schema-document asserts.
-- [ ] P43 A13's app half: every Grammar built-in word is in `CommandName.reserved`.
+- [x] P1 Checkout fixture. `BspRemainLawSpec:37`, `BspSuiteLawSpec:38`, `BspTargetLawSpec:42, :98`, `CallsAssemblyLawSpec:39`, `CallsCompileLawSpec:38`, `CallsRunLawSpec:38`, `CallsTaskLawSpec:38`, `CallsTestLawSpec:38`, `DaemonOpenLawSpec:38, :112, :135`, and `DaemonMoreLawSpec:38` each copy the `opened` and `repository` block: this checkout's lock, the developer's Coursier cache, `Machine.load` under `withLiveSystem`, and a fixed `/tmp/hd-store`. Laws that compile use one shared fixture on the S1 shape. Laws that never compile (`BspRemainLawSpec`, `CallsTaskLawSpec`, and the refusals in `CallsAssemblyLawSpec`, `CallsRunLawSpec`, `CallsPublishLawSpec`) use stubs and a fixture JDK.
+  - `app/test/CompilerClosure.scala` is the S1 shape for app (engine's test sources are not on app's classpath): the lock, the newest Scala 3 compiler, `pinning(modules*)`, and a `Missing` precondition that names `./histos resolve`. `app/test/LawMachine.scala` is the machine: the test JVM's own JDK, OS, and architecture, an empty environment, and a home and store under the law's directory, as a value (`at`) and through `TestSystem` (`system`) for product code that calls `Machine.load`. No app spec copies a lock walk or runs under `withLiveSystem`. The daemon laws run under a `/tmp` directory of their own, with `HISTOS_HOME`, the store, the ivy root, and an empty offline Coursier cache inside it.
+- [x] P2 `BspSuiteLawSpec:113` WEAK. `forall` over a list that is empty on a cold cache. Assert the named sources jar.
+  - The session's `Resolve` answers `org.scala-lang:scala-library` sources with a jar under the law's directory, and the law asserts that one URI. The old law passed on whatever the developer's cache held.
+- [x] P3 `CallsAssemblyLawSpec:39` MERGE. The jar-entry asserts repeat `AssembleLawSpec:66`.
+- [x] P4 `CallsCompileLawSpec:86`, `CallsTestLawSpec:93` WEAK. `contains("missing")`. Assert `'missing' is not a project`.
+  - Exact values: `Compile(Target(SelectError.Unknown(missing)))` for compile and `Select(SelectError.Unknown(missing))` for test.
+- [x] P5 `CallsProductLawSpec:34` WEAK. The cleanFull leg runs on an empty store and compares the formatter to itself. Seed two projects and assert only one is named and gone.
+- [x] P6 `CallsPublishLawSpec:43` HOST and WEAK. Runs `git` and copies this checkout's lock, and the receipt is never compared. Split the refusals onto a fixture JDK, and assert the receipt.
+  - The refusals run on stubs and the fixture JDK. The publish leg writes `closure.pinning(...)`, commits through `LawGit`, and asserts the receipt line the build's publisher returned. A local publish reads HEAD before the organization, so both legs commit.
+- [x] P7 `CallsResolveLawSpec:20` HOST. Solves against the developer's cache and hard-codes resolver facts. Seed a temp offline cache.
+  - A seeded cache would have to fake the compiler's whole closure, which `resolve --update` solves. The law runs on `CompilerClosure.layer` instead, so the cache is read offline behind the named precondition, and the hard-coded eviction lines are replaced by the written lock's one cell and its compiler rows, which must equal this checkout's.
+- [x] P8 `CallsSnapshotLawSpec:23` WEAK. `reported()` fields are always empty. Assert the `Out` lines, and drop the promote leg.
+- [x] P9 `CliCancelLawSpec:10` DELETE. `ExecuteLawSpec:76` proves it with the exact exit.
+- [x] P10 `CliCoverLawSpec:35` HOST. Retain mode downloads on a miss. Use an offline resolve, and assert the statements line.
+  - The law runs `Cli.execute` on `CompilerClosure.layer` and pins `statements 0/4 0.00` and `branches 0/0 0.00`.
+- [x] P11 `CliGapLawSpec:46` HOST. `git commit` honours the developer's `commit.gpgsign` and hooks. One shared git helper with `--no-gpg-sign` and `GIT_CONFIG_GLOBAL=/dev/null`.
+  - `app/test/LawGit.scala`, also used by `CallsPublishLawSpec` and `CallsWorkflowLawSpec`, sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` and commits with `--no-gpg-sign --no-verify`.
+- [x] P12 `CliLaunchLawSpec:13` HOST, MERGE. S3. Every leg has an exact-text law elsewhere. Delete, or move the setup legs into `ExecuteLawSpec`.
+- [x] P13 `CliLaunchLawSpec:48` HOST, MERGE. Writes the real `~/.cache/histos`. Fold into `CliPlanLawSpec:25`.
+- [x] P14 `CliLocalLawSpec:14` DELETE. Reads the real content store with asserts that fit any store. `ExecuteLawSpec:140` covers it.
+- [x] P15 `CliLocalLawSpec:43` HOST, MERGE. S3. Move the pin legs into `ExecuteLawSpec.pins`.
+  - The absent and pointer-pin `launcher --latest` legs are in `pins`. The `test --affected` and `~ mcp` legs are `ExecuteLawSpec` rows. `CliLocalLawSpec` and `CliLaunchLawSpec` are deleted.
+- [x] P16 `CliParseLawSpec:15` REWRITE. `.head` at L107 and L111, echo rows, and forwarding rows. Pattern-match, keep the literal sentences.
+- [x] P17 `CliRouteLawSpec:52` MERGE. One `CliExitLawSpec` row.
+  - Deleted. Wire's `CliLawSpec` already has the program-status-2 row, and `CliExitLawSpec` is gone (P47).
+- [x] P18 `ConnectionLawSpec:13` WEAK. Echoes constructor arguments, and `Connection.ensure` has no law. A law that `ensure` writes the decoded file, writes nothing without a pin, and leaves an equal file untouched.
+- [x] P19 `ConnectionLawSpec:27` MERGE. `LauncherPinTextLawSpec:10` has the table. Keep one missing and one bad row.
+- [x] P20 `DaemonOutboxLawSpec:9` WEAK. B6.
+- [x] P21 `DaemonOpenLawSpec:112` WEAK. `waiting.isEmpty` can never fail. Relaunch completes an `entered` promise.
+- [x] P22 `DaemonMoreLawSpec:38` MERGE into `DaemonOpenLawSpec` on the shared fixture.
+- [x] P23 `DaemonWatchLawSpec:37` WEAK. D1.
+- [x] P24 `DaemonWatchLawSpec:41` REWRITE. D2.
+- [x] P25 `FmtGrammarSpec:47` WEAK. `isLeft`. Pin the exact `CliParseError`, and move the exit assert.
+  - The exit of an unformatted check is wire's `CliLawSpec` row for an error line, so the assert is deleted here.
+- [x] P26 `GrammarLawSpec:220` MERGE. `ExecuteLawSpec:187` pins the shim messages.
+- [x] P27 `GrammarLawSpec:269` MERGE. `HelpLawSpec:30`.
+- [x] P28 `McpLawSpec:97` WEAK. `isLeft`, and `Call` round trips test zio-json. Assert `Rejection.ProjectName`.
+- [x] P29 `McpLawSpec:124` WEAK. Counts a literal. Build `HistosMcp.tools(...)` and assert its names equal `toolNames`.
+  - The law sends `tools/list` to the built server through `Mcp.handle` and compares the listed names with `toolNames`.
+- [x] P30 `McpLawSpec:154` WEAK. Decodes what the server only encodes. Assert `Level.Info.toJson` and `Level.Error.toJson`.
+- [x] P31 `OperationLawSpec:16` WEAK. Either of two `Left`s passes. Rows of (command, exact `Left`).
+- [x] P32 `PaintLawSpec:14` REWRITE. B8.
+- [x] P33 `PerformLawSpec:42` MERGE. Derive `readers` from `needed`, add `Format` (D1).
+- [x] P34 `PerformLawSpec:46` WEAK. B9.
+- [x] P35 `PerformRouteLawSpec:49` MERGE. `ExecuteLawSpec:155`.
+- [x] P36 `RebootLawSpec:23` FLAKY, WEAK. Real `sh`, 5 s of wall clock, and `Right(None) == Right(None)`. Require `Right(Some(_))`, and inject the spawn.
+  - `Cli.bootCall(repo, spawn)` takes the spawn, and every caller passes `Daemon.spawn`. The law's spawn counts and signals, the law writes the record itself, and the wait for it runs on the test clock: the call is still waiting after one poll, then returns the recorded socket, with one spawn. A missing script spawns nothing.
+- [x] P37 `ReportLawSpec:19` DELETE. `WireSchemaLawSpec:1881` has the `required` lists.
+- [x] P38 `RestartLawSpec:18` FLAKY, WEAK. Real processes, unbounded polling, a live sleep, and `!gone` that cannot fail. A Promise-backed fake child under `TestClock`.
+  - Each child is a fiber that offers `Started(n)` and offers `Stopped(n)` when it is interrupted, into a queue the law reads. The law waits for the watch's baseline before it writes, and `TestClock.adjust(Poll + Settle)` drives each poll. Green under `nonFlaky(30)`.
+- [x] P39 `RpcLawSpec:95` WEAK. Decodes with the same codecs, and nothing pins `"jsonrpc"`. Compare to literal JSON.
+- [x] P40 `SessionLawSpec:22` REWRITE. B7.
+- [x] P41 `SessionLawSpec:94` DELETE. Derived round trips. Replace with WireSchema laws for `CallProblem`, `ServerError`, and `SessionError`.
+  - `WireSchemaLawSpec` "a sum lists every case" now covers `ServerError`, `ServerIo`, `Session.SessionError`, and `Session.CallProblem` with the client's codecs.
+- [x] P42 `WireSchemaLawSpec:1968-1986` REWRITE. Strip the zio-json text, keep the schema-document asserts.
+  - A document of the wrong shape is `refused` with no text. A refusal a Histos parser words (`"(invalid path …)"`, `"(empty list)"`, and each text type's own message) keeps its text.
+- [x] P43 A13's app half: every Grammar built-in word is in `CommandName.reserved`.
+  - `GrammarLawSpec` reads the root words from `Grammar.builtIns` and asserts they are all reserved, and that only `acp`, `update`, and `self` are reserved beyond them. The literal copy of `CommandName.reserved` in `api/test/PluginSpec.scala` is gone.
+- [x] P44 Killing the client does not stop the server's run. A hung suite kept running after its client was killed and blocked the next run. B17.
+- [x] P45 `CallsPublishLawSpec` still installs into the real `~/.ivy2/local`, because `Calls.publishLocal` provides `IvyRoot.ivy2Local` itself.
+  - `IvyRoot` is in `Perform.run`'s environment and the server's (`Daemon.Needs`), and in `Build.here`'s, the MCP session's, and `Cli.execute`'s. The command line's wiring (`Cli.withLocal`) provides `IvyRoot.ivy2Local`. Every law provides `IvyRoot.at` a path of its own.
+- [x] P46 `SuitePattern.from(...) match` fallbacks in `McpLawSpec:35`, `OperationLawSpec:79`, `CallsTestLawSpec:55`, `GrammarLawSpec:331`, and `WireSchemaLawSpec:1686`. Use the `SuitePattern("…")` literal.
+  - Also `RunId("…")`, `ClangTarget("…")`, and `TaskId.Inspect` where a literal exists. A value with no literal is parsed with `ZIO.fromEither`, so a regression fails with its own error instead of `assertTrue(false)`.
+- [x] P47 `CliExitLawSpec` overlaps wire's `CliLawSpec` almost entirely after `CliExit` collapsed to `Success`, `Failed`, and `Usage`. Merge (P17) and delete the duplicates.
+  - Every row had a wire row with the same code, so the spec is deleted and wire is unchanged.

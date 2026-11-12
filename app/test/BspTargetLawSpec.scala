@@ -1,16 +1,17 @@
 package histos.bsp
 
 import histos.cache.ContentStore
-import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Sha256}
 import histos.publish.LauncherPin
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{ResolutionService, Resolve}
 import histos.program.Program
 import histos.server.Calls
-import histos.toolchain.{RuntimeIdentity, Runtimes}
+import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers, GraphCompile}
 import histos.{
+  CompilerClosure,
+  LawMachine,
   Module,
   Platform,
   Platforms,
@@ -25,41 +26,33 @@ import histos.{
 import java.nio.file.{Files, Path}
 
 import zio.json.*
-import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
+import zio.test.{TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 import zio.{Scope, ZIO, ZLayer}
 
 /** A build target names the module and the build file, and the sources are the files on disk. */
 object BspTargetLawSpec extends ZIOSpecDefault:
-  private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("bsplaw")
-  private val jdk     = JdkRuntime(
-    Path.of("jdk"),
-    JdkVersion.trusted("21", JdkMajor.trusted(21)),
-    RuntimeIdentity.Local(Path.of("jdk"), Sha256.trusted("ab")),
-  )
 
   def spec = suite("bsp target laws")(
     test("a module and the build file are targets, and each source file is named"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-bsp-target")
           .flatMap: dir =>
             val source =
               dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-            val build    = dir.resolve("histos.scala")
-            val pin      = dir.resolve(LauncherPin.file)
             val mainUri  = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
             val buildUri = Bsp.buildUri(dir)
             val classes  =
               GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toUri.toString
             val program =
               for
-                _        <- Workspace.createDirectories(parentOf(source))
                 _        <- Workspace.writeString(source, "object Hello\n")
-                _        <- Workspace.writeString(build, "// law\n")
-                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                _        <- Workspace.writeString(dir.resolve("histos.scala"), "// law\n")
+                _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 runtimes <- Runtimes.read(Calls.idleMachine, None)
-                session  <- Bsp.open(dir, graph, jdk, runtimes)
+                session  <- Bsp.open(dir, graph(scala3), LawMachine.fixtureJdk, runtimes)
                 _        <- ask(session, request(1, "build/initialize"))
                 _        <- ask(session, note("build/initialized"))
                 listed   <- ask(session, request(2, "workspace/buildTargets"))
@@ -77,7 +70,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                 val buildOpt = options.toOption.flatMap(_.find(_.target.uri == buildUri))
                 assertTrue(
                   targets.map(_.map(_.displayName).sorted) == Right(List(lawName.value, "histos.scala")),
-                  module.exists(lawTarget(mainUri)),
+                  module.exists(lawTarget(mainUri, scala3)),
                   file.exists(buildTarget(buildUri)),
                   files.exists(rows =>
                     rows.exists(item => item.uri.endsWith("Hello.scala") && item.kind == 1 && !item.generated) &&
@@ -93,16 +86,16 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                   rpcError(unknown).exists(_.error.message == "unknown build target"),
                   rpcError(missing).exists(_.error.message == "bsp params are required"),
                 )
-            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure))
     ,
     test("compiling the module writes its class, and a type error is not success"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-bsp-compile")
           .flatMap: dir =>
             val source =
               dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-            val pin       = dir.resolve(LauncherPin.file)
             val uri       = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
             val buildUri  = Bsp.buildUri(dir)
             val classFile =
@@ -111,22 +104,15 @@ object BspTargetLawSpec extends ZIOSpecDefault:
               Program.workDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toString
             val program =
               for
-                loaded  <- Machine.load(dir).either
-                machine <- loaded match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                found <- GraphCompile.jdk(machine).either
-                jdk   <- found match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                _ <- Workspace.createDirectories(parentOf(source))
-                _ <- Workspace.writeString(
+                machine <- LawMachine.at(dir)
+                jdk     <- LawMachine.jdk(machine)
+                _       <- Workspace.writeString(
                   source,
                   "object Hello:\n  def main(args: Array[String]): Unit = ()\n",
                 )
-                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 runtimes <- Runtimes.read(machine, None)
-                session  <- Bsp.open(dir, graph, jdk, runtimes)
+                session  <- Bsp.open(dir, graph(scala3), jdk, runtimes)
                 _        <- ask(session, request(1, "build/initialize"))
                 _        <- ask(session, note("build/initialized"))
                 compiled <- ask(session, asked(2, "buildTarget/compile", List(uri)))
@@ -154,10 +140,10 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                   ),
                   rpcError(refused).exists(_.error.message == "jvmRunEnvironment needs a main target"),
                 )
-            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock)),
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure)),
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
-  private def lawTarget(uri: String)(item: Rpc.BuildTarget): Boolean =
+  private def lawTarget(uri: String, scala3: ScalaVersion)(item: Rpc.BuildTarget): Boolean =
     item.id.uri == uri &&
       item.tags == List("library") &&
       item.languageIds == List("scala") &&
@@ -182,7 +168,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
       item.data.platform == 1 &&
       item.data.jars.nonEmpty
 
-  private def graph: ProjectGraph =
+  private def graph(scala3: ScalaVersion): ProjectGraph =
     val law = Module(
       lawName,
       Platforms(Platform.Jvm, Nil),
@@ -191,43 +177,13 @@ object BspTargetLawSpec extends ZIOSpecDefault:
       Nil,
       SourcePos("law.scala", 1, 1),
     )
-    ProjectGraph.trusted(
-      List(law),
-      Splits.aggregate,
-      Catalog.empty,
-      None,
-      Nil,
-      resolution = Resolution.Lock,
-    )
+    ProjectGraph.trusted(List(law), Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
-  private def sessionLayer(dir: Path, lock: DependencyLock) =
+  private def sessionLayer(dir: Path, closure: CompilerClosure) =
     ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
       Compilers.live(1) ++
       CompileMemo.live ++
-      ResolutionService.pinned(pinned(lock))
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
-
-  private def parentOf(path: Path): Path =
-    Option(path.getParent).getOrElse(path)
+      ResolutionService.pinned(closure.pinning(lawName))
 
   private def ask(session: Bsp.Session, payload: String) =
     session.answer(payload)

@@ -35,7 +35,9 @@ object HelpLawSpec extends ZIOSpecDefault:
           "unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile",
         Help.unknown("compil", List("compile", "compiles")) ==
           "unknown command 'compil'\ndid you mean compile or compiles?\nhistos help\nhistos help compile",
-        Help.render(List("nope")) == Left(Help.unknown("nope")),
+        Help.render(List("nope")) == Left("unknown command 'nope'\nhistos help\nhistos help <command>"),
+        Help.render(List("compil")) ==
+          Left("unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile"),
       )
     ,
     test("a flag names the closest flag, and an exact name is not a suggestion"):

@@ -12,38 +12,34 @@ import zio.*
 import zio.test.*
 
 object OperationLawSpec extends ZIOSpecDefault:
+  private val plugin = PluginTaskId(PluginId("demo"), TaskName("pack"))
+
   def spec = suite("operation laws")(
     test("mcp, bsp, server, portal, observe, and the local commands are not operations"):
-      val rejected = List(
-        Command.Mcp,
-        Command.Bsp,
-        Command.Server,
-        Command.Portal,
-        Command.Observe,
-        Command.New("demo", false, false, None),
-        Command.Init(false, false, None, None),
-        Command.Init(false, false, Some(ImportSource.Sbt), None),
-        Command.Doctor(None, false, None, false, false, false, Nil),
-        Command.Explain("supply.pin"),
-        Command.Deps(DepsAction.Check),
-        Command.Setup(None, false, false),
-        Command.Help(Nil),
-        Command.Coverage(Nil, CoverageFloors(), Excludes(Nil, Nil)),
-        Command.Affected("abc"),
-        Command.Watch(Command.Compile(Nil), List("compile")),
+      val nested = Left(CliParseError.WatchCommand("watch does not nest"))
+      val rows   = List(
+        Command.Mcp                                                 -> Left(CliParseError.Rejected),
+        Command.Bsp                                                 -> Left(CliParseError.Rejected),
+        Command.Server                                              -> Left(CliParseError.Rejected),
+        Command.Portal                                              -> Left(CliParseError.Rejected),
+        Command.Observe                                             -> Left(CliParseError.Rejected),
+        Command.New("demo", false, false, None)                     -> Left(CliParseError.Rejected),
+        Command.Init(false, false, None, None)                      -> Left(CliParseError.Rejected),
+        Command.Init(false, false, Some(ImportSource.Sbt), None)    -> Left(CliParseError.Rejected),
+        Command.Doctor(None, false, None, false, false, false, Nil) -> Left(CliParseError.Rejected),
+        Command.Explain("supply.pin")                               -> Left(CliParseError.Rejected),
+        Command.Deps(DepsAction.Check)                              -> Left(CliParseError.Rejected),
+        Command.Setup(None, false, false)                           -> Left(CliParseError.Rejected),
+        Command.Help(Nil)                                           -> Left(CliParseError.Rejected),
+        Command.Coverage(Nil, CoverageFloors(), Excludes(Nil, Nil)) -> Left(CliParseError.Rejected),
+        Command.Affected("abc")                                     -> Left(CliParseError.Rejected),
+        Command.Watch(Command.Compile(Nil), List("compile"))        -> nested,
+        Command.Watch(Command.Compile(Nil), Nil)                    -> nested,
       )
-      val bad = rejected.filter(command =>
-        Operation.operation(command) != Left(CliParseError.Rejected) &&
-          Operation.operation(command) != Left(CliParseError.WatchCommand("watch does not nest"))
-      )
-      val watch = Operation.operation(Command.Watch(Command.Compile(Nil), Nil))
-      assertTrue(
-        bad == Nil,
-        watch == Left(CliParseError.WatchCommand("watch does not nest")),
-        Operation.operation(Command.Coverage(Nil, CoverageFloors(), Excludes(Nil, Nil))) == Left(
-          CliParseError.Rejected
-        ),
-      )
+      val misses = rows.collect {
+        case (command, wanted) if Operation.operation(command) != wanted => (command, Operation.operation(command))
+      }
+      assertTrue(misses == Nil)
     ,
     test("a nested watch and bsp are not a watch payload"):
       assertTrue(
@@ -69,68 +65,48 @@ object OperationLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a built-in run is a task, a plugin is a task, and release flips its arguments"):
-      val plugin = PluginTaskId(PluginId("demo"), TaskName("pack"))
-      TaskId.from("inspect") match
-        case Left(_)        => assertTrue(false)
-        case Right(inspect) =>
-          TaskId.from("api") match
-            case Left(_)    => assertTrue(false)
-            case Right(api) =>
-              SuitePattern.from("*") match
-                case Left(_)     => assertTrue(false)
-                case Right(star) =>
-                  assertTrue(
-                    Operation.operation(Command.Run(inspect, Some(Platform.Jvm))) == Right(
-                      Call.Task("inspect", PluginArgs.empty)
-                    ),
-                    Operation.operation(Command.Run(api, Some(Platform.Jvm))) == Right(
-                      Call.Run("api", Some(Platform.Jvm))
-                    ),
-                    Operation.operation(Command.Plugin(plugin, PluginArgs.empty)) == Right(
-                      Call.Task(plugin.render, PluginArgs.empty)
-                    ),
-                    Operation.operation(Command.PublishRelease(true, List("ship"))) == Right(
-                      Call.PublishRelease(List("ship"), true)
-                    ),
-                    Operation.operation(Command.PreviewPlugin(plugin)) == Right(
-                      Call.PreviewRun(plugin.render, None)
-                    ),
-                    Operation.operation(Command.TestOnly(List(ProjectName("api")), List(star))) == Right(
-                      Call.Test(List(ProjectName("api")), List(star), TestMode.Run)
-                    ),
-                    Operation.operation(Command.TestQuick(Nil, Nil)) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
-                    Operation.operation(Command.Compile(List(ProjectName("api")))) == Right(
-                      Call.Compile(List(ProjectName("api")))
-                    ),
-                    Operation.operation(Command.Version) == Right(Call.Version),
-                    Operation.operation(Command.CleanFull) == Right(Call.CleanFull),
-                  )
+      for api <- ZIO.fromEither(TaskId.from("api"))
+      yield assertTrue(
+        Operation.operation(Command.Run(TaskId.Inspect, Some(Platform.Jvm))) == Right(
+          Call.Task("inspect", PluginArgs.empty)
+        ),
+        Operation.operation(Command.Run(api, Some(Platform.Jvm))) == Right(Call.Run("api", Some(Platform.Jvm))),
+        Operation.operation(Command.Plugin(plugin, PluginArgs.empty)) == Right(
+          Call.Task("demo/pack", PluginArgs.empty)
+        ),
+        Operation.operation(Command.PublishRelease(true, List("ship"))) == Right(
+          Call.PublishRelease(List("ship"), true)
+        ),
+        Operation.operation(Command.PreviewPlugin(plugin)) == Right(Call.PreviewRun("demo/pack", None)),
+        Operation.operation(Command.TestOnly(List(ProjectName("api")), List(SuitePattern("*")))) == Right(
+          Call.Test(List(ProjectName("api")), List(SuitePattern("*")), TestMode.Run)
+        ),
+        Operation.operation(Command.TestQuick(Nil, Nil)) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
+        Operation.operation(Command.Compile(List(ProjectName("api")))) == Right(
+          Call.Compile(List(ProjectName("api")))
+        ),
+        Operation.operation(Command.Version) == Right(Call.Version),
+        Operation.operation(Command.CleanFull) == Right(Call.CleanFull),
+      )
     ,
     test("callOf sends compile, test, run, and clean, and leaves every other command"):
-      val plugin = PluginTaskId(PluginId("demo"), TaskName("pack"))
-      TaskId.from("inspect") match
-        case Left(_)        => assertTrue(false)
-        case Right(inspect) =>
-          TaskId.from("api") match
-            case Left(_)    => assertTrue(false)
-            case Right(api) =>
-              RunId.from("run-1") match
-                case Left(_)   => assertTrue(false)
-                case Right(id) =>
-                  val rows = List(
-                    Command.Compile(List(ProjectName("api"))) -> Some(Call.Compile(List(ProjectName("api")))),
-                    Command.Test(Nil, AffectedChoice.Unset)   -> Some(Call.Test(Nil, Nil, TestMode.Run)),
-                    Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected) -> None,
-                    Command.Run(inspect, None)               -> Some(Call.Task("inspect", PluginArgs.empty)),
-                    Command.Run(api, Some(Platform.Native))  -> Some(Call.Run("api", Some(Platform.Native))),
-                    Command.Clean(Nil)                       -> Some(Call.Clean(Nil)),
-                    Command.CleanFull                        -> Some(Call.CleanFull),
-                    Command.Plugin(plugin, PluginArgs.empty) -> None,
-                    Command.Version                          -> None,
-                    Command.TestOnly(Nil, Nil)               -> None,
-                    Command.Cancel(id)                       -> None,
-                    Command.Graph                            -> None,
-                  )
-                  val bad = rows.filter { (command, expected) => Cli.callOf(command) != expected }
-                  assertTrue(bad == Nil),
+      for api <- ZIO.fromEither(TaskId.from("api"))
+      yield
+        val rows = List(
+          Command.Compile(List(ProjectName("api"))) -> Some(Call.Compile(List(ProjectName("api")))),
+          Command.Test(Nil, AffectedChoice.Unset)   -> Some(Call.Test(Nil, Nil, TestMode.Run)),
+          Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected) -> None,
+          Command.Run(TaskId.Inspect, None)        -> Some(Call.Task("inspect", PluginArgs.empty)),
+          Command.Run(api, Some(Platform.Native))  -> Some(Call.Run("api", Some(Platform.Native))),
+          Command.Clean(Nil)                       -> Some(Call.Clean(Nil)),
+          Command.CleanFull                        -> Some(Call.CleanFull),
+          Command.Plugin(plugin, PluginArgs.empty) -> None,
+          Command.Version                          -> None,
+          Command.TestOnly(Nil, Nil)               -> None,
+          Command.Cancel(RunId("run-1"))           -> None,
+          Command.Graph                            -> None,
+        )
+        val bad = rows.filter { (command, expected) => Cli.callOf(command) != expected }
+        assertTrue(bad == Nil),
   )
+end OperationLawSpec

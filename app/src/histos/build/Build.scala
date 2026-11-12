@@ -3,6 +3,7 @@ package histos.build
 import histos.cache.ContentStore
 import histos.jdk.Machine
 import histos.load.{Loader, LoadedBuild}
+import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult}
 import histos.resolve.Resolve
 import histos.server.{Call, Client, Feed, Message, Perform, Say, ServerError}
@@ -41,7 +42,7 @@ object Build:
           case Feed.Done(result) => Beat.Finished(result)
         }
 
-  def here[R <: Resolve & Loader & ContentStore](
+  def here[R <: Resolve & Loader & ContentStore & IvyRoot](
       repo: Path,
       apiJar: Path,
       machine: Machine,

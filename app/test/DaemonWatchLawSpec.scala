@@ -16,15 +16,17 @@ import histos.plugin.{
   Seal,
   TaskName,
 }
+import histos.format.{FormatMode, FormatTargets}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.TestMode
+import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.workflow.WorkflowAction
 import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.nio.file.Path
 
-import zio.ZIO
+import zio.{Promise, Ref, Semaphore, ZIO, durationInt}
 import zio.test.*
 
 object DaemonWatchLawSpec extends ZIOSpecDefault:
@@ -37,6 +39,39 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     test("class directory writers are the calls that occupy the permit"):
       val bad = outputs.collect { case (label, call, writes) if Daemon.writesOutputs(call) != writes => label }
       assertTrue(bad == Nil)
+    ,
+    test("a format and a compile in one checkout run one after the other"):
+      for
+        permit  <- Semaphore.make(1)
+        heard   <- Ref.make(List.empty[String])
+        entered <- Promise.make[Nothing, Unit]
+        format  <- Daemon
+          .lease(permit, Call.Format(FormatTargets.Build, FormatMode.Write))(_ =>
+            entered.succeed(()) *> ZIO.sleep(1.second) *> heard.update(_ :+ "format")
+          )
+          .fork
+        _       <- entered.await
+        compile <- Daemon.lease(permit, Call.Compile(Nil))(_ => heard.update(_ :+ "compile")).fork
+        _       <- TestClock.adjust(1.second)
+        _       <- format.join *> compile.join
+        order   <- heard.get
+      yield assertTrue(order == List("format", "compile"))
+    ,
+    test("a publish watch follows the selection the preview shows"):
+      val bad = selections.flatMap: tokens =>
+        val local     = Watching.roots(repo, Call.PublishLocal(tokens), shipped)
+        val snapshots = Watching.roots(repo, Call.PublishSnapshots(tokens), shipped)
+        val shown     = Watching.roots(repo, Call.PreviewPublishLocal(tokens), shipped)
+        val shownSnap = Watching.roots(repo, Call.PreviewPublishSnapshots(tokens), shipped)
+        List(
+          Option.when(local != shown)(s"publishLocal ${tokens.mkString(" ")}"),
+          Option.when(snapshots != shownSnap)(s"publish snapshots ${tokens.mkString(" ")}"),
+        ).flatten
+      assertTrue(
+        bad == Nil,
+        Watching.roots(repo, Call.PublishLocal(List("api")), shipped) == onlyApi,
+        Watching.roots(repo, Call.PublishSnapshots(List("lib")), shipped) == both,
+      )
     ,
     test("watch roots follow the named modules and one chosen module adds the shared sources"):
       val bad = roots.collect {
@@ -72,6 +107,22 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
 
   private def graph: ProjectGraph =
     ProjectGraph.trusted(List(module(api), module(core)))
+
+  private val tool           = ProjectName("tool")
+  private val lib: Ship.Line = Ship.Line(ShipName("lib"), ShipNumber("0.1.0"), ::(api, List(core)))
+
+  /** `lib` ships api and core. `tool` is in no ship. */
+  private def shipped: ProjectGraph =
+    ProjectGraph.trusted(
+      List(module(api), module(core), module(tool)),
+      histos.Splits.aggregate,
+      Catalog.Lines(::(lib, Nil)),
+      None,
+      Nil,
+    )
+
+  private val selections: List[List[String]] =
+    List(Nil, List("api"), List("lib"), List("tool"), List("api", "core"), List("missing"), List("lib", "missing"))
 
   private val docs = PluginId.trusted("docs")
 
@@ -132,7 +183,8 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("run not a project", Call.Run("1api", None), fileOnly),
     ("run unknown", Call.Run("other", None), fileOnly),
     ("preview run unknown", Call.PreviewRun("other", Some(Platform.Jvm)), fileOnly),
-    ("publish local unknown", Call.PublishLocal(List("missing")), both),
+    ("publish local unknown", Call.PublishLocal(List("missing")), fileOnly),
+    ("publish local empty", Call.PublishLocal(Nil), both),
     ("preview publish empty", Call.PreviewPublishLocal(Nil), both),
     ("preview publish unknown", Call.PreviewPublishLocal(List("missing")), fileOnly),
     ("preview snapshots unknown", Call.PreviewPublishSnapshots(List("missing")), fileOnly),
@@ -155,6 +207,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("clean empty", Call.Clean(Nil), true),
     ("clean named", Call.Clean(List(api)), true),
     ("clean full", Call.CleanFull, true),
+    ("format", Call.Format(FormatTargets.Build, FormatMode.Check), true),
     ("publish promote", Call.PublishPromote("id"), false),
     ("publish drop", Call.PublishDrop("drop"), false),
     ("publish assets", Call.PublishAssets(Nil), false),

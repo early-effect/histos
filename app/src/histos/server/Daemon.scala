@@ -7,6 +7,7 @@ import histos.cli.Operation
 import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
 import histos.schedule.CacheNamespace
@@ -297,6 +298,12 @@ object Client:
 end Client
 
 object Daemon:
+  /** What a server needs from its caller. */
+  type Needs = histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & IvyRoot
+
+  /** What a connection runs with: the caller's services and the compilers the server opened. */
+  private type Served = Needs & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService
+
   def open(
       repo: Path,
       graph: ProjectGraph,
@@ -310,11 +317,7 @@ object Daemon:
       machine: histos.jdk.Machine = Calls.idleMachine,
       relaunch: Path => IO[ServerError, Unit] = spawn,
       assembly: Option[String] = None,
-  ): ZIO[
-    Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
-    ServerError,
-    Running,
-  ] =
+  ): ZIO[Scope & Needs, ServerError, Running] =
     for
       listening <- Promise.make[ServerError, Record.Written]
       serving   <- run(
@@ -380,11 +383,7 @@ object Daemon:
       relaunch: IO[ServerError, Unit],
       listening: Promise[ServerError, Record.Written],
       assembly: Option[String],
-  ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
-    ServerError,
-    Unit,
-  ] =
+  ): ZIO[Needs, ServerError, Unit] =
     bindAt(repo).flatMap: (socket, channel) =>
       ZIO.scoped {
         for
@@ -507,18 +506,8 @@ object Daemon:
       machine: histos.jdk.Machine,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
-  ): ZIO[
-    Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
-    ServerError,
-    Unit,
-  ] =
-    def loop: ZIO[
-      Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-        histos.zinc.CompileMemo & histos.resolve.ResolutionService,
-      ServerError,
-      Unit,
-    ] =
+  ): ZIO[Scope & Served, ServerError, Unit] =
+    def loop: ZIO[Scope & Served, ServerError, Unit] =
       ZIO
         .attemptBlockingInterrupt(server.accept())
         .foldZIO(
@@ -565,8 +554,7 @@ object Daemon:
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    Served,
     ServerError,
     Unit,
   ] =
@@ -593,8 +581,7 @@ object Daemon:
                   out: Say,
                   compiled: UIO[Unit],
               ): Perform.Edges[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService
+                Served
               ] =
                 Perform.Edges(
                   watch = (inner, policy, edge) => watched(inner, policy, edge),
@@ -624,8 +611,7 @@ object Daemon:
                   chosen: histos.jdk.Machine,
                   compiled: UIO[Unit],
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Unit,
               ] =
@@ -642,17 +628,13 @@ object Daemon:
                     out,
                     edges(out, compiled),
                   )
-                  .provideSomeEnvironment[
-                    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                      histos.zinc.CompileMemo & histos.resolve.ResolutionService
-                  ](_.add(warm.formatters))
+                  .provideSomeEnvironment[Served](_.add(warm.formatters))
 
               def run(
                   target: Call,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Unit,
               ] =
@@ -678,8 +660,7 @@ object Daemon:
                   policy: WatchPolicy,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Unit,
               ] =
@@ -711,8 +692,7 @@ object Daemon:
                   changed: List[Path],
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Boolean,
               ] =
@@ -726,8 +706,7 @@ object Daemon:
                         .map((result, watched) => Watching.restarts(result, changed, watched))
 
               def watchRoots(call: Call): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Watching.Watched,
               ] =
@@ -746,8 +725,7 @@ object Daemon:
                   target: Call,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                Served,
                 ServerError,
                 Unit,
               ] =
@@ -778,8 +756,28 @@ object Daemon:
                         case _        => ran(compiled).ensuring(release(held))
                     lease(permit, target)(leased)
 
-              write(output, wire(Message.Ready), bound) *> run(asked, say)
+              write(output, wire(Message.Ready), bound) *> attended(asked, socket, input)(run(asked, say))
   end handle
+
+  /** A client that closes its socket ends its call, so a run it left does not hold the permit or the reload lock for
+    * the next one. A call never reads its socket after the call frame, so a read that ends is the client leaving. Bsp
+    * reads the socket itself, and reboot starts its successor after the client heard the reply.
+    */
+  private def attended[R](call: Call, socket: SocketChannel, input: InputStream)(
+      body: ZIO[R, ServerError, Unit]
+  ): ZIO[R, ServerError, Unit] =
+    call match
+      case Call.Bsp | Call.Reboot => body
+      case _                      => body.raceFirst(gone(socket, input))
+
+  /** Completes when the peer closes. A stray byte is not a close, so the read goes on. */
+  private def gone(socket: SocketChannel, input: InputStream): UIO[Unit] =
+    ZIO
+      .attemptBlockingCancelable(input.read())(ZIO.attempt(socket.shutdownInput()).ignore)
+      .foldZIO(
+        _ => ZIO.unit,
+        read => if read < 0 then ZIO.unit else gone(socket, input),
+      )
 
   /** A fingerprint change loads the build. Failure keeps the previous graph and is the call's error.
     */
@@ -790,8 +788,7 @@ object Daemon:
       bound: Path,
       warm: Warm,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    Served,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -812,8 +809,7 @@ object Daemon:
       bound: Path,
       warm: Warm,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    Served,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -831,8 +827,7 @@ object Daemon:
       warm: Warm,
       now: Fingerprint,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    Served,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -890,16 +885,18 @@ object Daemon:
         ZIO.when(close)(generation.scope.close(Exit.unit)).unit
       }
 
-  /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
+  /** Class-directory writers, and `fmt`, which rewrites the sources a compile reads. Queries, preview, cache, and
+    * `Call.Task` stay out.
+    */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Client | Call.Assembly(_) | Call.Clean(_) |
-          Call.CleanFull =>
+          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Client | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull |
+          Call.Format(_, _) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
-          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Format(_, _) | Call.Reload |
-          Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
           Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
           Call.PreviewRun(_, _) =>
@@ -963,8 +960,7 @@ object Daemon:
       input: InputStream,
       output: OutputStream,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    Served,
     ServerError,
     Unit,
   ] =
@@ -1013,18 +1009,20 @@ object Daemon:
       }
     }
 
-  /** One consumer writes the socket. Producers only `offer`. */
+  /** One consumer writes the socket. Producers only `offer`. `close` sends every line offered before it, then returns.
+    */
   private[histos] final case class Outbox(
       offer: String => UIO[Unit],
       close: IO[ServerError, Unit],
       done: Fiber[ServerError, Unit],
   )
 
+  /** `None` ends the stream after the lines queued ahead of it. A shut-down queue would drop them. */
   private[histos] def outbox(send: String => IO[ServerError, Unit]): ZIO[Scope, Nothing, Outbox] =
     for
-      outbound <- Queue.unbounded[String]
-      fiber    <- ZStream.fromQueueWithShutdown(outbound).foreach(send).forkScoped
-    yield Outbox(line => outbound.offer(line).unit, outbound.shutdown *> fiber.join, fiber)
+      outbound <- ZIO.acquireRelease(Queue.unbounded[Option[String]])(_.shutdown)
+      fiber    <- ZStream.fromQueue(outbound).collectWhileSome.foreach(send).forkScoped
+    yield Outbox(line => outbound.offer(Some(line)).unit, outbound.offer(None) *> fiber.join, fiber)
 
   private final case class BspFlight(
       id: Rpc.RpcId,

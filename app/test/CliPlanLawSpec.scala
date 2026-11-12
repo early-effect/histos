@@ -1,13 +1,17 @@
 package histos.cli
 
+import histos.LawMachine
+import histos.central.ReleaseFeed
 import histos.workspace.Workspace
+import slayer.stubbed
 
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 
-import zio.ZIO
-import zio.test.{TestSystem, ZIOSpecDefault, assertTrue, suite, test}
+import zio.{Scope, ZIO}
+import zio.test.{TestEnvironment, TestSystem, ZIOSpecDefault, assertTrue, suite, test}
 
 /** `new --bare` writes a project and does not write CI. `preview compile` names sources that have never been compiled.
+  * The release feed is a stub: no law launches against Maven Central.
   */
 object CliPlanLawSpec extends ZIOSpecDefault:
   private val version = "9.9.9-test"
@@ -22,26 +26,38 @@ object CliPlanLawSpec extends ZIOSpecDefault:
       |""".stripMargin
 
   def spec = suite("cli plan laws")(
-    test("bare new prints the project and does not write a launcher or a lock"):
+    test("bare new writes the build and the sources, and does not write a launcher, a lock, or CI"):
       Workspace
         .work("histos-cli-new")
         .flatMap: dir =>
           val created = dir.resolve("barelaw").toAbsolutePath.normalize
+          val main    =
+            created
+              .resolve("app")
+              .resolve("src")
+              .resolve("main")
+              .resolve("scala")
+              .resolve("barelaw")
+              .resolve("Main.scala")
           for
             _         <- standIn(dir)
             made      <- Cli.launch(List("new", "--bare", "barelaw"), dir)
-            props     <- ZIO.attempt(Files.readString(created.resolve("build.properties"))).orDie
-            buildFile <- ZIO.attempt(Files.isRegularFile(created.resolve("histos.scala"))).orDie
+            props     <- textAt(created.resolve("build.properties"))
+            buildText <- textAt(created.resolve("histos.scala"))
+            mainText  <- textAt(main)
             script    <- ZIO.attempt(Files.exists(created.resolve("histos"))).orDie
             lock      <- ZIO.attempt(Files.exists(created.resolve("dependencies.lock"))).orDie
+            ci        <- ZIO.attempt(Files.exists(created.resolve(".github"))).orDie
           yield assertTrue(
             made.exit == CliExit.Success,
             made.err == "",
             made.out == s"$created\nhistos test",
             props == s"histos.version=$version\n",
-            buildFile,
+            buildText.contains("module(\"app\", Jvm)"),
+            mainText.contains("object Main"),
             !script,
             !lock,
+            !ci,
           )
     ,
     test("preview compile names an uncompiled source"):
@@ -50,14 +66,9 @@ object CliPlanLawSpec extends ZIOSpecDefault:
         .flatMap: dir =>
           val source = dir.resolve("previewlaw").resolve("src").resolve("main").resolve("scala").resolve("Ready.scala")
           for
-            _ <- standIn(dir)
-            _ <- Workspace.createDirectories(parentOf(source)).catchAll(error => ZIO.dieMessage(error.message))
-            _ <- Workspace
-              .writeString(dir.resolve("histos.scala"), build)
-              .catchAll(error => ZIO.dieMessage(error.message))
-            _ <- Workspace
-              .writeString(source, "object Ready:\n  def n: Int = 1\n")
-              .catchAll(error => ZIO.dieMessage(error.message))
+            _       <- standIn(dir)
+            _       <- Workspace.writeString(dir.resolve("histos.scala"), build)
+            _       <- Workspace.writeString(source, "object Ready:\n  def n: Int = 1\n")
             preview <- Cli.launch(List("preview", "compile"), dir)
           yield assertTrue(
             preview.exit == CliExit.Success,
@@ -69,18 +80,11 @@ object CliPlanLawSpec extends ZIOSpecDefault:
               |no previous compile
               |stale previewlaw/src/main/scala/Ready.scala""".stripMargin,
           ),
-  )
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed])
 
-  private def parentOf(path: java.nio.file.Path): java.nio.file.Path =
-    Option(path.getParent).getOrElse(path)
+  private def textAt(path: Path): ZIO[Any, Nothing, String] =
+    ZIO.attempt(if Files.isRegularFile(path) then Files.readString(path) else "").orDie
 
-  private def standIn(dir: java.nio.file.Path) =
-    for
-      _ <- TestSystem.putProperty("java.home", java.lang.System.getProperty("java.home"))
-      _ <- TestSystem.putProperty("os.name", java.lang.System.getProperty("os.name"))
-      _ <- TestSystem.putProperty("os.arch", java.lang.System.getProperty("os.arch"))
-      _ <- TestSystem.putProperty("user.home", dir.toString)
-      _ <- TestSystem.putEnv("XDG_CACHE_HOME", "")
-      _ <- TestSystem.putEnv("HISTOS_VERSION", version)
-    yield ()
+  private def standIn(dir: Path) =
+    LawMachine.system(dir) *> TestSystem.putEnv("XDG_CACHE_HOME", "") *> TestSystem.putEnv("HISTOS_VERSION", version)
 end CliPlanLawSpec

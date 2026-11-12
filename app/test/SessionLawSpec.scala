@@ -3,7 +3,7 @@ package histos.client
 import histos.build.BuildEvent
 import histos.plugin.{NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
-import histos.server.{Call, Feed, Message, ServerError, ServerIo}
+import histos.server.{Call, Feed, Message, ServerError}
 import histos.{Platform, PlatformError}
 
 import java.nio.file.Path
@@ -11,8 +11,6 @@ import java.nio.file.Path
 import zio.{Chunk, ZIO}
 import zio.json.*
 import zio.test.*
-
-import ClientJson.given
 
 object SessionLawSpec extends ZIOSpecDefault:
   private val repo = Path.of("repo")
@@ -34,9 +32,10 @@ object SessionLawSpec extends ZIOSpecDefault:
         Session.runCall("demo/pack", Some("jvm"), PluginArgs.empty) -> Left(
           BuildFault.Rejected(Rejection.TaskPlatform("demo/pack"))
         ),
-        Session.runCall("demo/pack", None, args)    -> Right(Call.Task("demo/pack", args)),
-        Session.runCall("", None, PluginArgs.empty) -> Right(Call.Run("", None)),
-        Session.runCall("", None, args)             -> Left(BuildFault.Rejected(Rejection.TaskArguments(""))),
+        Session.runCall("demo/pack", None, args)           -> Right(Call.Task("demo/pack", args)),
+        Session.runCall("", None, PluginArgs.empty)        -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
+        Session.runCall("", Some("jvm"), PluginArgs.empty) -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
+        Session.runCall("", None, args)                    -> Left(BuildFault.Rejected(Rejection.MissingRunName)),
       )
       val bad = rows.filter { (got, expected) => got != expected }
       assertTrue(bad == Nil)
@@ -89,27 +88,9 @@ object SessionLawSpec extends ZIOSpecDefault:
         Remote.event(wire(Message.Ready)) == Left(ServerError.Protocol),
         Remote.event(wire(Message.Marker(0))) == Left(ServerError.Protocol),
         Remote.event("nope") == Left(ServerError.Protocol),
-      )
-    ,
-    test("a client error and a version call round-trip and an empty object is not a call"):
-      val socket = Path.of("sock")
-      val values = List(
-        round(Session.SessionError.DidNotFinish: Session.SessionError),
-        round(Session.SessionError.DifferentVersion: Session.SessionError),
-        round(ServerError.Protocol: ServerError),
-        round(ServerError.NoServer: ServerError),
-        round(ServerError.Unreachable(socket): ServerError),
-        round(ServerError.Io(ServerIo.Read(socket)): ServerError),
-        round(Call.Version: Call),
-      )
-      "{}".fromJson[Call] match
-        case Left(_)  => assertTrue(values.forall(identity))
-        case Right(_) => assertTrue(false),
+      ),
   )
 
   private def wire(message: Message): String =
     message.toJson
-
-  private def round[A: JsonCodec](value: A): Boolean =
-    value.toJson.fromJson[A] == Right(value)
 end SessionLawSpec

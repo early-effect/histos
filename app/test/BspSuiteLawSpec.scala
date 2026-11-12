@@ -1,15 +1,19 @@
 package histos.bsp
 
 import histos.cache.ContentStore
-import histos.jdk.Machine
+import histos.jdk.Sha256
 import histos.publish.LauncherPin
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{Classpath, Repositories, Repository, ResolutionService, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{LockedArtifact, ResolvedArtifact, ToolRequest}
 import histos.testrun.TestCompile
 import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers, GraphCompile}
 import histos.{
+  CompilerClosure,
+  Dep,
+  LawMachine,
   Module,
   Platform,
   Platforms,
@@ -26,24 +30,26 @@ import histos.{
 import java.nio.file.{Files, Path}
 
 import zio.json.*
-import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
-import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
+import zio.test.{TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
+import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer}
 
-/** A test target names its main, its classpath, and its work directory. A main target is not a test. */
+/** A test target names its main, its classpath, and its work directory. A main target is not a test. A dependency
+  * source is the jar `Resolve` answered for the module's Scala library, so the law does not depend on what the Coursier
+  * cache happens to hold.
+  */
 object BspSuiteLawSpec extends ZIOSpecDefault:
-  private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("suitelaw")
 
   def spec = suite("bsp suite laws")(
-    test("a test main is the suite, and a main target is refused"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+    test("a test main is the suite, a main target is refused, and the library's sources jar is named"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-bsp-suite")
           .flatMap: dir =>
             val main = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
             val probe =
               dir.resolve(lawName.value).resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
-            val pin       = dir.resolve(LauncherPin.file)
             val mainUri   = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
             val testUri   = Bsp.testUri(dir, lawName.value, scala3, Platform.Jvm)
             val buildUri  = Bsp.buildUri(dir)
@@ -53,24 +59,17 @@ object BspSuiteLawSpec extends ZIOSpecDefault:
               GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Hello.class")
             val work        = TestCompile.testWork(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toString
             val classesMark = s"/test-classes/${lawName.value}/"
+            val sourcesJar  = dir.resolve("sources").resolve(s"scala-library-${scala3.value}-sources.jar")
             val program     =
               for
-                loaded  <- Machine.load(dir).either
-                machine <- loaded match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                found <- GraphCompile.jdk(machine).either
-                jdk   <- found match
-                  case Left(error)  => ZIO.dieMessage(error.message)
-                  case Right(value) => ZIO.succeed(value)
-                _        <- Workspace.createDirectories(parentOf(main))
-                _        <- Workspace.createDirectories(parentOf(probe))
+                machine  <- LawMachine.at(dir)
+                jdk      <- LawMachine.jdk(machine)
                 _        <- Workspace.writeString(main, "object Hello:\n  def ready: Int = 1\n")
                 _        <- Workspace.writeString(probe, "object Probe:\n  def main(args: Array[String]): Unit = ()\n")
-                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 notes    <- Ref.make(Chunk.empty[String])
                 runtimes <- Runtimes.read(machine, None)
-                session  <- Bsp.open(dir, graph, jdk, runtimes, notify = line => notes.update(_ :+ line))
+                session  <- Bsp.open(dir, graph(scala3), jdk, runtimes, notify = line => notes.update(_ :+ line))
                 _        <- ask(session, request(1, "build/initialize"))
                 _        <- ask(session, note("build/initialized"))
                 listed   <- ask(session, request(2, "workspace/buildTargets"))
@@ -110,7 +109,7 @@ object BspSuiteLawSpec extends ZIOSpecDefault:
                   ),
                   files.exists(_.exists(item => item.uri.endsWith("Probe.scala") && item.kind == 1 && !item.generated)),
                   options.exists(item => item.classDirectory.contains(classesMark) && item.classpath.nonEmpty),
-                  sources.exists(item => item.sources.forall(_.startsWith("file:"))),
+                  sources.map(_.sources) == Some(List(sourcesJar.toAbsolutePath.normalize.toUri.toString)),
                   (mainStatus, status, transcript) == (Right(1), Right(1), ""),
                   mainWrote,
                   wrote,
@@ -124,10 +123,30 @@ object BspSuiteLawSpec extends ZIOSpecDefault:
                   rpcError(refused).exists(_.error.message == "jvmTestEnvironment needs a test target"),
                   rpcError(buildRefused).exists(_.error.message == "jvmTestEnvironment needs a test target"),
                 )
-            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+            ZIO.serviceWithZIO[Resolve]: offline =>
+              program.provideSomeLayer[Scope](session(dir, closure, Sources(offline, sourcesJar, scala3)))
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
-  private def graph: ProjectGraph =
+  /** The offline cache for every jar, and one sources jar for `org.scala-lang:scala-library` at `version`, the library
+    * a Scala 3 module runs on. Any other sources request goes to the offline cache.
+    */
+  private final class Sources(offline: Resolve, jar: Path, version: ScalaVersion) extends Resolve:
+    def resolveTool(request: ToolRequest): IO[ResolveError, Classpath]      = offline.resolveTool(request)
+    def resolve(cell: ResolveCell): IO[ResolveError, Classpath]             = offline.resolve(cell)
+    def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] = offline.fetch(artifact)
+    def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+      offline.resolvePlugin(dependency, repositories)
+    def sources(
+        organization: String,
+        name: String,
+        revision: String,
+        repository: Repository,
+    ): IO[ResolveError, ResolvedArtifact] =
+      if organization == "org.scala-lang" && name == "scala-library" && revision == version.value then
+        ZIO.succeed(ResolvedArtifact(organization, name, revision, jar, Sha256.trusted("ab"), repository))
+      else offline.sources(organization, name, revision, repository)
+
+  private def graph(scala3: ScalaVersion): ProjectGraph =
     val law = Module(
       lawName,
       Platforms(Platform.Jvm, Nil),
@@ -137,43 +156,14 @@ object BspSuiteLawSpec extends ZIOSpecDefault:
       SourcePos("law.scala", 1, 1),
       test = Some(TestMain("Probe")),
     )
-    ProjectGraph.trusted(
-      List(law),
-      Splits.aggregate,
-      Catalog.empty,
-      None,
-      Nil,
-      resolution = Resolution.Lock,
-    )
+    ProjectGraph.trusted(List(law), Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
-  private def sessionLayer(dir: Path, lock: DependencyLock) =
-    ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
-      Compilers.live(1) ++
-      CompileMemo.live ++
-      ResolutionService.pinned(pinned(lock))
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
-
-  private def parentOf(path: Path): Path =
-    Option(path.getParent).getOrElse(path)
+  private def session(dir: Path, closure: CompilerClosure, resolve: Resolve) =
+    ZLayer.succeed(resolve) >+>
+      (ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+        Compilers.live(1) ++
+        CompileMemo.live ++
+        ResolutionService.pinned(closure.pinning(lawName)))
 
   private def ask(session: Bsp.Session, payload: String) =
     session.answer(payload)

@@ -53,7 +53,7 @@ object Session:
       runs <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
     yield Desk(held, runs)
 
-  private type Env = Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope
+  private type Env = Loader & histos.resolve.Resolve & histos.cache.ContentStore & histos.publish.IvyRoot & Scope
 
   def perform(
       repo: Path,
@@ -157,29 +157,31 @@ object Session:
         case CallResult.Reported(report) => ZIO.succeed(report)
         case CallResult.Fault(fault)     => ZIO.fail(CallProblem.Fault(fault))
 
-  /** `inspect`, `versions`, `doc`, and a plugin task reject a platform. A main may name one.
+  /** `inspect`, `versions`, `doc`, and a plugin task reject a platform. A main may name one. An empty id names nothing,
+    * as `run ""` on the command line.
     */
   def runCall(
       id: String,
       platform: Option[String],
       args: PluginArgs,
   ): Either[BuildFault, Call] =
-    val task =
-      id.contains("/") || TaskId
-        .from(id)
-        .toOption
-        .exists(_.builtIn)
-    if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
-    else
-      platform match
-        case Some(_) if task =>
-          Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
-        case Some(raw) =>
-          Platform.from(raw) match
-            case Left(error)  => Left(BuildFault.Platform(error))
-            case Right(found) => Right(Call.Run(id, Some(found)))
-        case None if task => Right(Call.Task(id, args))
-        case None         => Right(Call.Run(id, None))
+    TaskId
+      .from(id)
+      .left
+      .map(_ => BuildFault.Rejected(Rejection.MissingRunName))
+      .flatMap: named =>
+        val task = id.contains("/") || named.builtIn
+        if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
+        else
+          platform match
+            case Some(_) if task =>
+              Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
+            case Some(raw) =>
+              Platform.from(raw) match
+                case Left(error)  => Left(BuildFault.Platform(error))
+                case Right(found) => Right(Call.Run(id, Some(found)))
+            case None if task => Right(Call.Task(id, args))
+            case None         => Right(Call.Run(id, None))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
   def spoken(repo: Path, feeds: List[Feed]): Either[SessionError, CallResult] =
@@ -319,7 +321,7 @@ object Session:
       Perform.Edges(
         watch = (inner, policy, edge) => watch(repo, apiJar, machine, desk, inner, policy, edge),
         reload = ZIO.fail(ServerError.NoServer),
-        reboot = Cli.bootCall(repo).flatMap { socket =>
+        reboot = Cli.bootCall(repo, histos.server.Daemon.spawn).flatMap { socket =>
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
         },
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
@@ -334,11 +336,7 @@ object Session:
       inner: Call,
       policy: histos.server.WatchPolicy,
       say: Say,
-  ): ZIO[
-    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
-    ServerError,
-    Unit,
-  ] =
+  ): ZIO[Env, ServerError, Unit] =
     Operation.underWatch(inner, policy) match
       case Left(error) =>
         Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))

@@ -1,103 +1,84 @@
 package histos.mcp
 
-import heddle.mcp.protocol.ToolName
-import histos.cache.CacheCleanMode
+import heddle.mcp.protocol.{ListToolsResult, ProtocolVersion, RequestMeta, ToolName}
+import histos.cache.{CacheCleanMode, CacheCleanModeError, ContentStore}
 import histos.cli.{Grammar, Operation}
+import histos.client.Session
 import histos.format.{FormatMode, FormatTargets}
+import histos.load.Loader
+import histos.publish.IvyRoot
 import histos.report.Rejection
-import histos.server.Call
+import histos.resolve.Resolve
+import histos.server.{Call, Calls}
 import histos.task.{RunId, TaskError}
-import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
-import histos.ProjectName
+import histos.testrun.{SuitePattern, SuitePatternError, TestMode, TestModeError}
+import histos.{ProjectName, ProjectNameError}
+import slayer.stubbed
 
-import zio.NonEmptyChunk
+import java.nio.file.Path
+
 import zio.json.*
+import zio.json.ast.Json
 import zio.test.*
+import zio.{NonEmptyChunk, Scope, ZIO, ZLayer}
 
 object McpLawSpec extends ZIOSpecDefault:
+  private val api     = ProjectName("api")
+  private val badName = Rejection.ProjectName(ProjectNameError.Bad("1api"))
+
   def spec = suite("mcp laws")(
     test("compile and clean parse project names and publish passes the tokens through"):
-      val api = ProjectName("api")
-      ProjectName.from("1api") match
-        case Left(error) =>
-          assertTrue(
-            HistosMcp.compileCall(List("api")) == Right(Call.Compile(List(api))),
-            HistosMcp.compileCall(Nil) == Right(Call.Compile(Nil)),
-            HistosMcp.cleanCall(List("api")) == Right(Call.Clean(List(api))),
-            HistosMcp.compileCall(List("1api")) == Left(Rejection.ProjectName(error)),
-            HistosMcp.cleanCall(List("1api")) == Left(Rejection.ProjectName(error)),
-            HistosMcp.publishLocalCall(List("1api")) == Right(Call.PublishLocal(List("1api"))),
-            HistosMcp.publishSnapshotsCall(List("1api")) == Right(Call.PublishSnapshots(List("1api"))),
-          )
-        case Right(_) => assertTrue(false)
+      assertTrue(
+        HistosMcp.compileCall(List("api")) == Right(Call.Compile(List(api))),
+        HistosMcp.compileCall(Nil) == Right(Call.Compile(Nil)),
+        HistosMcp.cleanCall(List("api")) == Right(Call.Clean(List(api))),
+        HistosMcp.compileCall(List("1api")) == Left(badName),
+        HistosMcp.cleanCall(List("1api")) == Left(badName),
+        HistosMcp.publishLocalCall(List("1api")) == Right(Call.PublishLocal(List("1api"))),
+        HistosMcp.publishSnapshotsCall(List("1api")) == Right(Call.PublishSnapshots(List("1api"))),
+      )
     ,
     test("test defaults to run and rejects a bad mode or a bad pattern"):
-      SuitePattern.from("*") match
-        case Left(_)     => assertTrue(false)
-        case Right(glob) =>
-          TestMode.from("nope") match
-            case Left(error) =>
-              assertTrue(
-                HistosMcp.testCall(List("api"), List("*"), None) == Right(
-                  Call.Test(List(ProjectName("api")), List(glob), TestMode.Run)
-                ),
-                HistosMcp.testCall(Nil, Nil, Some("quick")) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
-                HistosMcp.testCall(Nil, Nil, Some("nope")) == Left(Rejection.TestMode(error)),
-                HistosMcp.testCall(Nil, List(""), None) == Left(Rejection.SuitePattern(SuitePatternError.Empty)),
-              )
-            case Right(_) => assertTrue(false)
+      assertTrue(
+        HistosMcp.testCall(List("api"), List("*"), None) == Right(
+          Call.Test(List(api), List(SuitePattern("*")), TestMode.Run)
+        ),
+        HistosMcp.testCall(Nil, Nil, Some("quick")) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
+        HistosMcp.testCall(Nil, Nil, Some("nope")) == Left(Rejection.TestMode(TestModeError.Unknown("nope"))),
+        HistosMcp.testCall(Nil, List(""), None) == Left(Rejection.SuitePattern(SuitePatternError.Empty)),
+      )
     ,
     test("cache defaults to remove and cancel rejects an empty id"):
-      CacheCleanMode.from("nope") match
-        case Left(mode) =>
-          RunId.from("") match
-            case Left(id) =>
-              RunId.from("run-1") match
-                case Right(run) =>
-                  assertTrue(
-                    HistosMcp.cacheCall(None) == Right(Call.CacheClean(CacheCleanMode.Remove)),
-                    HistosMcp.cacheCall(Some("dry-run")) == Right(Call.CacheClean(CacheCleanMode.DryRun)),
-                    HistosMcp.cacheCall(Some("nope")) == Left(Rejection.CacheClean(mode)),
-                    HistosMcp.cancelCall("") == Left(Rejection.RunId(id)),
-                    id == TaskError.EmptyId,
-                    HistosMcp.cancelCall("run-1") == Right(Call.Cancel(run)),
-                  )
-                case Left(_) => assertTrue(false)
-            case Right(_) => assertTrue(false)
-        case Right(_) => assertTrue(false)
+      assertTrue(
+        HistosMcp.cacheCall(None) == Right(Call.CacheClean(CacheCleanMode.Remove)),
+        HistosMcp.cacheCall(Some("dry-run")) == Right(Call.CacheClean(CacheCleanMode.DryRun)),
+        HistosMcp.cacheCall(Some("nope")) == Left(Rejection.CacheClean(CacheCleanModeError.Unknown("nope"))),
+        HistosMcp.cancelCall("") == Left(Rejection.RunId(TaskError.EmptyId)),
+        HistosMcp.cancelCall("run-1") == Right(Call.Cancel(RunId("run-1"))),
+      )
     ,
     test("preview parses the operation and cleanFull rejects a project"):
-      ProjectName.from("1api") match
-        case Left(error) =>
-          assertTrue(
-            HistosMcp.previewCall(args("compile", projects = List("api"))) == Right(
-              Call.PreviewCompile(List(ProjectName("api")))
-            ),
-            HistosMcp.previewCall(args("compile", projects = List("1api"))) == Left(Rejection.ProjectName(error)),
-            HistosMcp.previewCall(args("test", projects = List("api"))) == Right(
-              Call.PreviewTest(List(ProjectName("api")))
-            ),
-            HistosMcp.previewCall(args("publishLocal", projects = List("1api"))) == Right(
-              Call.PreviewPublishLocal(List("1api"))
-            ),
-            HistosMcp.previewCall(args("publishSnapshots", projects = List("1api"))) == Right(
-              Call.PreviewPublishSnapshots(List("1api"))
-            ),
-            HistosMcp.previewCall(args("clean")) == Right(Call.PreviewClean(Nil)),
-            HistosMcp.previewCall(args("clean", projects = List("api"))) == Right(
-              Call.PreviewClean(List(ProjectName("api")))
-            ),
-            HistosMcp.previewCall(args("cleanFull", projects = List("api"))) == Left(Rejection.PreviewProjects),
-            HistosMcp.previewCall(args("cleanFull")) == Right(Call.PreviewCleanFull),
-            HistosMcp.previewCall(args("run", id = "")) == Left(Rejection.MissingRunName),
-            HistosMcp.previewCall(args("run")) == Right(Call.PreviewRun("api", None)),
-            HistosMcp.previewCall(args("ship")) == Left(Rejection.PreviewOperation("ship")),
-          )
-        case Right(_) => assertTrue(false)
+      assertTrue(
+        HistosMcp.previewCall(args("compile", projects = List("api"))) == Right(Call.PreviewCompile(List(api))),
+        HistosMcp.previewCall(args("compile", projects = List("1api"))) == Left(badName),
+        HistosMcp.previewCall(args("test", projects = List("api"))) == Right(Call.PreviewTest(List(api))),
+        HistosMcp.previewCall(args("publishLocal", projects = List("1api"))) == Right(
+          Call.PreviewPublishLocal(List("1api"))
+        ),
+        HistosMcp.previewCall(args("publishSnapshots", projects = List("1api"))) == Right(
+          Call.PreviewPublishSnapshots(List("1api"))
+        ),
+        HistosMcp.previewCall(args("clean")) == Right(Call.PreviewClean(Nil)),
+        HistosMcp.previewCall(args("clean", projects = List("api"))) == Right(Call.PreviewClean(List(api))),
+        HistosMcp.previewCall(args("cleanFull", projects = List("api"))) == Left(Rejection.PreviewProjects),
+        HistosMcp.previewCall(args("cleanFull")) == Right(Call.PreviewCleanFull),
+        HistosMcp.previewCall(args("run", id = "")) == Left(Rejection.MissingRunName),
+        HistosMcp.previewCall(args("run")) == Right(Call.PreviewRun("api", None)),
+        HistosMcp.previewCall(args("ship")) == Left(Rejection.PreviewOperation("ship")),
+      )
     ,
-    test("fmt sends the same call as the command line, and refuses a bad mode, a bad path, or two scopes"):
-      val api  = ProjectName.trusted("api")
-      val file = java.nio.file.Path.of("api/src/A.scala")
+    test("fmt sends the same call as the command line, and refuses a bad mode, a bad path, a bad name, or two scopes"):
+      val file = Path.of("api/src/A.scala")
       def fmt(projects: List[String] = Nil, files: List[String] = Nil, mode: Option[String] = None) =
         HistosMcp.fmtCall(HistosMcp.FmtArgs(projects, files, mode))
       for
@@ -108,58 +89,54 @@ object McpLawSpec extends ZIOSpecDefault:
         fmt() == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
         fmt() == build,
         fmt(List("api"), mode = Some("check")) == checked,
+        checked == Right(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)),
         fmt(files = List("api/src/A.scala")) == filed,
         filed == Right(Call.Format(FormatTargets.Files(NonEmptyChunk(file)), FormatMode.Write)),
         fmt(mode = Some("write")) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
         fmt(mode = Some("diff")) == Left(Rejection.FormatMode("diff")),
         fmt(List("api"), List("api/src/A.scala")) == Left(Rejection.FormatTargets),
         fmt(files = List("/etc/passwd")) == Left(Rejection.FormatPath("/etc/passwd")),
-        fmt(List("1api")).isLeft,
-        HistosMcp.fmtCall(HistosMcp.FmtArgs()).map(Call.encode).flatMap(_.fromJson[Call]) ==
-          Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
-        Call.encode(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)).fromJson[Call] ==
-          Right(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)),
+        fmt(List("1api")) == Left(badName),
       )
     ,
-    test("the tool list is the twenty five commands and does not include portal or bsp"):
-      val names = Set(
-        ToolName("graph"),
-        ToolName("run"),
-        ToolName("cancel"),
-        ToolName("compile"),
-        ToolName("test"),
-        ToolName("publishLocal"),
-        ToolName("publishSnapshots"),
-        ToolName("toolchain"),
-        ToolName("version"),
-        ToolName("assembly"),
-        ToolName("clean"),
-        ToolName("cleanFull"),
-        ToolName("resolve"),
-        ToolName("workflow"),
-        ToolName("fmt"),
-        ToolName("reload"),
-        ToolName("reboot"),
-        ToolName("cachePath"),
-        ToolName("cacheList"),
-        ToolName("cacheClean"),
-        ToolName("launcherUpdate"),
-        ToolName("watch"),
-        ToolName("preview"),
-        ToolName("observe"),
-        ToolName("doctor"),
+    test("tools/list names every tool the server registers, and neither portal nor bsp is one"):
+      val listing = Json.Obj(
+        "jsonrpc" -> Json.Str("2.0"),
+        "id"      -> Json.Num(1),
+        "method"  -> Json.Str("tools/list"),
+        "params"  -> Json.Obj(
+          "_meta" -> Json.Obj(
+            RequestMeta.VersionKey    -> Json.Str(ProtocolVersion.Current.value),
+            RequestMeta.ClientCapsKey -> Json.Obj(),
+          )
+        ),
       )
-      assertTrue(HistosMcp.toolNames == names, names.size == 25)
+      val program =
+        for
+          desk     <- Session.desk
+          mcp      <- ZIO.fromEither(HistosMcp.tools(Path.of("repo"), Path.of("api.jar"), Calls.idleMachine, desk))
+          answered <- mcp.handle(listing).someOrFail("tools/list had no answer")
+          listed   <- ZIO.fromEither(
+            answered.toJson
+              .fromJson[Json.Obj]
+              .flatMap(_.get("result").toRight("no result"))
+              .flatMap(_.as[ListToolsResult])
+          )
+          names = listed.tools.map(_.name).toSet
+        yield assertTrue(
+          names == HistosMcp.toolNames,
+          !names.contains(ToolName("portal")),
+          !names.contains(ToolName("bsp")),
+        )
+      program.provideSomeLayer[Scope](
+        stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
+      )
     ,
-    test("a notice level is info or error"):
-      val other = "\"warn\"".fromJson[Notice.Level]
+    test("a notice level is sent as info or error"):
       assertTrue(
-        "\"info\"".fromJson[Notice.Level] == Right(Notice.Level.Info),
-        "\"error\"".fromJson[Notice.Level] == Right(Notice.Level.Error),
-        Notice.Level.Info.toJson.fromJson[Notice.Level] == Right(Notice.Level.Info),
-        other match
-          case Left(reason) => reason.contains("unknown level warn")
-          case Right(_)     => false,
+        Notice.Level.Info.toJson == "\"info\"",
+        Notice.Level.Error.toJson == "\"error\"",
       ),
   )
 

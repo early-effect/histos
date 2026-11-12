@@ -4,7 +4,7 @@ import histos.LawDir
 import histos.build.BuildEvent
 import histos.cache.ContentStore
 import histos.load.{LoadedBuild, Loader}
-import histos.publish.{LauncherError, LauncherPin}
+import histos.publish.{IvyRoot, LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Report}
 import histos.resolve.Resolve
 import histos.server.{Call, Calls, Feed, Fingerprint, Record, ServerError}
@@ -90,7 +90,8 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           gone,
         ),
     ).provideSomeLayerShared[TestEnvironment & Scope](
-      LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore]
+      LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+        ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
     ),
   )
 

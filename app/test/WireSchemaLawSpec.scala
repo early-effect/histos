@@ -28,12 +28,6 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
   private val tally = ModuleTally("core", "3.10.0", "jvm", None, None, None)
   private val seen  = Observation(Chunk(tally), None, None, None, 1)
 
-  private val objectNumber  = """(expected '{' got '1')"""
-  private val quoteNumber   = """(expected '"' got '1')"""
-  private val stringNumber  = "(expected string)"
-  private val arrayNumber   = "(expected '[' got '1')"
-  private val alienEnum     = "(invalid enumeration value)"
-  private val alienSum      = "(invalid disambiguator)"
   private val configOutline =
     "InvalidData(path,message) | MissingData(path,message) | Unsupported(path,message) | " +
       "And(left,right) | Or(left,right) | SourceUnavailable(path,message,cause)"
@@ -52,10 +46,15 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       case Right(got)   => assertTrue(got == value)
       case Left(reason) => assertTrue(reason == "decoded")
 
+  /** A Histos parser refused the document with `message`. */
   private def rejected[A](document: String, message: String)(using JsonCodec[A]): TestResult =
     read[A](document) match
       case Left(reason) => assertTrue(reason == message)
       case Right(_)     => assertTrue(document == "rejected")
+
+  /** The document has the wrong shape. The wording is zio-json's, so only the refusal is the law. */
+  private def refused[A](document: String)(using JsonCodec[A]): TestResult =
+    assertTrue(read[A](document).isLeft)
 
   private def text[A](title: String, good: String, value: A, bad: String, message: String)(using
       Schema[A],
@@ -65,7 +64,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     assertTrue(schema.doc == SchemaDoc.Str(None), schema.named == Some(title)) &&
     accepted[A]("\"" + good + "\"", value) &&
     rejected[A]("\"" + bad + "\"", "(" + message + ")") &&
-    rejected[A]("1", stringNumber)
+    refused[A]("1")
 
   private def tokens[A](
       title: String,
@@ -79,14 +78,14 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     assertTrue(schema.doc == SchemaDoc.Enum(Some(title), names), schema.named == None) &&
     accepted[A]("\"" + good + "\"", value) &&
     rejected[A]("\"" + bad + "\"", "(" + message + ")") &&
-    rejected[A]("1", stringNumber)
+    refused[A]("1")
 
   private def plain[A](title: String, empty: A, word: A)(using Schema[A], JsonCodec[A]): TestResult =
     val schema = summon[Schema[A]]
     assertTrue(schema.doc == SchemaDoc.Str(None), schema.named == Some(title)) &&
     accepted[A]("\"\"", empty) &&
     accepted[A]("\"word\"", word) &&
-    rejected[A]("1", stringNumber)
+    refused[A]("1")
 
   private def pure[A](title: String, names: List[String], token: String, value: A)(using
       Schema[A],
@@ -95,8 +94,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     val schema = summon[Schema[A]]
     assertTrue(schema.doc == SchemaDoc.Enum(Some(title), names), schema.named == Some(title)) &&
     accepted[A]("\"" + token + "\"", value) &&
-    rejected[A]("\"__nope__\"", alienEnum) &&
-    rejected[A]("1", quoteNumber)
+    refused[A]("\"__nope__\"") &&
+    refused[A]("1")
 
   private def major[A](title: String, good: String, value: A, message: String)(using
       Schema[A],
@@ -114,8 +113,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     val schema = summon[Schema[A]]
     assertTrue(schema.named == Some(title), arms(schema.doc).mkString(" | ") == outline) &&
     accepted[A](document, value) &&
-    rejected[A]("""{"__nope__":{}}""", alienSum) &&
-    rejected[A]("1", objectNumber)
+    refused[A]("""{"__nope__":{}}""") &&
+    refused[A]("1")
 
   private def product[A](
       title: String,
@@ -134,7 +133,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           needed == required,
         )
       case other => assertTrue(other.toString == s"object $title")
-    shape && accepted[A](document, value) && rejected[A]("1", objectNumber)
+    shape && accepted[A](document, value) && refused[A]("1")
 
   private def arms(doc: SchemaDoc): List[String] =
     doc match
@@ -1654,6 +1653,37 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         )
     )
 
+  /** The errors an MCP tool fails with. Their codecs are the client's. */
+  private def sessionSums: TestResult =
+    import histos.client.ClientJson.given
+    import histos.client.Session.{CallProblem, SessionError as ToolSession}
+    import histos.server.{ServerError, ServerIo}
+    mixed[ServerError](
+      "ServerError",
+      "Toolchain(error) | Compiled(error) | Resolve(error) | Unreachable(path) | DifferentVersion() | " +
+        "Restart(socket,wanted,got) | NoServer() | Protocol() | Address(path) | Io(op)",
+      """{"Io":{"op":{"Read":{"path":"/work/repo"}}}}""",
+      ServerError.Io(ServerIo.Read(home)),
+    ) &&
+    mixed[ServerIo](
+      "ServerIo",
+      "Bind(path) | Accept(path) | Read(path) | Write(path) | Save(path)",
+      """{"Save":{"path":"/work/repo"}}""",
+      ServerIo.Save(home),
+    ) &&
+    mixed[ToolSession](
+      "SessionError",
+      "DifferentVersion() | Remote(error) | DidNotFinish()",
+      """{"Remote":{"error":{"NoServer":{}}}}""",
+      ToolSession.Remote(ServerError.NoServer),
+    ) &&
+    mixed[CallProblem](
+      "CallProblem",
+      "Fault(fault) | Transport(error)",
+      """{"Transport":{"error":{"DidNotFinish":{}}}}""",
+      CallProblem.Transport(ToolSession.DidNotFinish),
+    )
+
   private def sumLaws: TestResult =
     sum1 &&
       sum2 &&
@@ -1673,25 +1703,27 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     val schema = summon[Schema[Path]]
     assertTrue(schema.doc == SchemaDoc.Str(None), schema.named == Some("Path")) &&
     accepted[Path]("\"/work/repo\"", home) &&
-    rejected[Path]("1", stringNumber) &&
+    refused[Path]("1") &&
     rejected[Path]("\"\\u0000\"", "(invalid path \u0000)")
 
   private def takenLaws: TestResult =
-    taken(histos.testrun.SuitePattern.from("App*")) { pattern =>
-      text[histos.testrun.SuitePattern]("SuitePattern", "App*", pattern, "", "a test pattern is not empty")
-    } &&
+    text[histos.testrun.SuitePattern](
+      "SuitePattern",
+      "App*",
+      histos.testrun.SuitePattern("App*"),
+      "",
+      "a test pattern is not empty",
+    ) &&
       taken(histos.native.ClangVersion.from("21.0.0")) { version =>
         text[histos.native.ClangVersion]("ClangVersion", "21.0.0", version, "nope", "not a clang version: nope")
       } &&
-      taken(histos.native.ClangTarget.from("arm64-apple-darwin")) { target =>
-        text[histos.native.ClangTarget](
-          "ClangTarget",
-          "arm64-apple-darwin",
-          target,
-          "",
-          "clang --version did not report a target",
-        )
-      }
+      text[histos.native.ClangTarget](
+        "ClangTarget",
+        "arm64-apple-darwin",
+        histos.native.ClangTarget("arm64-apple-darwin"),
+        "",
+        "clang --version did not report a target",
+      )
 
   private def taken[E, A](read: Either[E, A])(use: A => TestResult): TestResult =
     read match
@@ -1912,15 +1944,15 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     )
     docs &&
     accepted[NonEmptyChunk[String]]("""["a"]""", NonEmptyChunk("a")) &&
-    rejected[NonEmptyChunk[String]]("1", arrayNumber) &&
+    refused[NonEmptyChunk[String]]("1") &&
     accepted[::[String]]("""["a"]""", ::("a", Nil)) &&
     rejected[::[String]]("[]", "(empty list)") &&
-    rejected[::[String]]("1", arrayNumber) &&
+    refused[::[String]]("1") &&
     accepted[NonEmptyChunk[histos.zinc.GraphCompileError]](
       """[{"NoRoot":{"module":"core"}}]""",
       NonEmptyChunk(histos.zinc.GraphCompileError.NoRoot(core)),
     ) &&
-    rejected[NonEmptyChunk[histos.zinc.GraphCompileError]]("1", arrayNumber)
+    refused[NonEmptyChunk[histos.zinc.GraphCompileError]]("1")
 
   private def configLaw: TestResult =
     val schema = summon[Schema[Config.Error]]
@@ -1933,7 +1965,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       """{"MissingData":{"path":[],"message":"gone"}}""",
       Config.Error.MissingData(Chunk.empty, "gone"),
     ) &&
-    rejected[Config.Error]("1", objectNumber)
+    refused[Config.Error]("1")
 
   private def providerLaw: TestResult =
     val schema = summon[Schema[histos.TestProvider]]
@@ -1954,7 +1986,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       """{"framework":"zio.test.sbt.ZTestFramework","organization":"dev.zio","name":"zio-test-sbt"}""",
       histos.TestProvider.Zio,
     ) &&
-    rejected[histos.TestProvider]("1", objectNumber)
+    refused[histos.TestProvider]("1")
 
   def spec = suite("wire schema laws")(
     test("a text document names its type and rejects a number or a bad word"):
@@ -1970,7 +2002,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       pureLaws
     ,
     test("a sum lists every case"):
-      sumLaws && actionLaw
+      sumLaws && actionLaw && sessionSums
     ,
     test("a product lists every field"):
       productLaws

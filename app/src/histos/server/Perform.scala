@@ -3,10 +3,10 @@ package histos.server
 import histos.cache.ContentStore
 import histos.jdk.Machine
 import histos.load.{Loader, LoadedBuild}
+import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.task.RunId
-import histos.testrun.ModuleTestError
 import histos.zinc.{GraphCompile, GraphCompileError}
 
 import java.nio.file.Path
@@ -47,16 +47,14 @@ object Perform:
           Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCleanFull =>
         false
 
-  /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
+  /** Publish keeps the compile fault. Every other call reports a cell that ran, and a compile that never started is its
+    * fault: a lock is a resolve fault.
+    */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
       case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) |
           Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
-      case Call.Test(_, _, _) | Call.PreviewTest(_) =>
-        Faults.testStopped(ModuleTestError.Compile(error)) match
-          case Some(why) => CallResult.Fault(why)
-          case None      => CallResult.reported(error.message)
       case _ =>
         Faults.compileStopped(error) match
           case Some(why) => CallResult.Fault(why)
@@ -75,7 +73,7 @@ object Perform:
       edges: Edges[R],
   ): ZIO[
     R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
-      histos.resolve.ResolutionService & histos.format.Formatters,
+      histos.resolve.ResolutionService & histos.format.Formatters & IvyRoot,
     ServerError,
     Unit,
   ] =

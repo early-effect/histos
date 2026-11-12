@@ -180,25 +180,23 @@ object Calls:
       tokens: List[String],
       say: Say,
       launcher: ApiDigest,
-  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore & IvyRoot, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       reported(
         repo,
         say,
         console,
-        PublishRun
-          .local(
-            repo,
-            graph,
-            build,
-            tokens,
-            jdk,
-            machine.env,
-            launcher,
-            feed => speak(say, console, feed).ignore,
-            hear(say),
-          )
-          .provideSomeLayer[Resolve & ContentStore](IvyRoot.ivy2Local),
+        PublishRun.local(
+          repo,
+          graph,
+          build,
+          tokens,
+          jdk,
+          machine.env,
+          launcher,
+          feed => speak(say, console, feed).ignore,
+          hear(say),
+        ),
       )
     }
 

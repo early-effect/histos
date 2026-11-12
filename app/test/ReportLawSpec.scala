@@ -1,6 +1,5 @@
 package histos.report
 
-import heddle.endpoint.{Schema, SchemaDoc}
 import histos.LawDir
 import histos.build.{Beat, Build, BuildEvent}
 import histos.clean.Products
@@ -16,13 +15,6 @@ import WireSchema.given
 
 object ReportLawSpec extends ZIOSpecDefault:
   def spec = suite("report laws")(
-    test("a diagnostic, a report, and an observation require their non-optional fields"):
-      assertTrue(
-        required[Diagnostic] == Some(List("severity", "message")),
-        required[Report] == Some(List("out", "err", "diagnostics", "tests")),
-        required[Observation] == Some(List("modules", "moduleCount")),
-      )
-    ,
     test("a diagnostic decodes without a path and fails without severity or message"):
       val note     = Diagnostic(None, None, None, None, None, Severity.Error, "boom")
       val severity = """{"message":"boom"}""".fromJson[Diagnostic]
@@ -98,9 +90,3 @@ object ReportLawSpec extends ZIOSpecDefault:
         yield assertTrue(read == Left(ObserveError.Missing(path.toString))),
     ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer),
   )
-
-  private def required[A](using schema: Schema[A]): Option[List[String]] =
-    schema.doc match
-      case SchemaDoc.Object(_, _, names) => Some(names)
-      case _                             => None
-end ReportLawSpec

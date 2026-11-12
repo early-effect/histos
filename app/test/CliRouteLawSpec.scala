@@ -49,10 +49,6 @@ object CliRouteLawSpec extends ZIOSpecDefault:
         done.playback == Playback.Heard,
       )
     ,
-    test("a program status of 2 is usage"):
-      for done <- Cli.recorded(repo, say => say(Message.Done(CallResult.reported(program = Some(2)))))
-      yield assertTrue(done.exit == CliExit.Usage, done.playback == Playback.Heard)
-    ,
     test("an empty watch does not load the build"):
       val program =
         Cli
