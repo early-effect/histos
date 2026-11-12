@@ -7,14 +7,27 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 
-import zio.{IO, ZIO}
+import zio.{IO, ULayer, ZIO, ZLayer}
 
-/** Files `coursier.LocalRepositories.ivy2Local` reads. Resolve has no publish method. */
+/** The ivy repository `publishLocal` installs into, in the layout Coursier's `ivy2Local` reads. */
+final class IvyRoot private (private[publish] val repository: coursier.ivy.IvyRepository)
+
+object IvyRoot:
+  /** Coursier's `ivy2Local`, where a build resolves `Repository.IvyLocal`. */
+  val ivy2Local: ULayer[IvyRoot] =
+    ZLayer.succeed(IvyRoot(coursier.LocalRepositories.ivy2Local))
+
+  /** The `ivy2Local` layout with `local` as its root. */
+  def at(local: Path): IvyRoot =
+    val base = local.toUri.toString
+    val root = if base.endsWith("/") then base else base + "/"
+    IvyRoot(coursier.ivy.IvyRepository.fromPattern(root +: coursier.ivy.Pattern.default, dropInfoAttributes = true))
+end IvyRoot
+
+/** Files an [[IvyRoot]] holds. Resolve has no publish method. */
 object IvyLocal:
-  def install(module: StagedModule): IO[PublishFault, Unit] =
-    placements(module).flatMap(files => ZIO.foreachDiscard(files)(write))
-
-  private val repository = coursier.LocalRepositories.ivy2Local
+  def install(root: IvyRoot, module: StagedModule): IO[PublishFault, Unit] =
+    placements(root.repository, module).flatMap(files => ZIO.foreachDiscard(files)(write))
 
   private final case class Placement(path: Path, bytes: Array[Byte])
 
@@ -50,41 +63,46 @@ object IvyLocal:
 
   private val metadataName = "ivy"
 
-  private def placements(module: StagedModule): IO[PublishFault, List[Placement]] =
+  private type Repository = coursier.ivy.IvyRepository
+
+  private def placements(repository: Repository, module: StagedModule): IO[PublishFault, List[Placement]] =
+    val descriptorBytes = descriptor(module).getBytes(StandardCharsets.UTF_8)
     for
       jarBytes     <- read(module.jar)
       pomBytes     <- read(module.pom)
       sourceBytes  <- readOption(module.sources)
       javadocBytes <- readOption(module.javadoc)
-      jar          <- place(module, module.artifact, jarArtifact, jarBytes)
-      pom          <- place(module, module.artifact, pomArtifact, pomBytes)
-      sources      <- placeOption(module, sourcesArtifact, sourceBytes)
-      javadoc      <- placeOption(module, javadocArtifact, javadocBytes)
-      metadata     <- place(module, metadataName, metadataArtifact, descriptor(module).getBytes(StandardCharsets.UTF_8))
+      jar          <- place(repository, module, module.artifact, jarArtifact, jarBytes)
+      pom          <- place(repository, module, module.artifact, pomArtifact, pomBytes)
+      sources      <- placeOption(repository, module, sourcesArtifact, sourceBytes)
+      javadoc      <- placeOption(repository, module, javadocArtifact, javadocBytes)
+      metadata     <- place(repository, module, metadataName, metadataArtifact, descriptorBytes)
     yield jar ++ pom ++ sources ++ javadoc ++ metadata
 
   private def placeOption(
+      repository: Repository,
       module: StagedModule,
       artifact: Artifact,
       bytes: Option[Array[Byte]],
   ): IO[PublishFault, List[Placement]] =
     bytes match
       case None       => ZIO.succeed(Nil)
-      case Some(body) => place(module, module.artifact, artifact, body)
+      case Some(body) => place(repository, module, module.artifact, artifact, body)
 
   private def place(
+      repository: Repository,
       module: StagedModule,
       name: String,
       artifact: Artifact,
       bytes: Array[Byte],
   ): IO[PublishFault, List[Placement]] =
     for
-      path <- locate(module, name, artifact)
-      sums <- checksums(path, bytes)
+      path <- locate(repository, module, name, artifact)
+      sums <- checksums(repository, path, bytes)
     yield Placement(path, bytes) :: sums
 
   /** `withDefaultChecksums` appends `.sha1` and `.md5`. `fromPattern` turns checksums on. */
-  private def checksums(path: Path, bytes: Array[Byte]): IO[PublishFault, List[Placement]] =
+  private def checksums(repository: Repository, path: Path, bytes: Array[Byte]): IO[PublishFault, List[Placement]] =
     if repository.withChecksums then
       for
         sha1 <- sibling(path, ".sha1")
@@ -94,7 +112,12 @@ object IvyLocal:
       yield List(Placement(sha1, sha), Placement(md5, md))
     else ZIO.succeed(Nil)
 
-  private def locate(module: StagedModule, name: String, artifact: Artifact): IO[PublishFault, Path] =
+  private def locate(
+      repository: Repository,
+      module: StagedModule,
+      name: String,
+      artifact: Artifact,
+  ): IO[PublishFault, Path] =
     val variables =
       Map(
         "organization" -> module.group.value,

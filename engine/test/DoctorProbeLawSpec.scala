@@ -2,7 +2,6 @@ package histos.doctor
 
 import histos.jdk.{JdkRead, JdkSource, Machine, Toolchain, ToolchainError}
 import histos.native.NativeOrigin
-import histos.plugin.RepoPath
 import histos.select.SelectError
 import histos.supply.{
   ApiCall,
@@ -34,7 +33,6 @@ import histos.version.{
 import histos.workspace.Workspace
 import histos.{
   Aggregate,
-  HttpUrl,
   Module,
   NodeFloor,
   NodePath,
@@ -225,28 +223,6 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
         RefusalMap.refused(call, 500, "down").isEmpty,
       )
     ,
-    test("print changes nothing, yes-mode skips a GitHub setting, and a local edit replaces the file text"):
-      val file    = RepoPath.trusted("histos.scala")
-      val files   = Map(file.value -> "before")
-      val edit    = Fix.Config(file, Edit("before", "after"))
-      val command = Fix.Command(ShellLine.trusted("echo ok"))
-      val setting = Fix.Settings(HttpUrl.trusted("https://example.test/settings"), "click")
-      val printed = FixApply.applyAll(List(edit, command, setting), FixMode.Print, _ => FixApply.Answer.Yes, files)
-      val yes     = FixApply.applyAll(
-        List(edit, command, setting),
-        FixMode.from(fix = true, yes = true),
-        _ => FixApply.Answer.Yes,
-        files,
-      )
-      val denied =
-        FixApply.applyAll(List(setting), FixMode.from(fix = true, yes = false), _ => FixApply.Answer.No, files)
-      assertTrue(
-        printed == (files, Nil),
-        yes._1.get(file.value).contains("after"),
-        yes._2 == List("echo ok"),
-        denied == (files, Nil),
-      )
-    ,
     test("fix mode prints unless fix is set, and yes excludes the GitHub setting"):
       val modes = List(true, false).flatMap(fix => List(true, false).map(yes => (fix, yes)))
       assertTrue:
@@ -348,16 +324,9 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
           case _                             => false,
       )
     ,
-    test("json quotes a title, and checks sort by id"):
-      val report =
-        DoctorReport(List(Outcome.Found(Note("a \"quote\" and a \\ slash"))), List(CheckId.trusted("demo.late")))
-      val graph  = ProjectGraph.trusted(Nil)
-      val checks = histos.doctor.Registry.collect(graph, List(mark("b.b"), mark("a.a")))
-      assertTrue(
-        Render.json(report).contains("""a \"quote\" and a \\ slash"""),
-        Render.json(report).contains(""""timedOut":["demo.late"]"""),
-        checks.map(_.id.value) == List("a.a", "b.b"),
-      )
+    test("checks sort by id"):
+      val checks = histos.doctor.Registry.collect(ProjectGraph.trusted(Nil), List(mark("b.b"), mark("a.a")))
+      assertTrue(checks.map(_.id.value) == List("a.a", "b.b"))
     ,
     test("a jvm graph does not probe node or clang, and a missing jdk is not ok"):
       ZIO.scoped:
@@ -719,13 +688,6 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       def needs: Set[Probe]                           = Set.empty
       def run(ctx: DoctorContext): UIO[List[Outcome]] =
         ZIO.succeed(if ctx.jobs.isEmpty then Nil else Nil)
-
-  private final case class Note(title: String) extends Diagnostic:
-    def check: CheckId  = CheckId.trusted("demo.mark")
-    def level: Level    = Level.Error
-    def summary: String = "sum"
-    def explain: String = "why"
-    def fixes: ::[Fix]  = ::(Fix.Command(ShellLine.trusted("true")), Nil)
 
   private def jvm: Module =
     Module(

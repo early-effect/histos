@@ -10,7 +10,9 @@ import scala.jdk.CollectionConverters.*
 
 import zio.ZIO
 
-/** A commit a publish law can name. The sha is the one git stored. */
+/** A commit a law can name. The sha is the one git stored. Git runs without the global or system config, so the
+  * developer's signing, hooks, and default branch do not change the result.
+  */
 object LawGit:
   def commit(repo: Path, branch: String = "topic"): ZIO[Any, Nothing, CommitSha] =
     ZIO.attemptBlocking(prepare(repo, branch)).foldZIO(blow, shaOf)
@@ -24,6 +26,28 @@ object LawGit:
   /** `origin/HEAD` names `branch`, so a checkout of that branch is the default branch. */
   def recordDefault(repo: Path, branch: String): ZIO[Any, Nothing, Unit] =
     ZIO.attemptBlocking(point(repo, branch)).foldZIO(blow, done)
+
+  /** A bare repository at `root/origin.git` whose HEAD is `branch` and holds one commit. */
+  def origin(root: Path, branch: String): ZIO[Any, Nothing, Path] =
+    val work = root.resolve("work")
+    val bare = root.resolve("origin.git")
+    for
+      _ <- Workspace.createDirectories(work).catchAll(error => ZIO.dieMessage(error.message))
+      _ <- commit(work, branch)
+      _ <- git(root, "clone", "--bare", work.toString, bare.toString)
+    yield bare
+
+  /** `git` in `dir`. A nonzero exit is a defect of the law's setup. */
+  def git(dir: Path, args: String*): ZIO[Any, Nothing, String] =
+    ZIO
+      .attemptBlocking(run(dir, args*))
+      .foldZIO(
+        blow,
+        {
+          case Left(text) => ZIO.dieMessage(text)
+          case Right(out) => ZIO.succeed(out)
+        },
+      )
 
   private def blow(error: Throwable): ZIO[Any, Nothing, Nothing] =
     ZIO.dieMessage(Option(error.getMessage).getOrElse(error.toString))
@@ -66,11 +90,13 @@ object LawGit:
 
   private def run(repo: Path, args: String*): Either[String, String] =
     try
-      val process = new ProcessBuilder((List("git", "-C", repo.toString) ++ args).asJava)
+      val builder = new ProcessBuilder((List("git", "-C", repo.toString) ++ args).asJava)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
-        .start()
-      val text = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-      val code = process.waitFor()
+      builder.environment().put("GIT_CONFIG_GLOBAL", "/dev/null")
+      builder.environment().put("GIT_CONFIG_NOSYSTEM", "1")
+      val process = builder.start()
+      val text    = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
+      val code    = process.waitFor()
       if code == 0 then Right(text) else Left(s"git ${args.mkString(" ")} exited $code")
     catch case error: java.io.IOException => Left(Option(error.getMessage).getOrElse(error.toString))
 end LawGit

@@ -28,58 +28,55 @@ object CleanLawSpec extends ZIOSpecDefault:
   private val all   = Aggregate(ProjectName.trusted("all"), List(core.name), SourcePos("histos.scala", 2, 1))
   private val graph = ProjectGraph.trusted(List(core, all, extra))
 
+  /** Where compile, test, pack, link, and run write one module's products. */
+  private val moduleRoots =
+    List(
+      "classes",
+      "analysis",
+      "test-classes",
+      "test-analysis",
+      "test-work",
+      "test-quick",
+      "tests",
+      "jars",
+      "link",
+      "run",
+    )
+
+  /** Products every module shares. */
+  private val sharedRoots = List("provider", "provider-src")
+
   def spec = suite("clean laws")(
-    test("an empty selection wipes module roots, shared roots, and the observation"):
+    test("an empty selection wipes every module root, every shared root, and the observation, and keeps the rest"):
       ZIO.scoped:
         Workspace
           .work("histos-clean-all")
           .flatMap: repo =>
             for
-              _          <- plant(repo)
-              wiped      <- Products.named(repo, graph, Nil)
-              coreGone   <- missing(classFile(repo, "core"))
-              extraGone  <- missing(classFile(repo, "extra"))
-              sharedGone <- missing(repo.resolve(".histos").resolve("provider").resolve("x"))
-              tallyGone  <- missing(Products.observation(repo))
-            yield assertTrue(
-              wiped == Nil,
-              coreGone,
-              extraGone,
-              sharedGone,
-              tallyGone,
-              Products.line(Nil) == "cleaned",
-              Products.moduleRoots == List(
-                "classes",
-                "analysis",
-                "test-classes",
-                "test-analysis",
-                "test-work",
-                "test-quick",
-                "tests",
-                "jars",
-                "link",
-                "run",
-              ),
-            )
+              _     <- plant(repo)
+              wiped <- Products.named(repo, graph, Nil)
+              left  <- remaining(planted(repo))
+              kept  <- present(repo.resolve(".histos").resolve("assembly.sha256"))
+              tally <- missing(Products.observation(repo))
+            yield assertTrue(wiped == Nil, left == Nil, kept, tally, Products.line(Nil) == "cleaned")
     ,
-    test("a module name leaves its neighbor and the shared roots, and an aggregate expands"):
+    test("a module name wipes that module under every module root, and its neighbor and the shared roots stay"):
       ZIO.scoped:
         Workspace
           .work("histos-clean-one")
           .flatMap: repo =>
             for
-              _          <- plant(repo)
-              named      <- Products.named(repo, graph, List(all.name))
-              coreGone   <- missing(classFile(repo, "core"))
-              extraKept  <- present(classFile(repo, "extra"))
-              sharedKept <- present(repo.resolve(".histos").resolve("provider").resolve("x"))
-              tallyGone  <- missing(Products.observation(repo))
+              _     <- plant(repo)
+              named <- Products.named(repo, graph, List(all.name))
+              neighbor = moduleRoots.map(root => file(repo, root, "extra")) ++ shared(repo)
+              gone   <- remaining(moduleRoots.map(root => file(repo, root, "core")))
+              stayed <- remaining(neighbor)
+              tally  <- missing(Products.observation(repo))
             yield assertTrue(
               named == List(core.name),
-              coreGone,
-              extraKept,
-              sharedKept,
-              tallyGone,
+              gone == Nil,
+              stayed == neighbor,
+              tally,
               Products.line(List(core.name)) == "cleaned core",
             )
     ,
@@ -88,14 +85,12 @@ object CleanLawSpec extends ZIOSpecDefault:
         Workspace
           .work("histos-clean-keep")
           .flatMap: repo =>
-            val file    = classFile(repo, "core")
             val missing = ProjectName.trusted("missing")
             for
               _         <- plant(repo)
               unknown   <- Products.named(repo, graph, List(missing)).exit
-              still     <- present(file)
               duplicate <- Products.named(repo, graph, List(core.name, core.name)).exit
-              again     <- present(file)
+              left      <- remaining(planted(repo))
             yield assertTrue(
               unknown match
                 case Exit.Failure(cause) =>
@@ -104,16 +99,14 @@ object CleanLawSpec extends ZIOSpecDefault:
                     case _                                  => false
                 case Exit.Success(_) => false
               ,
-              still,
               duplicate match
                 case Exit.Failure(cause) =>
                   cause.failureOption.contains(SelectError.Duplicate(core.name))
                 case Exit.Success(_) => false
               ,
-              again,
+              left == planted(repo),
               Products.forgotten(Nil) == "cleaned\nremoved nothing",
               Products.forgotten(List(entry)) == s"cleaned\nremoved ${entry.digest.value}",
-              Products.sharedRoots == List("provider", "provider-src"),
               Products.observation(repo) == repo.resolve(".histos").resolve("observation.json"),
             ),
   )
@@ -131,14 +124,23 @@ object CleanLawSpec extends ZIOSpecDefault:
       SourcePos("histos.scala", 1, 1),
     )
 
-  private def classFile(repo: Path, name: String): Path =
-    repo.resolve(".histos").resolve("classes").resolve(name).resolve("A.class")
+  private def file(repo: Path, root: String, module: String): Path =
+    repo.resolve(".histos").resolve(root).resolve(module).resolve("3.3.7").resolve("jvm").resolve("A")
+
+  private def shared(repo: Path): List[Path] =
+    sharedRoots.map(root => repo.resolve(".histos").resolve(root).resolve("x"))
+
+  private def planted(repo: Path): List[Path] =
+    moduleRoots.flatMap(root => List(file(repo, root, "core"), file(repo, root, "extra"))) ++ shared(repo)
 
   private def plant(repo: Path): zio.IO[histos.workspace.IoFailure, Unit] =
-    Workspace.writeString(classFile(repo, "core"), "c") *>
-      Workspace.writeString(classFile(repo, "extra"), "e") *>
-      Workspace.writeString(repo.resolve(".histos").resolve("provider").resolve("x"), "p") *>
+    ZIO.foreachDiscard(planted(repo))(Workspace.writeString(_, "p")) *>
+      Workspace.writeString(repo.resolve(".histos").resolve("assembly.sha256"), "a") *>
       Workspace.writeString(Products.observation(repo), "{}")
+
+  /** The files of `paths` still on disk. */
+  private def remaining(paths: List[Path]): zio.UIO[List[Path]] =
+    ZIO.filter(paths)(present)
 
   private def present(path: Path): zio.UIO[Boolean] =
     ZIO.attemptBlocking(Files.isRegularFile(path)).orDie

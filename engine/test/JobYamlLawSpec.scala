@@ -4,6 +4,9 @@ import histos.plugin.*
 import histos.version.CommitSha
 import histos.workflow.*
 
+import _root_.scala.compiletime.constValue
+import _root_.scala.deriving.Mirror
+
 import zio.{Scope, ZIO}
 import zio.test.*
 
@@ -53,53 +56,59 @@ object JobYamlLawSpec extends ZIOSpecDefault:
   private val header  = CiHeader(Nil, Set.empty, Nil)
 
   def spec = suite("job yaml laws")(
-    test("every ci fault lifts to that ci error, and any other build error is an unpinned run of its message"):
-      jobName("docs"): docs =>
-        jobName("test"): suite =>
-          jobName("pages"): pages =>
-            val core   = ProjectName("core")
-            val target = TargetName("one")
-            val rows   = List(
-              BuildError.Ci(CiFault.IllegalSite(docs))                  -> CiError.IllegalSite(docs),
-              BuildError.Ci(CiFault.UnknownNeed(docs, suite))           -> CiError.UnknownNeed(docs, suite),
-              BuildError.Ci(CiFault.DuplicateNeed(docs, suite))         -> CiError.DuplicateNeed(docs, suite),
-              BuildError.Ci(CiFault.UnknownModule(docs, core))          -> CiError.UnknownModule(docs, core),
-              BuildError.Ci(CiFault.DuplicateTarget(docs, target))      -> CiError.DuplicateTarget(docs, target),
-              BuildError.Ci(CiFault.UnpinnedAction(docs, action))       -> CiError.UnpinnedAction(docs, action),
-              BuildError.Ci(CiFault.GrantMissing(docs, action))         -> CiError.GrantMissing(docs, action),
-              BuildError.Ci(CiFault.UnknownRunner(docs, large))         -> CiError.UnknownRunner(docs, large),
-              BuildError.Ci(CiFault.UnknownSecret(token))               -> CiError.UnknownSecret(token),
-              BuildError.Ci(CiFault.UnreachableCond(docs))              -> CiError.UnreachableCond(docs),
-              BuildError.Ci(CiFault.DispatchInputConflict("mode"))      -> CiError.DispatchInputConflict("mode"),
-              BuildError.Ci(CiFault.ConcurrencyConflict("ci.yml"))      -> CiError.ConcurrencyConflict("ci.yml"),
-              BuildError.Ci(CiFault.UnpinnedWorkflowRun("missing.yml")) -> CiError.UnpinnedWorkflowRun("missing.yml"),
-              BuildError.PluginGraph(PluginGraphFault.DuplicateSite(docs, suite)) ->
-                CiError.DuplicateSite(docs, suite),
-            )
-            val other = List(
-              BuildError.PluginGraph(PluginGraphFault.DuplicateJob(suite)),
-              BuildError.PluginGraph(PluginGraphFault.ReservedJob(pages)),
-              BuildError.PluginGraph(PluginGraphFault.DuplicatePlugin(PluginId("test.echo"))),
-              BuildError.BadName("Not A Name", SourcePos("law", 1, 1)),
-            )
-            val lifted = rows.forall: (error, want) =>
-              JobYaml.lift(error) == want
-            val wrapped = other.forall(error => JobYaml.lift(error) == CiError.UnpinnedWorkflowRun(error.message))
-            assertTrue(lifted, wrapped, other.map(_.message).distinct.size == other.size)
+    test("a reserved or repeated job the wiring adds is that graph fault, not a ci error"):
+      jobName("test"): reserved =>
+        jobName("nightly"): nightly =>
+          val twice = List(TaskJob(nightly, TaskName("echo")), TaskJob(nightly, TaskName("site")))
+          assertTrue(
+            yaml(wired(List(TaskJob(reserved, TaskName("echo"))))) ==
+              Right(Left(BuildError.PluginGraph(PluginGraphFault.ReservedJob(reserved)))),
+            yaml(wired(twice)) == Right(Left(BuildError.PluginGraph(PluginGraphFault.DuplicateJob(nightly)))),
+          )
     ,
-    test("a pinned action is the pin line, and a local action is the path"):
+    test("a ci fault the wiring adds is that ci error"):
+      jobName("nightly"): nightly =>
+        jobName("docs"): docs =>
+          jobName("guide"): guide =>
+            val sites = List(
+              SiteJob(docs, TaskName("site"), Site(RepoPath("docs"))),
+              SiteJob(guide, TaskName("site"), Site(RepoPath("guide"))),
+            )
+            assertTrue(
+              yaml(wired(List(TaskJob(nightly, TaskName("echo"), needs = List(docs))))) ==
+                Right(Left(CiError.UnknownNeed(nightly, docs))),
+              yaml(wired(sites)) == Right(Left(CiError.DuplicateSite(docs, guide))),
+            )
+    ,
+    test("each ci fault lifts to the ci error that says the same sentence"):
+      jobName("docs"): docs =>
+        jobName("guide"): guide =>
+          val faults = List(
+            CiFault.IllegalSite(docs),
+            CiFault.UnknownNeed(docs, guide),
+            CiFault.DuplicateNeed(docs, guide),
+            CiFault.UnknownModule(docs, ProjectName("core")),
+            CiFault.DuplicateTarget(docs, TargetName("one")),
+            CiFault.UnpinnedAction(docs, action),
+            CiFault.GrantMissing(docs, action),
+            CiFault.UnknownRunner(docs, large),
+            CiFault.UnknownSecret(token),
+            CiFault.UnreachableCond(docs),
+            CiFault.DispatchInputConflict("mode"),
+            CiFault.ConcurrencyConflict("ci.yml"),
+            CiFault.UnpinnedWorkflowRun("missing.yml"),
+          )
+          val misses = faults.filterNot(fault => JobYaml.lift(fault).message == fault.message)
+          assertTrue(faults.map(_.ordinal).sorted == List.range(0, caseCount[CiFault]), misses == Nil)
+    ,
+    test("a pinned action is the name, the sha, and the tag, and a local action is the path"):
       val custom = ActionName("example/setup")
       val pin    = ActionPin(CommitSha("0123456789abcdef0123456789abcdef01234567"), "v9")
-      val pins   = List(ActionPins.checkout, ActionPins.deployPages, ActionPins.uploadPages)
-      val pinned = pins.forall(item => JobYaml.uses(ActionUse.Pinned(item.name, item.pin)) == item.line)
-      val tagged = pins.forall(item => item.line != item.name.value)
       assertTrue(
-        pinned,
-        tagged,
-        JobYaml.uses(ActionUse.Pinned(custom, pin)) == ActionPins.line(custom, pin),
-        ActionPins.line(custom, pin) != ActionPins.checkout.line,
-        JobYaml.uses(ActionUse.Local(ActionPins.localSetup)) == ActionPins.localSetup,
-        JobYaml.uses(ActionUse.Local(ActionPins.originHead)) == ActionPins.originHead,
+        JobYaml.uses(ActionUse.Pinned(custom, pin)) == "example/setup@0123456789abcdef0123456789abcdef01234567 # v9",
+        JobYaml.uses(ActionUse.Pinned(ActionPins.checkout.name, ActionPins.checkout.pin)) ==
+          "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+        JobYaml.uses(ActionUse.Local("./.github/actions/setup")) == "./.github/actions/setup",
       )
     ,
     test("one task job prints the run, the runner, the condition, the permissions, and the secret"):
@@ -263,13 +272,21 @@ object JobYamlLawSpec extends ZIOSpecDefault:
   private def built(jobs: List[CiJob], ci: CiSettings = CiSettings.empty): Either[BuildError, ProjectGraph] =
     Projects.organization(organization"example.com").ci(ci)(use(LawEcho(jobs)), module("core", Jvm)(scala3))
 
+  /** The loader adds the wiring's plugins after the graph is built, so the build's job checks never saw them. */
+  private def wired(jobs: List[CiJob]): Either[BuildError, ProjectGraph] =
+    val plugin = LawEcho(jobs)
+    built(Nil).map(_.withPlugins(List(RegisteredPlugin(plugin.id, plugin.contribute)(plugin))))
+
   private def documented(jobs: List[CiJob]): Either[BuildError, ProjectGraph] =
     Projects.organization(organization"example.com").docCheck(use(LawEcho(jobs)), module("core", Jvm)(scala3))
 
   private def yaml(
       graph: Either[BuildError, ProjectGraph]
-  ): Either[BuildError, Either[CiError, JobYaml.Rendered]] =
+  ): Either[BuildError, Either[CiError | BuildError, JobYaml.Rendered]] =
     graph.map(found => JobYaml.render(found, branch))
+
+  private inline def caseCount[A](using sum: Mirror.SumOf[A]): Int =
+    constValue[Tuple.Size[sum.MirroredElemTypes]]
 
   private def jobName(raw: String)(use: JobName => TestResult): TestResult =
     JobName.from(raw) match

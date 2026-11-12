@@ -2,12 +2,11 @@ package histos.doc
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
+import histos.resolve.{DependencyLock, Resolve}
 import histos.task.{TaskError, TaskResult}
 import histos.workspace.Workspace
 import histos.zinc.{AnalysisKind, FileStaleness, GraphCompile, SourceStale}
-import histos.{Jvm, ProjectName, Projects, Ship, module, organization, ships}
-import histos.`scala`
+import histos.{CompilerClosure, Jvm, ProjectName, Projects, ScalaVersion, Ship, module, organization, ships}
 
 import java.nio.file.{Files, Path}
 
@@ -16,50 +15,53 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** Scaladoc follows the catalog. A ship member is documented from the classes just compiled. Anything else is not. */
 object DocLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
+  private val group = organization"example.com"
 
   def spec = suite("documentation laws")(
     test("a catalog with no ships does not compile"):
-      Workspace
-        .work("histos-doc-idle")
-        .flatMap: dir =>
-          val program =
-            for
-              graph      <- ZIO.fromEither(idle).catchAll(error => ZIO.dieMessage(error.message))
-              machine    <- machineOf(dir)
-              ran        <- DocTask.fromRepo(graph, dir, machine).either
-              documented <- ZIO.attempt(Files.exists(dir.resolve(".histos").resolve("doc"))).orDie
-            yield assertTrue(
-              ran == Right(TaskResult.Doc),
-              !documented,
-            )
-          program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        Workspace
+          .work("histos-doc-idle")
+          .flatMap: dir =>
+            val program =
+              for
+                graph   <- ZIO.fromEither(idle(closure.scalaVersion)).catchAll(error => ZIO.dieMessage(error.message))
+                machine <- machineOf(dir)
+                ran     <- DocTask.fromRepo(graph, dir, machine).either
+                documented <- ZIO.attempt(Files.exists(dir.resolve(".histos").resolve("doc"))).orDie
+              yield assertTrue(
+                ran == Right(TaskResult.Doc),
+                !documented,
+              )
+            program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
     ,
     test("a ship member is documented and its dependency is not"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-doc-ship")
           .flatMap: dir =>
             val coreSrc   = dir.resolve("doccore").resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
             val appSrc    = dir.resolve("doclaw").resolve("src").resolve("main").resolve("scala").resolve("App.scala")
-            val index     = docOf(dir, "doclaw").resolve("index.html")
-            val coreDoc   = docOf(dir, "doccore")
+            val index     = docOf(dir, "doclaw", scala3).resolve("index.html")
+            val coreDoc   = docOf(dir, "doccore", scala3)
             val coreClass =
               GraphCompile.classesDir(dir, ProjectName.trusted("doccore"), scala3).resolve("Core.class")
             val analysis =
               SourceStale.directory(dir, ProjectName.trusted("doclaw"), scala3, PlatformJvm, AnalysisKind.Main)
-            val source  = appSrc.toAbsolutePath.normalize
+            val source = appSrc.toAbsolutePath.normalize
+            val pinned =
+              closure.pinning(ProjectName.trusted("doccore"), ProjectName.trusted("doclaw"))
             val program =
               for
-                graph   <- ZIO.fromEither(shipped).catchAll(error => ZIO.dieMessage(error.message))
+                graph   <- ZIO.fromEither(shipped(scala3)).catchAll(error => ZIO.dieMessage(error.message))
                 machine <- machineOf(dir)
                 _ <- Workspace.createDirectories(parentOf(coreSrc)).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace.createDirectories(parentOf(appSrc)).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace.writeString(coreSrc, coreText).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace.writeString(appSrc, appText).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace
-                  .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
+                  .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned))
                   .catchAll(error => ZIO.dieMessage(error.message))
                 ran        <- DocTask.fromRepo(graph, dir, machine).either
                 wroteIndex <- ZIO.attempt(Files.isRegularFile(index)).orDie
@@ -82,22 +84,26 @@ object DocLawSpec extends ZIOSpecDefault:
             program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
     ,
     test("an unknown name is a documentation failure"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-doc-bad")
           .flatMap: dir =>
             val source  = dir.resolve("docbad").resolve("src").resolve("main").resolve("scala").resolve("Bad.scala")
             val program =
               for
-                graph   <- ZIO.fromEither(broken).catchAll(error => ZIO.dieMessage(error.message))
+                graph   <- ZIO.fromEither(broken(scala3)).catchAll(error => ZIO.dieMessage(error.message))
                 machine <- machineOf(dir)
                 _ <- Workspace.createDirectories(parentOf(source)).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace.writeString(source, badText).catchAll(error => ZIO.dieMessage(error.message))
                 _ <- Workspace
-                  .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(badLock(lock)))
+                  .writeString(
+                    dir.resolve("dependencies.lock"),
+                    DependencyLock.render(closure.pinning(ProjectName.trusted("docbad"))),
+                  )
                   .catchAll(error => ZIO.dieMessage(error.message))
                 ran   <- DocTask.fromRepo(graph, dir, machine).either
-                index <- ZIO.attempt(Files.exists(docOf(dir, "docbad"))).orDie
+                index <- ZIO.attempt(Files.exists(docOf(dir, "docbad", scala3))).orDie
               yield assertTrue(
                 ran match
                   case Left(error: TaskError.Doc) => error.message.contains("nope")
@@ -106,19 +112,19 @@ object DocLawSpec extends ZIOSpecDefault:
                 !index,
               )
             program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store")))),
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
   private val PlatformJvm = histos.Platform.Jvm
 
-  private def idle =
+  private def idle(scala3: ScalaVersion) =
     Projects(module("docidle", Jvm)(scala3))
 
-  private def shipped =
+  private def shipped(scala3: ScalaVersion) =
     val core = module("doccore", Jvm)(scala3)
     val app  = module("doclaw", Jvm)(scala3).dependsOn(core)
     Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), core, app)
 
-  private def broken =
+  private def broken(scala3: ScalaVersion) =
     val bad = module("docbad", Jvm)(scala3)
     Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(bad)), bad)
 
@@ -142,49 +148,11 @@ object DocLawSpec extends ZIOSpecDefault:
       |  def n: Int = nope
       |""".stripMargin
 
-  private def docOf(dir: Path, name: String): Path =
+  private def docOf(dir: Path, name: String, scala3: ScalaVersion): Path =
     dir.resolve(".histos").resolve("doc").resolve(name).resolve(scala3.value).resolve("jvm")
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    val added = List(
-      cell("doccore"),
-      cell("doclaw"),
-    )
-    lock.copy(cells = added ++ lock.cells)
-
-  private def badLock(lock: DependencyLock): DependencyLock =
-    lock.copy(cells = cell("docbad") :: lock.cells)
-
-  private def cell(name: String): LockedCell =
-    LockedCell(
-      ProjectName.trusted(name),
-      scala3,
-      PlatformJvm,
-      Nil,
-      Nil,
-      Nil,
-      ClasspathScope.Compile,
-    )
 
   private def machineOf(dir: Path) =
     Machine.load(dir).catchAll(error => ZIO.dieMessage(error.message))
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 
   private def parentOf(path: Path): Path =
     Option(path.getParent).getOrElse(path)

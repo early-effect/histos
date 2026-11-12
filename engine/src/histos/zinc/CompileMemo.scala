@@ -12,12 +12,14 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, Ref, UIO, ULayer, ZIO, ZLayer}
 
-/** Identity of the lock file, or of the lock value when the file is absent. */
+/** Identity of the lock file's bytes, or of the lock value when the file is absent. A rewrite in the same modified tick
+  * with the same size is still a new stamp.
+  */
 final case class LockStamp(token: String)
 
 object LockStamp:
-  def file(modified: Long, size: Long): LockStamp =
-    LockStamp(s"f:$modified:$size")
+  def file(bytes: Sha256): LockStamp =
+    LockStamp(s"f:${bytes.value}")
 
   def content(hash: Sha256): LockStamp =
     LockStamp(s"c:${hash.value}")
@@ -105,16 +107,17 @@ object CompileMemo:
       val path = Resolve.lockPath(repo)
       val key  = path.toAbsolutePath.normalize.toString
       ZIO
-        .attemptBlocking(fileStamp(path))
+        .attemptBlocking(Option.when(Files.isRegularFile(path))(Files.readAllBytes(path)))
         .mapError(_ => GraphCompileError.LockRead(path))
         .flatMap:
-          case Some(stamp) =>
+          case Some(bytes) =>
+            val stamp = LockStamp.file(Sha256Digest.of(Chunk.fromArray(bytes)))
             locks.get.flatMap: cached =>
               cached.get(key) match
                 case Some((known, parsed)) if known == stamp => ZIO.succeed(StampedLock(parsed, stamp))
                 case _                                       =>
-                  read(repo).flatMap: parsed =>
-                    locks.update(_.updated(key, (stamp, parsed))).as(StampedLock(parsed, stamp))
+                  parsed(bytes).flatMap: lock =>
+                    locks.update(_.updated(key, (stamp, lock))).as(StampedLock(lock, stamp))
           case None =>
             read(repo).map(parsed => StampedLock(parsed, contentStamp(parsed)))
 
@@ -237,11 +240,16 @@ object CompileMemo:
         .mapError:
           case histos.resolve.ResolveError.Io(failure) => GraphCompileError.LockRead(failure.path)
           case other                                   => GraphCompileError.Lock(other)
-  end Live
 
-  private def fileStamp(path: Path): Option[LockStamp] =
-    if !Files.isRegularFile(path) then None
-    else Some(LockStamp.file(Files.getLastModifiedTime(path).toMillis, Files.size(path)))
+    /** The bytes the stamp hashed, so a rewrite after that read cannot pair this stamp with another lock. */
+    private def parsed(bytes: Array[Byte]): IO[GraphCompileError, DependencyLock] =
+      ZIO.fromEither(
+        DependencyLock
+          .parse(new String(bytes, StandardCharsets.UTF_8))
+          .left
+          .map(error => GraphCompileError.Lock(histos.resolve.ResolveError.Lock(error)))
+      )
+  end Live
 
   private def contentStamp(lock: DependencyLock): LockStamp =
     val text = lock.cells

@@ -32,7 +32,7 @@ import histos.plugin.{
   TaskName,
   WorkflowFile,
 }
-import histos.{BuildError, PluginGraphFault, ProjectGraph}
+import histos.{BuildError, CiFault, PluginGraphFault, ProjectGraph}
 
 /** Prints [[JobRender]]. The engine does not match a [[histos.plugin.CiJob]] class. */
 object JobYaml:
@@ -43,11 +43,18 @@ object JobYaml:
       case ActionUse.Pinned(name, pin) => ActionPins.line(name, pin)
       case ActionUse.Local(path)       => path
 
-  def render(graph: ProjectGraph, defaultBranch: String): Either[CiError, Rendered] =
+  /** The loader adds the wiring's plugins after the build checked its jobs, so a graph fault can first show here. It
+    * stays a [[BuildError]].
+    */
+  def render(graph: ProjectGraph, defaultBranch: String): Either[CiError | BuildError, Rendered] =
     JobCheck
       .arrange(graph)
       .left
-      .map(lift)
+      .map:
+        case BuildError.Ci(fault)                                                  => lift(fault)
+        case BuildError.PluginGraph(PluginGraphFault.DuplicateSite(first, second)) =>
+          CiError.DuplicateSite(first, second)
+        case graphFault => graphFault
       .map: placed =>
         val ci = placed.collect:
           case item @ Placed(WorkflowFile.Ci, _, _) => jobBlock(graph, item)
@@ -57,24 +64,21 @@ object JobYaml:
         val owned = ownedFiles(graph, placed, defaultBranch)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
 
-  def lift(error: BuildError): CiError =
-    error match
-      case BuildError.PluginGraph(PluginGraphFault.DuplicateSite(first, second)) =>
-        CiError.DuplicateSite(first, second)
-      case BuildError.Ci(histos.CiFault.IllegalSite(name))            => CiError.IllegalSite(name)
-      case BuildError.Ci(histos.CiFault.UnknownNeed(job, need))       => CiError.UnknownNeed(job, need)
-      case BuildError.Ci(histos.CiFault.DuplicateNeed(job, need))     => CiError.DuplicateNeed(job, need)
-      case BuildError.Ci(histos.CiFault.UnknownModule(job, module))   => CiError.UnknownModule(job, module)
-      case BuildError.Ci(histos.CiFault.DuplicateTarget(job, target)) => CiError.DuplicateTarget(job, target)
-      case BuildError.Ci(histos.CiFault.UnpinnedAction(job, action))  => CiError.UnpinnedAction(job, action)
-      case BuildError.Ci(histos.CiFault.GrantMissing(job, action))    => CiError.GrantMissing(job, action)
-      case BuildError.Ci(histos.CiFault.UnknownRunner(job, runner))   => CiError.UnknownRunner(job, runner)
-      case BuildError.Ci(histos.CiFault.UnknownSecret(secret))        => CiError.UnknownSecret(secret)
-      case BuildError.Ci(histos.CiFault.UnreachableCond(job))         => CiError.UnreachableCond(job)
-      case BuildError.Ci(histos.CiFault.DispatchInputConflict(name))  => CiError.DispatchInputConflict(name)
-      case BuildError.Ci(histos.CiFault.ConcurrencyConflict(file))    => CiError.ConcurrencyConflict(file)
-      case BuildError.Ci(histos.CiFault.UnpinnedWorkflowRun(name))    => CiError.UnpinnedWorkflowRun(name)
-      case other                                                      => CiError.UnpinnedWorkflowRun(other.message)
+  def lift(fault: CiFault): CiError =
+    fault match
+      case CiFault.IllegalSite(name)            => CiError.IllegalSite(name)
+      case CiFault.UnknownNeed(job, need)       => CiError.UnknownNeed(job, need)
+      case CiFault.DuplicateNeed(job, need)     => CiError.DuplicateNeed(job, need)
+      case CiFault.UnknownModule(job, module)   => CiError.UnknownModule(job, module)
+      case CiFault.DuplicateTarget(job, target) => CiError.DuplicateTarget(job, target)
+      case CiFault.UnpinnedAction(job, action)  => CiError.UnpinnedAction(job, action)
+      case CiFault.GrantMissing(job, action)    => CiError.GrantMissing(job, action)
+      case CiFault.UnknownRunner(job, runner)   => CiError.UnknownRunner(job, runner)
+      case CiFault.UnknownSecret(secret)        => CiError.UnknownSecret(secret)
+      case CiFault.UnreachableCond(job)         => CiError.UnreachableCond(job)
+      case CiFault.DispatchInputConflict(name)  => CiError.DispatchInputConflict(name)
+      case CiFault.ConcurrencyConflict(file)    => CiError.ConcurrencyConflict(file)
+      case CiFault.UnpinnedWorkflowRun(name)    => CiError.UnpinnedWorkflowRun(name)
 
   private def jobBlock(graph: ProjectGraph, item: Placed): List[String] =
     val body = item.render match
@@ -537,7 +541,7 @@ object JobYaml:
         case Cond.Affected(module)     => contains(module.value)
         case Cond.AffectedAll          => contains("all")
         case Cond.NoUpstreamFailed     => NoneFailed
-        case Cond.Not(inner)           => s"!${wrap(render(inner))}"
+        case Cond.Not(inner)           => s"!(${render(inner)})"
         case Cond.All(parts)           => join(parts.map(render).filter(_ != "true"), " && ", "true")
         case Cond.AnyOf(parts)         => join(parts.map(render).filter(_ != "false"), " || ", "false")
 

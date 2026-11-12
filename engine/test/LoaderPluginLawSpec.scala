@@ -23,20 +23,23 @@ object LoaderPluginLawSpec extends ZIOSpecDefault:
       load(coordinated, List(coreSource, pluginSource, otherSource), Some(wiringBundle)).map: found =>
         assertTrue(found.plugins.links.map(_.id.value) == List("law.mark", "law.other"))
     ,
-    test("a module that is not a coordinate stays off the wiring classpath"):
+    test("a module that is not a coordinate stays off the wiring classpath, so the wiring cannot see law"):
       load(plain, List(coreSource, pluginSource), Some(wiringSeesPlugin)).either.map: found =>
-        val refused = found match
-          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.nonEmpty
-          case _                                          => false
-        assertTrue(refused)
+        val texts = found match
+          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.map(_.text)
+          case other                                      => List(other.toString)
+        assertTrue(
+          texts.exists(text => text.startsWith("histos.wiring.scala:4:") && text.endsWith(": error: Not found: law"))
+        )
     ,
-    test("a plugin module that does not compile fails the load"):
+    test("a plugin module that does not compile fails the load, and the diagnostic names its source and line"):
       load(coordinated, List(coreSource, pluginBroken), None).either.map: found =>
-        val refused = found match
-          case Left(LoadError.CompileFailed(diagnostics)) =>
-            diagnostics.exists(message => message.text.contains("String"))
-          case _ => false
-        assertTrue(refused)
+        val texts = found match
+          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.map(_.text)
+          case other                                      => List(other.toString)
+        assertTrue(
+          texts.exists(text => text.contains("plugins/src/main/scala/law/Mark.scala:4:") && text.contains("String"))
+        )
     ,
     test("a plugin that still needs a service fails the wiring compile"):
       load(coordinated, List(coreSource, needsSource), Some(wiringNeeds)).either.map: found =>

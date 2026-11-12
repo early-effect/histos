@@ -24,15 +24,15 @@ import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{ApiDigest, PluginArgs, PluginCoordinate, PluginRunError, PluginTaskId}
-import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
+import histos.publish.{IvyRoot, LauncherPin, LauncherScript, PublishRun, ReleaseError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginRequest, PluginUpdate, Resolve, ResolveError}
 import histos.schedule.{CacheConfig, CacheNamespace, RemoteCache}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
-import histos.workflow.{CiBranch, Workflow, WorkflowAction}
-import histos.{Platform, ProjectGraph, ProjectName, Publishing, Sona}
+import histos.workflow.{CiBranch, CiError, Workflow, WorkflowAction}
+import histos.{BuildError, Platform, ProjectGraph, ProjectName, Publishing, Sona}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -186,17 +186,19 @@ object Calls:
         repo,
         say,
         console,
-        PublishRun.local(
-          repo,
-          graph,
-          build,
-          tokens,
-          jdk,
-          machine.env,
-          launcher,
-          feed => speak(say, console, feed).ignore,
-          hear(say),
-        ),
+        PublishRun
+          .local(
+            repo,
+            graph,
+            build,
+            tokens,
+            jdk,
+            machine.env,
+            launcher,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+          )
+          .provideSomeLayer[Resolve & ContentStore](IvyRoot.ivy2Local),
       )
     }
 
@@ -613,7 +615,7 @@ object Calls:
   ): IO[ServerError, Unit] =
     sonaOf(loaded).flatMap(sona =>
       workflowWork(repo, loaded.graph, sona, action).foldZIO(
-        why => fault(say, BuildFault.Workflow(why)),
+        why => fault(say, why),
         file => told(say, file.toString) *> ok(say),
       )
     )
@@ -649,25 +651,32 @@ object Calls:
       graph: ProjectGraph,
       sona: Publishing,
       action: WorkflowAction,
-  ): IO[WorkflowFault, Path] =
+  ): IO[BuildFault, Path] =
     val present = action match
-      case WorkflowAction.Check  => Workflow.present(repo).mapError(WorkflowFault.Files(_))
+      case WorkflowAction.Check  => Workflow.present(repo).mapError(files)
       case WorkflowAction.Update => ZIO.unit
     present *> CiBranch
       .read(repo)
-      .mapError(WorkflowFault.Files(_))
+      .mapError(files)
       .flatMap: branch =>
         val rendered = action match
-          case WorkflowAction.Check =>
-            Workflow.check(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
-          case WorkflowAction.Update =>
-            Workflow.update(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
+          case WorkflowAction.Check  => Workflow.check(repo, graph, sona)(using branch).mapError(refused)
+          case WorkflowAction.Update => Workflow.update(repo, graph, sona)(using branch).mapError(refused)
         val scripts = action match
           case WorkflowAction.Check =>
-            LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
+            LauncherScript.check(repo, graph).mapError(error => BuildFault.Workflow(WorkflowFault.Scripts(error)))
           case WorkflowAction.Update =>
-            LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
+            LauncherScript.update(repo, graph).mapError(error => BuildFault.Workflow(WorkflowFault.Scripts(error)))
         rendered *> scripts.as(Workflow.path(repo))
+
+  private def files(error: CiError): BuildFault =
+    BuildFault.Workflow(WorkflowFault.Files(error))
+
+  /** A graph fault from the wiring's jobs is the broken graph the loader would have named. */
+  private def refused(error: CiError | BuildError): BuildFault =
+    error match
+      case ci: CiError       => files(ci)
+      case graph: BuildError => BuildFault.Load(LoadError.BrokenGraph(graph))
 
   def version(repo: Path, text: String, say: Say): IO[ServerError, Unit] =
     histos.ApiClock.versionLines(repo, text).flatMap(shown => told(say, shown) *> ok(say))

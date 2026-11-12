@@ -100,7 +100,41 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
       test("every compile input token parses, and an unknown token does not"):
         check(Gen.fromIterable(CompileInput.values)): input =>
           assertTrue(CompileInput.from(input.token).contains(input))
-        && assertTrue(CompileInput.from("classes").isEmpty, CompileInput.from("").isEmpty),
+        && assertTrue(CompileInput.from("classes").isEmpty, CompileInput.from("").isEmpty)
+      ,
+      test("the diff names a row exactly when its text changed"):
+        check(Gen.fromIterable(CompileInput.values), Gen.string, Gen.string): (input, before, after) =>
+          val diff = CompileInputs.diff(List(CompileRow(input, before)), List(CompileRow(input, after)))
+          assertTrue(diff == (if before == after then Nil else List(input)))
+      ,
+      test("an api digest and a jar checksum with the same text are different rows"):
+        val apis      = List(CompileRow(CompileInput.Apis, "digest"))
+        val artifacts = List(CompileRow(CompileInput.Artifacts, "digest"))
+        assertTrue(CompileInputs.diff(apis, artifacts) == List(CompileInput.Artifacts, CompileInput.Apis))
+      ,
+      test("the stored rows round-trip, and a repeated input or no bytes does not"):
+        val rows = CompileInput.values.toList.map(input => CompileRow(input, input.token))
+        val dup  = List(CompileRow(CompileInput.Apis, "a"), CompileRow(CompileInput.Apis, "b"))
+        assertTrue(
+          CompileInputs.decode(CompileInputs.encode(rows)) == Some(rows),
+          CompileInputs.decode(CompileInputs.encode(dup)) == None,
+          CompileInputs.decode(Chunk.empty) == None,
+        )
+      ,
+      test("compiler jars replace the compiler row and go after the declared rows"):
+        val rows = List(CompileRow(CompileInput.Compiler, "old"), CompileRow(CompileInput.Apis, "api"))
+        assertTrue(
+          CompileInputs.withCompiler(rows, List(Sha256.trusted("ab"))) ==
+            List(CompileRow(CompileInput.Apis, "api"), CompileRow(CompileInput.Compiler, "ab"))
+        )
+      ,
+      test("a coverage row is absent from a normal compile and is the only new row of a coverage compile"):
+        val plain   = CompileInputs.declared(asked, sourceHash)
+        val covered = CompileInputs.declared(asked.copy(coverage = Some("on")), sourceHash)
+        assertTrue(
+          !plain.exists(_.input == CompileInput.Coverage),
+          CompileInputs.diff(plain, covered) == List(CompileInput.Coverage),
+        ),
     ),
     suite("a stored map is a miss until replay says the products are this key")(
       test("no map, garbage bytes, and the same rows are three misses, and none of them is a hit"):

@@ -29,7 +29,7 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
               ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val ivy    = localRoot
+                val ivy    = repo.resolve("ivy")
                 val source = repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
                 val store  = repo.resolve("store")
                 val built  = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), app)
@@ -65,16 +65,13 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                       .either
                     said   <- notes.get
                     onDisk <- present(jar, pom)
-                    _      <- wipe(ivy)
                   yield assertTrue(
                     found.map(_.lines) == Right(List(s"${group.value} runlaw_3 $revision")),
                     said.contains(s"installing runlaw_3 $revision"),
                     !said.exists(_.contains("-ci")),
                     onDisk,
                   )
-                run
-                  .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(store)))
-                  .ensuring(wipe(ivy))
+                run.provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(store)) ++ ZLayer.succeed(IvyRoot.at(ivy)))
               }
             }
           }
@@ -85,22 +82,9 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
   private def present(jar: Path, pom: Path) =
     ZIO.attemptBlocking(Files.isRegularFile(jar) && Files.isRegularFile(pom)).orDie
 
-  private def wipe(root: Path) =
-    Workspace.delete(root.resolve(group.value)).catchAll(error => ZIO.dieMessage(error.message))
-
   /** `Pattern.default`: `[organisation]/[module]/[revision]/[type]s/[artifact].[ext]`. */
   private def placed(root: Path, revision: String, kind: String, ext: String): Path =
     root.resolve(group.value).resolve("runlaw_3").resolve(revision).resolve(kind).resolve(s"runlaw_3.$ext")
-
-  private def localRoot: Path =
-    val configured =
-      Option(System.getProperty("coursier.ivy.home"))
-        .filter(_.nonEmpty)
-        .orElse(Option(System.getProperty("ivy.home")).filter(_.nonEmpty))
-    val base = configured
-      .orElse(Option(System.getProperty("user.home")).filter(_.nonEmpty).map(home => s"$home/.ivy2"))
-      .getOrElse("")
-    Path.of(base).resolve("local")
 
   private def pinned(lock: DependencyLock, names: ProjectName*): DependencyLock =
     val added = names.toList.map: name =>

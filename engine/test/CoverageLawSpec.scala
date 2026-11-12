@@ -1,11 +1,9 @@
 package histos.coverage
 
-import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.Sha256
 import histos.resolve.{Repositories, ResolvedArtifact, Repository, ToolId, ToolRole, ToolVariant, Transitivity}
-import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
-import histos.zinc.{CompileInput, CompileInputs, CompileRequest, CompileToolchain}
-import histos.{CoverageFloors, Module, Platform, ProjectName, ScalaVersion, ScalacFlags, ToolRevision}
+import histos.{CoverageFloors, Module, Platform, ProjectName, ScalaVersion, ToolRevision}
 
 import java.nio.file.Path
 
@@ -260,14 +258,6 @@ object CoverageLawSpec extends ZIOSpecDefault:
       val dir  = Flags.classesDir(repo, ProjectName.trusted("core"), ScalaVersion.trusted("3.10.0"), Platform.Jvm)
       assertTrue(dir.endsWith(Path.of(".histos/coverage/classes/core/3.10.0/jvm")))
     ,
-    test("a coverage row is absent from a normal compile and present on a coverage compile"):
-      val plain   = CompileInputs.declared(compileRequest, Sha256.trusted("src"))
-      val covered = CompileInputs.declared(compileRequest.copy(coverage = Some("on")), Sha256.trusted("src"))
-      assertTrue(
-        !plain.exists(_.input == CompileInput.Coverage),
-        CompileInputs.diff(plain, covered) == List(CompileInput.Coverage),
-      )
-    ,
     test("a missing directory is an empty report, and class files without an inventory fail"):
       Workspace
         .work("histos-coverage")
@@ -370,25 +360,5 @@ object CoverageLawSpec extends ZIOSpecDefault:
       Path.of(s"/$name.jar"),
       Sha256.trusted("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
       Repository.Central,
-    )
-
-  private def compileRequest: CompileRequest =
-    CompileRequest(
-      CompileToolchain(
-        scala3,
-        Platform.Jvm,
-        JdkRuntime(
-          Path.of("/jdk"),
-          JdkVersion.trusted("21", JdkMajor.trusted(21)),
-          RuntimeIdentity.Local(Path.of("/jdk"), Sha256.trusted("ab")),
-        ),
-        ScalacFlags.empty,
-      ),
-      Nil,
-      Nil,
-      Path.of("classes"),
-      Path.of("analysis"),
-      Nil,
-      Nil,
     )
 end CoverageLawSpec

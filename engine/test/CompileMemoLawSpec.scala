@@ -19,12 +19,13 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
   private val direct  = LockedDirect("org.example", "demo", "1.0.0", DepKind.Java)
 
   def spec = suite("compile memo laws")(
-    test("a missing lock is the pin error, a written lock is that stamp, and note ignores the file"):
+    test("a missing lock is the pin error, a rewritten lock is read again, and note ignores the file"):
       Workspace
         .work("histos-memo-lock")
         .flatMap: repo =>
           val pin  = lock(sha)
           val next = lock(library)
+          val file = histos.resolve.Resolve.lockPath(repo)
           for
             memo    <- CompileMemo.live.build.map(_.get[CompileMemo])
             missing <- memo.lock(repo).either
@@ -33,7 +34,9 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
             second  <- memo.lock(repo)
             noted   <- memo.note(pin)
             other   <- memo.note(next)
+            written <- ZIO.attemptBlocking(Files.getLastModifiedTime(file))
             _       <- write(repo, next)
+            _       <- ZIO.attemptBlocking(Files.setLastModifiedTime(file, written))
             reread  <- memo.lock(repo)
           yield assertTrue(
             missing == Left(

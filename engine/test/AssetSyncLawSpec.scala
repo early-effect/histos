@@ -78,11 +78,8 @@ object AssetSyncLawSpec extends ZIOSpecDefault:
             kept   <- Workspace.readString(note)
             klass  <- Workspace.readString(classes.resolve("Hello.class"))
             listed <- Workspace.readString(manifest)
-            refused = result match
-              case Left(error) => error.message
-              case Right(_)    => ""
           yield assertTrue(
-            refused.contains("already a class file"),
+            result == Left(AssetError.Collides(ResourceName("Hello.class"))),
             kept == "keep",
             klass == "class",
             listed == "note.txt\n",
