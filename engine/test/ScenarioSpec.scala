@@ -1,6 +1,7 @@
 package histos
 
 import histos.jdk.Sha256
+import histos.program.ProgramFeed
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
@@ -108,7 +109,28 @@ object ScenarioSpec extends ZIOSpecDefault:
             testText.contains(": error: "),
             testText.contains("nope"),
             !testText.contains(": warning: "),
-          ),
+          )
+    ,
+    test("a running program's output arrives while it runs"):
+      ZIO.scoped:
+        for
+          built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).main(MainClass("demo.Wait"))))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          gate = checkout.root.resolve("gate")
+          _    <- checkout.write("app/src/main/scala/demo/Wait.scala", waiting(gate))
+          seen <- checkout
+            .run("app")
+            .tap:
+              case ProgramFeed.Out("ready") => ZIO.attemptBlocking(Files.writeString(gate, "go")).orDie
+              case _                        => ZIO.unit
+            .runCollect
+            .timeout(60.seconds)
+        yield assertTrue(
+          seen.map(_.collect { case ProgramFeed.Out(text) => text }) == Some(Chunk("ready", "done")),
+          seen.exists(_.exists { case ProgramFeed.Exited(_, _, _, code) => code == 0; case _ => false }),
+        )
+    @@ TestAspect.withLiveClock,
   ).provideSomeLayerShared[TestEnvironment & Scope](Scenario.tools) @@ TestAspect.withLiveSystem @@
     TestAspect.timeout(3.minutes)
 
@@ -167,6 +189,21 @@ object ScenarioSpec extends ZIOSpecDefault:
 
   private def cached(feeds: Chunk[TestFeed]): List[String] =
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList
+
+  /** Prints `ready`, waits until `gate` exists, then prints `done`. A run that holds output until exit never opens it.
+    */
+  private def waiting(gate: Path): String =
+    s"""package demo
+       |
+       |import java.nio.file.{Files, Path}
+       |
+       |object Wait:
+       |  def main(args: Array[String]): Unit =
+       |    println("ready")
+       |    System.out.flush()
+       |    while !Files.exists(Path.of("$gate")) do Thread.sleep(20)
+       |    println("done")
+       |""".stripMargin
 
   private val core =
     """object Core:

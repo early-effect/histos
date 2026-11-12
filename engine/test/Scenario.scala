@@ -3,6 +3,7 @@ package histos
 import histos.cache.ContentStore
 import histos.clean.Products
 import histos.jdk.{Machine, Sha256}
+import histos.program.{Program, ProgramError, ProgramFeed}
 import histos.resolve.{BuildResolvers, DependencyLock, LockedCell, ResolutionService, Resolve, ResolveError}
 import histos.schedule.CacheError
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestMode, TestRun}
@@ -13,6 +14,7 @@ import histos.zinc.{CompileFeed, CompilerStarts, GraphCompile, GraphCompileError
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, IO, Ref, Scope, UIO, ZEnvironment, ZIO, ZLayer}
+import zio.stream.ZStream
 
 /** One content store, one compiler-start count, and the checkouts that share them. Not
   * [[histos.zinc.CompileReplay.processStore]]: that store is one directory for the test JVM.
@@ -110,6 +112,18 @@ final class Checkout private[histos] (
         .runCollect
         .provideEnvironment(env)
     yield feeds
+
+  /** The module's main, compiled and started, with each feed as the program produces it. */
+  def run(name: String): ZStream[Any, ProgramError | GraphCompileError | ResolveError, ProgramFeed] =
+    ZStream.unwrap:
+      for
+        machine  <- here
+        jdk      <- GraphCompile.jdk(machine)
+        runtimes <- Runtimes.read(machine, None)
+        lock     <- Resolve.readLock(root)
+      yield Program
+        .console(root, build, name, jdk, runtimes, None, _ => ZIO.unit, ZIO.unit)
+        .provideLayer(ZLayer.succeedEnvironment(env) >+> ResolutionService.pinned(lock))
 
   /** Needs `TestAspect.withLiveSystem`. */
   private def here: IO[GraphCompileError, Machine] =
