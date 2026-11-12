@@ -1,6 +1,6 @@
 package histos.supply
 
-import histos.doctor.{Edit, Fix, FixApply, ShellLine}
+import histos.doctor.{Edit, Fix, FixApply, GitHubPut, HistosCommand}
 import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.HttpUrl
@@ -21,27 +21,61 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
   private val notText = Array[Byte](0xc3.toByte, 0x28)
 
   def spec = suite("supply surface laws")(
-    test("fix off applies nothing, a secret command is not run, and --yes does not confirm a GitHub setting"):
+    test("a fix runs only the histos commands it names, and prose or a person's command never reaches the shell"):
+      val repoName = RepoName.trusted("early-effect/histos")
+      val found    = List(
+        SupplyDiagnostic.SignedCommitsConflict(
+          RuleSource.Absent,
+          CommitSigning.GitPush(Identity.FirstDeveloper),
+          Set(MergeMethod.Rebase),
+        ),
+        SupplyDiagnostic.DependencyGraphOff(repoName),
+        SupplyDiagnostic.DependabotAlertsOff(repoName),
+        SupplyDiagnostic.DefaultTokenWrite(repoName),
+        SupplyDiagnostic.ScheduleDisabled(RepoPath(".github/workflows/ci.yml"), repoName),
+        histos.version.ShipDiagnostic.Releases("releases was not read"),
+        histos.version.ShipDiagnostic.Session("HISTOS_SHA is missing"),
+        histos.doctor.ToolchainDiagnostic.NodeShadowed("export HISTOS_NODE=/opt/node/bin/node", "node 22 is first"),
+        SupplyDiagnostic.DependabotOverlap(::(Ecosystem.Maven, Nil), RepoPath(".github/dependabot.yml")),
+        SupplyDiagnostic.WorkflowFiles,
+      )
+      val program =
+        for
+          repo  <- Workspace.work("surface-prose")
+          ran   <- Ref.make(List.empty[String])
+          notes <- DoctorSurface.applyReported(
+            repo,
+            found.flatMap(_.fixes.toList),
+            DoctorSurface.Request(None, false, None, true, true, Nil, false),
+            false,
+            _ => ZIO.die(new IllegalStateException("asked")),
+            command => ran.update(_ :+ command.line),
+            _ => ZIO.die(new IllegalStateException("set")),
+          )
+          lines <- ran.get
+        yield assertTrue(
+          lines == List("./histos setup supply-chain --fix", "./histos workflow --update"),
+          notes == List(
+            "ran: ./histos setup supply-chain --fix",
+            "ran: ./histos workflow --update",
+            "not applied (no terminal): https://github.com/early-effect/histos/settings/security_analysis",
+            "not applied (open it in a browser): https://github.com/early-effect/histos/actions",
+          ),
+        )
+      program
+    ,
+    test("fix off applies nothing, --yes does not confirm a GitHub setting, and a page with no call is a person's"):
       val program =
         for
           repo <- Workspace.work("surface-fix")
           off  <- DoctorSurface.applyReported(
             repo,
-            List(command("true")),
+            List(command("workflow", "--update")),
             DoctorSurface.Request(None, false, None, false, false, Nil, false),
             true,
             _ => ZIO.die(new IllegalStateException("asked")),
             _ => ZIO.die(new IllegalStateException("ran")),
             _ => ZIO.die(new IllegalStateException("set")),
-          )
-          secret <- DoctorSurface.applyReported(
-            repo,
-            List(command("echo secret")),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            true,
-            _ => ZIO.die(new IllegalStateException("asked")),
-            _ => ZIO.die(new IllegalStateException("ran")),
-            _ => ZIO.succeed(()),
           )
           yes <- DoctorSurface.applyReported(
             repo,
@@ -52,10 +86,19 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             _ => ZIO.succeed(()),
             _ => ZIO.die(new IllegalStateException("set")),
           )
+          open <- DoctorSurface.applyReported(
+            repo,
+            List(page("https://example.test/secrets")),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
+            true,
+            _ => ZIO.die(new IllegalStateException("asked")),
+            _ => ZIO.succeed(()),
+            _ => ZIO.die(new IllegalStateException("set")),
+          )
         yield assertTrue(
           off.isEmpty,
-          secret.exists(_.contains("not applied (secret)")),
-          yes.exists(_.contains("not applied (--yes does not confirm GitHub settings)")),
+          yes == List("not applied (--yes does not confirm GitHub settings): https://example.test/settings"),
+          open == List("not applied (open it in a browser): https://example.test/secrets"),
         )
       program
     ,
@@ -489,11 +532,16 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
       ),
   )
 
-  private def command(line: String): Fix =
-    Fix.Command(ShellLine.trusted(line))
+  private def command(head: String, tail: String*): Fix =
+    Fix.Histos(HistosCommand.of(head, tail*))
 
+  /** A page with the call that applies it. */
   private def setting(url: String): Fix =
-    Fix.Settings(HttpUrl.trusted(url), "open")
+    Fix.Settings(HttpUrl.trusted(url), "open", Some(GitHubPut(HttpUrl.trusted(s"$url/api"), "{}")))
+
+  /** A page a person opens. */
+  private def page(url: String): Fix =
+    Fix.Settings(HttpUrl.trusted(url), "open", None)
 
   private def bump(coordinate: String, from: String, to: String): ChosenBump =
     val where = Coordinate.trusted(coordinate)

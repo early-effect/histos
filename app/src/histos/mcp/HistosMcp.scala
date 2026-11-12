@@ -346,7 +346,7 @@ object HistosMcp:
                     histos.supply.Terminal.detached,
                     ZLayer.succeed(histos.supply.Net.live),
                     histos.doctor.GhAuth.live,
-                    histos.supply.Shell.live,
+                    histos.supply.CommandRunner.attached,
                   )
                   .map((_, text) => DoctorText(text))
         }

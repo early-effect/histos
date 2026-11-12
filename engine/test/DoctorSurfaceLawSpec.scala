@@ -1,18 +1,18 @@
 package histos
 
 import histos.central.{MavenModule, ReleaseFeed}
-import histos.doctor.{Fix, FixApply, GhAuth, GitHubCredential}
+import histos.doctor.{Fix, FixApply, GhAuth, GitHubCredential, GitHubPut, HistosCommand}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
 import histos.supply.{
+  CommandRunner,
   DoctorSurface,
   GitAnswers,
   GitRead,
   Net,
   PrAuthor,
   Reply,
-  Shell,
   SupplyChain,
   Terminal,
   UpdatePolicy,
@@ -63,8 +63,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                       case Left(_)      => ZIO.succeed(assertTrue(Projects(module("core", Jvm)(scala3)).isRight))
                       case Right(graph) =>
                         def ask(fix: Fix): UIO[FixApply.Answer]           = ZIO.dieMessage("doctor surface asked")
-                        def exec(line: String): UIO[Unit]                 = ZIO.dieMessage(s"doctor surface ran $line")
-                        def setting(url: String): UIO[Unit]               = ZIO.dieMessage(s"doctor surface wrote $url")
+                        def exec(command: HistosCommand): UIO[Unit] = ZIO.dieMessage(s"doctor surface ran ${command.line}")
+                        def setting(put: GitHubPut): UIO[Unit]      = ZIO.dieMessage(s"doctor surface sent ${put.url.value}")
                         def run(request: DoctorSurface.Request, net: Net) =
                           DoctorSurface.runWith(
                             repo,
@@ -224,10 +224,10 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                   )
         .provideSomeLayer[TestEnvironment](
           stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Terminal] ++ stubbed[Net] ++ stubbed[GhAuth] ++
-            stubbed[Shell]
+            stubbed[CommandRunner]
         )
     ,
-    test("a fix command runs in the shell it is given, and a run with no token asks the gh it is given"):
+    test("a fix's histos command runs in the runner it is given, and a run with no token asks the gh it is given"):
       ZIO
         .scoped:
           Workspace
@@ -250,8 +250,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                   for
                     ran   <- Ref.make(List.empty[(Path, String)])
                     hosts <- Ref.make(List.empty[Option[String]])
-                    _     <- stub[Shell](_.run(any[Path], any[String])): (at: Path, line: String) =>
-                      ran.update(_ :+ (at -> line))
+                    _     <- stub[CommandRunner](_.run(any[Path], any[HistosCommand])):
+                      (at: Path, command: HistosCommand) => ran.update(_ :+ (at -> command.line))
                     _ <- stub[GhAuth](_.token(any[Option[String]])): (host: Option[String]) =>
                       hosts.update(_ :+ host).as(None)
                     fixed <- DoctorSurface.run(
@@ -269,10 +269,10 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                   )
         .provideSomeLayer[TestEnvironment](
           stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(terminal(false)) ++ stubbed[Net] ++
-            stubbed[GhAuth] ++ stubbed[Shell]
+            stubbed[GhAuth] ++ stubbed[CommandRunner]
         )
     ,
-    test("a fix asks the terminal it is given: none is not applied, and an answer of no or yes is that answer"):
+    test("a settings page with no call is never asked about or sent, on a terminal or off one"):
       ZIO
         .scoped:
           Workspace
@@ -305,7 +305,7 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                         DoctorSurface.Request(Some("supply-chain"), false, None, true, false, Nil, false),
                         machine,
                       )
-                      .provideSomeLayer[ReleaseFeed & GitRead & Net & GhAuth & Shell](
+                      .provideSomeLayer[ReleaseFeed & GitRead & Net & GhAuth & CommandRunner](
                         ZLayer.succeed(terminal(attached))
                       )
                   for
@@ -315,19 +315,16 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                       "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n",
                     )
                     none   <- fix(false)
-                    _      <- TestConsole.feedLines("n")
-                    no     <- fix(true)
                     _      <- TestConsole.feedLines("y")
                     yes    <- fix(true)
                     prompt <- TestConsole.output
                   yield assertTrue(
-                    none._2.contains(s"not applied (no terminal): $url"),
-                    no._2.contains(s"skipped: $url"),
-                    yes._2.contains(s"applied: $url"),
-                    prompt == Vector(s"Apply GitHub setting $url? [y/N] \n", s"Apply GitHub setting $url? [y/N] \n"),
+                    none._2.contains(s"not applied (open it in a browser): $url"),
+                    yes._2.contains(s"not applied (open it in a browser): $url"),
+                    prompt.isEmpty,
                   )
         .provideSomeLayer[TestEnvironment](
-          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[Shell]
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[CommandRunner]
         ),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
 

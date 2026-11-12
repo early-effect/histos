@@ -315,7 +315,8 @@ object Cli:
                 written
                   .provideSomeLayer[Loader & Resolve](
                     ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live ++
-                      ZLayer.succeed(histos.supply.Net.live) ++ histos.doctor.GhAuth.live ++ histos.supply.Shell.live
+                      ZLayer.succeed(histos.supply.Net.live) ++ histos.doctor.GhAuth.live ++
+                      histos.supply.CommandRunner.attached
                   )
                   .fold(
                     error => Completed(CliExit.Usage, "", error.message, Playback.Held),
@@ -517,7 +518,7 @@ object Cli:
                   histos.supply.Terminal.live,
                   ZLayer.succeed(histos.supply.Net.live),
                   histos.doctor.GhAuth.live,
-                  histos.supply.Shell.live,
+                  histos.supply.CommandRunner.attached,
                 )
                 .map: (code, text) =>
                   val exit = if code == 0 then CliExit.Success else CliExit.Failed

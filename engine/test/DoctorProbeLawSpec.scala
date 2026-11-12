@@ -179,14 +179,12 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
         skipped == Outcome.Skipped(
           HygieneChecks.credentialsId,
           Probe.JobEnv,
-          Fix.Command(
-            ShellLine.trusted("export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets")
-          ),
+          Fix.Steps(::("export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets", Nil)),
         ),
         unread == Outcome.Skipped(
           HygieneChecks.credentialsId,
           Probe.JobEnv,
-          Fix.Command(ShellLine.trusted("retry when the portal answers")),
+          Fix.Steps(::("retry when the portal answers", Nil)),
         ),
         accepted == Outcome.Ok(HygieneChecks.credentialsId, "the portal accepted the token"),
         found(rejected),
@@ -201,11 +199,7 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       assertTrue(
         off == List(Outcome.Ok(HygieneChecks.pagesId, "no pages site")),
         down == List(
-          Outcome.Skipped(
-            HygieneChecks.pagesId,
-            Probe.GitHubRead,
-            Fix.Command(ShellLine.trusted("retry when the GitHub API answers")),
-          )
+          Outcome.Skipped(HygieneChecks.pagesId, Probe.GitHubRead, Fix.Steps(::("retry when the GitHub API answers", Nil)))
         ),
         open == List(Outcome.Ok(HygieneChecks.pagesId, "Pages deploys from GitHub Actions")),
         other.exists(found),

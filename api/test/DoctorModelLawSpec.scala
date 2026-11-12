@@ -52,7 +52,7 @@ object DoctorModelLawSpec extends ZIOSpecDefault:
     ,
     test("fault text keeps the summary, one location, and only the first fix"):
       val first  = Fix.Command(ShellLine.trusted("histos help"))
-      val second = Fix.Settings(histos.HttpUrl.trusted("https://example.com/second-fix"), "second-fix")
+      val second = Fix.Settings(histos.HttpUrl.trusted("https://example.com/second-fix"), "second-fix", None)
       val same   = Noted.error("demo.check", "summary", "summary", first, second)
       val longer = Noted.error("demo.check", "summary", "why", first)
       val placed = Noted.at(longer, "build.scala", Some(4))
