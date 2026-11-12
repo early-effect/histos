@@ -161,8 +161,9 @@ object ApiClock:
     AssemblyMark
       .read(repo)
       .zip(record(repo))
-      .map: (onto, stored) =>
-        val socket = stored.map(_.socket).getOrElse(repo.resolve(".histos").resolve("server.sock").toString)
+      .zip(histos.server.SocketPath.at(repo))
+      .map: (onto, stored, path) =>
+        val socket = stored.map(_.socket).getOrElse(path.toString)
         (onto, stored.flatMap(_.assembly), socket)
 
   private def record(repo: Path): UIO[Option[ServerFile]] =
