@@ -30,8 +30,8 @@ import java.nio.file.attribute.PosixFilePermissions
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Ref, UIO, ZIO}
-import zio.stream.ZStream
+import zio.{Chunk, IO, Queue, Ref, UIO, ZIO}
+import zio.stream.{Take, ZStream}
 
 /** Run the class a module names, on one platform. The main classpath only. No test classes and no classpath scan. A
   * module that builds more than one platform does not compile and does not start until `choice` names one of them.
@@ -77,22 +77,7 @@ object Program:
           ZStream.unwrap:
             continue.get.map: keep =>
               if keep then
-                ZStream
-                  .fromZIO(
-                    runCell(
-                      CellRun(
-                        repo,
-                        graph,
-                        module,
-                        binary,
-                        cell,
-                        lock,
-                        jdk,
-                        runtimes,
-                      )
-                    )
-                  )
-                  .flatMap(ZStream.fromChunk)
+                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes))
                   .tap:
                     case ProgramFeed.Exited(_, _, _, code) if code != 0 =>
                       continue.set(false)
@@ -217,9 +202,22 @@ object Program:
             dest
           .mapError(_ => ProgramError.Work(dest))
 
+  /** One cell's feeds as the program produces them. The run is a step, so it stays scheduled, and it hands each feed to
+    * the stream as it happens. The run belongs to the stream's scope: ending the stream stops the program.
+    */
+  private def live(run: CellRun): ZStream[Resolve & ResolutionService, ProgramError, ProgramFeed] =
+    ZStream.unwrapScoped:
+      for
+        queue <- Queue.unbounded[Take[ProgramError, ProgramFeed]]
+        _     <- runCell(run, feed => queue.offer(Take.single(feed)).unit)
+          .foldCauseZIO(cause => queue.offer(Take.failCause(cause)), _ => queue.offer(Take.end))
+          .forkScoped
+      yield ZStream.fromQueue(queue).flattenTake
+
   private def runCell(
-      run: CellRun
-  ): ZIO[Resolve & ResolutionService, ProgramError, Chunk[ProgramFeed]] =
+      run: CellRun,
+      emit: ProgramFeed => UIO[Unit],
+  ): ZIO[Resolve & ResolutionService, ProgramError, Unit] =
     (for
       report   <- ZIO.service[ResolutionService]
       fresh    <- report.current
@@ -261,10 +259,12 @@ object Program:
         Set(Need.Process),
       )
       execute(
-        Step.local[Chunk[ProgramFeed]](info)(
-          one(run).runCollect.provideSome[Resolve](
-            zio.ZLayer.succeed(tools)
-          )
+        Step.local[Unit](info)(
+          one(run)
+            .runForeach(emit)
+            .provideSome[Resolve](
+              zio.ZLayer.succeed(tools)
+            )
         )
       )
 
