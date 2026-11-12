@@ -123,6 +123,7 @@ enum Command:
   case Explain(id: String)
   case Deps(action: DepsAction)
   case Setup(from: Option[String], fix: Boolean, yes: Boolean)
+  case Bump(part: histos.version.BumpPart, ships: List[histos.version.ShipName])
   case Help(words: List[String])
 
 /** Why `histos fmt` arguments are not a format request. */
@@ -434,6 +435,53 @@ object Cli:
       case histos.coverage.CoverageFailure.Instrument(_) => CliExit.TaskFailed
       case histos.coverage.CoverageFailure.Io(_)         => CliExit.TaskFailed
 
+  /** Rewrite `.next` past the newest stable. The pin in `build.properties` stays. */
+  private def bump(
+      repo: Path,
+      apiJar: Path,
+      part: histos.version.BumpPart,
+      ships: List[histos.version.ShipName],
+  ): URIO[Loader & Scope, Completed] =
+    val source = repo.resolve("histos.scala")
+    ZIO
+      .serviceWithZIO[Loader](_.load(repo, apiJar))
+      .either
+      .flatMap:
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message, Playback.Held))
+        case Right(loaded) =>
+          ZIO
+            .attemptBlocking(java.nio.file.Files.readString(source))
+            .mapError(_ => histos.version.BumpFault.Io(source.toString))
+            .flatMap: text =>
+              histos.version.ShipBumpRun.run(
+                loaded.graph,
+                part,
+                ships,
+                text,
+                module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
+              )
+            .foldZIO(
+              fault => ZIO.succeed(Completed(bumpExit(fault), "", fault.message, Playback.Held)),
+              report =>
+                report.source match
+                  case None =>
+                    ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held))
+                  case Some(next) =>
+                    ZIO
+                      .attemptBlocking(java.nio.file.Files.writeString(source, next))
+                      .mapError(_ => histos.version.BumpFault.Io(source.toString))
+                      .foldZIO(
+                        fault => ZIO.succeed(Completed(CliExit.TaskFailed, "", fault.message, Playback.Held)),
+                        _ => ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held)),
+                      ),
+            )
+
+  private def bumpExit(fault: histos.version.BumpFault): CliExit =
+    fault match
+      case histos.version.BumpFault.MissingShip(_) => CliExit.Usage
+      case _                                       => CliExit.TaskFailed
+
   private def doctor(
       repo: Path,
       apiJar: Path,
@@ -636,6 +684,8 @@ object Cli:
         ZIO.serviceWithZIO[histos.jdk.Machine](machine =>
           doctor(repo, apiJar, area, json, preflight, fix, yes, verbose, projects, machine)
         )
+      case Command.Bump(part, ships) =>
+        bump(repo, apiJar, part, ships)
       case Command.Explain(id) =>
         ZIO.succeed(explain(id))
       case Command.Deps(action) =>
@@ -2411,6 +2461,8 @@ object Cli:
         inProcessReady(repo)((api, machine) =>
           withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, verbose, projects, machine))
         )
+      case Command.Bump(part, ships) =>
+        inProcessReady(repo)((api, machine) => withLoader(machine)(bump(repo, api, part, ships)))
       case Command.Explain(id) =>
         ZIO.succeed(explain(id))
       case Command.Deps(action) =>

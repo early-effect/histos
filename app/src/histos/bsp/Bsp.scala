@@ -1094,6 +1094,7 @@ object Bsp:
                   cell,
                   lock,
                   BuildResolvers(seen.resolvers),
+                  Dep.runtime(id.module.dependencies, id.platform),
                 )
                 .mapError(BspError.Run(_))
             )

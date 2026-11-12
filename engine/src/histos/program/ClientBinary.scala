@@ -13,7 +13,7 @@ object ClientBinary:
   def destination(repo: Path): Path =
     repo.resolve("dist").resolve(fileName)
 
-  /** A native module named `client` that has a main. The workflow step exists only then.
+  /** A native module named `client` that has a main. The install and snapshot client matrix exist only then.
     */
   def present(graph: ProjectGraph): Boolean =
     graph.projects.exists:

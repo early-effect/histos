@@ -76,6 +76,7 @@ object CommandName:
     trusted("init"),
     trusted("affected"),
     trusted("doctor"),
+    trusted("bump"),
     trusted("deps"),
     trusted("setup"),
     trusted("help"),

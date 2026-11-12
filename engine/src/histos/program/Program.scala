@@ -156,8 +156,16 @@ object Program:
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
     for
-      view      <- ZIO.service[LockedTools]
-      paths     <- classpath(repo, modules, module, cell, lock, repositories)
+      view  <- ZIO.service[LockedTools]
+      paths <- classpath(
+        repo,
+        modules,
+        module,
+        cell,
+        lock,
+        repositories,
+        Dep.select(module.dependencies, cell.platform),
+      )
       linkDir   <- fresh(workDir(repo, cell))
       major     <- nativeMajor(module, cell.version)
       toolchain <- ZIO
@@ -338,6 +346,7 @@ object Program:
                 cell,
                 lock,
                 repositories,
+                Dep.runtime(module.dependencies, cell.platform),
               )
               work <- fresh(workDir(repo, cell))
             yield events(
@@ -363,6 +372,7 @@ object Program:
                 cell,
                 lock,
                 repositories,
+                Dep.select(module.dependencies, cell.platform),
               )
               _      <- fresh(linkDir)
               linked <- JsLink
@@ -417,6 +427,7 @@ object Program:
                 cell,
                 lock,
                 repositories,
+                Dep.select(module.dependencies, cell.platform),
               )
               _         <- fresh(linkDir)
               toolchain <- ZIO
@@ -505,10 +516,11 @@ object Program:
       cell: histos.zinc.CompiledCell,
       lock: DependencyLock,
       repositories: Repositories,
+      dependencies: List[Dep],
   ): ZIO[Resolve & LockedTools, ProgramError, List[Path]] =
     val resolveCell = ResolveCell(
       module.name,
-      Dep.select(module.dependencies, cell.platform),
+      dependencies,
       cell.version,
       cell.platform,
       repositories,

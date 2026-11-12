@@ -9,6 +9,7 @@ import histos.{
   HttpUrl,
   License,
   LicenseName,
+  MavenScope,
   Organization,
   PomText,
   Scm,
@@ -117,6 +118,38 @@ object LayoutLawSpec extends ZIOSpecDefault:
             !marked.contains("plexus-archiver_3"),
             open.contains("<artifactId>lib</artifactId>"),
             !open.contains("<exclusions>"),
+          )
+    ,
+    test("a provided dependency writes scope provided, and a compile dependency writes no scope"):
+      val rendered =
+        for
+          name    <- ArtifactId.from("servlet")
+          version <- DependencyVersion.from("4.0.1")
+        yield
+          val revision = Revision.Release(ReleaseVersion(ship))
+          val supplied = Artifact(
+            Organization("demo"),
+            name,
+            revision,
+            pk,
+            dependencies = List(
+              MavenDependency(Organization("javax.servlet"), name, version, scope = MavenScope.Provided)
+            ),
+          )
+          val ordinary = Artifact(
+            Organization("demo"),
+            name,
+            revision,
+            pk,
+            dependencies = List(MavenDependency(Organization("javax.servlet"), name, version)),
+          )
+          (Layout.pom(supplied), Layout.pom(ordinary))
+      rendered match
+        case Left(_)                     => assertTrue(false)
+        case Right((supplied, ordinary)) =>
+          assertTrue(
+            supplied.contains("<scope>provided</scope>"),
+            !ordinary.contains("<scope>"),
           )
     ,
     test("an empty dependency list omits the dependencies wrapper"):

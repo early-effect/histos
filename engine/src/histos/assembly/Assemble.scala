@@ -143,7 +143,7 @@ object Assemble:
     ZIO.foldLeft(ordered)(List.empty[Path]): (acc, module) =>
       val cell = ResolveCell(
         module.name,
-        Dep.select(module.dependencies, Platform.Jvm),
+        Dep.runtime(module.dependencies, Platform.Jvm),
         version,
         Platform.Jvm,
         repositories,

@@ -153,6 +153,7 @@ object PluginSpec extends ZIOSpecDefault:
           "init",
           "affected",
           "doctor",
+          "bump",
           "deps",
           "setup",
           "help",

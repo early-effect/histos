@@ -33,10 +33,11 @@ object DepLawSpec extends ZIOSpecDefault:
         DepError.Ranged("1.+").diagnose.level == Level.Error,
       )
     ,
-    test("a platform selection is those platforms, and compile-only stays off the pom"):
-      val dep    = dep"dev.zio::zio:2.1.26"
-      val chosen = dep.on(Jvm, Jvm, Js).compileOnly
-      val listed = List(dep, chosen)
+    test("a platform selection is those platforms, compile-only stays off the pom, and provided stays off the runtime"):
+      val dep      = dep"dev.zio::zio:2.1.26"
+      val chosen   = dep.on(Jvm, Jvm, Js).compileOnly
+      val supplied = dep.provided
+      val listed   = List(dep, chosen, supplied)
       assertTrue(
         dep.applies(Native),
         !chosen.applies(Native),
@@ -44,10 +45,15 @@ object DepLawSpec extends ZIOSpecDefault:
         chosen.applies(Js),
         chosen.platforms == Some(List(Jvm, Js)),
         chosen.link == DepLink.CompileOnly,
-        Dep.select(listed, Native) == List(dep),
-        Dep.published(listed, Jvm) == List(dep),
-        Dep.published(listed, Native) == List(dep),
-        Dep.published(List(chosen.excluding(organization"org.example", artifact"left-out")), Jvm).isEmpty,
+        supplied.link == DepLink.Provided,
+        Dep.select(listed, Jvm) == listed,
+        Dep.select(listed, Native) == List(dep, supplied),
+        Dep.runtime(listed, Jvm) == List(dep, chosen),
+        Dep.runtime(listed, Native) == List(dep),
+        Dep.declared(listed, Jvm) == List(dep, supplied),
+        Dep.declared(listed, Native) == List(dep, supplied),
+        Dep.declared(List(chosen.excluding(organization"org.example", artifact"left-out")), Jvm).isEmpty,
+        supplied.module("zio-streams").link == DepLink.Published,
       )
     ,
     test("a module copies organization, kind, and revision, and clears the other fields"):

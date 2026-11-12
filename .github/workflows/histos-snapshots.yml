@@ -4,22 +4,90 @@ on:
 permissions:
   contents: read
 jobs:
+  client:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            platform: linux-x86_64
+            archive: LLVM-21.1.8-Linux-X64.tar.xz
+            sha256: b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b
+          - runner: macos-26
+            platform: macos-aarch64
+            archive: LLVM-21.1.8-macOS-ARM64.tar.xz
+            sha256: b95bdd32a33a81ee4d40363aaeb26728a26783fcef26a4d80f65457433ea4669
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/setup
+      - run: ./histos doctor --preflight client
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llvm
+        with:
+          path: "${{ runner.temp }}/llvm"
+          key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/${{ matrix.archive }}" -o "$dir/llvm.tar.xz"
+            expected="${{ matrix.sha256 }}"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ "$(uname -s)" = Linux ]; then
+            if [ -n "$LD_LIBRARY_PATH" ]; then
+              echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+            else
+              echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+            fi
+          fi
+          if [ "$(uname -s)" = Darwin ]; then
+            sdk=$(xcrun --show-sdk-path)
+            wrap="${{ runner.temp }}/clang-sdk"
+            mkdir -p "$wrap"
+            for tool in clang clang++; do
+              printf '%s\n' '#!/bin/sh' "exec \"$dir/bin/$tool\" -isysroot \"$sdk\" \"\$@\"" > "$wrap/$tool"
+              chmod +x "$wrap/$tool"
+            done
+            echo "$wrap" >> "$GITHUB_PATH"
+          fi
+      - run: "./histos client"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-${{ matrix.platform }}
+          path: dist/histos-client
+          if-no-files-found: error
   snapshots:
+    needs: client
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - run: |
-          usage=$(./histos 2>&1 || true)
-          case "$usage" in
-            *" doctor "*) ;;
-            *) ./histos assembly ;;
-          esac
       - run: ./histos doctor --preflight snapshots
       - run: "./histos assembly"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: client-*
+          path: dist/clients
       - run: "./histos publish snapshots"
         env:
           HISTOS_SESSION: snapshot

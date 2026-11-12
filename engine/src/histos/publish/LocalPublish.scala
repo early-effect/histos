@@ -24,6 +24,8 @@ import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, P
 import histos.{
   Dep,
   DepExclusion,
+  DepLink,
+  MavenScope,
   MainClass,
   Module,
   Organization,
@@ -600,7 +602,7 @@ object LocalPublish:
       external <- ZIO.foldLeft(ordered)(List.empty[Path]): (acc, item) =>
         val request = ResolveCell(
           item.name,
-          Dep.select(item.dependencies, platform),
+          Dep.runtime(item.dependencies, platform),
           version,
           platform,
           BuildResolvers(graph.resolvers),
@@ -653,7 +655,7 @@ object LocalPublish:
                   version,
                 ).map(seen :+ _)
         val external = Dep
-          .published(found.dependencies, cell.platform)
+          .declared(found.dependencies, cell.platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
@@ -663,6 +665,7 @@ object LocalPublish:
                 ArtifactName.of(dependency, cell.version, cell.platform),
                 dependency.revision.value,
                 dependency.exclusions,
+                dependency.link,
               ).map(seen :+ _)
         for
           inside  <- internal
@@ -675,17 +678,24 @@ object LocalPublish:
       artifact: String,
       revision: String,
       exclusions: List[DepExclusion],
+      link: DepLink,
   ): Either[LocalPublishError, MavenDependency] =
     Organization.from(group) match
       case Left(_) =>
         Left(LocalPublishError.BadDependency(group, artifact, revision))
-      case Right(parsed) => coordinate(parsed, artifact, revision, exclusions)
+      case Right(parsed) => coordinate(parsed, artifact, revision, exclusions, scopeOf(link))
+
+  private def scopeOf(link: DepLink): MavenScope =
+    link match
+      case DepLink.Provided                        => MavenScope.Provided
+      case DepLink.Published | DepLink.CompileOnly => MavenScope.Compile
 
   private def coordinate(
       group: Organization,
       artifact: String,
       revision: String,
       exclusions: List[DepExclusion] = Nil,
+      scope: MavenScope = MavenScope.Compile,
   ): Either[LocalPublishError, MavenDependency] =
     for
       name <- ArtifactId
@@ -696,7 +706,7 @@ object LocalPublish:
         .from(revision)
         .left
         .map(_ => LocalPublishError.BadDependency(group.value, artifact, revision))
-    yield MavenDependency(group, name, version, exclusions)
+    yield MavenDependency(group, name, version, exclusions, scope)
 
   private def artifactName(
       graph: ProjectGraph,
