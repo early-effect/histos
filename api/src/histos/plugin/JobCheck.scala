@@ -14,8 +14,8 @@ import histos.{
   ProjectName,
 }
 
-/** One rendered job, and the workflow file it belongs in. */
-final case class Placed(file: WorkflowFile, plugin: Option[PluginId], render: JobRender)
+/** One rendered job, the plugin that contributed it, and the workflow file it belongs in. */
+final case class Placed(file: WorkflowFile, plugin: PluginId, render: JobRender)
 
 enum WorkflowFile:
   case Ci
@@ -81,15 +81,12 @@ object JobCheck:
         module.application.nonEmpty
       case _ => false
 
-  private final case class Item(plugin: Option[PluginId], job: CiJob, render: JobRender)
+  private final case class Item(plugin: PluginId, job: CiJob, render: JobRender)
 
   private def renders(graph: ProjectGraph): List[Item] =
-    val contributed = graph.plugins.flatMap: plugin =>
+    graph.plugins.flatMap: plugin =>
       plugin.contribution.jobs.flatMap: job =>
-        job.render.map(render => Item(Some(plugin.id), job, render))
-    val declared = graph.jobs.flatMap: job =>
-      job.render.map(render => Item(None, job, render))
-    contributed ++ declared
+        job.render.map(render => Item(plugin.id, job, render))
 
   private def reserved(items: List[Item]): Either[BuildError, Unit] =
     items.map(item => nameOf(item.render)).find(_.isReserved) match

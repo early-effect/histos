@@ -158,7 +158,7 @@ object JobYamlEventLawSpec extends ZIOSpecDefault:
   private def matrixJob: CiJob =
     val arranged = TaskArrange(
       JobName("matrix"),
-      RunLine.Task(echo),
+      echo,
       JobPermissions.read,
       Nil,
       Cond.True,
@@ -169,11 +169,8 @@ object JobYamlEventLawSpec extends ZIOSpecDefault:
       List(Target(TargetName("two"))),
     )
     new CiJob:
-      def name: JobName = arranged.name
-      def step: JobStep =
-        arranged.line match
-          case RunLine.Task(name)   => JobStep.Task(name)
-          case RunLine.Client(when) => JobStep.Command(HistosCommand.Client, when)
+      def name: JobName               = arranged.name
+      def task: TaskName              = arranged.task
       def permissions: JobPermissions = arranged.permissions
       def needs: List[JobName]        = arranged.needs
       def render: List[JobRender]     = List(JobRender.Fan(arranged, rows))

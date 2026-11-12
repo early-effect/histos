@@ -151,7 +151,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 3 | Dead code | `--compile-client`, `Dist.buildFile`, `Dist.sources`, `Dist.bundle`, `DistLayout.sources`, `sourcesSha256` | Shim |
 | 4 | Single-use API | `CommandJob`, `HistosCommand`, `PinClient`, `ClientWhen`, `JobStep.Command`, `RunLine.Client` | Link job |
 | 5 | CI waste | `link-client` links every pull request, and its skip check reads the raw pin | Link job |
-| 6 | Heuristic | `ClientBinary.present`, `installShip`, and `ClientBuilds` infer the toolchain | Ship row |
+| 6 | Heuristic | `ClientBinary.present`, `installShip`, `ClientBuilds`, and `JobCheck.launcher` (which reserves a `launcher` job name for a module named `client`) infer the toolchain | Ship row |
 | 7 | Self-host in the engine | `Assemble` hardcodes `app`, `api`, and `histos.cli.Main` | Ship row |
 | 8 | Self-host in the CLI | `assembly` defaults to `dist/histos.jar` and writes `.histos/assembly.sha256` | Ship row |
 | 9 | Cache identity | `ToolchainStamp` writes the commit into `wire` sources | Ship row |
@@ -211,7 +211,12 @@ Each item audits the files it touches against the Totality list and adds what it
   - A ZIO-level retry was tried and removed. It slept on the caller's clock, so `BspSuiteLawSpec` waited on `TestClock` in CI. It also duplicated the backoff Coursier's downloader already applies to timeouts, socket, DNS, and HTTP 408, 429, and 5xx failures.
   - `./histos test api wire engine app central`: api 201 and wire 248 on JVM and Native, engine 693, app 194, central 81.
   - `fmt --check` and `workflow --check` are clean. The wrapper's floor waits for the CI setup item (row 29).
-- [ ] **Link job.** `link-client` leaves `histos.scala` and `ci.yml`, then the command-job API is deleted. Proof: render tests show no `link-client`, and no job needs a link job or downloads `dist/histos-client`. No pin move, because the pin renders the same file once `histos.scala` stops naming the job.
+- [x] **Link job.** `link-client` leaves `histos.scala` and `ci.yml`, then the command-job API is deleted. Proof: render tests show no `link-client`, and no job needs a link job or downloads `dist/histos-client`. No pin move, because the pin renders the same file once `histos.scala` stops naming the job. Done:
+  - `CommandJob`, `HistosCommand`, `ClientWhen`, `PinClient`, `JobStep`, `RunLine`, `Projects.job`, and the graph's `jobs` are gone.
+  - `CiJob` now names its `task`, since every job runs one plugin task, and job placement carries a `PluginId` with no `Option`.
+  - `CiClientLawSpec` asserts this repository's `ci.yml` links no client, fetches none, and needs no link job. `main`'s `ci.yml` fails it (the `link-client` job at line 191).
+  - `./histos test api wire engine app central`: api 201 and wire 248 on JVM and Native, engine 693, app 194, central 81.
+  - `workflow --check` (with the pin's generator) and `fmt --check` are clean.
 - [ ] **Scenarios.** The harness returns on today's test helpers: `Scenario.open` is one store and a compiler-start count, `checkout` is a work tree, and `compile` and `test` run that checkout against the scenario store. Read [scenario-work-plan.md](scenario-work-plan.md) first, and close its unchecked items there in order. Proof: `ScenarioSpec`, the two laws it had before #132 (two checkouts of the same bytes miss on the absolute source path, and a wiped checkout restores without a compiler start), green on today's engine.
 - [ ] **Restart watch.** `~ --restart run` restarts a running program on a change, on a server and in process. The program does not hold the compile lock. A failed compile leaves the program running and prints the failure. Proof: a law with a real child that counts starts: a source change restarts it once, a broken change leaves it running, and leaving the watch stops it. The same law on the server path.
 - [ ] **Link cache.** A native or JavaScript link whose key (`NativeKey`, `JsKey` on product digests) is in the store restores the linked output and does not start the linker. Read [cache-work-plan.md](cache-work-plan.md) first. Proof: a scenario counts linker starts: a trailing comment keeps the link, a method body relinks, and a wiped checkout restores without a link.
