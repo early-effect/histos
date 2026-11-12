@@ -165,7 +165,7 @@ object LayoutLawSpec extends ZIOSpecDefault:
             SnapshotDocument(
               Organization.trusted("a\"&b"),
               name,
-              SnapshotRevision.trusted("1.0.0-SNAPSHOT"),
+              SnapshotRevision("1.0.0-SNAPSHOT"),
               SnapshotStamp.from(java.time.Instant.EPOCH),
               2,
               SnapshotVersion(SnapshotBase.trusted("1.0.0"), SnapshotStamp.from(java.time.Instant.EPOCH), 2),

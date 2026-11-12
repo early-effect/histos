@@ -65,6 +65,15 @@ object EntryPath:
   extension (path: EntryPath)
     def value: String = path
 
+    /** The last segment, which is how a module directory looks its files up. */
+    def name: String = path.substring(path.lastIndexOf('/') + 1)
+
+    /** A file `name` inside this directory. */
+    def child(name: String): EntryPath = s"$path/$name"
+
+    /** This path with `suffix` appended, as `.md5` names the checksum beside its file. */
+    def suffixed(suffix: String): EntryPath = path + suffix
+
     /** The directory that holds this entry. An entry at the root has none. */
     def parent: Option[EntryPath] =
       val cut = path.lastIndexOf('/')
@@ -84,15 +93,37 @@ enum LayoutPlace:
   case Entry(path: EntryPath)
 end LayoutPlace
 
+/** A pom element Central requires. */
+enum PomField:
+  /** The document is not a `<project>`. */
+  case Project
+  case GroupId, ArtifactId, Version, Name, License, Developer, Scm
+
+  /** A snapshot parent or dependency whose coordinate is not `group:artifact:version`. */
+  case Parent, Dependency
+
+  def token: String = this match
+    case Project    => "pom"
+    case GroupId    => "groupId"
+    case ArtifactId => "artifactId"
+    case Version    => "version"
+    case Name       => "name"
+    case License    => "license"
+    case Developer  => "developer"
+    case Scm        => "scm"
+    case Parent     => "parent"
+    case Dependency => "dependency"
+end PomField
+
 /** Why a bundle is not a release Central would publish. */
 enum Finding:
   case Layout(place: LayoutPlace)
-  case FileSet(name: String)
-  case Checksum(name: String)
-  case PomFields(field: String)
-  case SnapshotVersion(version: String)
-  case SnapshotDependency(coordinate: String)
-  case AlreadyPublished(gav: String)
+  case FileSet(path: EntryPath)
+  case Checksum(path: EntryPath)
+  case PomFields(field: PomField)
+  case SnapshotVersion(version: SnapshotRevision)
+  case SnapshotDependency(gav: Gav)
+  case AlreadyPublished(gav: Gav)
   case EmptyPom
   case TooLarge
 
@@ -100,12 +131,12 @@ enum Finding:
   def token: String = this match
     case Layout(LayoutPlace.Upload)      => "layout"
     case Layout(LayoutPlace.Entry(path)) => s"layout:${Finding.sane(path.value)}"
-    case FileSet(name)                   => s"file-set:${Finding.sane(name)}"
-    case Checksum(name)                  => s"checksum:${Finding.sane(name)}"
-    case PomFields(field)                => s"pom-fields:${Finding.sane(field)}"
-    case SnapshotVersion(version)        => s"snapshot-version:${Finding.sane(version)}"
-    case SnapshotDependency(coordinate)  => s"snapshot-dependency:${Finding.sane(coordinate)}"
-    case AlreadyPublished(gav)           => s"already-published:${Finding.sane(gav)}"
+    case FileSet(path)                   => s"file-set:${Finding.sane(path.value)}"
+    case Checksum(path)                  => s"checksum:${Finding.sane(path.value)}"
+    case PomFields(field)                => s"pom-fields:${field.token}"
+    case SnapshotVersion(version)        => s"snapshot-version:${Finding.sane(version.value)}"
+    case SnapshotDependency(gav)         => s"snapshot-dependency:${Finding.sane(gav.render)}"
+    case AlreadyPublished(gav)           => s"already-published:${Finding.sane(gav.render)}"
     case EmptyPom                        => "empty-pom"
     case TooLarge                        => "too-large"
 end Finding
@@ -128,18 +159,23 @@ object Finding:
       case char        => String.valueOf(char)
 
   private def named(token: String, kind: String, detail: String): Either[FindingError, Finding] =
-    def text(make: String => Finding): Either[FindingError, Finding] =
-      if detail.isEmpty then Left(FindingError.Bare(kind)) else Right(make(detail))
+    def entry(make: EntryPath => Finding): Either[FindingError, Finding] =
+      EntryPath.from(detail).left.map(_ => FindingError.Bare(kind)).map(make)
+    def parsed[A](parse: String => Either[FindingError, A])(make: A => Finding): Either[FindingError, Finding] =
+      if detail.isEmpty then Left(FindingError.Bare(kind)) else parse(detail).map(make)
+    def gav(raw: String): Either[FindingError, Gav] =
+      Gav.from(raw).left.map(FindingError.Coordinate(_))
     kind match
       case "empty-pom" | "too-large" => Left(FindingError.Extra(kind))
-      case "layout"                  =>
-        EntryPath.from(detail).left.map(_ => FindingError.Bare(kind)).map(path => Layout(LayoutPlace.Entry(path)))
-      case "file-set"            => text(FileSet(_))
-      case "checksum"            => text(Checksum(_))
-      case "pom-fields"          => text(PomFields(_))
-      case "snapshot-version"    => text(SnapshotVersion(_))
-      case "snapshot-dependency" => text(SnapshotDependency(_))
-      case "already-published"   => text(AlreadyPublished(_))
+      case "layout"                  => entry(path => Layout(LayoutPlace.Entry(path)))
+      case "file-set"                => entry(FileSet(_))
+      case "checksum"                => entry(Checksum(_))
+      case "pom-fields"              =>
+        parsed(raw => PomField.values.find(_.token == raw).toRight(FindingError.Field(raw)))(PomFields(_))
+      case "snapshot-version" =>
+        parsed(raw => SnapshotRevision.from(raw).left.map(FindingError.Version(_)))(SnapshotVersion(_))
+      case "snapshot-dependency" => parsed(gav)(SnapshotDependency(_))
+      case "already-published"   => parsed(gav)(AlreadyPublished(_))
       case _                     => Left(FindingError.Unknown(token))
 end Finding
 
@@ -148,11 +184,17 @@ enum FindingError:
   case Unknown(token: String)
   case Bare(kind: String)
   case Extra(kind: String)
+  case Field(raw: String)
+  case Version(error: SnapshotRevisionError)
+  case Coordinate(error: GavError)
 
   def message: String = this match
-    case Unknown(token) => s"'$token' is not a finding"
-    case Bare(kind)     => s"finding '$kind' needs a detail after ':'"
-    case Extra(kind)    => s"finding '$kind' takes no detail"
+    case Unknown(token)    => s"'$token' is not a finding"
+    case Bare(kind)        => s"finding '$kind' needs a detail after ':'"
+    case Extra(kind)       => s"finding '$kind' takes no detail"
+    case Field(raw)        => s"'$raw' is not a pom field"
+    case Version(error)    => error.message
+    case Coordinate(error) => error.message
 end FindingError
 
 /** Why a status body does not read as a state and a report. */
@@ -200,7 +242,7 @@ object PortalReport:
       case ((acc, gavs), (Some(dir), entries)) =>
         val (more, gav) = module(dir, entries)
         (acc ++ more, gav.fold(gavs)(gavs :+ _))
-    val taken = gavs.filter(published.contains).map(gav => Finding.AlreadyPublished(gav.render))
+    val taken = gavs.filter(published.contains).map(Finding.AlreadyPublished(_))
     Report(found ++ taken, gavs)
 
   private def module(dir: EntryPath, entries: Map[EntryPath, Chunk[Byte]]): (Chunk[Finding], Option[Gav]) =
@@ -213,80 +255,63 @@ object PortalReport:
         val extra = entries.collect:
           case (path, _) if !allowed(stem, fileName(dir, path)) => Finding.Layout(LayoutPlace.Entry(path))
         val jars = Chunk(
-          artifactFile(names, dir.value, s"$stem.jar", zip = true),
-          artifactFile(names, dir.value, s"$stem-sources.jar", zip = true),
-          artifactFile(names, dir.value, s"$stem-javadoc.jar", zip = true),
+          artifactFile(names, dir.child(s"$stem.jar")),
+          artifactFile(names, dir.child(s"$stem-sources.jar")),
+          artifactFile(names, dir.child(s"$stem-javadoc.jar")),
         ).flatten
-        val (pomFound, _) = pomFile(names, dir.value, s"$stem.pom", gav)
-        val snapshot      =
-          if version.endsWith("-SNAPSHOT") then Chunk(Finding.SnapshotVersion(version)) else Chunk.empty
+        val pomFound = pomFile(names, dir.child(s"$stem.pom"), gav)
+        val snapshot =
+          SnapshotRevision.from(version).fold(_ => Chunk.empty, found => Chunk(Finding.SnapshotVersion(found)))
         (Chunk.fromIterable(extra) ++ jars ++ pomFound ++ snapshot, Some(gav))
       case _ =>
         (Chunk(Finding.Layout(LayoutPlace.Entry(dir))), None)
 
-  private def artifactFile(
-      files: Map[String, Chunk[Byte]],
-      dir: String,
-      name: String,
-      zip: Boolean,
-  ): Chunk[Finding] =
-    val path = s"$dir/$name"
-    files.get(name) match
-      case None =>
-        Chunk(Finding.FileSet(path))
-      case Some(bytes) if zip && !zipMagic(bytes) =>
-        Chunk(Finding.FileSet(path))
-      case Some(bytes) =>
-        sidecars(files, path, bytes)
+  /** A jar that is missing or is not a zip is the same file-set finding. */
+  private def artifactFile(files: Map[String, Chunk[Byte]], path: EntryPath): Chunk[Finding] =
+    files.get(path.name) match
+      case Some(bytes) if zipMagic(bytes) => sidecars(files, path, bytes)
+      case _                              => Chunk(Finding.FileSet(path))
 
-  private def pomFile(
-      files: Map[String, Chunk[Byte]],
-      dir: String,
-      name: String,
-      gav: Gav,
-  ): (Chunk[Finding], Option[Gav]) =
-    val path = s"$dir/$name"
-    files.get(name) match
+  private def pomFile(files: Map[String, Chunk[Byte]], path: EntryPath, gav: Gav): Chunk[Finding] =
+    files.get(path.name) match
       case None =>
-        (Chunk(Finding.FileSet(path)), None)
+        Chunk(Finding.FileSet(path))
       case Some(bytes) if new String(bytes.toArray, StandardCharsets.UTF_8).trim.isEmpty =>
-        (Chunk(Finding.EmptyPom) ++ sidecars(files, path, bytes), Some(gav))
+        Chunk(Finding.EmptyPom) ++ sidecars(files, path, bytes)
       case Some(bytes) =>
         val fields =
           parsePom(bytes) match
-            case None          => Chunk(Finding.PomFields("pom"))
+            case None          => Chunk(Finding.PomFields(PomField.Project))
             case Some(project) => pomFields(project, gav)
-        (fields ++ sidecars(files, path, bytes), Some(gav))
+        fields ++ sidecars(files, path, bytes)
 
-  private def sidecars(files: Map[String, Chunk[Byte]], path: String, bytes: Chunk[Byte]): Chunk[Finding] =
+  private def sidecars(files: Map[String, Chunk[Byte]], path: EntryPath, bytes: Chunk[Byte]): Chunk[Finding] =
     Chunk.fromIterable(
       List(
-        required(files, s"$path.md5", Digest.md5(bytes)),
-        required(files, s"$path.sha1", Digest.sha1(bytes)),
-        present(files, s"$path.sha256", Digest.sha256(bytes)),
-        present(files, s"$path.sha512", Digest.sha512(bytes)),
-        signature(files, path),
+        required(files, path.suffixed(".md5"), Digest.md5(bytes)),
+        required(files, path.suffixed(".sha1"), Digest.sha1(bytes)),
+        present(files, path.suffixed(".sha256"), Digest.sha256(bytes)),
+        present(files, path.suffixed(".sha512"), Digest.sha512(bytes)),
+        signature(files, path.suffixed(".asc")),
       ).flatten
     )
 
-  private def required(files: Map[String, Chunk[Byte]], name: String, expected: String): Option[Finding] =
-    files.get(name.substring(name.lastIndexOf('/') + 1)) match
-      case None       => Some(Finding.FileSet(name))
-      case Some(data) => matched(name, data, expected)
+  private def required(files: Map[String, Chunk[Byte]], path: EntryPath, expected: String): Option[Finding] =
+    files.get(path.name) match
+      case None       => Some(Finding.FileSet(path))
+      case Some(data) => matched(path, data, expected)
 
   /** Central does not require `.sha256` or `.sha512`. One that is present still has to match. */
-  private def present(files: Map[String, Chunk[Byte]], name: String, expected: String): Option[Finding] =
-    files.get(name.substring(name.lastIndexOf('/') + 1)).flatMap(data => matched(name, data, expected))
+  private def present(files: Map[String, Chunk[Byte]], path: EntryPath, expected: String): Option[Finding] =
+    files.get(path.name).flatMap(data => matched(path, data, expected))
 
-  private def matched(name: String, data: Chunk[Byte], expected: String): Option[Finding] =
-    if hexMatches(data, expected) then None else Some(Finding.Checksum(name))
+  private def matched(path: EntryPath, data: Chunk[Byte], expected: String): Option[Finding] =
+    if hexMatches(data, expected) then None else Some(Finding.Checksum(path))
 
-  private def signature(files: Map[String, Chunk[Byte]], path: String): Option[Finding] =
-    val name = s"$path.asc"
-    val file = name.substring(name.lastIndexOf('/') + 1)
-    files.get(file) match
+  private def signature(files: Map[String, Chunk[Byte]], path: EntryPath): Option[Finding] =
+    files.get(path.name) match
       case Some(data) if data.nonEmpty => None
-      case _                           => Some(Finding.FileSet(name))
+      case _                           => Some(Finding.FileSet(path))
 
   private def allowed(stem: String, name: String): Boolean =
     val artifacts = List(s"$stem.jar", s"$stem-sources.jar", s"$stem-javadoc.jar", s"$stem.pom")
@@ -295,19 +320,18 @@ object PortalReport:
 
   private def pomFields(project: Element, gav: Gav): Chunk[Finding] =
     val found = List.newBuilder[Finding]
-    if one(project, "groupId") != Some(gav.group) then found += Finding.PomFields("groupId")
-    if one(project, "artifactId") != Some(gav.artifact) then found += Finding.PomFields("artifactId")
+    if one(project, "groupId") != Some(gav.group) then found += Finding.PomFields(PomField.GroupId)
+    if one(project, "artifactId") != Some(gav.artifact) then found += Finding.PomFields(PomField.ArtifactId)
     one(project, "version") match
-      case Some(version) if version == gav.version        => ()
-      case Some(version) if version.endsWith("-SNAPSHOT") =>
-        found += Finding.PomFields("version")
-        found += Finding.SnapshotVersion(version)
-      case Some(_) => found += Finding.PomFields("version")
-      case None    => found += Finding.PomFields("version")
-    if one(project, "name").isEmpty then found += Finding.PomFields("name")
-    if !licenseOk(project) then found += Finding.PomFields("license")
-    if !developerOk(project) then found += Finding.PomFields("developer")
-    if !scmOk(project) then found += Finding.PomFields("scm")
+      case Some(version) if version == gav.version => ()
+      case Some(version)                           =>
+        found += Finding.PomFields(PomField.Version)
+        SnapshotRevision.from(version).foreach(snapshot => found += Finding.SnapshotVersion(snapshot))
+      case None => found += Finding.PomFields(PomField.Version)
+    if one(project, "name").isEmpty then found += Finding.PomFields(PomField.Name)
+    if !licenseOk(project) then found += Finding.PomFields(PomField.License)
+    if !developerOk(project) then found += Finding.PomFields(PomField.Developer)
+    if !scmOk(project) then found += Finding.PomFields(PomField.Scm)
     found ++= snapshotDependencies(project)
     Chunk.fromIterable(found.result())
 
@@ -327,19 +351,18 @@ object PortalReport:
       one(scm, "url").isDefined && one(scm, "connection").isDefined && one(scm, "developerConnection").isDefined
 
   private def snapshotDependencies(project: Element): List[Finding] =
-    val parent = direct(project, "parent").flatMap: node =>
-      coordinate(node).filter(_.version.endsWith("-SNAPSHOT")).map(gav => Finding.SnapshotDependency(gav.render))
+    val parent = direct(project, "parent").flatMap(node => snapshot(node, PomField.Parent))
     val listed = direct(project, "dependencies").flatMap: deps =>
-      direct(deps, "dependency").flatMap: dep =>
-        coordinate(dep).filter(_.version.endsWith("-SNAPSHOT")).map(gav => Finding.SnapshotDependency(gav.render))
+      direct(deps, "dependency").flatMap(dep => snapshot(dep, PomField.Dependency))
     parent ++ listed
 
-  private def coordinate(node: Element): Option[Gav] =
+  /** A coordinate at a snapshot version. A `:` inside one of its parts is not a coordinate, so it is that field. */
+  private def snapshot(node: Element, field: PomField): Option[Finding] =
     for
       group    <- one(node, "groupId")
       artifact <- one(node, "artifactId")
-      version  <- one(node, "version")
-    yield Gav(group, artifact, version)
+      version  <- one(node, "version") if SnapshotRevision.from(version).isRight
+    yield Gav.from(s"$group:$artifact:$version").fold(_ => Finding.PomFields(field), Finding.SnapshotDependency(_))
 
   private def parsePom(bytes: Chunk[Byte]): Option[Element] =
     try

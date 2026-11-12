@@ -94,7 +94,7 @@ object PortalServerLawSpec extends ZIOSpecDefault:
             "blank id"             -> (gap.status == Status.NotFound),
             "missing deployment"   -> (missing.status == Status.NotFound),
             "parent id"            -> (parent.status == Status.InternalServerError &&
-              parent.body.text.contains("the rehearsal portal could not store the deployment")),
+              parent.body.text.contains("the rehearsal portal could not read its store")),
             "drop of a missing deployment" -> (dropped.status == Status.NotFound),
             "every request is noted"       -> (heardAll == 10),
           )
@@ -152,6 +152,28 @@ object PortalServerLawSpec extends ZIOSpecDefault:
         yield assertTrue(
           status.status == Status.InternalServerError,
           status.body.text.contains("the rehearsal portal could not read the deployment"),
+        )
+      }
+    ,
+    test("an upload the store cannot write says it could not store, and a status it cannot read says so"):
+      val folded = DeploymentId("folded")
+      val held   = PortalStore.Record(DeploymentState.Validated, Chunk.empty, Chunk.empty)
+      ZIO.scoped {
+        for
+          blocked  <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
+          _        <- ZIO.attemptBlocking(Files.writeString(blocked.root.resolve("deployments"), "a file")).orDie
+          body     <- packed(Chunk[Byte](1, 2, 3))
+          refused  <- ask(blocked, Method.POST, "api/v1/publisher/upload?publishingType=USER_MANAGED", body)
+          readable <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
+          _        <- PortalStore.create(readable.root, folded, held)
+          state = readable.root.resolve("deployments").resolve(folded.value).resolve("state")
+          _ <- ZIO.attemptBlocking(Files.delete(state)).orDie *> ZIO.attemptBlocking(Files.createDirectory(state)).orDie
+          status <- ask(readable, Method.POST, s"api/v1/publisher/status?id=${folded.value}")
+        yield assertTrue(
+          refused.status == Status.InternalServerError,
+          refused.body.text.contains("the rehearsal portal could not store the deployment"),
+          status.status == Status.InternalServerError,
+          status.body.text.contains("the rehearsal portal could not read its store"),
         )
       },
   ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer) @@ TestAspect.withLiveClock

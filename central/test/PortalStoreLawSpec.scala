@@ -105,18 +105,41 @@ object PortalStoreLawSpec extends ZIOSpecDefault:
         )
       program
     ,
-    test("a deployment id that is not one path segment is an io error"):
+    test("a deployment id that is not one path segment fails a create as a write and a read as a read"):
       val ids     = List(DeploymentId("."), DeploymentId(".."), DeploymentId("a/b"), DeploymentId("a\\b"))
       val program =
         for
           root <- ZIO.service[Path]
           dir  <- LawDir.child(root, "segment")
           rows <- ZIO.foreach(ids): id =>
-            PortalStore.create(dir, id, record(DeploymentState.Validated)).either.map(id -> _)
+            for
+              created <- PortalStore.create(dir, id, record(DeploymentState.Validated)).either
+              read    <- PortalStore.read(dir, id).either
+            yield (id, created, read)
         yield
           val misses = rows.collect:
-            case (id, found) if found != Left(PortalStore.Error.Io(dir)) => id.value
+            case (id, created, read)
+                if created != Left(PortalStore.Error.Write(dir)) || read != Left(PortalStore.Error.Read(dir)) =>
+              id.value
           assertTrue(misses == Nil)
+      program
+    ,
+    test("a file the store cannot read is a read error, and one it cannot write is a write error"):
+      val program =
+        for
+          root     <- ZIO.service[Path]
+          readable <- LawDir.child(root, "unreadable")
+          id       <- stored(readable, DeploymentId("folded"), record(DeploymentState.Validated))
+          state = deployments(readable, id).resolve("state")
+          _ <- ZIO.attemptBlocking(Files.delete(state)).orDie *> ZIO.attemptBlocking(Files.createDirectory(state)).orDie
+          read    <- PortalStore.read(readable, id).either
+          blocked <- LawDir.child(root, "unwritable")
+          _       <- written(blocked.resolve("deployments"), "a file where the folder goes")
+          made    <- PortalStore.create(blocked, DeploymentId("held"), record(DeploymentState.Validated)).either
+        yield assertTrue(
+          read == Left(PortalStore.Error.Read(state)),
+          made == Left(PortalStore.Error.Write(deployments(blocked, DeploymentId("held")).resolve("state"))),
+        )
       program
     ,
     test("a published marker rebuilds a dotted group, and a bad report or gav line names its fault"):
