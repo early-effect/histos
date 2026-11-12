@@ -1,7 +1,7 @@
 package histos.central
 
 import heddle.client.{Authority, Client, ClientError}
-import heddle.http.{Body, Method, Request, Response, Status}
+import heddle.http.{Method, Request, Response, Status}
 
 import slayer.{any, stub, stubbed, Stubbed}
 
@@ -34,59 +34,56 @@ object PreflightReadLawSpec extends ZIOSpecDefault:
       assertTrue(good == Right(Chunk((gav, pom))), misses == Nil)
     ,
     test("a missing pom is unpublished, a 2xx is already public, and any other answer is that failure"):
-      val rows = List(
-        ZIO.succeed(Response(Status.NotFound))            -> (Right(()): Either[PreflightError, Unit]),
-        ZIO.succeed(Response(Status.Ok))                  -> Left(PreflightError.Published(gav)),
-        ZIO.succeed(Response(Status.Created))             -> Left(PreflightError.Published(gav)),
-        ZIO.succeed(Response(Status.InternalServerError)) -> Left(PreflightError.Repository(gav, 500)),
-        ZIO.fail(ClientError.ConnectTimeout(Authority("repo1.maven.org", 443))) -> Left(
-          PreflightError.RepositoryDown(gav, TransportFault.ConnectTimeout("repo1.maven.org", 443))
+      val rows: List[(String, IO[ClientError, Response], Either[PreflightError, Unit])] = List(
+        ("404", ZIO.succeed(Response(Status.NotFound)), Right(())),
+        ("200", ZIO.succeed(Response(Status.Ok)), Left(PreflightError.Published(gav))),
+        ("201", ZIO.succeed(Response(Status.Created)), Left(PreflightError.Published(gav))),
+        ("500", ZIO.succeed(Response(Status.InternalServerError)), Left(PreflightError.Repository(gav, 500))),
+        (
+          "timeout",
+          ZIO.fail(ClientError.ConnectTimeout(Authority("repo1.maven.org", 443))),
+          Left(PreflightError.RepositoryDown(gav, TransportFault.ConnectTimeout("repo1.maven.org", 443))),
         ),
       )
       val program =
-        ZIO.foreach(rows) { (response, expected) =>
+        ZIO.foreach(rows) { (label, response, expected) =>
           asked(response)(client => Preflight.head(client, Preflight.Hosts.central.repo1, gav, pom)).map {
             (found, requests) =>
-              val aimed = requests match
-                case Chunk(req) =>
-                  req.method == Method.HEAD && req.url.render == repo && req.header("User-Agent").contains("histos")
-                case _ => false
-              found == expected && aimed
+              val seen = (found, requests.map(aimed))
+              Option.when(seen != (expected, Chunk((Method.HEAD, repo, Some("histos")))))(label -> seen)
           }
         }
-      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(flags => assertTrue(flags.forall(identity)))
+      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(misses => assertTrue(misses.flatten == Nil))
     ,
     test("a key is present only when the body is armored, and a miss or a status stays typed"):
-      fingerprint match
-        case Left(error) => ZIO.succeed(assertTrue(error == PreflightError.BadFingerprint))
-        case Right(key)  =>
-          val lookup = s"$keyHost?op=get&search=0x${key.value}"
-          val rows   = List(
-            ZIO.succeed(Response.text(armor))                 -> (Right(()): Either[PreflightError, Unit]),
-            ZIO.succeed(Response.text("nope"))                -> Left(PreflightError.KeyMissing(key)),
-            ZIO.succeed(Response(Status.NotFound))            -> Left(PreflightError.KeyMissing(key)),
-            ZIO.succeed(Response(Status.InternalServerError)) -> Left(PreflightError.KeyStatus(500)),
-            ZIO.fail(ClientError.ReadTimeout(Authority("keyserver.ubuntu.com", 443))) -> Left(
-              PreflightError.KeyDown(TransportFault.ReadTimeout("keyserver.ubuntu.com", 443))
-            ),
-          )
-          val program =
-            ZIO.foreach(rows) { (response, expected) =>
+      val program =
+        ZIO
+          .fromEither(Fingerprint.from(hex))
+          .flatMap: key =>
+            val lookup = s"$keyHost?op=get&search=0x${key.value}"
+            val rows: List[(String, IO[ClientError, Response], Either[PreflightError, Unit])] = List(
+              ("armored", ZIO.succeed(Response.text(armor)), Right(())),
+              ("plain", ZIO.succeed(Response.text("nope")), Left(PreflightError.KeyMissing(key))),
+              ("404", ZIO.succeed(Response(Status.NotFound)), Left(PreflightError.KeyMissing(key))),
+              ("500", ZIO.succeed(Response(Status.InternalServerError)), Left(PreflightError.KeyStatus(500))),
+              (
+                "timeout",
+                ZIO.fail(ClientError.ReadTimeout(Authority("keyserver.ubuntu.com", 443))),
+                Left(PreflightError.KeyDown(TransportFault.ReadTimeout("keyserver.ubuntu.com", 443))),
+              ),
+            )
+            ZIO.foreach(rows) { (label, response, expected) =>
               asked(response)(client => Preflight.lookup(client, Preflight.Hosts.central.keyserver, key)).map {
                 (found, requests) =>
-                  val aimed = requests match
-                    case Chunk(req) =>
-                      req.method == Method.GET && req.url.render == lookup &&
-                      req.header("User-Agent").contains("histos")
-                    case _ => false
-                  found == expected && aimed
+                  val seen = (found, requests.map(aimed))
+                  Option.when(seen != (expected, Chunk((Method.GET, lookup, Some("histos")))))(label -> seen)
               }
             }
-          program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(flags => assertTrue(flags.forall(identity))),
+      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(misses => assertTrue(misses.flatten == Nil)),
   )
 
-  private def fingerprint: Either[PreflightError, Fingerprint] =
-    Fingerprint.from(hex)
+  private def aimed(req: Request): (Method, String, Option[String]) =
+    (req.method, req.url.render, req.header("User-Agent"))
 
   private def asked[A](response: IO[ClientError, Response])(
       use: Client => IO[PreflightError, A]

@@ -8,17 +8,18 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
 
   def spec = suite("portal flow")(
     test("a changed poll speaks and resets, and a quiet poll speaks on the 30th read"):
-      val quiets  = (0 to 29).toList
-      val changes = List(Portal.PollChange.Same, Portal.PollChange.Changed)
-      val misses  = quiets.flatMap: quiet =>
-        changes.flatMap: change =>
-          val found    = Portal.beat(quiet, change)
-          val expected = change match
-            case Portal.PollChange.Changed                                 => (Portal.PollNote.Say, 0)
-            case Portal.PollChange.Same if quiet + 1 >= Portal.reportEvery => (Portal.PollNote.Say, 0)
-            case Portal.PollChange.Same                                    => (Portal.PollNote.Wait, quiet + 1)
-          if found == expected then Nil else List((quiet, change, found))
-      assertTrue(misses == Nil, Portal.beat(28, Portal.PollChange.Same) == (Portal.PollNote.Wait, 29))
+      import Portal.PollChange.{Changed, Same}
+      import Portal.PollNote.{Say, Wait}
+      val quiet = List.fill(30)(Same).scanLeft((Say, 0))((last, change) => Portal.beat(last._2, change)).drop(1)
+      assertTrue(
+        Portal.beat(0, Changed) == (Say, 0),
+        Portal.beat(17, Changed) == (Say, 0),
+        Portal.beat(29, Changed) == (Say, 0),
+        Portal.beat(0, Same) == (Wait, 1),
+        Portal.beat(28, Same) == (Wait, 29),
+        Portal.beat(29, Same) == (Say, 0),
+        quiet.map(_._1) == List.fill(29)(Wait) :+ Say,
+      )
     ,
     test("a fast body says nothing"):
       for
@@ -81,34 +82,27 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
     test("a bad portal fails before the upload"):
       val upload = ZIO.die(new IllegalStateException("uploaded"))
       val gavs   = Chunk(Gav("demo", "widget", "1.0.0"))
-      Fingerprint.from(fingerprintHex) match
-        case Left(_)    => ZIO.succeed(assertTrue(false))
-        case Right(key) =>
-          for
-            ftp  <- Preflight.release(Map("HISTOS_PORTAL" -> "ftp://example.com"), gavs, key, upload).either
-            http <- Preflight.release(Map("HISTOS_PORTAL" -> "http://example.com"), gavs, key, upload).either
-          yield assertTrue(
-            ftp == Left(PreflightError.Portal(PortalBase.Error.Malformed("ftp://example.com"))),
-            http == Left(PreflightError.Portal(PortalBase.Error.Insecure("example.com"))),
-          )
+      for
+        key  <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
+        ftp  <- Preflight.release(Map("HISTOS_PORTAL" -> "ftp://example.com"), gavs, key, upload).either
+        http <- Preflight.release(Map("HISTOS_PORTAL" -> "http://example.com"), gavs, key, upload).either
+      yield assertTrue(
+        ftp == Left(PreflightError.Portal(PortalBase.Error.Malformed("ftp://example.com"))),
+        http == Left(PreflightError.Portal(PortalBase.Error.Insecure("example.com"))),
+      )
     ,
     test("a loopback portal skips the reads and maps an upload failure"):
-      val gavs = Chunk(Gav("demo", "widget", "1.0.0"))
-      Fingerprint.from(fingerprintHex) match
-        case Left(_)    => ZIO.succeed(assertTrue(false))
-        case Right(key) =>
-          DeploymentId.from("deploy-1") match
-            case Left(_)   => ZIO.succeed(assertTrue(false))
-            case Right(id) =>
-              val deployment = Deployment(id, DeploymentState.Validated)
-              val env        = Map("HISTOS_PORTAL" -> "http://127.0.0.1:9")
-              for
-                refused <- Preflight.release(env, gavs, key, ZIO.fail(PortalError.Unauthorized)).either
-                passed  <- Preflight.release(env, gavs, key, ZIO.succeed(deployment))
-              yield assertTrue(
-                refused == Left(PreflightError.Upload(PortalError.Unauthorized)),
-                passed == deployment,
-              )
+      val gavs       = Chunk(Gav("demo", "widget", "1.0.0"))
+      val env        = Map("HISTOS_PORTAL" -> "http://127.0.0.1:9")
+      val deployment = Deployment(DeploymentId("deploy-1"), DeploymentState.Validated)
+      for
+        key     <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
+        refused <- Preflight.release(env, gavs, key, ZIO.fail(PortalError.Unauthorized)).either
+        passed  <- Preflight.release(env, gavs, key, ZIO.succeed(deployment))
+      yield assertTrue(
+        refused == Left(PreflightError.Upload(PortalError.Unauthorized)),
+        passed == deployment,
+      )
     ,
     test("a repo1 or keyserver fault is named in the preflight message"):
       val gav  = Gav("demo", "widget", "1.0.0")

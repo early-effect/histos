@@ -13,13 +13,16 @@ import heddle.client.{Client, ClientError}
 import heddle.http.header.{BasicCredentials, Headers}
 import heddle.http.{Body, FormField, MediaType, Method, QueryParams, Response, Status}
 
-import zio.{Chunk, Config, Scope, UIO, ZIO}
+import zio.{Chunk, Config, IO, Scope, UIO, ZIO}
 import zio.test.*
 
 object PortalServerLawSpec extends ZIOSpecDefault:
   private val jar = Chunk[Byte](0x50.toByte, 0x4b.toByte, 3.toByte, 4.toByte)
   private val asc = Chunk.single(1.toByte)
 
+  // Each law opens a heddle server, which shuts down on the Clock it was installed under: closing the scope polls a
+  // connection that is still writing its last response every 10 ms, up to `gracefulShutdownTimeout`. On TestClock that
+  // poll never wakes.
   def spec = suite("rehearsal portal")(
     test("a file is not a portal root, and each open error keeps its sentence"):
       val credentials   = PortalOpenError.Credentials.diagnose
@@ -36,7 +39,7 @@ object PortalServerLawSpec extends ZIOSpecDefault:
         case _                        => false
       ZIO.scoped {
         for
-          parent <- ZIO.acquireRelease(directory("histos-portal-file"))(delete)
+          parent <- ZIO.serviceWithZIO[Path](LawDir.child(_, "file"))
           file = parent.resolve("not-a-directory")
           _      <- ZIO.attemptBlocking(Files.writeString(file, "x")).orDie
           opened <- secret.flatMap(value => PortalServer.open(file, value, ZIO.unit).either)
@@ -110,22 +113,62 @@ object PortalServerLawSpec extends ZIOSpecDefault:
           opened  <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
           body    <- packed(Chunk[Byte](1, 2, 3))
           created <- ask(opened, Method.POST, "api/v1/publisher/upload?publishingType=USER_MANAGED", body)
-          id      <- ZIO.fromOption(deployment(created)).orElseFail(PortalError.Unnamed)
+          id      <- deployment(created)
           status  <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
           denied  <- ask(opened, Method.POST, s"api/v1/publisher/deployment/${id.value}")
           _       <- ask(opened, Method.DELETE, s"api/v1/publisher/deployment/${id.value}")
           gone    <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
         yield assertTrue(
           created.status == Status.Created,
-          report(status) == Some((DeploymentState.Failed, Chunk(Finding.Layout("zip")))),
+          report(status) == Right((DeploymentState.Failed, Chunk(upload))),
           denied.status == Status.Conflict,
           denied.body.text.contains("the deployment cannot be promoted"),
           gone.status == Status.NotFound,
         )
+      }
+    ,
+    test("an empty bundle fails in either mode and is never validated"):
+      ZIO.scoped {
+        for
+          opened <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
+          body   <- packed(zipped(Nil))
+          states <- ZIO.foreach(List("USER_MANAGED", "AUTOMATIC")): publishingType =>
+            for
+              created <- ask(opened, Method.POST, s"api/v1/publisher/upload?publishingType=$publishingType", body)
+              id      <- deployment(created)
+              status  <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
+            yield report(status)
+        yield assertTrue(states == List.fill(2)(Right((DeploymentState.Failed, Chunk(upload)))))
+      }
+    ,
+    test("a stored deployment that does not decode is a server error that says it could not be read"):
+      val broken  = DeploymentId("broken")
+      val pending = PortalStore.Record(DeploymentState.Pending, Chunk.empty, Chunk.empty)
+      ZIO.scoped {
+        for
+          opened <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
+          _      <- PortalStore.create(opened.root, broken, pending)
+          status <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${broken.value}")
+        yield assertTrue(
+          status.status == Status.InternalServerError,
+          status.body.text.contains("the rehearsal portal could not read the deployment"),
+        )
       },
-  )
+  ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer) @@ TestAspect.withLiveClock
 
-  private def staged(mode: ReleaseMode, ready: DeploymentState): ZIO[Scope, Any, TestResult] =
+  /** Why a law could not finish its exchange with the portal. */
+  private type Fault = PortalOpenError | RepositoryUser.Error | ArtifactIdError | ClientError | PortalError |
+    DeploymentId.Error
+
+  /** Why a status response does not read as a report. */
+  private enum Unread:
+    case Code(code: Int)
+    case Empty
+    case Parse(error: StatusError)
+
+  private val upload: Finding = Finding.Layout(LayoutPlace.Upload)
+
+  private def staged(mode: ReleaseMode, ready: DeploymentState): ZIO[Path & Scope, Fault, TestResult] =
     val publishingType = mode match
       case ReleaseMode.Hold      => "USER_MANAGED"
       case ReleaseMode.Automatic => "AUTOMATIC"
@@ -136,7 +179,7 @@ object PortalServerLawSpec extends ZIOSpecDefault:
         judged = PortalReport.inspect(zip, zip.length.toLong, Set.empty)
         body    <- packed(zip)
         created <- ask(opened, Method.POST, s"api/v1/publisher/upload?publishingType=$publishingType", body)
-        id      <- ZIO.fromOption(deployment(created)).orElseFail(PortalError.Unnamed)
+        id      <- deployment(created)
         before  <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
         _       <- ask(opened, Method.POST, s"api/v1/publisher/deployment/${id.value}")
         after   <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
@@ -146,22 +189,22 @@ object PortalServerLawSpec extends ZIOSpecDefault:
         judged == Report(Chunk.empty, Chunk(Gav("demo", "widget", "1.0.0"))),
         created.status == Status.Created,
         created.body.text.contains(id.value + "\n"),
-        report(before) == Some((ready, Chunk.empty)),
-        report(after) == Some((DeploymentState.Published, Chunk.empty)),
+        report(before) == Right((ready, Chunk.empty)),
+        report(after) == Right((DeploymentState.Published, Chunk.empty)),
         gone.status == Status.NotFound,
       )
     }
 
-  private final case class Opened(base: String, token: String)
+  private final case class Opened(base: String, token: String, root: Path)
 
   private def rehearse(
       bind: (Path, RepositorySecret) => ZIO[Scope, PortalOpenError, PortalServer.Bound]
-  ): ZIO[Scope, PortalOpenError | RepositoryUser.Error, Opened] =
+  ): ZIO[Path & Scope, PortalOpenError | RepositoryUser.Error, Opened] =
     for
-      root        <- ZIO.acquireRelease(directory("histos-portal"))(delete)
+      root        <- ZIO.serviceWithZIO[Path](LawDir.child(_, "portal"))
       credentials <- secret
       bound       <- bind(root, credentials)
-    yield Opened(bound.url, bearer(credentials))
+    yield Opened(bound.url, bearer(credentials), root)
 
   private def secret: ZIO[Any, RepositoryUser.Error, RepositorySecret] =
     RepositoryUser.from("ann") match
@@ -184,12 +227,18 @@ object PortalServerLawSpec extends ZIOSpecDefault:
     val target  = if query.isEmpty then path else s"$path?${query.render}"
     Client.request(method, s"${opened.base}$target", headers, body)
 
-  private def deployment(response: Response): Option[DeploymentId] =
-    if response.status == Status.Created then response.body.text.flatMap(text => DeploymentId.from(text).toOption)
-    else None
+  /** The id a `201` named. A body that is not an id keeps its parse error. */
+  private def deployment(response: Response): IO[PortalError | DeploymentId.Error, DeploymentId] =
+    if response.status != Status.Created then ZIO.fail(PortalError.Status(response.status.code))
+    else
+      ZIO
+        .fromOption(response.body.text)
+        .orElseFail(PortalError.Unnamed)
+        .flatMap(text => ZIO.fromEither(DeploymentId.from(text)))
 
-  private def report(response: Response): Option[(DeploymentState, Chunk[Finding])] =
-    if response.status == Status.Ok then response.body.text.flatMap(PortalReport.parse) else None
+  private def report(response: Response): Either[Unread, (DeploymentState, Chunk[Finding])] =
+    if response.status != Status.Ok then Left(Unread.Code(response.status.code))
+    else response.body.text.toRight(Unread.Empty).flatMap(PortalReport.parse(_).left.map(Unread.Parse(_)))
 
   private def packed(bytes: Chunk[Byte]): UIO[Body] =
     Body.multipart(Chunk(FormField.Binary("bundle", bytes, MediaType.OctetStream, Some("bundle.zip"))))
@@ -240,19 +289,4 @@ object PortalServerLawSpec extends ZIOSpecDefault:
 
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))
-
-  private def directory(prefix: String): UIO[Path] =
-    ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie
-
-  private def delete(root: Path): UIO[Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        try
-          val paths = List.newBuilder[Path]
-          val items = walk.iterator()
-          while items.hasNext do paths += items.next()
-          paths.result().sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-        finally walk.close()
-    }.orDie
 end PortalServerLawSpec

@@ -16,7 +16,7 @@ import histos.{
   ScmConnection,
 }
 
-import zio.Chunk
+import zio.{Chunk, ZIO}
 import zio.test.*
 
 object LayoutLawSpec extends ZIOSpecDefault:
@@ -34,40 +34,34 @@ object LayoutLawSpec extends ZIOSpecDefault:
     ,
     test("paths follow the group, the artifact, and the rendered revision"):
       val root = java.nio.file.Path.of("repo")
-      built(Revision.Release(ReleaseVersion(ship)), Organization("demo.group")) match
-        case Left(_)         => assertTrue(false)
-        case Right(artifact) =>
-          Layout.paths(root, artifact) match
-            case Left(_)      => assertTrue(false)
-            case Right(paths) =>
-              val base     = root.toAbsolutePath.normalize
-              val expected = List("demo", "group", "widget", "1.0.0").foldLeft(base)(_.resolve(_))
-              assertTrue(
-                paths.directory.normalize == expected,
-                paths.jar == expected.resolve("widget-1.0.0.jar"),
-                paths.pom == expected.resolve("widget-1.0.0.pom"),
-                paths.sources.isEmpty,
-                paths.javadoc.isEmpty,
-              )
+      for
+        artifact <- ZIO.fromEither(built(Revision.Release(ReleaseVersion(ship)), Organization("demo.group")))
+        paths    <- ZIO.fromEither(Layout.paths(root, artifact))
+      yield
+        val base     = root.toAbsolutePath.normalize
+        val expected = List("demo", "group", "widget", "1.0.0").foldLeft(base)(_.resolve(_))
+        assertTrue(
+          paths.directory.normalize == expected,
+          paths.jar == expected.resolve("widget-1.0.0.jar"),
+          paths.pom == expected.resolve("widget-1.0.0.pom"),
+          paths.sources.isEmpty,
+          paths.javadoc.isEmpty,
+        )
     ,
     test("sources and javadoc paths appear only when the artifact carries them"):
       val root = java.nio.file.Path.of("repo")
-      withExtras match
-        case Left(_)         => assertTrue(false)
-        case Right(artifact) =>
-          Layout.paths(root, artifact) match
-            case Left(_)      => assertTrue(false)
-            case Right(paths) =>
-              val directory = paths.directory
-              assertTrue(
-                paths.sources.contains(directory.resolve("widget-1.0.0-SNAPSHOT-sources.jar")),
-                paths.javadoc.contains(directory.resolve("widget-1.0.0-SNAPSHOT-javadoc.jar")),
-              )
+      for
+        artifact <- ZIO.fromEither(withExtras)
+        paths    <- ZIO.fromEither(Layout.paths(root, artifact))
+      yield assertTrue(
+        paths.sources.contains(paths.directory.resolve("widget-1.0.0-SNAPSHOT-sources.jar")),
+        paths.javadoc.contains(paths.directory.resolve("widget-1.0.0-SNAPSHOT-javadoc.jar")),
+      )
     ,
     test("a pom escapes xml, writes distribution repo, and copies the scm connection"):
-      describedArtifact match
-        case None           => assertTrue(false)
-        case Some(artifact) =>
+      ZIO
+        .fromEither(describedArtifact)
+        .map: artifact =>
           val pom = Layout.pom(artifact)
           assertTrue(
             pom.contains("<groupId>a&quot;&amp;b</groupId>"),
@@ -107,9 +101,9 @@ object LayoutLawSpec extends ZIOSpecDefault:
             dependencies = List(MavenDependency(Organization("org.example"), plain, version)),
           )
           (Layout.pom(marked), Layout.pom(open))
-      rendered match
-        case Left(_)               => assertTrue(false)
-        case Right((marked, open)) =>
+      ZIO
+        .fromEither(rendered)
+        .map: (marked, open) =>
           assertTrue(
             marked.contains("<artifactId>widget_3</artifactId>"),
             marked.contains("<groupId>org.codehaus.plexus</groupId>"),
@@ -144,18 +138,18 @@ object LayoutLawSpec extends ZIOSpecDefault:
             dependencies = List(MavenDependency(Organization("javax.servlet"), name, version)),
           )
           (Layout.pom(supplied), Layout.pom(ordinary))
-      rendered match
-        case Left(_)                     => assertTrue(false)
-        case Right((supplied, ordinary)) =>
+      ZIO
+        .fromEither(rendered)
+        .map: (supplied, ordinary) =>
           assertTrue(
             supplied.contains("<scope>provided</scope>"),
             !ordinary.contains("<scope>"),
           )
     ,
     test("an empty dependency list omits the dependencies wrapper"):
-      built(Revision.Ci(CiVersion(ship)), Organization("demo")) match
-        case Left(_)         => assertTrue(false)
-        case Right(artifact) =>
+      ZIO
+        .fromEither(built(Revision.Ci(CiVersion(ship)), Organization("demo")))
+        .map: artifact =>
           val pom = Layout.pom(artifact)
           assertTrue(
             pom.contains("<version>1.0.0-ci</version>"),
@@ -169,7 +163,7 @@ object LayoutLawSpec extends ZIOSpecDefault:
         .map: name =>
           SnapshotMetadata.render(
             SnapshotDocument(
-              Organization.trusted("a&b"),
+              Organization.trusted("a\"&b"),
               name,
               SnapshotRevision.trusted("1.0.0-SNAPSHOT"),
               SnapshotStamp.from(java.time.Instant.EPOCH),
@@ -178,12 +172,11 @@ object LayoutLawSpec extends ZIOSpecDefault:
               SnapshotUpdated.from(java.time.Instant.EPOCH),
             )
           )
-      rendered match
-        case Left(_)    => assertTrue(false)
-        case Right(xml) =>
+      ZIO
+        .fromEither(rendered)
+        .map: xml =>
           assertTrue(
-            xml.contains("<groupId>a&amp;b</groupId>"),
-            !xml.contains("<groupId>a&b</groupId>"),
+            xml.contains("  <groupId>a\"&amp;b</groupId>\n"),
             xml.contains("<buildNumber>2</buildNumber>"),
             xml.contains("<timestamp>19700101.000000</timestamp>"),
             xml.contains("<lastUpdated>19700101000000</lastUpdated>"),
@@ -222,33 +215,22 @@ object LayoutLawSpec extends ZIOSpecDefault:
           javadoc = Some(pk),
         )
 
-  private def describedArtifact: Option[Artifact] =
-    ArtifactId.from("widget") match
-      case Left(_)     => None
-      case Right(name) =>
-        ArtifactId.from("core") match
-          case Left(_)        => None
-          case Right(depends) =>
-            DependencyVersion.from("1.2.3") match
-              case Left(_)        => None
-              case Right(version) =>
-                Some(
-                  Artifact(
-                    Organization.trusted("a\"&b"),
-                    name,
-                    Revision.Release(ReleaseVersion(ship)),
-                    pk,
-                    dependencies = List(MavenDependency(Organization("demo"), depends, version)),
-                    document = PomDocument(
-                      description = Some(PomText("rocks & rolls")),
-                      license = Some(
-                        License(LicenseName("Apache-2.0"), HttpUrl("https://www.apache.org/licenses/LICENSE-2.0.txt"))
-                      ),
-                      developer = Some(Developer(DeveloperId("ada"), PomText("Ada"))),
-                      scm = Some(
-                        Scm(HttpUrl("https://example.com/demo"), ScmConnection("scm:git:https://example.com/demo.git"))
-                      ),
-                    ),
-                  )
-                )
+  private def describedArtifact: Either[ArtifactIdError | DependencyVersionError, Artifact] =
+    for
+      name    <- ArtifactId.from("widget")
+      depends <- ArtifactId.from("core")
+      version <- DependencyVersion.from("1.2.3")
+    yield Artifact(
+      Organization.trusted("a\"&b"),
+      name,
+      Revision.Release(ReleaseVersion(ship)),
+      pk,
+      dependencies = List(MavenDependency(Organization("demo"), depends, version)),
+      document = PomDocument(
+        description = Some(PomText("rocks & rolls")),
+        license = Some(License(LicenseName("Apache-2.0"), HttpUrl("https://www.apache.org/licenses/LICENSE-2.0.txt"))),
+        developer = Some(Developer(DeveloperId("ada"), PomText("Ada"))),
+        scm = Some(Scm(HttpUrl("https://example.com/demo"), ScmConnection("scm:git:https://example.com/demo.git"))),
+      ),
+    )
 end LayoutLawSpec
