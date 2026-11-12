@@ -11,6 +11,7 @@ import histos.{
   ScalaVersion,
   ScalaVersions,
   SourcePos,
+  ThreadStack,
 }
 
 import java.nio.file.{Files, Path}
@@ -34,6 +35,16 @@ object ProgramLawSpec extends ZIOSpecDefault:
         !ClientBinary.present(ProjectGraph.trusted(List(jvm))),
         !ClientBinary.present(ProjectGraph.trusted(List(other))),
         ClientBinary.destination(repo) == repo.resolve("dist").resolve("histos-client"),
+      )
+    ,
+    test("a native run gets its module's thread stack over the server's, or 8m when the module names none"):
+      val main   = Some(MainClass.trusted("demo.Exit"))
+      val sized  = module("app", Platform.Native, main).copy(threadStack = ThreadStack("16m"))
+      val bare   = module("app", Platform.Native, main)
+      val server = Map("PATH" -> "/bin", "SCALANATIVE_THREAD_STACK_SIZE" -> "1m")
+      assertTrue(
+        Program.nativeEnvironment(server, sized) == Map("PATH" -> "/bin", "SCALANATIVE_THREAD_STACK_SIZE" -> "16m"),
+        Program.nativeEnvironment(server, bare) == Map("PATH" -> "/bin", "SCALANATIVE_THREAD_STACK_SIZE" -> "8m"),
       )
     ,
     test(

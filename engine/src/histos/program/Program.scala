@@ -4,7 +4,7 @@ import histos.doctor.Suggest
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
-import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
+import histos.native.{NativeLink, NativeLinkRequest, NativeStack, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{
@@ -466,7 +466,7 @@ object Program:
                   )
                 )
               work <- fresh(linkDir.resolve("exec"))
-            yield command(cell, List(program.toString), work, env)
+            yield command(cell, List(program.toString), work, nativeEnvironment(env, module))
     began ++ ran
 
   private def events(
@@ -486,6 +486,10 @@ object Program:
             cell.platform,
             code.value,
           )
+
+  /** A Native program's environment. The module's [[histos.ThreadStack]] wins over one the server inherited. */
+  private[histos] def nativeEnvironment(env: Map[String, String], module: Module): Map[String, String] =
+    env ++ NativeStack.environment(module.threadStack)
 
   private def command(
       cell: histos.zinc.CompiledCell,

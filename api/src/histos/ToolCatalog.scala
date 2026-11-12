@@ -39,8 +39,8 @@ object ToolCatalog:
       ToolRevision("1.1.1"),
       ToolRevision("0.1.3"),
     ),
-    // 0.5.12 aborts in libunwind on Apple Silicon. The newer nightly
-    // 0.5.13-20261031-4e8508c-SNAPSHOT publishes a javalib whose checksum does not match.
-    NativeTools(NativeVersion("0.5.13-20261030-eb3f3b8-SNAPSHOT"), ScalaVersion("3.9.0")),
+    // A nightly: the release aborts in libunwind on Apple Silicon, and its module-initialization wait recurses
+    // until a thread's stack runs out (scala-native#4366, fixed by #5221).
+    NativeTools(NativeVersion("0.5.13-20261111-9be93b7-SNAPSHOT"), ScalaVersion("3.9.0")),
     FormatTools(ToolRevision("3.11.5"), ScalaVersion("2.13.18")),
   )

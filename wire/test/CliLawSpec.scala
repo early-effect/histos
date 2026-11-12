@@ -31,6 +31,16 @@ object CliLawSpec extends ZIOSpecDefault:
         named.map(_.code) == List(0, 1, 2),
       )
     ,
+    test("a fatal error ends the native client with status 1 and a line that names the error"):
+      val overflow = histos.client.Fatal.of(new StackOverflowError())
+      val memory   = histos.client.Fatal.of(new OutOfMemoryError("heap"))
+      assertTrue(
+        overflow.line == "the histos client stopped on a fatal error: java.lang.StackOverflowError",
+        memory.line == "the histos client stopped on a fatal error: java.lang.OutOfMemoryError: heap",
+        overflow.exit.code == 1,
+        memory.exit.code == 1,
+      )
+    ,
     test("a clean report is 0, a non-zero program status wins, and a failed test, error line, or error is 1"):
       assertTrue(
         misses(

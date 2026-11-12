@@ -61,6 +61,7 @@ final case class Module(
     testStore: TestStore = TestStore.Off,
     needs: Set[Need] = Set.empty,
     resources: List[GeneratedAsset] = Nil,
+    threadStack: ThreadStack = ThreadStack.default,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -568,6 +569,7 @@ object Projects:
                   m.testStore,
                   m.needs,
                   m.resources,
+                  m.threadStack,
                 )
 
   private def publicationOf(

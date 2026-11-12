@@ -58,6 +58,16 @@ private object NativeVersionMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ NativeVersion.trusted(${ Expr(text) }) }
 
+private object ThreadStackMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ThreadStack] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("ThreadStack(...) takes a literal. Use ThreadStack.from at runtime.", raw)
+      case Some(text) =>
+        ThreadStack.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ThreadStack.trusted(${ Expr(text) }) }
+
 private object FrameworkClassMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[FrameworkClass] =
     import quotes.reflect.report
