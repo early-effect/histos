@@ -1,14 +1,11 @@
 # Histos
 
-Histos is a Scala build tool. The build is data. The work is a ZIO effect. A person and an agent ask for the same operation and read the same result.
-
-The terminal prints that result and chooses an exit. An agent receives the result as data and sees each line as it is printed. An editor uses BSP. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault.
+Histos is a Scala build tool. The build is a Scala program that returns a graph. The work is a ZIO effect. A person, an editor, and an agent ask for the same operations and read the same results.
 
 ```mermaid
 flowchart TD
   person[terminal] --> cmd[histos command]
-  metals[Metals] --> conn[".bsp/histos.json"]
-  conn --> bsp["histos bsp"]
+  metals[Metals] --> bsp["histos bsp"]
   agent[MCP client] --> mcp["histos mcp"]
   cmd --> client[native client]
   client --> record[".histos/server.json"]
@@ -16,27 +13,19 @@ flowchart TD
   mcp --> record
   record --> jvm[JVM server]
   jvm --> zinc[Zinc]
-  jvm --> coursier[Coursier library]
-  jvm --> store["content store"]
+  jvm --> coursier[Coursier]
+  jvm --> store[content store]
 ```
 
-A batch command execs the native client. The client reads `.histos/server.json` and talks to that JVM server, starting one when none is listening. `server`, `bsp`, and `mcp` stay on the jar. When the recorded version matches, BSP copies frames onto that server and MCP sends the same call. No server means that process does the work. A different version reboots that server, and the call runs on the replacement. A local assembly whose snapshot id is not the revision this checkout would publish fails the command and names `histos assembly`.
+A command goes to a warm JVM server for its project, and starts one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
 
-This is pre-release. The API may break when that makes it more honest. Other repositories take snapshots.
-
-What we still intend is [next](docs/next.md).
-
-## A build
-
-A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A version, a dependency, a path, a url, and a name are typed literals. A bad one does not compile the build file. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
+Histos is pre-release. The API breaks when that makes it more honest. What we still intend is [next](docs/next.md).
 
 ## Install
 
-Histos runs on macOS and Linux. A Windows machine uses WSL. A native Windows build may come later.
+Histos runs on macOS and Linux. On Windows, use WSL.
 
-Histos does not install a JDK. A JDK 21 or newer has to be on `PATH`. On macOS: `brew install --cask temurin@21`. On Linux: https://adoptium.net/temurin/releases?version=21
-
-The `cs` binary is not required. Dependency resolution uses the Coursier library inside the server. That library writes `~/.cache/coursier/v1` itself.
+Histos does not install a JDK, Node, or clang. The launcher checks for JDK 21 or newer, but `test`, `run`, and a native or JavaScript link compile a small `java.lang.foreign` bootstrap, which needs JDK 22 or newer. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
 
 One POSIX script is the installer and the command:
 
@@ -45,242 +34,194 @@ curl -fsSL https://github.com/early-effect/histos/releases/download/dist/shim | 
 export PATH="$HOME/.histos/bin:$PATH"
 ```
 
-The script does not edit a shell rc. A second run is a no-op when the installed shim matches.
+The script installs itself as `~/.histos/bin/histos` and does not edit a shell rc. A first install writes `~/.histos/default`, the toolchain used outside a project, from the channel `dist` publishes.
 
-A first install writes `~/.histos/default` when that file is missing. The value is the published dist channel: `channel` when that file is on the dist base, otherwise the newest `channel-<version>-SNAPSHOT` asset, or the newest release when no snapshot channel is published. The next command resolves it, so `histos new` works straight after install.
+### Toolchains and pins
 
-`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version and, when no default is set, records that version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and when that file is missing it starts from the same published channel. Inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same pin into both files. A release pin moves to the newest release on the dist base. A snapshot pin, a pointer or a timestamp, moves to the newest snapshot line at or above its own. The pin's form is kept: a timestamp moves to the newest timestamp of that line, and a pointer stays a pointer while `update` installs the toolchain for its current timestamp. `--freeze` writes the timestamp and `--follow` writes the pointer. Both together is a usage failure. When a release is at or above the snapshot pin's line, `update` asks `histos 0.2.1 is a stable release newer than 0.2.0-SNAPSHOT. Switch to 0.2.1? [y/N]`. It asks only when stdin and stderr are terminals and `CI` is unset or `false`. Otherwise it stays on the snapshot line and prints `histos 0.2.1 is a stable release. histos update --stable switches.` `--stable` answers yes. A snapshot pointer is read from the channel at most once an hour, and `histos update` reads it every time. A cached channel is used when the network is down. Nothing else updates in the background. Outside CI, a pin that a published release passed prints a notice: a release pin behind a newer release names `histos update`, and a snapshot pin whose line is released names `histos update --stable`. Central is asked at most once a day, and the answer is cached under `~/.histos`.
+A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest, `histos.jar`, and, when the manifest names one for this platform, the native client `histos-client`. Prebuilt clients exist for `linux-x86_64` and `macos-aarch64`. Without a client, the shim runs `java -jar`.
 
-`histos new <name>` creates a one-module project pinned to the toolchain that wrote it. `histos init` writes the current directory. The default scaffold is `.gitignore`, the `./histos` wrapper, `workflow --update`, and `resolve --update`, then `doctor` outside CI. `--bare` writes the build file and the sources only. `histos init --from sbt` reads `build.sbt`. `histos init --from zipx` reads `project/ZipxVersions.scala`. A setting the draft does not map stays as a comment. The second line the command prints is `histos test`.
+A project pins its toolchain in `build.properties`:
 
-`--compile-client` on the install script, `histos toolchain install`, and `histos update` links a native client for that version after the jar is checked. It is not sticky. Clang has to already be on `PATH`. Histos does not install it. A release with no prebuilt client for this platform runs `java -jar` and says that `--compile-client` will link one. A snapshot runs the client its manifest names. A manifest that names none runs `java -jar` and names the newest release that has one. The first prebuilt clients are `linux-x86_64` and `macos-aarch64`.
-
-A project pin wins. The layout is `~/.histos/bin/histos`, `~/.histos/default`, and `~/.histos/toolchains/<version>/` with the manifest, `histos.jar`, and `histos-client`. The content store is `~/.cache/histos` unless `XDG_CACHE_HOME` is set.
-
-```mermaid
-flowchart TD
-  cmd[a build command] --> local{assembly checksum matches}
-  local -->|yes| jar[that jar]
-  local -->|no| pin{project pin}
-  pin -->|build.properties| resolved[resolved version]
-  pin -->|none| fallback["~/.histos/default"]
-  resolved --> tc["toolchain directory"]
-  fallback --> tc
-  tc --> pair[jar and client]
-  jar --> run[exec the client]
-  pair --> run
+```text
+histos.version=0.2.10
 ```
 
-GitHub Actions use `.github/actions/setup` from this repo:
+The pin wins over `~/.histos/default`. It has three forms:
 
-```yaml
-- uses: early-effect/histos/.github/actions/setup@main
+- `0.2.10` is a release.
+- `0.2.10-SNAPSHOT` is a pointer that follows the newest snapshot of that line. The shim reads `channel-<pin>` from the `dist` release at most once an hour (`HISTOS_CHANNEL_REFRESH=every-call` reads it every time), and uses the cached answer when the network is down.
+- A timestamp such as `0.2.10-20261112.042525-1`, or a commit pointer such as `0.2.10-7230ba21293f-SNAPSHOT`, freezes one build.
+
+The shim answers four commands itself:
+
+- `histos toolchain install 0.2.10` downloads one version. It records that version as the default when none is set.
+- `histos toolchain list` prints the installed versions.
+- `histos self update` replaces the shim when the published one differs.
+- `histos update` moves the pin. Inside a project it rewrites `build.properties`. Outside one it rewrites `~/.histos/default`. `--make-default` writes both.
+
+`update` moves a release pin to the newest release and a snapshot pin to the newest snapshot line at or above its own. It keeps the pin's form: `--freeze` writes a timestamp and `--follow` writes a pointer. When a release has passed a snapshot pin, `update` asks on a terminal whether to switch, and `--stable` answers yes. Outside CI, a command on the JVM prints a notice when a published release has passed the project's pin. It asks Central at most once a day.
+
+`HISTOS_HOME` moves `~/.histos`. `HISTOS_DIST` points the shim at another `dist` base.
+
+## Start a project
+
+```sh
+histos new demo
+cd demo
+./histos test
 ```
 
-`version` empty reads `build.properties`. The action restores `~/.histos/toolchains` and `~/.cache/coursier/v1`. It does not install a JDK, Node, LLVM, or Playwright, and it does not open the content store. A job that needs a JDK calls `actions/setup-java` itself.
+`histos new <name>` writes a one-module project in a new directory. `histos init` writes one into the current directory. Both pin the toolchain that wrote them. `histos init --from sbt` drafts `histos.scala` from `build.sbt` and `project/plugins.sbt`, and `histos init --from zipx` from `project/ZipxVersions.scala`. A setting the draft does not map stays as a comment.
 
-## This repository
+The full scaffold also writes `.gitignore`, a `./histos` script that runs the installed shim, the generated workflows, and `dependencies.lock`, then runs `doctor` outside CI. On a terminal it asks before writing the CI files and asks for the CI branch. `--yes` takes the defaults, and `--branch <name>` names the branch. `--bare` writes only `histos.scala`, `build.properties`, and the sources.
 
-Histos builds itself. [histos](histos) comes from `workflow --update`. A local assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim.
+## A build
 
-`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted. CI starts from the version line. The pin is the driver. The generator does not look at this repository, and no job assembles this checkout in order to run it. Snapshot and release jobs still run `./histos assembly` because they publish this tree. `workflow --check` compares the files that pin renders with the files in the tree.
+`histos.scala` defines `object build extends HistosBuild` with a `graph`. A module names its platforms (`Jvm`, `Js`, `Native`), its Scala versions, and its dependencies. Versions, dependencies, paths, urls, and names are typed literals, so a bad one does not compile the build file. The literals are [Literals.scala](api/src/histos/Literals.scala). This repository's build is [histos.scala](histos.scala).
 
-[histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. A process loaded from class files packs that directory into the cache and compiles against the jar. `.histos/classes/api` is the api compiled for the modules after that.
+```scala
+import histos.*
 
-`assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The same run writes the ship snapshot id, the revision Coursier would fetch and the revision every artifact of that publish shares, into `target/unmanaged/wire/src/histos/Toolchain.scala` and compiles that object into the jar. `histos client` links `dist/histos-client` and compiles that same object into the native client. The next `./histos` runs the client when that file is executable, and the jar otherwise. Either way the jar checksum has to match `.histos/assembly.sha256`.
-
-For example, `histos.version=0.1.0` pins that release. The shim installs that toolchain from the GitHub release `dist`: the jar, the manifest, and a prebuilt client when the manifest names one. `histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel until the next `histos update`, which moves it to the newest timestamp and keeps it a timestamp. `histos new` and `histos init` write the version the shim resolved, so a snapshot default becomes a timestamp pin. `launcher --latest` writes the snapshot pointer and does not fetch. A release pin stays there. Any of these lines may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from `dist` when the line ends in `-SNAPSHOT`. The body of that file is one timestamp revision. Run the `snapshots` workflow. That is the publish. It runs `./histos assembly`, then `./histos publish snapshots` with `HISTOS_SESSION=snapshot`, `HISTOS_SHA` set to the commit, and `HISTOS_BRANCH=default`. The pointer moves from any branch. The command uploads `channel-<ship>-SNAPSHOT` and `channel-<ship>-<sha>-SNAPSHOT`, plus the timestamped manifest and jar for each. The channel body is the timestamp Maven stored for that coordinate. By default the manifest leaves `clients` empty, so the shim runs `java -jar`. This ship asks with `.clients(ClientBuilds.ReleasesAndSnapshots)`, so its snapshot manifest names the clients. A ship that asks links the client on every snapshot: the snapshots workflow runs the client matrix, downloads each binary to `dist/clients/client-<platform>/histos-client`, and `publish snapshots` uploads the jar, the clients, the manifest that names them, and the channel last. Only the one asset ship with a native client and an LLVM pin may ask for it. A laptop publish of an asset ship uses `GITHUB_TOKEN` or `gh auth token`, and `GITHUB_REPOSITORY` or the origin remote.
-
-The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. The native client sends that version line. The server records the same line, and `.histos/assembly.sha256` when that file is present.
-
-A running server keeps the driver it started with. `publish local`, a new `dist/histos.jar`, or `HISTOS_ASSEMBLY` does not replace that process. The next command compares the version line and that checksum. A mismatch prints `rebooting server onto <sha> (was <sha>)` and the socket, reboots the server, and the command runs on the replacement. If that restart does not record the checksum, the failure names the socket, the checksum wanted, and the checksum it got. `histos reboot` prints the same line. `histos version` prints the launcher pin, the assembly checksum, and the snapshot id compiled into that assembly against the revision this checkout would publish.
-
-When this checkout has `.histos/assembly.sha256` and the snapshot id compiled into the toolchain is not the revision this checkout would publish, the command fails before it compiles `histos.scala` or reboots onto the stale jar: `toolchain is <id>; this checkout would publish <id>. Run histos assembly.` An unstamped binary says `no snapshot id`. `assembly`, `version`, and `reboot` still run, and they stay on the current server while that check is failing. Once the snapshot matches, a new assembly checksum reboots the next command, including `version`. A checkout with no local assembly, including CI on the published pin, does not fail this check. While dogfooding, `.histos/allow-drift` (gitignored with the rest of `.histos`) prints that sentence and continues. Delete the file to fail closed again. The MCP process is a third JVM. Its `version` result adds `mcp <id>` or `mcp is not this assembly`. `./histos version` does not. Restarting MCP is still yours. The tool does not kill it.
-
-`.bsp/histos.json` takes its `version` from that line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
-
-## A workflow
-
-```mermaid
-flowchart TD
-  job[test job] --> setup["setup action"]
-  setup --> keys["exact keys, no restore prefix"]
-  keys --> ask{tools this job asks for}
-  ask -->|native module and an LLVM revision| llvm[LLVM]
-  ask -->|Js module and a Node revision| node[Node]
-  ask -->|a Playwright revision| pw["Playwright, and Node when a floor is set"]
-  ask -->|neither| none["no Node, LLVM, or Playwright"]
-  llvm --> run["./histos test"]
-  node --> run
-  pw --> run
-  none --> run
+object build extends HistosBuild:
+  def graph =
+    val zio = dep"dev.zio::zio:2.1.27"
+    val app = module("app", Jvm)(scala"3.10.0")
+      .libraryDependencies(zio)
+      .testDependencies(zio.module("zio-test"), zio.module("zio-test-sbt"))
+      .main(MainClass("demo.Main"))
+    Projects(app)
 ```
 
-The setup action restores toolchains and `~/.cache/coursier/v1`. It does not install those tools, and it does not open the content store. The test job restores `~/.cache/histos`, and after the suite it deletes that key and saves the store again so the next run sees the products this one wrote. `versions`, `workflow`, and `format` do not open that scope, so a job that does not compile cannot publish an empty store. A build that declares `.scalafmt` gets a `format` job beside the suite. It runs `./histos fmt --check`. Only a test job installs Node, LLVM, or Playwright, and only for the modules that job runs. Playwright is also installed when the build names its revision, because this suite launches Firefox from a JVM test. `install-deps firefox` stays on every such run, after the step rewrites the Azure Ubuntu mirror to `archive.ubuntu.com`. The browser download waits for a cache miss.
+- A third-party root is one `dep"..."` literal. A family member is `.module("other")` on that value, which copies the organization, kind, and revision.
+- `.compileOnly` stays on the compile classpath and out of the pom. `.provided` stays on the compile classpath, off a JVM run and a fat jar, and is `provided` in the pom.
+- `.excluding(organization, artifact)` excludes a published artifact. `.sbt(sbt"2")` makes an sbt plugin coordinate.
+- A dependency on a ship this build owns is a pin: `.pointer` is `<ship>-SNAPSHOT`, `.commit(sha)` is `<ship>-<12 hex>-SNAPSHOT`, and `.released` is the ship number.
 
-A site is a `SiteJob`. `Automatic` uploads its directory and deploys it from a `pages` job on a push to the repository's default branch. `Manual` writes `histos-pages.yml`, and that workflow deploys when someone runs it. `Both` is the default and does both. A site job runs on the default branch only, so a pull request does not build it and does not request the `github-pages` environment. The branch comparison is `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`.
+`Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`.
+
+## Commands
+
+`histos help` lists the commands, and `histos help <command>` prints one.
+
+| Group | Commands |
+| --- | --- |
+| Information | `version`, `graph`, `toolchain`, `observe`, `help` |
+| Build | `compile`, `run`, `clean`, `cleanFull`, `fmt` |
+| Test | `test`, `testOnly`, `testQuick`, `coverage`, `affected`, `~` |
+| Project | `new`, `init` |
+| Publish | `publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, `publish drop`, `bump` |
+| Dependencies | `resolve`, `deps` |
+| CI | `workflow`, `doctor`, `setup supply-chain`, `--explain` |
+| Cache | `cache path`, `cache list`, `cache clean`, `cache promote` |
+| Server | `server`, `bsp`, `mcp`, `reload`, `reboot`, `cancel` |
+| Preview | `preview compile`, `preview test`, `preview publishLocal`, `preview publish snapshots`, `preview clean`, `preview cleanFull`, `preview run` |
+| Building Histos | `assembly`, `client`, `launcher`, `portal` ([self-host](docs/self-host.md)) |
+
+### Build and run
+
+`histos compile [project ...]` compiles the named projects, or every module. An aggregate expands to its modules.
+
+`histos run <name> [jvm|js|native]` runs a module's main. `histos run inspect` prints the project names, `histos run versions` prints the version decision, `histos run doc` writes scaladoc, and `histos run <plugin>/<task>` runs a plugin task. `run` passes no program arguments.
+
+`histos clean [project ...]` deletes products. No name wipes every product root under `.histos` without reading the build. A name wipes that module, and an aggregate expands. `histos cleanFull` wipes the products, removes this project's keep file from the content store, and then deletes every store entry no remaining project keeps.
+
+`histos fmt` formats with the scalafmt the build declares (`.scalafmt` reads `.scalafmt.conf`, `.scalafmt(RepoPath("config/scalafmt.conf"))` another file). The `version` in that configuration is the scalafmt that runs, locked with its sha256 by `resolve --update`. No name formats every module's `src` and `test` trees and `histos.scala`. A name formats that module. `--file <path>` formats repository-relative files. The configuration's include and exclude filters apply, and `project.git` applies except with `--file`. `histos fmt --check` writes no source, names each unformatted file, and fails. It records known-formatted files in `.histos/format/ledger`.
+
+### Test
+
+`histos test [project ...]` runs the selected suites. `histos test --affected '["api"]'` runs only those modules, and `["all"]` runs everything. `histos affected --base <sha>` prints the modules that differ from that commit as that JSON list.
+
+`histos testOnly --module api '*Grammar*'` runs suites that match a pattern. `histos testQuick` skips a suite whose stored stamp still matches, and takes the same `--module` and patterns. The stamp includes the upstream API digest, so a signature change runs the suite.
+
+A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` lets `test` skip a suite whose stored digest still matches. `Remote` does not skip and does not upload.
+
+`histos coverage [project ...]` instruments Scala 3 and Scala 2.13 on the JVM, runs the suites, and writes the report under `.histos/coverage`. JavaScript and Native are named and not measured. Floors are `--min-stmt`, `--min-branch`, `--min-stmt-file`, `--min-branch-file`, `--min-stmt-package`, and `--min-branch-package`, and `--exclude-class` and `--exclude-file` take regexes. `test` stays uninstrumented, and publish never reads `.histos/coverage`.
+
+### Watch
+
+`histos ~ compile` runs a command again after a source save, on the server when one is up. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program and restarts it on a change (see [Known gaps](#known-gaps)).
+
+### Preview
+
+`histos preview compile`, `preview test`, `preview publishLocal`, `preview publish snapshots`, `preview clean`, `preview cleanFull`, and `preview run` write nothing. A compile or test preview names the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. When the analysis cannot be read, the line says the staleness is unknown.
+
+### Information
+
+`histos version` prints the pin. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos toolchain` prints the JDK a compile would use, and Node or clang when a module needs them. `histos observe` prints the stored compile tally.
+
+### Dependencies
+
+`histos resolve` fetches what `dependencies.lock` records and checks each sha256. `resolve --update` solves and writes the lock, and `resolve --check` fails when a fresh solve differs. `histos deps check`, `deps update [--yes] [--security]`, `deps audit [--report]`, `deps pr [--security] [--open]`, `deps alert`, and `deps snapshot [--submit]` check, update, audit, and report dependencies. `histos setup supply-chain [--from zipx] [--fix] [--yes]` writes the supply-chain files.
+
+### Doctor
+
+`histos doctor [project ...]` runs the repository checks and lists errors and warnings. `--verbose` lists every check, `--area <area>` limits them, `--json` prints JSON, `--preflight <job>` runs the offline checks for one CI job, and `--fix` applies local edits. Named projects are the modules this run launches, which decides whether Node and clang are probed. `histos --explain supply.pin` explains one check by its id.
+
+## CI
+
+`histos workflow --update` writes the generated workflows, and `histos workflow --check` (the default) compares them with the tree. Neither publishes or changes the pin.
+
+`ci.yml` has these jobs:
+
+- `affected` computes the modules that changed.
+- `test` runs `./histos test --affected ...` on a pull request or a dispatch. It restores and saves the content store `~/.cache/histos` under a key per pull request.
+- `versions` runs `./histos run versions`.
+- `scaladoc` runs `./histos run doc` when the build calls `.docCheck`, and fails on a warning.
+- `coverage` runs `./histos coverage` when the build calls `.coverage()`.
+- `format` runs `./histos fmt --check` when the build declares `.scalafmt`.
+- `cache-seed` compiles on a push to the default branch and saves the main store.
+- `workflow` runs `doctor` and `workflow --check`.
+- `supply-chain` checks the workflows, the lock, and the advisories.
+- `dependency-snapshot` submits the dependency graph on a push to the default branch.
+- Plugin jobs (`TaskJob`, `SiteJob`) and command jobs the build declares.
+
+Each job runs `./.github/actions/setup`, which installs the shim, installs the pinned toolchain, and restores `~/.histos/toolchains` and the Coursier cache. That action lives in this repository. A consumer repository has to provide it today (see [Known gaps](#known-gaps)). Node and LLVM are installed only in jobs that need them: the test job for the modules it runs, `scaladoc` for the build's JavaScript and native modules, and `cache-seed` for every module. Playwright, and Node with it, is installed in those jobs whenever the build names a Playwright revision.
+
+A `SiteJob` publishes one directory. `Automatic` deploys from a `pages` job on a push to the default branch, `Manual` writes `histos-pages.yml` for a person to dispatch, and `Both` (the default) does both.
+
+The catalog adds `histos-release.yml` (dispatch only), `histos-promote.yml` when the release holds the deployment, and `histos-snapshots.yml` when a ship names an asset. The supply chain adds `histos-deps.yml`, and `histos-audit.yml` when it schedules an audit.
 
 ## Publishing
 
-The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish snapshots`, and `publish release` are three commands. The last two close the build's `sona` layer. The staged revision chooses the Sonatype branch. The command name does not.
+The decision is [publishing.md](docs/publishing.md). A ship is a catalog row, `Ship("demo").next(0, 1, 0)(api, app)`, and the number is the next release. SNAPSHOT is never written in the catalog. `histos run versions` prints what a session would publish.
 
-```mermaid
-flowchart TD
-  stage["stage the jar, pom, sources jar, and javadoc jar"]
-  stage --> local[publishLocal]
-  stage --> snap[publish snapshots]
-  stage --> rel[publish release]
-  local --> ivy["ivy2Local, unsigned"]
-  snap --> put["PUT a snapshot, unsigned"]
-  rel --> sign[sign the files]
-  sign --> portal[one portal bundle]
-```
+| Command | Writes |
+| --- | --- |
+| `publishLocal` | The snapshot coordinate of HEAD into Coursier's `ivy2Local`, unsigned. A release when `HISTOS_SESSION=release`. |
+| `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. |
+| `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. |
 
-`publishLocal` and `publish release` stage the same files: the jar, the pom, the sources jar, and a javadoc jar that holds that module's scaladoc. A library module stages its jar. An assembly stages the packaged program. `publish snapshots` stages the same files and omits the javadoc jar. `publishLocal` writes those files where Coursier resolves `ivy2Local` and does not sign. A snapshot coordinate is a PUT of those files and does not sign. A release signs those files, then uploads one portal bundle. A warning from scaladoc does not fail the publish. `Projects.docCheck` adds a CI job, `scaladoc`, that runs the same scaladoc beside the suite and fails on a warning.
+`publishLocal` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publishLocal` moves it only on the default branch.
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
-- A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
-- `publish local` and `publish snapshots` write the snapshot coordinate of HEAD. They do not write `<ship>-ci`. A pull-request session is kept. `publish snapshots` moves the pointer from any checkout. `publish local` moves it only on the default branch.
-- `publish release` publishes the ship number and requires `HISTOS_SESSION=release`.
+- A release also needs `PGP_SECRET`. `PGP_PASSPHRASE` unlocks it (empty by default), and `PGP_KEY_HEX` selects a fingerprint. `HISTOS_SIGNER=gpg` signs with `gpg` instead, and then `PGP_KEY_HEX` is required and `PGP_SECRET` is not read.
+- A release needs a license, a developer, and an scm, or the command fails before upload. Each pom is checked against Central first, and an already public coordinate is held.
 
-A catalog row, as an example, is `ships(Ship("histos").next(0, 1, 0)(api, app))`. The number is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `<ship>-ci`. `publish snapshots` writes `<ship>-<sha>-SNAPSHOT` and moves the `<ship>-SNAPSHOT` pointer from any checkout. `publish local` moves that pointer only on the default branch. `ship"..."` is only the number.
+The `releases` file at the root records what is already published. Empty means the catalog number is not released. This line means it is, so a snapshot of that number is held and `histos bump` is the next edit:
 
-A laptop runs `./histos publish snapshots`. The commit at HEAD is the coordinate. Export the session only to choose a different commit, a pull request, or a release. The catalog stays on the next release. `releases` may be empty. An empty file means the catalog number is not released. `histos matches` means that number is already released, and both snapshot and release publishes are held.
-
-`histos run versions` prints a session you name. Publish does not need this block.
-
-```bash
-export HISTOS_SESSION=snapshot
-export HISTOS_SHA=$(git rev-parse HEAD)
-export HISTOS_BRANCH=default
-./histos run versions
+```text
+histos matches
 ```
 
-`publish snapshots` moves the snapshot pointer without those exports, from any checkout. `publish local` moves it only on the default branch. `other` stores only the commit snapshot for a local write. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released, from `releases` or from Maven Central, and `ship.pin` when `histos.version` trails a published Histos release. It does not open a bump pull request or rewrite the pin. `histos bump` rewrites `.next` past the newest stable `coursier.Versions` lists. The default is the next patch. `--minor` and `--major` move that component. A maven repository wins over ivy2 local. The command does not change `histos.version`.
+A missing file refuses every publish.
 
-A dependency on an owned ship is a pin, not a revision string. A third-party root is one `dep"..."` literal. A family member is `.module("other")` on that value. `.module` copies organization, kind, and revision, and clears platforms, compile-only, provided, exclusions, and an sbt series. `.compileOnly` stays on the compile classpath and out of the pom. `.provided` stays on the compile classpath, stays off a JVM run and a fat jar, and the pom writes `<scope>provided</scope>`. An sbt plugin coordinate is `.sbt(sbt"2")` on a binary root. An exclusion is `.excluding(organization, artifact)` and names the published artifact id.
+The default layer is `Sona.layer(ReleaseMode.Automatic)`, which publishes and waits for `PUBLISHED`. `ReleaseMode.Hold` waits for `VALIDATED`, and `histos publish promote <deployment>` or `histos publish drop <deployment>` finishes it. `--automatic` forces Automatic for one run. Each step prints as it happens: building, staged, signing, bundling, uploading, and the portal state.
 
-```scala
-Ship("histos").next(0, 2, 3).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
-Ship("histos").next(0, 2, 3).commit("0123456789abcdef0123456789abcdef01234567").dep(
-  organization"rocks.earlyeffect",
-  artifact"histos-api",
-)
-Ship("histos").next(0, 2, 3).released.dep(organization"rocks.earlyeffect", artifact"histos")
-```
+`histos publish assets` uploads the file an assembly names when its deployment is `VALIDATED` or `PUBLISHED` and the GitHub release for that tag exists. It needs `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
 
-The sample above uses `0.2.3` as an example number. `.pointer` is `<ship>-SNAPSHOT`. `.commit` is `<ship>-<12 hex>-SNAPSHOT`. `.released` is that ship number. The three types are distinct, so a release API does not accept a snapshot pin.
+`histos bump [--major | --minor | --patch] [ship ...]` moves `.next` past the newest stable version Coursier lists, when that stable has caught `.next`. The default is the next patch. It does not change the pin. `doctor` warns `ship.should-bump` when the number is already released and `ship.pin` when the pin trails a published Histos release.
 
-The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
+## Editors
 
-`publish release` does not stage a snapshot coordinate. It reports that ship and continues with the others. A ship that depends on a snapshot is reported and not uploaded. One ship's upload failure does not fail the others. Missing credentials, a missing signing key, or a portal base that cannot be read fails the whole invocation before compile, when the layer's secret names are the five below. `publish snapshots` checks the username and password only. A layer whose secret names differ skips the check.
+Metals speaks BSP 2.2 to Histos. Open the project and import the build. Metals reads `.bsp/histos.json` and starts its `argv` (`./histos bsp` when the project has the script, `histos bsp` otherwise). A command rewrites that file when the pin changes, and a running `bsp` rewrites it when the build files change, which Metals treats as a build change.
 
-Unset, `PGP_SECRET` is the key and `PGP_PASSPHRASE` unlocks it. `PGP_KEY_HEX`, when set, selects that fingerprint. `HISTOS_SIGNER=gpg` signs with gpg, and then the fingerprint is required. The release workflow sets `HISTOS_SESSION=release` on the publish step, then lists `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
+One target is one cell: a module, a Scala version, a platform, and `main`, or `test` when the cell has test sources. `histos.scala` is its own target. Scala 3 targets compile with `-Xsemanticdb` and `-sourceroot`, and Scala 2 targets with the semanticdb plugin. Diagnostics arrive as `build/publishDiagnostics`, or `build/logMessage` when a problem has no position.
 
-A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. `publishLocal` does not take a directory and it does not write `~/.m2`. It installs a snapshot, or a release when `HISTOS_SESSION=release`.
+`bsp` stays on the JVM. When a server is recorded, the session runs there, and a server at another version is replaced first. With no server, `bsp` compiles in its own process.
 
-`publish promote <deployment>` publishes a `VALIDATED` deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
+## Agents
 
-`publish assets` uploads the file named on an assembly when `.histos/deployments/<ship>` says `VALIDATED` or `PUBLISHED`, and a GitHub release for that tag already exists. A named ship in another state fails. No name skips a ship with no file, or a file in another state. The command does not create the release. The release workflow does not run it.
-
-The workflow is dispatch only. A tag does not publish. Each ship runs `./histos publish release <ship>` with `HISTOS_SESSION=release`, which signs the staged files and uploads that bundle. The file does not pass `--automatic`. This build is Automatic anyway, because that is the default layer. Hold is the build that also renders `histos-promote.yml`. That file's only input is the deployment id, and its command is `./histos publish promote`. After a non-snapshot ship that names an asset has published, that job runs `./histos assembly`, then `ubuntu-26.04` and `macos-26` install Temurin 25 and run `./histos client`. The macOS job wraps `clang` with the Xcode SDK. The install job uploads the jar, `linux-x86_64` and `macos-aarch64` clients, and the manifest to the existing `dist` release. A snapshot ship does not add those jobs to the release file. This ship's snapshot workflow links the clients before it publishes. A ship that names an asset renders `histos-snapshots.yml`. Run that workflow. It publishes the Maven snapshot, the pointer channel, and the commit-coordinate channel in one dispatch. The release named `dist` already exists. The workflow does not create it.
-
-Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `HISTOS_PORTAL` to that URL. Unset, the client uses `https://central.sonatype.com`. [ReleaseSpec](engine/test/ReleaseSpec.scala) runs that client against [PortalServer](central/src/histos/central/PortalServer.scala) and does not call Central.
-
-The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The three publish commands package `app` the same way. A release signs that jar. `assembly` writes `dist/histos.jar` for this checkout. That file is the local launcher, not a second publication. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create a tag or a GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
-
-`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The version line stays a published Histos, stable or snapshot, and the shim downloads that toolchain.
-
-## An operation
-
-`version` prints the ship number. `graph` prints each project with its platforms and Scala versions, then each plugin. Environment values are left out. `toolchain` prints the JDK a compile would use, Node when a module is JavaScript, and clang when a module is native.
-
-`compile` takes project names. No name compiles every module. `clean` takes project names too. No name wipes every product root under `.histos` and does not read the build. A name wipes that module. An aggregate expands to its modules, and upstream stays. The pin and the launcher file are at the repo root, so they stay. The assembly checksum and the server stay. `cleanFull` takes no project. It wipes those products, then drops this project's content-store entries. `assembly` takes an optional path.
-
-`client` links the native client and writes `dist/histos-client`. It does not start that binary. The suite runs the pin. This build registers a `link-client` command job. The step runs after setup. It runs `./histos client` when the pin has no executable client for this platform, and prints that the pin already has one when the file is there. A snapshot from one machine does not ship the other platform, and linking that missing client does not replace the pin: the launcher execs `dist/histos-client` only when the jar is `dist/histos.jar`. The generator does not add a client step because a module is named `client`. `test` runs the suites. The default `testStore` is `Off`, so a full run launches every suite. `testQuick` skips a suite whose stored fingerprint still matches. `testOnly` takes `--module` and at least one pattern. `testQuick` takes the same flags, and its patterns may be empty. `Local` skips on `test` as well. `Remote` does not skip and does not upload. `coverage` instruments Scala 3 and Scala 2.13 on the JVM, runs the suites, and writes the report under `.histos/coverage`. JavaScript and Native are named and not measured. `test` stays uninstrumented. Publish reads the product classes and does not read `.histos/coverage`. The coverage job is opt-in via `.coverage()` or `.coverage(CoverageFloors(statements = Some(90)))`. The job runs `./histos coverage`. A floor is a flag and the job fails only then. `.coverageExcludes` records class and file regexes the command always excludes, and it does not turn the job on. A `--exclude-class` or `--exclude-file` on the command adds to that list. A floor flag replaces that one floor from `.coverage()`, and an omitted floor uses the build. This repository excludes classes matching `.*Macro.*` and does not ask for the job. `run <name> [jvm|js|native]` runs that module. `run inspect` prints the project names. `run versions` prints the version decision. `run <plugin>/<task>` runs a plugin task.
-
-`fmt` formats with scalafmt, and nothing needs to be installed for it. A build turns it on with `.scalafmt` (the `.scalafmt.conf` at the root) or `.scalafmt(RepoPath("config/scalafmt.conf"))`. The `version` line in that configuration is the scalafmt that runs. `resolve --update` locks `scalafmt-dynamic-core` and the `scalafmt-core` that version names, with their sha256, and `resolve --check` fails when the configuration moved and the lock did not. No name formats every module's `src` and `test` trees and `histos.scala`. A name formats that module, and an aggregate expands. `--file` takes repository-relative files. The configuration's `project.includeFilters`, `project.excludeFilters`, and `project.git` apply. `--check` writes nothing, names each unformatted file, and fails. A parse error names its file, line, and column. `.histos/format/ledger` records the files known formatted under these jars and this configuration, by content, so an unchanged file is not formatted again. The server keeps scalafmt loaded between calls. The MCP tool is `fmt`.
-
-`publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, and `publish drop` are the commands in Publishing. `preview` of `compile`, `test`, `publishLocal`, `publish snapshots`, `clean`, `cleanFull`, or `run` writes nothing. Compile and test name the sources the last analysis says are stale. A test preview names the suites a quick run would skip and the ones it would run. When the analysis cannot be read, the line says the staleness is unknown. When a digest cannot be read, the line says the suite is not known to be skippable.
-
-`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. A plugin task watches the files, directories, and modules that task declared, and a file the task declared as an output is not a change. A task that declares no inputs watches `histos.scala` only. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process and stays in the foreground. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one, and returns when a server is listening. A mismatch of the version line or the assembly checksum does that before the command, after printing the checksums. A local assembly whose snapshot id is not the revision this checkout would publish fails the command instead, and names `histos assembly`. `mcp` and `bsp` open a transport.
-
-`cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
-
-`resolve` fetches what `dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither changes the version line. `launcher --update` writes the timestamp of a snapshot channel. A release pin stays, and the failure names `histos update`, which moves a release pin. `launcher --latest` writes the snapshot pointer. A release pin stays.
-
-A word the grammar does not own is a plugin command, when the build registered it. A reserved root word cannot be one.
-
-The tally names files compiled, files skipped, modules, and classes written. A count that is unknown is omitted. A failure count is added when one happened.
-
-## Restarting a program
-
-`~ run app --restart` compiles `app`, starts it, and keeps watching while it runs. A source change compiles again. The compile failing leaves the running process up. The compile succeeding, and the change being one of that program's sources, stops the process and starts it again. Cancelling the watch stops the process. The process exiting on its own ends the watch with that status.
-
-`~ run app` does not do this. It runs the program and watches only after the process exits.
-
-This is the job [sbt-reload](https://github.com/jamesward/sbt-reload) does with a plugin. Nothing is added to the build.
-
-| sbt-reload | Histos |
-| --- | --- |
-| `~runReload` | `~ run <module> --restart` |
-| `reloadRestart` | run the command again |
-| `runReloadArgs`, `run / javaOptions`, `run / envVars` | the program's arguments, the module's java options, and the environment `run` already passes |
-| a compile failure | the running process stays up |
-| leaving the watch | the process stops |
-| `reloadPause`, `reloadResume`, `reloadStatus` | not this command |
-| `reloadOutput` from a second client | the watch client already has the program's stdout and stderr |
-| a plugin in `project/plugins.sbt` | nothing to install |
-
-sbt-reload exists because sbt's `~run` blocks inside the forked process and never returns to the watch. Histos has the same fact for a long-running main, and the answer is this flag.
-
-A plugin task is the other case. `run` receives a `Scope` that closes when the task returns. `PluginScopes` names that scope and the generation scope, and `Server.install` extended into the generation scope keeps the socket open across saves. The socket closes when the build or a plugin source changes, and when the server shuts down. `~ run <plugin>/<task>` rebuilds underneath that socket and does not take `--restart`. `--restart` on `~ compile`, `~ test`, or a plugin task is a usage error.
-
-## An editor
-
-Metals is the editor path. It speaks BSP 2.2 to Histos. There is no sbt BSP server in this project.
-
-```mermaid
-sequenceDiagram
-  participant Metals
-  participant File as histos.json
-  participant Bsp as histos bsp
-  participant Server as JVM server
-  Metals->>File: read argv
-  Metals->>Bsp: start that argv
-  Bsp->>Server: splice when the version matches
-  Metals->>Bsp: build/initialize
-  Metals->>Bsp: workspace/buildTargets
-  Metals->>Bsp: buildTarget/compile
-  Bsp-->>Metals: diagnostics
-```
-
-Open the project in an editor that runs Metals. Metals discovers `.bsp/histos.json`. Import the build. Metals starts the `argv` in that file: `./histos bsp` when the project ships the wrapper, and `histos bsp` otherwise. The working directory is the project.
-
-A command writes that file when the pin parses and the build fingerprint can be read. A missing or bad line leaves the file alone. This checkout already commits it. The `version` field is that line. `bspVersion` is `2.2.0`. `languages` is `scala`. `graph` is a hash of the build files. Metals ignores the field and hashes the file, so a rewrite is a build change. A running `bsp` rewrites the file when that hash changes.
-
-One target is one cell: the module, the Scala version, the platform, and a scope of `main` or `test`. `histos.scala` is its own target. A compile from the editor is `buildTarget/compile` for that target. The scalac options include `-Xsemanticdb` and `-sourceroot`, which is what Metals uses to navigate. Diagnostics are `build/publishDiagnostics` on each source file. A compile that fails is still that report.
-
-`bsp` runs on the jar. A server recorded at the same version and assembly checksum receives the session. A mismatch replaces that server and prints the checksums. No server means the `bsp` process compiles. `histos reload` asks a running server to load the build again. `histos reboot` replaces that server, or starts one, and returns when a server is listening. The MCP `reboot` tool is that same call and returns the reboot line and the socket. `~ bsp` is usage and does not start a session.
-
-## An agent
-
-An agent uses MCP. The same calls a person runs are tools. The process working directory is the project root.
-
-```mermaid
-sequenceDiagram
-  participant Agent
-  participant Mcp as histos mcp
-  participant Server as JVM server
-  Agent->>Mcp: tools/list
-  Mcp-->>Agent: the tool set
-  Agent->>Mcp: tools/call compile
-  Mcp->>Server: the same call, when server.json matches
-  Server-->>Mcp: lines, then the report
-  Mcp-->>Agent: the report
-```
-
-Point the client's stdio server at the shim. In this checkout the command is `./histos` and the argument is `mcp`, because the wrapper is how this repo boots.
+An agent uses MCP. Point the client's stdio server at `histos` (or `./histos` in a project with the script) with the argument `mcp`:
 
 ```json
 {
@@ -293,93 +234,57 @@ Point the client's stdio server at the shim. In this checkout the command is `./
 }
 ```
 
-`tools/list` is `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, `observe`, and `doctor`. `compile` with an empty project list compiles every module. `test` takes suite globs in `patterns` and `run` or `quick` in `mode`. An absent mode runs the suites. `run` takes a main, `inspect`, `versions`, or a plugin task id. `watch` takes the inner command and does not take a leading `~`.
+The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `fmt`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, `observe`, and `doctor`. Each sends the same call the command sends and returns the report as data, with each line as it is printed. A compile or test that failed is a report. A request that never started fails the tool.
 
-When `.histos/server.json` names this version and assembly checksum, the tool sends the call there and prints each line as it arrives. No server means this process keeps one graph and runs the call. `reboot` starts a server when none is recorded and returns when one is listening. A different version reboots the server, prints the checksums, and the tool sends the call again. A local assembly whose snapshot id is not the revision this checkout would publish fails the tool and names `histos assembly`. A compile or a test that ran and failed comes back as a report. A request that never started fails the tool.
+## The server
 
-`acp` is a reserved word and has no command. `~ mcp` is usage and does not start a session.
+`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`, and the socket is `.histos/server.sock`. When the recorded version differs from the command's, the command reboots the server and runs on the replacement.
+
+`histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed.
+
+The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `cleanFull`, and `fmt` to the server itself, without starting a JVM to enter the tool. Every other command, and any of those with a flag the client does not read, runs `java -jar` on the toolchain jar.
 
 ## Cache
 
-Compile, package, and link are content-addressed. A hit means the declared inputs and the toolchain identity matched. A miss names the input that changed. The decision is [cache-work-plan.md](docs/cache-work-plan.md).
+Compile and package are content-addressed. The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's name is its digest.
 
-```mermaid
-flowchart TD
-  key["sources, flags, JDK, jar checksums, upstream API digests"]
-  key -->|hit| cas["content store"]
-  key -->|miss| work["compiler, linker, or packager"]
-  work --> cas
-  cas --> api["API digest"]
-  cas --> product["product digest"]
-  api --> down["downstream compile"]
-  product --> linked["link and package"]
-  api --> quick[testQuick]
-  quick -->|stamp matches| skip[skip the suite]
-  quick -->|signature moved| launch[run the suite]
-  plain[test] --> launch
-  jars["Coursier cache"] --> key
-```
+- The API digest is a compiled module's public signature. A comment or a method body does not change it, so a downstream compile hits. A public signature change runs that compile.
+- The product digest is the class bytes with jar timestamps, line numbers, and the `TASTY` attribute taken out. Packaging keys on it.
+- `testQuick` stamps include the upstream API digest.
+- `histos cache path` prints the store, `cache list` prints each digest and its size, and `cache clean` removes entries older than 30 days that no project keeps. `--dry-run` names them and keeps them.
 
-The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's name is its digest. The API digest is the public signature, written beside the analysis. A comment or a method body does not change it, so a downstream compile hits. A public signature changes it, so that compile runs. The product digest is the class bytes after jar timestamps, line numbers, and the `TASTY` attribute are taken out. Link and package key on that digest. A trailing comment that does not move member positions keeps the link. A method body runs it.
+A remote cache speaks the Bazel remote cache protocol (bazel-remote or anything compatible). Today it serves plugin tasks only. `HISTOS_CACHE_URI` selects it: `http` and `https` use HTTP, `grpc` is plaintext gRPC, and `grpcs` is TLS. Unset or blank is off. A bad value fails and does not fall back to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`, and `HISTOS_CACHE_NAMESPACE` is `main` unless it names `pr/<n>` or `dev/<name>`. A lookup tries this namespace, then `main`, then the local store, and then runs the action. `histos cache promote --from pr/12 --to main` copies an index over HTTP, and reports `remote cache is not configured` when the URI is unset.
 
-`test` launches the selected suites. Generated CI runs `test`. `testQuick` is local, and its stamp includes the upstream API digest, so a signature change cannot skip the suite. A coverage compile writes a coverage row and class files under `.histos/coverage`. A normal compile does not. Publish, package, and `test` do not read that directory. `TestStore` on a module is `Off`, `Local`, or `Remote`. `Off` is the default and does not skip `test`. `Local` skips `test` when the stored suite digest still matches. `Remote` is refused when the module names a need. The remote URI is configuration, so `Remote` does not upload and does not skip.
+CI restores the content store, the Coursier cache, and the toolchains with exact keys. That copy is not the compile key. A compile still hits or misses inside the store.
 
-`./histos clean` deletes the work tree and leaves the store. `cleanFull` forgets this project's entries. `cache clean` drops an entry older than 30 days that no project keeps.
+## Tools on the machine
 
-### Remote
+Histos uses the JDK, Node, and clang already installed.
 
-The remote is a Bazel cache. A team shares compile, package, and link results through that protocol, and the build stays the Scala graph. The server is bazel-remote, or anything else that speaks the same API. `HISTOS_CACHE_URI` picks the client. `http` and `https` use the HTTP cache. `grpc` is plaintext and `grpcs` is TLS. Unset or blank is off and opens nothing. A bad scheme, mode, namespace, or address fails. It does not fall through to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`.
+- JDK: `.histos/toolchain.local` names a JDK home. Otherwise the running JVM (`java.home`).
+- Node: `HISTOS_NODE`, then the `nodePath` on `RunnerTools`, then `.histos/node.local` (a Node home), then `node` on `PATH`. A source that is missing, not executable, or older than the floor fails, and the next source is not tried.
+- clang: on `PATH`.
 
-```mermaid
-flowchart TD
-  key[action key] --> here{this namespace}
-  here -->|hit| result[ActionResult]
-  here -->|miss| parent{a later prefix}
-  here -->|any other status| stop[stop]
-  parent -->|pull request or dev, then main| main[main index]
-  parent -->|none left| local{local content store}
-  main -->|hit| result
-  main -->|miss| local
-  main -->|any other status| stop
-  result --> blob["/cas/digest"]
-  blob --> out[output]
-  local -->|hit| out
-  local -->|miss| run[run the action]
-  run --> local
-  run -->|Write, and the action may leave| put["blob, then this namespace's index"]
-```
-
-Two stores, one key. `/cas/{digest}` holds the bytes. The digest is the name, so a bad blob is a different name and an honest index entry never fetches it. `/{namespace}/ac/{digest}` holds an ActionResult whose stdout digest names that blob. The namespace is a prefix on the index. It is not part of the digest. The key is the declared inputs plus the toolchain: OS, arch, JDK, Scala, and the linker. The lock digest is an input. A hit requires the whole key. A prefix does not drop an input to recover an older result.
-
-A pull request reads `pr/<n>`, then `main`, and writes `pr/<n>` only. A push to the repository's default branch reads and writes the `main` namespace. That token is `CacheNamespace.Main`. It is not the git branch name. A laptop reads `main` and writes only when it sets `dev/<name>`. That namespace reads `dev/<name>`, then `main`. CI does not read `dev`. A miss tries the next prefix. HTTP reports that as 404. gRPC reports it as `NOT_FOUND`. A hit or any other status stops the walk.
-
-A run asks the remote first, then the local content store, then runs the action. `Write` uploads after a miss, and only when the action may leave the machine. Compile may leave. A test, a publish, and an action that needs the network or docker stay. The blob is written first. A crash leaves an unreferenced blob, not an index entry for bytes that never arrived. `Read` looks and does not upload. `Off` is the process default, so neither lookup nor upload opens a connection.
-
-`promote"rebuild"` is the default. Main fills `main` by doing the work, so a pull request cannot fill the index the next pull request reads. `promote"copy-index"` copies that pull request's index onto `main` and does not compile. The owner picks it. `purge` deletes the caller's index and leaves every blob, including a blob another namespace still names. `purge` and `cache promote` stay on HTTP. A `grpc` or `grpcs` address refuses them and does not open a second port. The generated test job sets `HISTOS_CACHE_NAMESPACE` to `pr/<n>` on a pull request and to `main` on a push to the default branch. Docs, deploy, versions, workflow, and release leave it unset. The workflow does not set `HISTOS_CACHE_URI`.
-
-The URI is configuration. Until it is set, `cache promote` reports `remote cache is not configured` and does not open a connection.
-
-GitHub restores the content-store directory, the Coursier directory, and the toolchain directory with an exact key and no restore prefix. That copy is not the compile key. A later compile still hits or misses inside the store. Coursier is only the dependency jars, at `~/.cache/coursier/v1`.
-
-## Tools already on the machine
-
-Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module needs Node 25 or newer. Histos resolves that binary in order: `HISTOS_NODE`, the `nodePath` on `RunnerTools`, `.histos/node.local`, then `node` on `PATH`. `HISTOS_NODE` and `nodePath` are absolute paths of a binary named `node`. A path that is missing, not executable, or older than 25 fails, and Histos does not try the next source. The message names the source. `.histos/toolchain.local` names a JDK home. `.histos/node.local` names a Node home, not the binary. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. LLVM is `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release. A miss unpacks it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Playwright's browser download runs on a miss. The step still runs on a hit, checks the package, and runs `install-deps firefox`, because a fresh runner does not keep the apt packages. Before that apt, the step rewrites `azure.archive.ubuntu.com` to `archive.ubuntu.com`. The Azure mirror hangs with no output. The command has three minutes.
+A file that points at a missing or too-old home fails, and Histos does not pick another.
 
 ## Plugins
 
-A plugin is a service. The layer provides it. Configuration is that layer's environment. The contract is [docs/plugins.md](docs/plugins.md). A command name the grammar owns is reserved. `acp` is reserved and has no command.
+A plugin is a service, and the layer provides it. The contract is [plugins.md](docs/plugins.md). A command name the grammar owns is reserved. `acp` is reserved and has no command.
 
-`run` is called inside a `Scope`. That scope closes when the task returns, including when the task is interrupted. A temp file and a fork that must not outlive the task belong there. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope. An acquire extended into `ResourceLife.Generation` stays open after the task returns and closes when this generation of plugin classes is released. `Server.install` is that acquire. `Server.serve` never returns, so the watch never starts.
+A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar.
 
-`src/main/resources` is copied into the main class directory. `src/test/resources` is copied into the test class directory. `.resources` on the module adds generated files to the main class directory. A generated name replaces an unmanaged file of that name. The same generated name twice is refused when the graph is built. `run`, test, and the binary jar read that class directory. The sources jar stays sources only. This is not the assembly file `publish assets` uploads.
+## Known gaps
 
-A plugin is a layer. A plugin module is an ordinary module: its tests compile, and another module may `dependsOn` it. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar. The sources jar does not.
+These are true today and tracked:
 
-## Scenarios
+- A cached toolchain jar leaves its native client uninstalled, so the shim runs `java -jar` until `toolchain install` runs. With a `-SNAPSHOT` pin and a native client, the version the shim passes and the one the server records disagree, so commands keep rebooting the server. [cli-work-plan.md](docs/cli-work-plan.md)
+- Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
+- `~ --restart run` cannot restart on a server, because the running program holds the compile lock. A failed compile still restarts the program.
+- No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)
 
-A scenario checks a build by standing it up. One content store, one or more checkouts, sources written by the test, and an assertion on the result. That is how Histos is checked against itself: two copies of a project share a cache, a clean restores, and a skip that hides a change fails. The same shape is the Histos side when the other side is sbt and zipx. That comparison is the bench in [the cache plan](docs/cache-work-plan.md).
+## Building Histos
 
-The decisions are [scenario-work-plan.md](docs/scenario-work-plan.md). The code is [Scenario.scala](engine/test/Scenario.scala), proved by [ScenarioSpec.scala](engine/test/ScenarioSpec.scala). A scenario is a test. It is not a command, and it is not a second language.
+Histos builds itself, and that needs commands no other build uses: `assembly`, `client`, `launcher`, and `portal`. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
 
 ## License
 
