@@ -42,6 +42,11 @@ private[zinc] final case class CompilerKey(
     boundary: LoaderBoundary,
 )
 
+/** An analysis a pool compile wrote, and the sha256 of the `inc.zip` bytes it wrote. A store restore writes other bytes
+  * into that directory, so a compile that finds other bytes reads the file.
+  */
+private[zinc] final case class Remembered(bytes: histos.jdk.Sha256, contents: AnalysisContents)
+
 private[zinc] final case class CompilerArtifacts(
     runtime: List[Path],
     compiler: List[Path],
@@ -59,7 +64,7 @@ private[zinc] final class CompilerPool(
     live: Ref[Map[CompilerKey, Int]],
     permits: Ref[Map[CompilerKey, Semaphore]],
     guard: Semaphore,
-    remembered: Ref[Map[Path, AnalysisContents]],
+    remembered: Ref[Map[Path, Remembered]],
 ):
   def openings: UIO[Int] = made.get
 
@@ -97,9 +102,9 @@ private[zinc] final class CompilerPool(
                 .flatMap(ZIO.fromEither)
                 .flatMap { (output, stored) =>
                   stored match
-                    case Some(contents) =>
+                    case Some(entry) =>
                       val dir = request.analysis.toAbsolutePath.normalize
-                      remembered.update(_.updated(dir, contents)).as(output)
+                      remembered.update(_.updated(dir, entry)).as(output)
                     case None => ZIO.succeed(output)
                 }
             }).ensuring(checkin(id, ready))
@@ -171,7 +176,7 @@ private[zinc] object CompilerPool:
       live       <- Ref.make(Map.empty[CompilerKey, Int])
       permits    <- Ref.make(Map.empty[CompilerKey, Semaphore])
       guard      <- Semaphore.make(1)
-      remembered <- Ref.make(Map.empty[Path, AnalysisContents])
+      remembered <- Ref.make(Map.empty[Path, Remembered])
     yield CompilerPool(scope, width.max(1), made, idle, live, permits, guard, remembered)
 
   /** Opens from the jars on the key. The request already resolved them, so a later lock does not rebuild this compiler.
