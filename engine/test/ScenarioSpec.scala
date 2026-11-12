@@ -1,11 +1,11 @@
 package histos
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.program.ProgramFeed
 import histos.resolve.{ResolveError, ToolRole}
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
+import histos.zinc.{ApiDigest, CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
@@ -127,21 +127,61 @@ object ScenarioSpec extends ZIOSpecDefault:
           starts == 1,
         )
     ,
-    test("a quick hit stays in its checkout, and its record is a file there and not a blob"):
+    test("an upstream comment keeps the quick stamp, and a new public method the suite never calls moves it"):
       ZIO.scoped:
         for
           scala3   <- locked
-          built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).test(TestMain("demo.Foo"))))
+          built    <- ZIO.fromEither(upstream(scala3))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          otherClass = GraphCompile.classesDir(checkout.root, ProjectName("core"), scala3).resolve("demo/Other.class")
+          _         <- writeUpstream(checkout)
+          first     <- checkout.test(TestMode.Quick)
+          stamp     <- record(checkout, scala3)
+          signature <- api(checkout, scala3)
+          bytes     <- digestOf(otherClass)
+          _         <- checkout.write("core/src/main/scala/demo/Other.scala", other + "  // trailing note\n")
+          commented <- checkout.test(TestMode.Quick)
+          kept      <- record(checkout, scala3)
+          unmoved   <- api(checkout, scala3)
+          rebuilt   <- digestOf(otherClass)
+          _         <- checkout.write("core/src/main/scala/demo/Other.scala", widened)
+          signed    <- checkout.test(TestMode.Quick)
+          moved     <- record(checkout, scala3)
+          wider     <- api(checkout, scala3)
+        yield assertTrue(
+          statuses(first) == List(TestStatus.Passed),
+          out(first).contains("alpha"),
+          cached(first).isEmpty,
+          stamp.isDefined,
+          rebuilt != bytes,
+          matches(signature, unmoved),
+          cached(commented) == List("demo.Foo"),
+          !out(commented).contains("alpha"),
+          statuses(commented).isEmpty,
+          kept == stamp,
+          differs(signature, wider),
+          statuses(signed) == List(TestStatus.Passed),
+          out(signed).contains("alpha"),
+          cached(signed).isEmpty,
+          differs(stamp, moved),
+        )
+    ,
+    test("a second checkout of the same test is not cached by the first checkout's record, a file and not a blob"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(upstream(scala3))
           scenario <- Scenario.open
           left     <- scenario.checkout(built)
           right    <- scenario.checkout(built)
-          _        <- writeApp(left)
-          _        <- writeApp(right)
+          _        <- writeUpstream(left)
+          _        <- writeUpstream(right)
           first    <- left.test(TestMode.Quick)
           kept     <- record(left, scala3)
           hit      <- left.test(TestMode.Quick)
           before   <- record(right, scala3)
-          other    <- right.test(TestMode.Quick)
+          second   <- right.test(TestMode.Quick)
           after    <- record(right, scala3)
           shared   <- ZIO.exists(kept.toList)(scenario.holds)
         yield assertTrue(
@@ -153,9 +193,9 @@ object ScenarioSpec extends ZIOSpecDefault:
           !out(hit).contains("alpha"),
           statuses(hit).isEmpty,
           before.isEmpty,
-          statuses(other) == List(TestStatus.Passed),
-          out(other).contains("alpha"),
-          cached(other).isEmpty,
+          statuses(second) == List(TestStatus.Passed),
+          out(second).contains("alpha"),
+          cached(second).isEmpty,
           after.isDefined,
           after == kept,
           !shared,
@@ -247,6 +287,17 @@ object ScenarioSpec extends ZIOSpecDefault:
     checkout.write("app/src/main/scala/demo/Lib.scala", lib) *>
       checkout.write("app/src/test/scala/demo/Foo.scala", foo)
 
+  /** `app`'s suite `demo.Foo` over `core`. */
+  private def upstream(version: ScalaVersion): Either[BuildError, ProjectGraph] =
+    val core = module("core", Jvm)(version)
+    Projects.locked(core, module("app", Jvm)(version).dependsOn(core).test(TestMain("demo.Foo")))
+
+  /** `Lib` and `Other` in `core`. `Foo` calls `Lib` and never names `Other`. */
+  private def writeUpstream(checkout: Checkout): IO[IoFailure, Unit] =
+    checkout.write("core/src/main/scala/demo/Lib.scala", lib) *>
+      checkout.write("core/src/main/scala/demo/Other.scala", other) *>
+      checkout.write("app/src/test/scala/demo/Foo.scala", foo)
+
   /** `E` in main sources, its samples in tests, and `Check`, which inlines the mirror's size through two files. */
   private def writeMirror(checkout: Checkout, cases: String, values: String): IO[IoFailure, Unit] =
     checkout.write("core/src/main/scala/demo/E.scala", cases) *>
@@ -264,6 +315,20 @@ object ScenarioSpec extends ZIOSpecDefault:
     Workspace
       .readIfPresent(path)
       .map(_.flatMap(text => Sha256.from(text.trim.stripPrefix("success ")).toOption))
+
+  /** The API digest the last compile of `core` wrote. */
+  private def api(checkout: Checkout, version: ScalaVersion): IO[IoFailure, Option[Sha256]] =
+    GraphCompile.analysisDirOf(GraphCompile.classesDir(checkout.root, ProjectName("core"), version)) match
+      case Some(dir) =>
+        Workspace
+          .readIfPresent(dir.resolve(ApiDigest.fileName))
+          .map(_.flatMap(text => Sha256.from(text.trim).toOption))
+      case None => ZIO.none
+
+  private def digestOf(path: Path): IO[IoFailure, Sha256] =
+    ZIO
+      .attemptBlocking(Files.readAllBytes(path))
+      .mapBoth(_ => IoFailure(path, IoFault.Read), bytes => Sha256Digest.of(Chunk.fromArray(bytes)))
 
   private def exists(path: Path): IO[IoFailure, Boolean] =
     ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => IoFailure(path, IoFault.Stat))
@@ -307,8 +372,9 @@ object ScenarioSpec extends ZIOSpecDefault:
       case (Some(one), Some(other)) => one == other
       case _                        => false
 
+  /** What `app`'s suites did. `core` has none. */
   private def statuses(feeds: Chunk[TestFeed]): List[TestStatus] =
-    feeds.collect { case TestFeed.Done(cell) => cell.status }.toList
+    feeds.collect { case TestFeed.Done(cell) if cell.module == ProjectName("app") => cell.status }.toList
 
   private def out(feeds: Chunk[TestFeed]): String =
     feeds.collect { case TestFeed.Out(_, _, _, text) => text }.mkString("\n")
@@ -422,6 +488,21 @@ object ScenarioSpec extends ZIOSpecDefault:
       |
       |object Lib:
       |  def word: String = "alpha"
+      |""".stripMargin
+
+  private val other =
+    """package demo
+      |
+      |object Other:
+      |  def word: String = "other"
+      |""".stripMargin
+
+  private val widened =
+    """package demo
+      |
+      |object Other:
+      |  def word: String = "other"
+      |  def extra: Int = 1
       |""".stripMargin
 
   private val foo =
