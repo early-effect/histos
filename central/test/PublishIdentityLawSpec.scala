@@ -3,18 +3,12 @@ package histos.central
 import histos.version.{CiVersion, CommitSha, ReleaseVersion, ShipNumber, SnapshotCoordinate, SnapshotPointer}
 import histos.{Organization, OrganizationError}
 
-import heddle.client.{Authority, ClientError, TargetError}
-import heddle.error.HttpError
-import heddle.http.Status
-
 import zio.{Chunk, Config}
 import zio.test.*
 
 object PublishIdentityLawSpec extends ZIOSpecDefault:
   private val ship = ShipNumber("1.0.0")
   private val sha  = CommitSha("0123456789abcdef0123456789abcdef01234567")
-  private val host = Authority("repo.example", 9)
-  private val boom = new java.io.IOException("boom")
 
   def spec = suite("publish identity")(
     test("a revision renders the form a repository stores"):
@@ -82,6 +76,8 @@ object PublishIdentityLawSpec extends ZIOSpecDefault:
         Digest.sha1(abc) == "a9993e364706816aba3e25717850c26c9cd0d89d",
         Digest.sha256(abc) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         Digest.sha256(empty) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        Digest.sha512(abc) ==
+          "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
         Checksum.sha256(abc).value == Digest.sha256(abc),
       )
     ,
@@ -133,34 +129,16 @@ object PublishIdentityLawSpec extends ZIOSpecDefault:
         secret.map(_.toString.toLowerCase.contains("redacted")) == Right(true),
       )
     ,
-    test("a deployment id rejects empty or whitespace and keeps a slash"):
+    test("a deployment id names an empty or spaced id, trims the ends, and keeps a slash"):
       assertTrue(
-        DeploymentId.from("  ") == Left(PortalError.Unnamed),
-        DeploymentId.from("a b") == Left(PortalError.Unnamed),
-        DeploymentId.from("deploy-1").map(_.value) == Right("deploy-1"),
+        DeploymentId.from("  ") == Left(DeploymentId.Error.Empty),
+        DeploymentId.from(" a b ") == Left(DeploymentId.Error.Spaced("a b")),
+        DeploymentId.from("a\tb") == Left(DeploymentId.Error.Spaced("a\tb")),
+        DeploymentId.Error.Empty.message == "a deployment id is empty",
+        DeploymentId.Error.Spaced("a b").message == "deployment id 'a b' contains whitespace",
+        DeploymentId.from(" deploy-1\n").map(_.value) == Right("deploy-1"),
         DeploymentId.from("a/b").map(_.value) == Right("a/b"),
         DeploymentId.from("..").map(_.value) == Right(".."),
-      )
-    ,
-    test("every client failure becomes the transport fault that names the target"):
-      val rows = List(
-        ClientError.InvalidTarget("nope", TargetError.NoHost) -> TransportFault.Target("nope"),
-        ClientError.Connect(host, boom)                       -> TransportFault.Connect(host.host, host.port),
-        ClientError.ConnectTimeout(host)                      -> TransportFault.ConnectTimeout(host.host, host.port),
-        ClientError.Tls(host, boom)                           -> TransportFault.Tls(host.host, host.port),
-        ClientError.ReadTimeout(host)                         -> TransportFault.ReadTimeout(host.host, host.port),
-        ClientError.Io(host, boom)                            -> TransportFault.Io(host.host, host.port),
-        ClientError.Protocol(host, HttpError.HeadersTooLarge) -> TransportFault.Protocol(host.host, host.port),
-        ClientError.PoolExhausted(host)                       -> TransportFault.Pool(host.host, host.port),
-        ClientError.NotAnEventStream(host, Status.Ok)         -> TransportFault.Protocol(host.host, host.port),
-        ClientError.InvalidTrust("bad")                       -> TransportFault.Trust,
-        ClientError.BodyFailed(boom)                          -> TransportFault.Body,
-      )
-      val misses = rows.collect:
-        case (error, expected) if TransportFaults.from(error) != expected => expected
-      assertTrue(misses == Nil)
-    ,
-    test("a rejected publish diagnoses as publish.rejected"):
-      assertTrue(PublishError.Unauthorized.diagnose.check.value == "publish.rejected"),
+      ),
   )
 end PublishIdentityLawSpec

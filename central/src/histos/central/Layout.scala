@@ -8,6 +8,8 @@ import java.security.MessageDigest
 import zio.{Chunk, IO, ULayer, ZIO, ZLayer}
 
 object Digest:
+  def sha512(bytes: Chunk[Byte]): String = digest("SHA-512", bytes)
+
   def sha256(bytes: Chunk[Byte]): String = digest("SHA-256", bytes)
 
   def sha1(bytes: Chunk[Byte]): String = digest("SHA-1", bytes)

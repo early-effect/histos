@@ -7,7 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
-import zio.Chunk
+import zio.{Chunk, ZIO}
 import zio.test.*
 
 object PortalReportLawSpec extends ZIOSpecDefault:
@@ -26,10 +26,7 @@ object PortalReportLawSpec extends ZIOSpecDefault:
 
   def spec = suite("portal report")(
     test("a complete release bundle names the gav and has no findings"):
-      judged(bundle("1.0.0", pom(release))) match
-        case None         => assertTrue(false)
-        case Some(report) =>
-          assertTrue(report == Report(Chunk.empty, Chunk(gav)))
+      assertTrue(judged(bundle("1.0.0", pom(release))) == Right(Report(Chunk.empty, Chunk(gav))))
     ,
     test("a bundle over the cap is too large and is not opened"):
       val over = PortalReport.inspect(Chunk[Byte](1, 2, 3), PortalReport.Cap + 1, Set.empty)
@@ -45,21 +42,25 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       val copied = duplicateZip("demo/widget/1.0.0/widget-1.0.0.jar")
       assertTrue(
         PortalReport.inspect(Chunk[Byte](1, 2, 3), 3L, Set.empty) == Report(Chunk(Finding.Layout("zip")), Chunk.empty),
-        empty.map(zip => PortalReport.inspect(zip, zip.length.toLong, Set.empty)) == Some(
-          Report(Chunk.empty, Chunk.empty)
+        PortalReport.inspect(empty, empty.length.toLong, Set.empty) == Report(
+          Chunk(Finding.Layout("zip")),
+          Chunk.empty,
+        ),
+        judged(Right(List("demo/widget/1.0.0/" -> Chunk.empty))) == Right(
+          Report(Chunk(Finding.Layout("zip")), Chunk.empty)
         ),
         PortalReport.inspect(copied, copied.length.toLong, Set.empty) ==
           Report(Chunk(Finding.Layout("demo/widget/1.0.0/widget-1.0.0.jar")), Chunk.empty),
-        judged(rooted).map(_.findings) == Some(Chunk(Finding.Layout("README"))),
-        judged(rooted).map(_.gavs) == Some(Chunk(gav)),
+        judged(rooted).map(_.findings) == Right(Chunk(Finding.Layout("README"))),
+        judged(rooted).map(_.gavs) == Right(Chunk(gav)),
       )
     ,
     test("a directory entry is skipped and a short path is not a module"):
       val withDir = bundle("1.0.0", pom(release)).map(entries => ("demo/" -> Chunk.empty) :: entries)
-      val short   = judged(Some(List("demo/widget/readme.txt" -> utf8("x"))))
+      val short   = judged(Right(List("demo/widget/readme.txt" -> utf8("x"))))
       assertTrue(
-        judged(withDir) == Some(Report(Chunk.empty, Chunk(gav))),
-        short == Some(Report(Chunk(Finding.Layout("demo/widget")), Chunk.empty)),
+        judged(withDir) == Right(Report(Chunk.empty, Chunk(gav))),
+        short == Right(Report(Chunk(Finding.Layout("demo/widget")), Chunk.empty)),
       )
     ,
     test("an illegal path segment is layout and does not invent a gav"):
@@ -72,61 +73,82 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         "demo/widget\\x/1.0.0",
       )
       val misses = dirs.flatMap: dir =>
-        val report = judged(Some(List(s"$dir/readme.txt" -> utf8("x"))))
-        if report == Some(Report(Chunk(Finding.Layout(dir)), Chunk.empty)) then Nil else List(dir)
+        val report = judged(Right(List(s"$dir/readme.txt" -> utf8("x"))))
+        if report == Right(Report(Chunk(Finding.Layout(dir)), Chunk.empty)) then Nil else List(dir)
       assertTrue(misses == Nil)
     ,
     test("uppercase checksum text still matches, and a wrong md5 is a checksum"):
       val upper = rewrite("demo/widget/1.0.0/widget-1.0.0.jar.md5", Digest.md5(jar).toUpperCase + " note\n")
       val wrong = rewrite("demo/widget/1.0.0/widget-1.0.0.jar.md5", "00\n")
       assertTrue(
-        judged(upper) == Some(Report(Chunk.empty, Chunk(gav))),
-        judged(wrong) == Some(
+        judged(upper) == Right(Report(Chunk.empty, Chunk(gav))),
+        judged(wrong) == Right(
           Report(Chunk(Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.jar.md5")), Chunk(gav))
         ),
       )
     ,
-    test("sha256 is allowed and is not required"):
+    test("sha256 and sha512 are allowed and are not required"):
       val extra = bundle("1.0.0", pom(release)).map: entries =>
-        entries :+ ("demo/widget/1.0.0/widget-1.0.0.jar.sha256" -> utf8("00\n"))
-      assertTrue(judged(extra) == Some(Report(Chunk.empty, Chunk(gav))))
+        entries ++ List(
+          "demo/widget/1.0.0/widget-1.0.0.jar.sha256" -> utf8(Digest.sha256(jar) + "\n"),
+          "demo/widget/1.0.0/widget-1.0.0.jar.sha512" -> utf8(Digest.sha512(jar) + "\n"),
+        )
+      assertTrue(judged(extra) == Right(Report(Chunk.empty, Chunk(gav))))
+    ,
+    test("a sha256 or sha512 that is present and wrong is a checksum"):
+      val wrong = bundle("1.0.0", pom(release)).map: entries =>
+        entries ++ List(
+          "demo/widget/1.0.0/widget-1.0.0.jar.sha256" -> utf8("00\n"),
+          "demo/widget/1.0.0/widget-1.0.0.pom.sha512" -> utf8("00\n"),
+        )
+      assertTrue(
+        judged(wrong) == Right(
+          Report(
+            Chunk(
+              Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.jar.sha256"),
+              Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.pom.sha512"),
+            ),
+            Chunk(gav),
+          )
+        )
+      )
     ,
     test("a missing sources jar is a file set, and an empty signature is a file set"):
       val dropped = bundle("1.0.0", pom(release)).map: entries =>
         entries.filterNot(_._1 == "demo/widget/1.0.0/widget-1.0.0-sources.jar")
       val blank = rewrite("demo/widget/1.0.0/widget-1.0.0.jar.asc", "")
       assertTrue(
-        judged(dropped) == Some(
+        judged(dropped) == Right(
           Report(Chunk(Finding.FileSet("demo/widget/1.0.0/widget-1.0.0-sources.jar")), Chunk(gav))
         ),
-        judged(blank) == Some(
+        judged(blank) == Right(
           Report(Chunk(Finding.FileSet("demo/widget/1.0.0/widget-1.0.0.jar.asc")), Chunk(gav))
         ),
       )
     ,
     test("an empty pom is empty, and a pom that is not a project names the pom"):
-      val empty = judged(bundle("1.0.0", Some(" \n")))
-      val alien = judged(bundle("1.0.0", Some("<not-a-project/>")))
-      val typed = judged(bundle("1.0.0", Some("<!DOCTYPE a><project></project>")))
+      val empty = judged(bundle("1.0.0", Right(" \n")))
+      val alien = judged(bundle("1.0.0", Right("<not-a-project/>")))
+      val typed = judged(bundle("1.0.0", Right("<!DOCTYPE a><project></project>")))
       assertTrue(
-        empty.map(_.findings) == Some(Chunk(Finding.EmptyPom)),
-        alien.map(_.findings.contains(Finding.PomFields("pom"))) == Some(true),
-        typed.map(_.findings.contains(Finding.PomFields("pom"))) == Some(true),
+        empty.map(_.findings) == Right(Chunk(Finding.EmptyPom)),
+        alien.map(_.findings.contains(Finding.PomFields("pom"))) == Right(true),
+        typed.map(_.findings.contains(Finding.PomFields("pom"))) == Right(true),
       )
     ,
     test("a pom field that does not match the path is named"):
       val shifted = pom(release).map(_.replace("<groupId>demo</groupId>", "<groupId>other</groupId>"))
       assertTrue(
-        judged(bundle("1.0.0", shifted)).map(_.findings) == Some(Chunk(Finding.PomFields("groupId")))
+        judged(bundle("1.0.0", shifted)).map(_.findings) == Right(Chunk(Finding.PomFields("groupId")))
       )
     ,
     test("a snapshot version on the path or in the pom is a snapshot finding"):
       val onPath = judged(bundle("1.0.0-SNAPSHOT", pom(snapshot)))
       val inPom  = pom(release).map(_.replace("<version>1.0.0</version>", "<version>9.9.9-SNAPSHOT</version>"))
       assertTrue(
-        onPath.map(_.findings) == Some(Chunk(Finding.SnapshotVersion("1.0.0-SNAPSHOT"))),
-        onPath.map(_.gavs) == Some(Chunk(Gav("demo", "widget", "1.0.0-SNAPSHOT"))),
-        judged(bundle("1.0.0", inPom)).map(_.findings) == Some(
+        onPath.map(_.findings) == Right(Chunk(Finding.SnapshotVersion("1.0.0-SNAPSHOT"))),
+        onPath.map(_.gavs) == Right(Chunk(Gav("demo", "widget", "1.0.0-SNAPSHOT"))),
+        judged(bundle("1.0.0", inPom)).map(_.findings) == Right(
           Chunk(Finding.PomFields("version"), Finding.SnapshotVersion("9.9.9-SNAPSHOT"))
         ),
       )
@@ -145,10 +167,10 @@ object PortalReportLawSpec extends ZIOSpecDefault:
             |</project>""".stripMargin,
         )
       assertTrue(
-        judged(bundle("1.0.0", parent)).map(_.findings) == Some(
+        judged(bundle("1.0.0", parent)).map(_.findings) == Right(
           Chunk(Finding.SnapshotDependency("demo:parent:1.0.0-SNAPSHOT"))
         ),
-        judged(bundle("1.0.0", depends)).map(_.findings) == Some(
+        judged(bundle("1.0.0", depends)).map(_.findings) == Right(
           Chunk(Finding.SnapshotDependency("demo:core:2.0.0-SNAPSHOT"))
         ),
       )
@@ -158,10 +180,8 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         entries :+ ("demo/widget/1.0.0/notes.txt" -> utf8("x"))
       val taken = judged(bundle("1.0.0", pom(release)), Set(gav))
       assertTrue(
-        extra.flatMap(entries => judged(Some(entries))).map(_.findings) == Some(
-          Chunk(Finding.Layout("demo/widget/1.0.0/notes.txt"))
-        ),
-        taken == Some(Report(Chunk(Finding.AlreadyPublished(gav.render)), Chunk(gav))),
+        judged(extra).map(_.findings) == Right(Chunk(Finding.Layout("demo/widget/1.0.0/notes.txt"))),
+        taken == Right(Report(Chunk(Finding.AlreadyPublished(gav.render)), Chunk(gav))),
       )
     ,
     test("a gav line is three fields and a finding token survives a newline by replacing it"):
@@ -191,9 +211,9 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         DeploymentState.Published,
         DeploymentState.Failed,
       )
-      DeploymentId.from("deploy-1") match
-        case Left(_)   => assertTrue(false)
-        case Right(id) =>
+      ZIO
+        .fromEither(DeploymentId.from("deploy-1"))
+        .map: id =>
           val misses = states.flatMap: state =>
             val json = PortalReport.render(id, state, findings)
             if PortalReport.parse(json) == Some((state, findings)) && json.contains("deploy-1") then Nil
@@ -206,13 +226,15 @@ object PortalReportLawSpec extends ZIOSpecDefault:
           ),
   )
 
-  private def pom(revision: Revision): Option[String] =
-    ArtifactId.from("widget") match
-      case Right(name) =>
-        Some(Layout.pom(Artifact(Organization("demo"), name, revision, jar, document = documented)))
-      case Left(_) => None
+  private def pom(revision: Revision): Either[ArtifactIdError, String] =
+    ArtifactId
+      .from("widget")
+      .map(name => Layout.pom(Artifact(Organization("demo"), name, revision, jar, document = documented)))
 
-  private def bundle(version: String, text: Option[String]): Option[List[(String, Chunk[Byte])]] =
+  private def bundle(
+      version: String,
+      text: Either[ArtifactIdError, String],
+  ): Either[ArtifactIdError, List[(String, Chunk[Byte])]] =
     text.map: pom =>
       val dir  = s"demo/widget/$version"
       val stem = s"widget-$version"
@@ -225,16 +247,19 @@ object PortalReportLawSpec extends ZIOSpecDefault:
             s"$dir/$name.asc"  -> asc,
           )
 
-  private def rewrite(name: String, text: String): Option[List[(String, Chunk[Byte])]] =
+  private def rewrite(name: String, text: String): Either[ArtifactIdError, List[(String, Chunk[Byte])]] =
     bundle("1.0.0", pom(release)).map: entries =>
       entries.map:
         case (found, _) if found == name => found -> utf8(text)
         case other                       => other
 
-  private def judged(entries: Option[List[(String, Chunk[Byte])]], published: Set[Gav] = Set.empty): Option[Report] =
-    entries.flatMap(zipped).map(zip => PortalReport.inspect(zip, zip.length.toLong, published))
+  private def judged(
+      entries: Either[ArtifactIdError, List[(String, Chunk[Byte])]],
+      published: Set[Gav] = Set.empty,
+  ): Either[ArtifactIdError, Report] =
+    entries.map(zipped).map(zip => PortalReport.inspect(zip, zip.length.toLong, published))
 
-  private def zipped(entries: List[(String, Chunk[Byte])]): Option[Chunk[Byte]] =
+  private def zipped(entries: List[(String, Chunk[Byte])]): Chunk[Byte] =
     val out = new ByteArrayOutputStream
     val zip = new ZipOutputStream(out)
     entries.foreach: (name, bytes) =>
@@ -242,7 +267,7 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       if bytes.nonEmpty then zip.write(bytes.toArray)
       zip.closeEntry()
     zip.close()
-    Some(Chunk.fromArray(out.toByteArray))
+    Chunk.fromArray(out.toByteArray)
 
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))

@@ -87,8 +87,9 @@ object PortalReport:
     if size > Cap || zip.length.toLong > Cap then Report(Chunk(Finding.TooLarge), Chunk.empty)
     else
       unzip(zip) match
-        case Left(findings) => Report(findings, Chunk.empty)
-        case Right(files)   => judge(files, published)
+        case Left(findings)                => Report(findings, Chunk.empty)
+        case Right(files) if files.isEmpty => Report(Chunk(Finding.Layout("zip")), Chunk.empty)
+        case Right(files)                  => judge(files, published)
 
   def render(id: DeploymentId, state: DeploymentState, findings: Chunk[Finding]): String =
     val report = findings.map(finding => quote(finding.token)).mkString("[", ",", "]")
@@ -169,24 +170,25 @@ object PortalReport:
   private def sidecars(files: Map[String, Chunk[Byte]], path: String, bytes: Chunk[Byte]): Chunk[Finding] =
     Chunk.fromIterable(
       List(
-        checksum(files, path, ".md5", Digest.md5(bytes)),
-        checksum(files, path, ".sha1", Digest.sha1(bytes)),
+        required(files, s"$path.md5", Digest.md5(bytes)),
+        required(files, s"$path.sha1", Digest.sha1(bytes)),
+        present(files, s"$path.sha256", Digest.sha256(bytes)),
+        present(files, s"$path.sha512", Digest.sha512(bytes)),
         signature(files, path),
       ).flatten
     )
 
-  private def checksum(
-      files: Map[String, Chunk[Byte]],
-      path: String,
-      ext: String,
-      expected: String,
-  ): Option[Finding] =
-    val name = s"$path$ext"
-    val file = name.substring(name.lastIndexOf('/') + 1)
-    files.get(file) match
-      case None                                     => Some(Finding.FileSet(name))
-      case Some(data) if hexMatches(data, expected) => None
-      case Some(_)                                  => Some(Finding.Checksum(name))
+  private def required(files: Map[String, Chunk[Byte]], name: String, expected: String): Option[Finding] =
+    files.get(name.substring(name.lastIndexOf('/') + 1)) match
+      case None       => Some(Finding.FileSet(name))
+      case Some(data) => matched(name, data, expected)
+
+  /** Central does not require `.sha256` or `.sha512`. One that is present still has to match. */
+  private def present(files: Map[String, Chunk[Byte]], name: String, expected: String): Option[Finding] =
+    files.get(name.substring(name.lastIndexOf('/') + 1)).flatMap(data => matched(name, data, expected))
+
+  private def matched(name: String, data: Chunk[Byte], expected: String): Option[Finding] =
+    if hexMatches(data, expected) then None else Some(Finding.Checksum(name))
 
   private def signature(files: Map[String, Chunk[Byte]], path: String): Option[Finding] =
     val name = s"$path.asc"
@@ -197,10 +199,8 @@ object PortalReport:
 
   private def allowed(stem: String, name: String): Boolean =
     val artifacts = List(s"$stem.jar", s"$stem-sources.jar", s"$stem-javadoc.jar", s"$stem.pom")
-    artifacts.exists(artifact =>
-      name == artifact || name == s"$artifact.md5" || name == s"$artifact.sha1" || name == s"$artifact.sha256" ||
-        name == s"$artifact.asc"
-    )
+    val suffixes  = List("", ".md5", ".sha1", ".sha256", ".sha512", ".asc")
+    artifacts.exists(artifact => suffixes.exists(suffix => name == s"$artifact$suffix"))
 
   private def pomFields(project: Element, gav: Gav): Chunk[Finding] =
     val found = List.newBuilder[Finding]

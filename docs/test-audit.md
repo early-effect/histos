@@ -36,7 +36,8 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] B2 `JobYaml.lift` ends in `case other => CiError.UnpinnedWorkflowRun(other.message)`, so a `BadName` or a `DuplicatePlugin` reports as an unpinned workflow run. `CiError` gets an honest case for a non-CI build failure. Owner: engine A-L, and engine M-Z points `WorkflowLawSpec:293` at it.
 - [ ] B3 `Decisions.scala:133` names a cross-version split's cells with the coordinate (`split.toList.map(CellName.trusted)` over the groupBy keys), and calls `split.head`. The cells are the rows' `cell`. Owner: engine M-Z (`SupplyDecisionLawSpec:135`).
 - [ ] B4 `VersionOrder` collects every digit run, so `1.2.3-RC1` sorts above `1.2.3`, and `NodeToolchain.highest` prefers `v25.0.0-rc.1` over `v25.0.0`. A pre-release sorts below its release. Owner: engine M-Z (`ToolchainLawSpec:13`).
-- [ ] B5 `DeploymentId.from` fails a mistyped id with `PortalError.Unnamed`, the portal-response error, so the operator reads "the portal upload did not name a deployment". It gets its own error case. Owner: central, and engine M-Z updates `ReleaseRunLawSpec:168`.
+- [x] B5 `DeploymentId.from` fails a mistyped id with `PortalError.Unnamed`, the portal-response error, so the operator reads "the portal upload did not name a deployment". It gets its own error case. Owner: central, and engine M-Z updates `ReleaseRunLawSpec:168`.
+  - Proof: `PublishIdentityLawSpec` "a deployment id names an empty or spaced id" was red on the old parser (`"  "` and `" a b "` both read "the portal upload did not name a deployment"). Green with `DeploymentId.Error` (`Empty`, `Spaced(text)`). `ReleaseError.Deployment` carries it, so `publish drop "has space"` prints "deployment id 'has space' contains whitespace" (`ReleaseRunLawSpec`, edited only to keep engine green). The portal client still maps an unparseable upload body to `PortalError.Unnamed`.
 - [ ] B6 The daemon outbox `close` is `outbound.shutdown *> fiber.join`. A shut-down queue does not hand its remaining lines to the sender, so the BSP exit `Marker` that `Daemon.scala` offers just before `close` can be dropped. Prove the queue behavior in a miniature spec first. Owner: app (`DaemonOutboxLawSpec`).
 - [ ] B7 The MCP `run` tool accepts an empty id (`runCall("", None, empty) == Right(Call.Run("", None))`), while CLI `run ""` is `BadTaskId` and MCP preview is `MissingRunName`. Parity: reject it. Owner: app (`SessionLawSpec:22`).
 - [ ] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
@@ -48,8 +49,12 @@ Each bug gets a law that fails on today's code, then the fix.
 
 - [ ] D1 `fmt` rewrites sources a compile reads. Does it hold the writer permit? The recommendation is yes. Today `Call.Format` is missing from the permit and `Perform` tables (`DaemonWatchLawSpec:37`, `PerformLawSpec:42`). Owner: app.
 - [ ] D2 `~ publishLocal <x>` watches every module, and `preview publishLocal <x>` watches only the build file, because `PublishLocal` and `PublishSnapshots` fall through `case _ => Every` in `Watching`. The recommendation is to route both through `publish(graph, tokens)`. Owner: app (`DaemonWatchLawSpec:41`).
-- [ ] D3 The rehearsal portal reports no finding for an empty bundle, so it marks an empty upload `VALIDATED`. The recommendation is that an empty bundle is a layout finding. Owner: central (`PortalReportLawSpec:42`).
-- [ ] D4 The rehearsal portal accepts a `.sha256` file with a wrong digest. The recommendation is that a checksum file that is present is checked. Owner: central (`PortalReportLawSpec:89`).
+- [x] D3 The rehearsal portal reports no finding for an empty bundle, so it marks an empty upload `VALIDATED`. The recommendation is that an empty bundle is a layout finding. Owner: central (`PortalReportLawSpec:42`).
+  - Russ: an empty bundle is a layout finding, and the rehearsal portal must not mark an empty upload `VALIDATED`.
+  - Proof: `PortalReportLawSpec` "a non-zip, an empty zip, ..." was red (`Report(Chunk(), Chunk())`), and `PortalServerLawSpec` "an empty bundle fails in either mode" was red (`VALIDATED` in hold, `PUBLISHED` in automatic). Both are green with `Finding.Layout("zip")` for a zip with no files, which also covers a zip of directory entries only.
+- [x] D4 The rehearsal portal accepts a `.sha256` file with a wrong digest. The recommendation is that a checksum file that is present is checked. Owner: central (`PortalReportLawSpec:89`).
+  - Russ: any checksum file that is present is checked. `.md5` and `.sha1` stay required. `.sha256` and `.sha512` are optional, and one that is present must match.
+  - Proof: `PortalReportLawSpec` "a sha256 or sha512 that is present and wrong is a checksum" was red (the wrong `.sha256` passed, and `.sha512` was a layout finding), and "sha256 and sha512 are allowed" was red on `.sha512`. Both are green.
 - [x] D5 `JobCheck` read tag and label conditions from the triggers alone. A `workflow_dispatch` run from a tag never made `Event(Tag)` or `TagMatches` reachable, and `HasLabel` needed a labeled pull-request type, so `ci.yml` refused both. Owner: api (`JobCheckLawSpec`).
   - Russ: reachable means GitHub can make it true. A dispatch runs from any ref, so a ref condition (`TagMatches`, `Event(Tag)`, which renders as a ref test, and `DefaultBranch`) is reachable in a file with dispatch. An event condition is the event name the start sets, so dispatch never makes a push condition true. A label condition reads `github.event.pull_request`, so it is reachable in a file with any `pull_request` trigger.
 
@@ -142,16 +147,16 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## central
 
-- [ ] C1 `PortalClientLawSpec:28, :49, :69, :131, :147, :163`, `PreflightReadLawSpec:60` WEAK. The `Left` arm accepts the parser's only failure, so a parser regression skips the law. Parse inside the effect with `ZIO.fromEither`.
-- [ ] C2 `PublishIdentityLawSpec:144` MERGE. The same 11 `TransportFaults.from` rows as `PortalClientLawSpec:199`. Keep one.
-- [ ] C3 `PublishIdentityLawSpec:163` DELETE. `MessageLawSpec:796` pins it.
-- [ ] C4 `LayoutLawSpec:166` WEAK. The "quote" fixture `a&b` has no quote. Use `a"&b` and assert the `<groupId>` element.
-- [ ] C5 `PortalReportLawSpec:42` REWRITE. The title says an empty zip is a layout finding, and the assert says no finding (D3).
-- [ ] C6 `PortalReportLawSpec:89` WEAK. The `.sha256` fixture is a wrong digest (D4).
-- [ ] C7 `PortalFlowLawSpec:10` REWRITE. Copies `beat`, and the 30th read is never pinned. Assert `beat(29, Same) == (Say, 0)` literally.
-- [ ] C8 `PortalClientLawSpec:88, :103`, `PreflightReadLawSpec:36, :59`, `PortalStoreLawSpec:13` WEAK. Rows reduce to `Boolean` and `forall(identity)`, which names no row. Collect mismatches and assert `misses == Nil`.
-- [ ] C9 `case Left(_) => assertTrue(false)` in `LayoutLawSpec`, `PortalFlowLawSpec:85, :98, :101`, `PortalReportLawSpec:30, :195`, and the `"unused"` placeholders in `LocalPublishLawSpec:40, :55`, drop the error. Use `ZIO.fromEither` steps.
-- [ ] C10 B5.
+- [x] C1 `PortalClientLawSpec:28, :49, :69, :131, :147, :163`, `PreflightReadLawSpec:60` WEAK. The `Left` arm accepts the parser's only failure, so a parser regression skips the law. Parse inside the effect with `ZIO.fromEither`.
+- [x] C2 `PublishIdentityLawSpec:144` MERGE. The same 11 `TransportFaults.from` rows as `PortalClientLawSpec:199`. Keep one.
+- [x] C3 `PublishIdentityLawSpec:163` DELETE. `MessageLawSpec:796` pins it.
+- [x] C4 `LayoutLawSpec:166` WEAK. The "quote" fixture `a&b` has no quote. Use `a"&b` and assert the `<groupId>` element.
+- [x] C5 `PortalReportLawSpec:42` REWRITE. The title says an empty zip is a layout finding, and the assert says no finding (D3).
+- [x] C6 `PortalReportLawSpec:89` WEAK. The `.sha256` fixture is a wrong digest (D4).
+- [x] C7 `PortalFlowLawSpec:10` REWRITE. Copies `beat`, and the 30th read is never pinned. Assert `beat(29, Same) == (Say, 0)` literally.
+- [x] C8 `PortalClientLawSpec:88, :103`, `PreflightReadLawSpec:36, :59`, `PortalStoreLawSpec:13` WEAK. Rows reduce to `Boolean` and `forall(identity)`, which names no row. Collect mismatches and assert `misses == Nil`.
+- [x] C9 `case Left(_) => assertTrue(false)` in `LayoutLawSpec`, `PortalFlowLawSpec:85, :98, :101`, `PortalReportLawSpec:30, :195`, and the `"unused"` placeholders in `LocalPublishLawSpec:40, :55`, drop the error. Use `ZIO.fromEither` steps.
+- [x] C10 B5.
 
 ## engine A-L
 

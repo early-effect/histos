@@ -122,6 +122,20 @@ object PortalServerLawSpec extends ZIOSpecDefault:
           denied.body.text.contains("the deployment cannot be promoted"),
           gone.status == Status.NotFound,
         )
+      }
+    ,
+    test("an empty bundle fails in either mode and is never validated"):
+      ZIO.scoped {
+        for
+          opened <- rehearse((root, credentials) => PortalServer.serve(root, credentials))
+          body   <- packed(zipped(Nil))
+          states <- ZIO.foreach(List("USER_MANAGED", "AUTOMATIC")): publishingType =>
+            for
+              created <- ask(opened, Method.POST, s"api/v1/publisher/upload?publishingType=$publishingType", body)
+              id      <- ZIO.fromOption(deployment(created)).orElseFail(PortalError.Unnamed)
+              status  <- ask(opened, Method.POST, s"api/v1/publisher/status?id=${id.value}")
+            yield report(status)
+        yield assertTrue(states == List.fill(2)(Some((DeploymentState.Failed, Chunk(Finding.Layout("zip"))))))
       },
   )
 

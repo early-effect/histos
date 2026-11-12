@@ -19,41 +19,38 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
         ZIO
           .serviceWithZIO[Publisher](_.publish(artifact))
           .map: published =>
-            published match
-              case Published.Local(jar, pom, sources, javadoc, sum) =>
-                val jarName = "widget-1.0.0.jar"
-                assertTrue(
-                  sources.isEmpty,
-                  javadoc.isEmpty,
-                  sum.value == Digest.sha256(pk),
-                  Files.isRegularFile(jar),
-                  Files.isRegularFile(pom),
-                  read(jar) == new String(pk.toArray, StandardCharsets.UTF_8),
-                  sidecar(jar, "md5") == Some(Digest.md5(pk) + "\n"),
-                  sidecar(jar, "sha1") == Some(Digest.sha1(pk) + "\n"),
-                  sidecar(jar, "sha256") == Some(Digest.sha256(pk) + "\n"),
-                  sidecar(pom, "sha256") == Some(Digest.sha256(Chunk.fromArray(Files.readAllBytes(pom))) + "\n"),
-                  jar.endsWith(jarName),
-                  !Files.exists(jar.getParent.resolve("widget-1.0.0-sources.jar")),
-                  Files.isDirectory(dir),
-                )
-              case Published.Snapshot(unique, _) =>
-                assertTrue(unique.value == "unused")
+            val jar = module(dir).resolve("widget-1.0.0.jar")
+            val pom = module(dir).resolve("widget-1.0.0.pom")
+            assertTrue(
+              published == Published.Local(jar, pom, None, None, Checksum.sha256(pk)),
+              read(jar) == new String(pk.toArray, StandardCharsets.UTF_8),
+              Files.isRegularFile(pom),
+              sidecar(jar, "md5") == Some(Digest.md5(pk) + "\n"),
+              sidecar(jar, "sha1") == Some(Digest.sha1(pk) + "\n"),
+              sidecar(jar, "sha256") == Some(Digest.sha256(pk) + "\n"),
+              sidecar(pom, "sha256") == Some(Digest.sha256(Chunk.fromArray(Files.readAllBytes(pom))) + "\n"),
+              !Files.exists(module(dir).resolve("widget-1.0.0-sources.jar")),
+            )
     ,
     test("sources and javadoc are written only when the artifact carries them"):
-      placed("extras", sources = Some(pk), javadoc = Some(pk)): (_, artifact) =>
+      placed("extras", sources = Some(pk), javadoc = Some(pk)): (dir, artifact) =>
         ZIO
           .serviceWithZIO[Publisher](_.publish(artifact))
           .map: published =>
-            published match
-              case Published.Local(_, _, sources, javadoc, _) =>
-                assertTrue(
-                  sources.exists(Files.isRegularFile(_)),
-                  javadoc.exists(Files.isRegularFile(_)),
-                  sources.exists(path => sidecar(path, "md5") == Some(Digest.md5(pk) + "\n")),
-                )
-              case Published.Snapshot(unique, _) =>
-                assertTrue(unique.value == "unused")
+            val sources = module(dir).resolve("widget-1.0.0-sources.jar")
+            val javadoc = module(dir).resolve("widget-1.0.0-javadoc.jar")
+            assertTrue(
+              published == Published.Local(
+                module(dir).resolve("widget-1.0.0.jar"),
+                module(dir).resolve("widget-1.0.0.pom"),
+                Some(sources),
+                Some(javadoc),
+                Checksum.sha256(pk),
+              ),
+              Files.isRegularFile(sources),
+              Files.isRegularFile(javadoc),
+              sidecar(sources, "md5") == Some(Digest.md5(pk) + "\n"),
+            )
     ,
     test("an empty jar, a non-zip, an empty source jar, and a non-zip source jar are refused"):
       val program =
@@ -83,13 +80,15 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
           blocked <- run(file, pk, None)
           missing = dir.resolve("fresh")
           created <- run(missing, pk, None)
-        yield assertTrue(
-          blocked == Left(PublishError.NotADirectory(file)),
-          created.map {
-            case Published.Local(jar, _, _, _, _) => Files.isRegularFile(jar) && Files.isDirectory(missing)
-            case Published.Snapshot(_, _)         => false
-          } == Right(true),
-        )
+        yield
+          val jar = module(missing).resolve("widget-1.0.0.jar")
+          assertTrue(
+            blocked == Left(PublishError.NotADirectory(file)),
+            created == Right(
+              Published.Local(jar, module(missing).resolve("widget-1.0.0.pom"), None, None, Checksum.sha256(pk))
+            ),
+            Files.isRegularFile(jar),
+          )
       program,
   ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer)
 
@@ -131,6 +130,9 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
           sources = sources,
           javadoc = javadoc,
         )
+
+  private def module(root: Path): Path =
+    root.resolve("demo").resolve("widget").resolve("1.0.0")
 
   private def sidecar(path: Path, suffix: String): Option[String] =
     Option(path.getFileName).map: name =>

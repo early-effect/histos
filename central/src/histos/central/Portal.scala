@@ -18,15 +18,27 @@ enum ReleaseMode:
 enum DeploymentState:
   case Pending, Validating, Validated, Publishing, Published, Failed
 
-/** The id an upload body named. Empty or any whitespace is refused. */
+/** The id an upload body named, or the one `publish promote` and `publish drop` take. The ends are trimmed. An empty id
+  * or whitespace inside it is refused.
+  */
 opaque type DeploymentId = String
 
 object DeploymentId:
   given CanEqual[DeploymentId, DeploymentId] = CanEqual.derived
 
-  def from(raw: String): Either[PortalError, DeploymentId] =
+  enum Error:
+    case Empty
+    case Spaced(text: String)
+
+    def message: String = this match
+      case Empty        => "a deployment id is empty"
+      case Spaced(text) => s"deployment id '$text' contains whitespace"
+  end Error
+
+  def from(raw: String): Either[Error, DeploymentId] =
     val text = raw.trim
-    if text.isEmpty || text.exists(_.isWhitespace) then Left(PortalError.Unnamed)
+    if text.isEmpty then Left(Error.Empty)
+    else if text.exists(_.isWhitespace) then Left(Error.Spaced(text))
     else Right(text)
 
   extension (id: DeploymentId) def value: String = id
@@ -237,8 +249,11 @@ private final class PortalClient(
 
   private def named(response: Response): IO[PortalError, DeploymentId] =
     response.body.strict match
-      case Some(bytes) => ZIO.fromEither(DeploymentId.from(new String(bytes.toArray, StandardCharsets.UTF_8)))
-      case None        => ZIO.fail(PortalError.Unnamed)
+      case Some(bytes) =>
+        ZIO
+          .fromEither(DeploymentId.from(new String(bytes.toArray, StandardCharsets.UTF_8)))
+          .orElseFail(PortalError.Unnamed)
+      case None => ZIO.fail(PortalError.Unnamed)
 
   private def state(id: DeploymentId): IO[PortalError, DeploymentState] =
     Portal.keep(note, s"reading portal ${id.value}")(fetched(id)).tapError(error => note(error.message))

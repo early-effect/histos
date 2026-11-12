@@ -24,65 +24,60 @@ object PortalClientLawSpec extends ZIOSpecDefault:
   def spec = suite("portal client laws")(
     test("hold stops at validated, names the deployment, and sends the bearer token"):
       val program =
-        drive(List(created("deploy-1"), json("VALIDATED")))(_.upload(bundle, ReleaseMode.Hold)).map { spoken =>
-          id("deploy-1") match
-            case Left(error)       => assertTrue(error == PortalError.Unnamed)
-            case Right(deployment) =>
-              assertTrue(
-                spoken.result == Right(Deployment(deployment, DeploymentState.Validated)),
-                spoken.requests.map(shown) == List(
-                  s"POST $origin/api/v1/publisher/upload?publishingType=USER_MANAGED",
-                  s"POST $origin/api/v1/publisher/status?id=deploy-1",
-                ),
-                spoken.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is VALIDATED"),
-                spoken.requests.forall(authorized),
-              )
-        }
+        for
+          id     <- deployId
+          spoken <- drive(List(created("deploy-1"), json("VALIDATED")))(_.upload(bundle, ReleaseMode.Hold))
+        yield assertTrue(
+          spoken.result == Right(Deployment(id, DeploymentState.Validated)),
+          spoken.requests.map(shown) == List(
+            s"POST $origin/api/v1/publisher/upload?publishingType=USER_MANAGED",
+            s"POST $origin/api/v1/publisher/status?id=deploy-1",
+          ),
+          spoken.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is VALIDATED"),
+          spoken.requests.forall(authorized),
+        )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("a non-terminal state waits, a repeat is quiet, and validated ends the poll"):
       val program =
-        for spoken <- driveAfter(
+        for
+          id     <- deployId
+          spoken <- driveAfter(
             List(created("deploy-1"), json("PENDING"), json("PENDING"), json("VALIDATING"), json("VALIDATED")),
             3,
           )(_.upload(bundle, ReleaseMode.Hold))
-        yield id("deploy-1") match
-          case Left(error)       => assertTrue(error == PortalError.Unnamed)
-          case Right(deployment) =>
-            assertTrue(
-              spoken.result == Right(Deployment(deployment, DeploymentState.Validated)),
-              spoken.requests.count(status) == 4,
-              spoken.notes == Chunk(
-                "uploading bundle to the portal",
-                "portal deploy-1 is PENDING, waiting for VALIDATED",
-                "portal deploy-1 is VALIDATING, waiting for VALIDATED",
-                "portal deploy-1 is VALIDATED",
-              ),
-            )
+        yield assertTrue(
+          spoken.result == Right(Deployment(id, DeploymentState.Validated)),
+          spoken.requests.count(status) == 4,
+          spoken.notes == Chunk(
+            "uploading bundle to the portal",
+            "portal deploy-1 is PENDING, waiting for VALIDATED",
+            "portal deploy-1 is VALIDATING, waiting for VALIDATED",
+            "portal deploy-1 is VALIDATED",
+          ),
+        )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("automatic does not stop at validated and asks for an automatic publish"):
       val program =
-        driveAfter(List(created("deploy-1"), json("VALIDATED"), json("PUBLISHED")), 1)(
-          _.upload(bundle, ReleaseMode.Automatic)
-        ).map { spoken =>
-          id("deploy-1") match
-            case Left(error)       => assertTrue(error == PortalError.Unnamed)
-            case Right(deployment) =>
-              assertTrue(
-                spoken.result == Right(Deployment(deployment, DeploymentState.Published)),
-                spoken.requests.headOption
-                  .map(shown)
-                  .contains(
-                    s"POST $origin/api/v1/publisher/upload?publishingType=AUTOMATIC"
-                  ),
-                spoken.notes == Chunk(
-                  "uploading bundle to the portal",
-                  "portal deploy-1 is VALIDATED, waiting for PUBLISHED",
-                  "portal deploy-1 is PUBLISHED",
-                ),
-              )
-        }
+        for
+          id     <- deployId
+          spoken <- driveAfter(List(created("deploy-1"), json("VALIDATED"), json("PUBLISHED")), 1)(
+            _.upload(bundle, ReleaseMode.Automatic)
+          )
+        yield assertTrue(
+          spoken.result == Right(Deployment(id, DeploymentState.Published)),
+          spoken.requests.headOption
+            .map(shown)
+            .contains(
+              s"POST $origin/api/v1/publisher/upload?publishingType=AUTOMATIC"
+            ),
+          spoken.notes == Chunk(
+            "uploading bundle to the portal",
+            "portal deploy-1 is VALIDATED, waiting for PUBLISHED",
+            "portal deploy-1 is PUBLISHED",
+          ),
+        )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("an upload rejection is the status, and the poll is not asked"):
@@ -94,32 +89,35 @@ object PortalClientLawSpec extends ZIOSpecDefault:
       val program =
         ZIO.foreach(cases) { (status, error) =>
           drive(List(ZIO.succeed(Response(status))))(_.upload(bundle, ReleaseMode.Hold)).map { spoken =>
-            val expected = Chunk("uploading bundle to the portal", error.message)
-            spoken.result == Left(error) && spoken.requests.length == 1 && spoken.notes == expected
+            val seen = (spoken.result, spoken.requests.length, spoken.notes)
+            Option.when(seen != (Left(error), 1, Chunk("uploading bundle to the portal", error.message))):
+              status.code -> seen
           }
         }
-      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(rows => assertTrue(rows.forall(identity)))
+      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(rows => assertTrue(rows.flatten == Nil))
     ,
     test("a created body that does not name a deployment is unnamed"):
       val bodies = List(
-        Response.text("", Status.Created),
-        Response.text("  \n", Status.Created),
-        Response.text("ab cd", Status.Created),
-        Response(Status.Created).withBody(Body.stream(ZStream.succeed(1.toByte))),
+        "empty"    -> Response.text("", Status.Created),
+        "blank"    -> Response.text("  \n", Status.Created),
+        "spaced"   -> Response.text("ab cd", Status.Created),
+        "streamed" -> Response(Status.Created).withBody(Body.stream(ZStream.succeed(1.toByte))),
       )
       val program =
-        ZIO.foreach(bodies) { response =>
+        ZIO.foreach(bodies) { (label, response) =>
           drive(List(ZIO.succeed(response)))(_.upload(bundle, ReleaseMode.Hold)).map { spoken =>
-            spoken.result == Left(PortalError.Unnamed) && spoken.requests.length == 1
+            val seen = (spoken.result, spoken.requests.length)
+            Option.when(seen != (Left(PortalError.Unnamed), 1))(label -> seen)
           }
         }
-      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(rows => assertTrue(rows.forall(identity)))
+      program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(rows => assertTrue(rows.flatten == Nil))
     ,
     test("a status body is the first deploymentState key, and a broken body is a report"):
       val accepted = """{"note":"\"deploymentState\"","deploymentState":"VALIDATED"}"""
       val broken   = List("""{"deploymentState":"VALIDATED}""", """{"deploymentState" "VALIDATED"}""")
       val program  =
         for
+          id   <- deployId
           held <- drive(List(created("deploy-1"), ZIO.succeed(Response.text(accepted))))(
             _.upload(bundle, ReleaseMode.Hold)
           )
@@ -128,57 +126,50 @@ object PortalClientLawSpec extends ZIOSpecDefault:
               _.result
             )
           }
-        yield id("deploy-1") match
-          case Left(error)       => assertTrue(error == PortalError.Unnamed)
-          case Right(deployment) =>
-            assertTrue(
-              held.result == Right(Deployment(deployment, DeploymentState.Validated)),
-              missed.forall(_ == Left(PortalError.Report)),
-            )
+        yield assertTrue(
+          held.result == Right(Deployment(id, DeploymentState.Validated)),
+          missed == List(Left(PortalError.Report), Left(PortalError.Report)),
+        )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("a failed deployment is that id, and a status rejection is not a state"):
       val program =
         for
+          id     <- deployId
           failed <- drive(List(created("deploy-1"), json("FAILED")))(_.upload(bundle, ReleaseMode.Hold))
           denied <- drive(List(created("deploy-1"), ZIO.succeed(Response(Status.Unauthorized))))(
             _.upload(bundle, ReleaseMode.Hold)
           )
-        yield id("deploy-1") match
-          case Left(error)       => assertTrue(error == PortalError.Unnamed)
-          case Right(deployment) =>
-            assertTrue(
-              failed.result == Left(PortalError.Failed(deployment)),
-              failed.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is FAILED"),
-              denied.result == Left(PortalError.Unauthorized),
-              denied.notes == Chunk(
-                "uploading bundle to the portal",
-                "the portal rejected the credentials",
-              ),
-            )
+        yield assertTrue(
+          failed.result == Left(PortalError.Failed(id)),
+          failed.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is FAILED"),
+          denied.result == Left(PortalError.Unauthorized),
+          denied.notes == Chunk(
+            "uploading bundle to the portal",
+            "the portal rejected the credentials",
+          ),
+        )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("promote and drop are the deployment path, and 401 and 409 stay typed"):
       val program =
-        id("deploy-1") match
-          case Left(error)       => ZIO.succeed(assertTrue(error == PortalError.Unnamed))
-          case Right(deployment) =>
-            for
-              promoted <- drive(List(ZIO.succeed(Response.empty())))(_.promote(deployment))
-              dropped  <- drive(List(ZIO.succeed(Response.empty())))(_.drop(deployment))
-              conflict <- drive(List(ZIO.succeed(Response(Status.Conflict))))(_.promote(deployment))
-              denied   <- drive(List(ZIO.succeed(Response(Status.Forbidden))))(_.drop(deployment))
-            yield
-              val path = s"$origin/api/v1/publisher/deployment/deploy-1"
-              assertTrue(
-                promoted.result == Right(()),
-                dropped.result == Right(()),
-                promoted.requests.map(shown) == List(s"POST $path"),
-                dropped.requests.map(shown) == List(s"DELETE $path"),
-                promoted.requests.forall(authorized),
-                conflict.result == Left(PortalError.Status(409)),
-                denied.result == Left(PortalError.Unauthorized),
-              )
+        for
+          id       <- deployId
+          promoted <- drive(List(ZIO.succeed(Response.empty())))(_.promote(id))
+          dropped  <- drive(List(ZIO.succeed(Response.empty())))(_.drop(id))
+          conflict <- drive(List(ZIO.succeed(Response(Status.Conflict))))(_.promote(id))
+          denied   <- drive(List(ZIO.succeed(Response(Status.Forbidden))))(_.drop(id))
+        yield
+          val path = s"$origin/api/v1/publisher/deployment/deploy-1"
+          assertTrue(
+            promoted.result == Right(()),
+            dropped.result == Right(()),
+            promoted.requests.map(shown) == List(s"POST $path"),
+            dropped.requests.map(shown) == List(s"DELETE $path"),
+            promoted.requests.forall(authorized),
+            conflict.result == Left(PortalError.Status(409)),
+            denied.result == Left(PortalError.Unauthorized),
+          )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("a client failure is the transport fault, and the portal is not asked twice"):
@@ -293,8 +284,8 @@ object PortalClientLawSpec extends ZIOSpecDefault:
   private def json(token: String): IO[ClientError, Response] =
     ZIO.succeed(Response.text(s"""{"deploymentState":"$token"}"""))
 
-  private def id(raw: String): Either[PortalError, DeploymentId] =
-    DeploymentId.from(raw)
+  private val deployId: IO[DeploymentId.Error, DeploymentId] =
+    ZIO.fromEither(DeploymentId.from("deploy-1"))
 
   private def shown(req: Request): String =
     s"${req.method} ${req.url.render}"

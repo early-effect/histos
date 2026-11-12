@@ -13,17 +13,17 @@ object PortalStoreLawSpec extends ZIOSpecDefault:
     test("validated, published, and failed round-trip, and any other state does not"):
       val program =
         for
-          root <- ZIO.service[Path]
-          dir  <- LawDir.child(root, "round")
-          kept <- ZIO.foreach(List(DeploymentState.Validated, DeploymentState.Published, DeploymentState.Failed)):
+          root   <- ZIO.service[Path]
+          dir    <- LawDir.child(root, "round")
+          misses <- ZIO.foreach(List(DeploymentState.Validated, DeploymentState.Published, DeploymentState.Failed)):
             state =>
               stored(dir, state.toString.toLowerCase, record(state)).flatMap: id =>
-                PortalStore.read(dir, id).map(found => found == Some(record(state)))
+                PortalStore.read(dir, id).map(found => Option.when(found != Some(record(state)))(state -> found))
           pending <- stored(dir, "pending", record(DeploymentState.Pending))
           refused <- PortalStore.read(dir, pending).either
         yield
           val folder = deployments(dir, pending)
-          assertTrue(kept.forall(identity), refused == Left(PortalStore.Error.Io(folder)))
+          assertTrue(misses.flatten == Nil, refused == Left(PortalStore.Error.Io(folder)))
       program
     ,
     test("promote publishes a validated deployment and leaves a published one in place"):
