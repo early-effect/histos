@@ -6,7 +6,7 @@ import histos.jdk.{Machine, Sha256}
 import histos.program.{Program, ProgramError, ProgramFeed}
 import histos.resolve.{BuildResolvers, DependencyLock, LockedCell, ResolutionService, Resolve, ResolveError}
 import histos.schedule.{CacheError, Parallelism}
-import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestMode, TestRun}
+import histos.testrun.{ModuleTest, ModuleTestError, SessionFeed, TestFeed, TestMode, TestRun}
 import histos.toolchain.Runtimes
 import histos.workspace.{IoFailure, Workspace}
 import histos.zinc.{CompileFeed, CompileMemo, CompilerStarts, Compilers, GraphCompile, GraphCompileError}
@@ -91,16 +91,20 @@ final class Checkout private[histos] (
         .provideEnvironment(env)
     yield feeds
 
-  /** Every module's tests. A quick record is written under this work tree. */
-  def test(mode: TestMode): IO[ModuleTestError | GraphCompileError, Chunk[TestFeed]] =
+  /** Every module's tests, on this checkout's compilers and memo, as the server's `test` runs them. A quick record is
+    * written under this work tree.
+    */
+  def test(mode: TestMode): IO[ModuleTestError | GraphCompileError | ResolveError, Chunk[TestFeed]] =
     for
       machine  <- here
       jdk      <- GraphCompile.jdk(machine)
       runtimes <- Runtimes.read(machine, None)
+      lock     <- Resolve.readLock(root)
       feeds    <- ModuleTest
-        .console(TestRun(root, build, Nil, jdk, runtimes, mode))
+        .sessionOn(TestRun(root, build, Nil, jdk, runtimes, mode))
+        .collect { case SessionFeed.Test(feed) => feed }
         .runCollect
-        .provideEnvironment(env)
+        .provideLayer(ZLayer.succeedEnvironment(env) >+> ResolutionService.pinned(lock))
     yield feeds
 
   /** The module's main, compiled and started, with each feed as the program produces it. */

@@ -430,8 +430,8 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       key: Sha256,
-      known: Map[Path, AnalysisContents],
-  ): Either[CompileError, (CompileOutput, Option[AnalysisContents])] =
+      known: Map[Path, Remembered],
+  ): Either[CompileError, (CompileOutput, Option[Remembered])] =
     val zinc        = new IncrementalCompilerImpl
     val converter   = MappedFileConverter.empty
     val reporter    = CollectingReporter(hear)
@@ -482,11 +482,10 @@ object JvmCompile:
       Stamps.timeWrapBinaryStamps(converter),
     )
     val before = classMarks(request.classes)
+    val zip    = request.analysis.resolve("inc.zip")
     try
       val result = zinc.compile(inputs, Logger.Null)
-      FileAnalysisStore
-        .binary(request.analysis.resolve("inc.zip").toFile)
-        .set(result)
+      FileAnalysisStore.binary(zip.toFile).set(result)
       if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
       else
         val recorded = result.analysis() match
@@ -507,7 +506,7 @@ object JvmCompile:
               writtenClasses(before, request.classes),
               None,
             ),
-            Some(result),
+            fingerprint(zip).map(Remembered(_, result)),
           )
     catch
       case _: xsbti.CompileFailed =>
@@ -521,7 +520,7 @@ object JvmCompile:
       entry: Path,
       ownClasses: Path,
       ownAnalysis: Path,
-      known: Map[Path, AnalysisContents],
+      known: Map[Path, Remembered],
   ): Optional[CompileAnalysis] =
     val path = entry.toAbsolutePath.normalize
     if path == ownClasses || !Files.isDirectory(path) then Optional.empty
@@ -529,13 +528,25 @@ object JvmCompile:
       GraphCompile.analysisDirOf(path) match
         case Some(dir) if dir.toAbsolutePath.normalize != ownAnalysis =>
           val normal = dir.toAbsolutePath.normalize
-          known.get(normal) match
+          current(normal, known) match
             case Some(contents) => analysisOf(contents)
             case None           =>
               val zip = normal.resolve("inc.zip")
               if Files.isRegularFile(zip) then storedAnalysis(zip)
               else Optional.empty
         case _ => Optional.empty
+
+  /** The pool's analysis of `dir` while its `inc.zip` still holds the bytes that compile wrote. A store restore puts
+    * another analysis under the same path, and Zinc would diff an upstream against itself.
+    */
+  private def current(dir: Path, known: Map[Path, Remembered]): Option[AnalysisContents] =
+    known.get(dir).filter(entry => fingerprint(dir.resolve("inc.zip")).contains(entry.bytes)).map(_.contents)
+
+  private def fingerprint(zip: Path): Option[Sha256] =
+    try
+      if Files.isRegularFile(zip) then Some(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(zip))))
+      else None
+    catch case _: IOException | _: UncheckedIOException => None
 
   private def analysisOf(contents: AnalysisContents): Optional[CompileAnalysis] =
     contents.getAnalysis match
@@ -561,9 +572,9 @@ object JvmCompile:
   private def priorResult(
       zinc: IncrementalCompilerImpl,
       dir: Path,
-      known: Map[Path, AnalysisContents],
+      known: Map[Path, Remembered],
   ): (PreviousResult, Prior) =
-    known.get(dir.toAbsolutePath.normalize) match
+    current(dir.toAbsolutePath.normalize, known) match
       case Some(contents) => remembered(zinc, contents)
       case None           =>
         val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
