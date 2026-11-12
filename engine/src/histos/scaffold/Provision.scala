@@ -13,9 +13,10 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, UIO, ZIO, ZLayer}
+import zio.{IO, UIO, URIO, ZIO, ZLayer}
 
-/** `histos new` and `histos init`. Full writes the scaffold, then CI, a lock, and doctor outside CI.
+/** `histos new` and `histos init`. Full writes the scaffold, then CI, a lock, and doctor outside CI. The doctor reads
+  * the registry feed, git, and the terminal from the caller's environment.
   */
 object Provision:
   val DefaultBranch: String = "main"
@@ -37,7 +38,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     Skeleton.create(parent, name, version, request.kind).mapError(ProvisionError.Files(_)).flatMap { dir =>
       finish(dir, apiJar, machine, request)
     }
@@ -48,7 +49,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     draft(dir, request.source).flatMap { text =>
       Skeleton.init(dir, version, request.kind, text).mapError(ProvisionError.Files(_)).flatMap { written =>
         finish(written, apiJar, machine, request)
@@ -75,7 +76,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     val head = s"${dir.toAbsolutePath.normalize}\nhistos test"
     request.kind match
       case ScaffoldKind.Bare => ZIO.succeed(Report(dir, head))
@@ -131,7 +132,7 @@ object Provision:
       graph: histos.ProjectGraph,
       env: Map[String, String],
       machine: Machine,
-  ): UIO[String] =
+  ): URIO[DoctorSurface.Needs, String] =
     if UpgradeNotice.inCi(env) then ZIO.succeed("")
     else
       DoctorSurface

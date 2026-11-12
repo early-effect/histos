@@ -2,7 +2,7 @@ package histos.toolchain
 
 import histos.jdk.{JdkRead, JdkRuntime, JdkSource, Os, Sha256, Toolchain, ToolchainError}
 import histos.native.NativeOrigin
-import histos.node.NodeToolchain
+import histos.node.{NodeMajor, NodeShadow, NodeSight, NodeToolchain, NodeVersion}
 
 import java.nio.file.Path
 
@@ -10,15 +10,30 @@ import zio.test.*
 
 object ToolchainLawSpec extends ZIOSpecDefault:
   def spec = suite("toolchain laws")(
-    test("a missing component is zero, and a pre-release does not invert the numbers in front"):
+    test("a missing component is zero, a pre-release sorts below its release, and a build sorts above it"):
       assertTrue(
         VersionOrder.compare("1.2", "1.2.0") == 0,
         VersionOrder.compare("1.2.3", "1.2") > 0,
+        VersionOrder.compare("1.9.0", "1.10.0") < 0,
         VersionOrder.atLeast("1.8.0_292", "8", stripJavaOne = true),
         !VersionOrder.atLeast("1.7.0", "8", stripJavaOne = true),
         !VersionOrder.atLeast("1.8", "8", stripJavaOne = false),
-        VersionOrder.compare("1.2.3-RC1", "1.2.3") > 0,
+        VersionOrder.compare("1.2.3-RC1", "1.2.3") < 0,
+        VersionOrder.compare("1.2.3-RC1", "1.2.2") > 0,
+        VersionOrder.compare("1.2.3-RC10", "1.2.3-RC2") > 0,
+        VersionOrder.compare("1.2.3-RC1+7", "1.2.3-RC1") > 0,
         VersionOrder.compare("1.2.3+7", "1.2.3") > 0,
+        VersionOrder.compare("1.2.3+7", "1.2.3+13") < 0,
+        !VersionOrder.atLeast("25.0.0-rc.1", "25", stripJavaOne = false),
+      )
+    ,
+    test("the newest node on PATH is the release, not its release candidate"):
+      val old       = NodeSight(Path.of("/old/bin/node"), NodeVersion.trusted("24.0.0", NodeMajor.trusted(24)))
+      val candidate = NodeSight(Path.of("/rc/bin/node"), NodeVersion.trusted("25.0.0-rc.1", NodeMajor.trusted(25)))
+      val release   = NodeSight(Path.of("/new/bin/node"), NodeVersion.trusted("25.0.0", NodeMajor.trusted(25)))
+      assertTrue(
+        NodeToolchain.shadow(List(old, release, candidate)) == Some(NodeShadow(old, release)),
+        NodeToolchain.shadow(List(old, candidate, release)) == Some(NodeShadow(old, release)),
       )
     ,
     test("a host token round-trips, and an other os or an unsupported architecture has no token"):

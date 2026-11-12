@@ -13,14 +13,15 @@ object NodeMajor:
   extension (major: NodeMajor) def value: Int = major
 end NodeMajor
 
-/** A full Node version, such as `22.14.0`. The leading `v` from `node --version` is not part of it.
+/** A full Node version, such as `22.14.0`, `25.0.0-rc.1`, or a nightly with a `+` build. The leading `v` from `node
+  * --version` is not part of it. A pre-release sorts below its release (`VersionOrder`).
   */
 final case class NodeVersion private (value: String, major: NodeMajor)
 
 object NodeVersion:
   given CanEqual[NodeVersion, NodeVersion] = CanEqual.derived
 
-  private val Full = """(\d+)\.(\d+)\.(\d+)""".r
+  private val Full = """(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?""".r
 
   def from(raw: String): Either[NodeVersionError, NodeVersion] =
     val body =

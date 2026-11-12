@@ -8,7 +8,7 @@ import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Clock, ZIO}
+import zio.{Chunk, ZIO}
 import zio.test.*
 
 object PackLawSpec extends ZIOSpecDefault:
@@ -18,7 +18,6 @@ object PackLawSpec extends ZIOSpecDefault:
         val dest  = root.resolve("classes.jar")
         val bytes = Chunk.fromArray("class".getBytes(StandardCharsets.UTF_8))
         for
-          _       <- Clock.instant
           empty   <- ClassJar.writeBytes(Nil, dest).either
           escaped <- ClassJar.writeBytes(List(".." -> bytes), dest).either
           slash   <- ClassJar.writeBytes(List("/abs" -> bytes), dest).either
@@ -52,7 +51,6 @@ object PackLawSpec extends ZIOSpecDefault:
         val sources = root.resolve("src")
         val note    = sources.resolve("main").resolve("resources").resolve("notes").resolve("hello.txt")
         for
-          _       <- Clock.instant
           missing <- Resources.files(sources)
           _       <- ZIO.attemptBlocking {
             Option(note.getParent).foreach(Files.createDirectories(_))

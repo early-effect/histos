@@ -885,13 +885,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           (
             "BadName(raw) | Unknown(name,near) | NotModule(name) | Duplicate(name) | " +
               "Missing(path) | Drift(file,hint) | Io(failure) | " +
-              "DuplicateSite(first,second) | IllegalSite(name) | " +
-              "UnknownNeed(job,need) | DuplicateNeed(job,need) | " +
-              "UnknownModule(job,module) | DuplicateTarget(job,target) | " +
-              "UnpinnedAction(job,action) | GrantMissing(job,action) | " +
-              "UnknownRunner(job,runner) | UnknownSecret(secret) | " +
-              "UnreachableCond(job) | DispatchInputConflict(name) | " +
-              "ConcurrencyConflict(file) | UnpinnedWorkflowRun(name) | Pins(text) | " +
+              "DuplicateSite(first,second) | Fault(fault) | Pins(text) | " +
               "NoDefaultBranch() | JobTimeout(count) | LlvmChecksum(archive) | SnapshotClients(ship)"
           ),
           """{"NoDefaultBranch":{}}""",

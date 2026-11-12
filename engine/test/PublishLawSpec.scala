@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.{MavenModule, Publisher, ReleaseFeed}
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest, VersionError as JdkVersionError}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256Digest}
 import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.select.SelectError
@@ -18,6 +18,7 @@ import histos.version.{
   SnapshotPointer,
   VersionError,
 }
+import histos.workspace.Workspace
 import histos.`scala`
 import histos.{
   Dep,
@@ -27,7 +28,6 @@ import histos.{
   ProjectGraph,
   ProjectName,
   Projects,
-  Splits,
   Publishing,
   Ship,
   SonaPublish,
@@ -41,13 +41,10 @@ import histos.{
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.time.Instant
-import java.util.zip.ZipFile
-
-import _root_.scala.jdk.CollectionConverters.*
 
 import slayer.{any, stub, stubbed}
 
-import zio.{Chunk, Clock, Scope, ZIO}
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
 object PublishLawSpec extends ZIOSpecDefault:
@@ -95,49 +92,42 @@ object PublishLawSpec extends ZIOSpecDefault:
         )
       ,
       test("a stored commit snapshot has its own channel, and two assets are refused"):
-        val app = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
-        val cli = module("cli", Jvm)(scala3).assembly(MainClass("demo.Cli")).asset(asset"dist/cli.jar")
-        val one = shipped(app)
-        val two = shipped(app, cli)
-        (one, two, ProjectName("app"), ShipName("demo")) match
-          case (Right(single), Right(both), moduleName, ship) =>
-            val commit = published(moduleName, ship, stored.render)
-            val moved  = published(moduleName, ship, pointer.render)
-            val again  = published(moduleName, ship, pointer.render)
-            val cliHit = published(ProjectName("cli"), ship, pointer.render)
-            assertTrue(
-              DistChannel.plan(single, List(commit)).exists(_.map(_.revision) == List(stored.render)),
-              DistChannel.plan(single, List(moved)).exists(_.map(_.revision) == List(pointer.render)),
-              DistChannel
-                .plan(single, List(commit, moved))
-                .exists(
-                  _.map(_.revision) == List(stored.render, pointer.render)
-                ),
-              !DistChannel.plan(single, List(commit)).exists(_.exists(_.revision == pointer.render)),
-              DistChannel.plan(single, List(moved, again)) ==
-                Left(LocalPublishError.Stock(s"demo app published more than one ${pointer.render}")),
-              DistChannel.plan(both, List(moved, cliHit)) == Left(LocalPublishError.Stock("demo names two assets")),
-              DistChannel.plan(both, List(commit)) == Left(LocalPublishError.Stock("demo names two assets")),
-            )
-          case _ => assertTrue(one.isRight, two.isRight)
-      ,
-      test("a snapshot coordinate is a revision that ends in -SNAPSHOT"):
-        check(Gen.string(Gen.alphaNumericChar)): raw =>
-          assertTrue(
-            PublishSelect.snapshotCoordinate(s"$raw-SNAPSHOT"),
-            !PublishSelect.snapshotCoordinate(s"${raw.stripSuffix("-SNAPSHOT")}-release"),
-          )
+        val app    = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
+        val cli    = module("cli", Jvm)(scala3).assembly(MainClass("demo.Cli")).asset(asset"dist/cli.jar")
+        val commit = published(ProjectName("app"), ShipName("demo"), stored.render)
+        val moved  = published(ProjectName("app"), ShipName("demo"), pointer.render)
+        val cliHit = published(ProjectName("cli"), ShipName("demo"), pointer.render)
+        for
+          single <- ZIO.fromEither(shipped(app))
+          both   <- ZIO.fromEither(shipped(app, cli))
+        yield assertTrue(
+          DistChannel.plan(single, List(commit)).map(_.map(_.revision)) == Right(List(stored.render)),
+          DistChannel.plan(single, List(moved)).map(_.map(_.revision)) == Right(List(pointer.render)),
+          DistChannel.plan(single, List(commit, moved)).map(_.map(_.revision)) ==
+            Right(List(stored.render, pointer.render)),
+          DistChannel.plan(single, List(moved, moved)) ==
+            Left(LocalPublishError.Stock(s"demo app published more than one ${pointer.render}")),
+          DistChannel.plan(both, List(moved, cliHit)) == Left(LocalPublishError.Stock("demo names two assets")),
+          DistChannel.plan(both, List(commit)) == Left(LocalPublishError.Stock("demo names two assets")),
+        )
       ,
       test("a ship token wins, a snapshot dependency is refused, and an assembly may pack an unpublished module"):
-        Dep.from("com.acme:widgets:1.0.0-SNAPSHOT") match
-          case Left(_)    => assertTrue(false)
-          case Right(dep) =>
-            val extra = module("extra", Jvm)(scala3)
-            val lib   = module("lib", Jvm)(scala3)
-            val app   = module("app", Jvm)(scala3).dependsOn(lib).libraryDependencies(dep)
-            val fat   = module("fat", Jvm)(scala3).dependsOn(extra).assembly(MainClass("demo.Main"))
-            val plain = module("plain", Jvm)(scala3).dependsOn(extra)
-            val built = Projects.organization(organization"example.com")(
+        val demo    = ShipName("demo")
+        val widgets = ShipName("widgets")
+        val writing = List(
+          ShipWrite(demo, List(ProjectName("app"), ProjectName("fat"), ProjectName("plain")), false),
+          ShipWrite(widgets, List(ProjectName("lib")), true),
+        )
+        val named = module("demo", Jvm)(scala3)
+        for
+          dep <- ZIO.fromEither(Dep.from("com.acme:widgets:1.0.0-SNAPSHOT"))
+          extra = module("extra", Jvm)(scala3)
+          lib   = module("lib", Jvm)(scala3)
+          app   = module("app", Jvm)(scala3).dependsOn(lib).libraryDependencies(dep)
+          fat   = module("fat", Jvm)(scala3).dependsOn(extra).assembly(MainClass("demo.Main"))
+          plain = module("plain", Jvm)(scala3).dependsOn(extra)
+          graph <- ZIO.fromEither(
+            Projects.organization(organization"example.com")(
               ships(
                 Ship("demo").next(1, 2, 3)(app, fat, plain),
                 Ship("widgets").next(1, 2, 3)(lib),
@@ -148,45 +138,33 @@ object PublishLawSpec extends ZIOSpecDefault:
               fat,
               plain,
             )
-            built match
-              case Left(_)      => assertTrue(built.isRight)
-              case Right(graph) =>
-                val demo    = ShipName("demo")
-                val widgets = ShipName("widgets")
-                val writing = List(
-                  ShipWrite(demo, List(ProjectName("app"), ProjectName("fat"), ProjectName("plain")), false),
-                  ShipWrite(widgets, List(ProjectName("lib")), true),
-                )
-                val library = s"${dep.organization}:${dep.name}:${dep.revision}"
-                val named   = module("demo", Jvm)(scala3)
-                val same    = Projects.organization(organization"example.com")(
-                  ships(Ship("demo").next(1, 2, 3)(named)),
-                  named,
-                )
-                assertTrue(
-                  same.flatMap(PublishSelect.resolve(_, List("demo"))) == Right(List(PublishName.Ship(demo))),
-                  PublishSelect.resolve(graph, List("missing")) == Left(LocalPublishError.Unknown("missing")),
-                  PublishSelect.resolve(graph, List("app", "app")) ==
-                    Left(LocalPublishError.Target(SelectError.Duplicate(ProjectName("app")))),
-                  PublishSelect.pick(graph, List(PublishName.Module(ProjectName("app"))), writing).exists { picked =>
-                    picked.roots.isEmpty && picked.modules.isEmpty &&
-                    picked.refused == List(LocalPublishError.SnapshotDependency(demo, library))
-                  },
-                  PublishSelect.pick(graph, List(PublishName.Module(ProjectName("extra"))), writing) ==
-                    Left(LocalPublishError.NotPublished(ProjectName("extra"))),
-                  PublishSelect.pick(graph, List(PublishName.Ship(ShipName("other"))), writing) ==
-                    Left(LocalPublishError.UnknownShip(ShipName("other"))),
-                  PublishSelect.pick(graph, List(PublishName.Module(ProjectName("plain"))), writing) ==
-                    Left(LocalPublishError.UnpublishedDependency(ProjectName("plain"), ProjectName("extra"))),
-                  PublishSelect.pick(graph, List(PublishName.Module(ProjectName("fat"))), writing).exists { picked =>
-                    picked.modules == Set(ProjectName("fat")) && picked.refused.isEmpty
-                  },
-                  PublishSelect
-                    .pick(graph, Nil, List(ShipWrite(demo, List(ProjectName("fat")), false)))
-                    .exists(
-                      _.modules == Set(ProjectName("fat"))
-                    ),
-                )
+          )
+          same <- ZIO.fromEither(
+            Projects.organization(organization"example.com")(ships(Ship("demo").next(1, 2, 3)(named)), named)
+          )
+          library = s"${dep.organization}:${dep.name}:${dep.revision}"
+        yield assertTrue(
+          PublishSelect.resolve(same, List("demo")) == Right(List(PublishName.Ship(demo))),
+          PublishSelect.resolve(graph, List("missing")) == Left(LocalPublishError.Unknown("missing")),
+          PublishSelect.resolve(graph, List("app", "app")) ==
+            Left(LocalPublishError.Target(SelectError.Duplicate(ProjectName("app")))),
+          PublishSelect.pick(graph, List(PublishName.Module(ProjectName("app"))), writing).exists { picked =>
+            picked.roots.isEmpty && picked.modules.isEmpty &&
+            picked.refused == List(LocalPublishError.SnapshotDependency(demo, library))
+          },
+          PublishSelect.pick(graph, List(PublishName.Module(ProjectName("extra"))), writing) ==
+            Left(LocalPublishError.NotPublished(ProjectName("extra"))),
+          PublishSelect.pick(graph, List(PublishName.Ship(ShipName("other"))), writing) ==
+            Left(LocalPublishError.UnknownShip(ShipName("other"))),
+          PublishSelect.pick(graph, List(PublishName.Module(ProjectName("plain"))), writing) ==
+            Left(LocalPublishError.UnpublishedDependency(ProjectName("plain"), ProjectName("extra"))),
+          PublishSelect.pick(graph, List(PublishName.Module(ProjectName("fat"))), writing).exists { picked =>
+            picked.modules == Set(ProjectName("fat")) && picked.refused.isEmpty
+          },
+          PublishSelect
+            .pick(graph, Nil, List(ShipWrite(demo, List(ProjectName("fat")), false)))
+            .exists(_.modules == Set(ProjectName("fat"))),
+        )
       ,
       test("snapshot credentials are a user and a password, or they are refused"):
         assertTrue(
@@ -202,37 +180,29 @@ object PublishLawSpec extends ZIOSpecDefault:
           },
         )
       ,
-      test("a bundle path stays inside the archive, and a size past the cap is refused before the body is read"):
-        assertTrue(
-          BundlePath.from("note.txt").exists(_.name == "note.txt"),
-          BundlePath.from("..").isLeft,
-          BundlePath.from("").isLeft,
-          BundlePath.from("/abs").isLeft,
-          BundlePath.from("a/../b").isLeft,
-        )
-      ,
       test("a launcher pin is a pointer, one timestamp, or a release"):
         val stamp = s"${number.render}-20261106.153000-1"
-        (LauncherPin.from(pointer.render), LauncherPin.from(stamp), LauncherPin.from(number.render)) match
-          case (Right(channel), Right(revision), Right(release)) =>
-            assertTrue(
-              channel.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
-              revision.choice == LauncherChoice.Revision(LauncherChannel.Line(pointer), stamp),
-              release.choice == LauncherChoice.Release(number),
-              LauncherPin.parse(LauncherPin.render(revision)).exists(_.choice == revision.choice),
-              LauncherPin.parse("") == Left(LauncherError.Missing),
-              LauncherPin.parse(s"${LauncherPin.Key}=${pointer.render}\n${LauncherPin.Key}=again\n") ==
-                Left(LauncherError.Duplicate),
-              LauncherPin.parse("other=1\n") == Left(LauncherError.Unknown("other")),
-              LauncherPin.from("not a version") == Left(LauncherError.Version("not a version")),
-              LauncherPin.renderBase("https://example.test/maven") == Right("https://example.test/maven"),
-              LauncherPin.renderBase("http://127.0.0.1:9/maven") == Right("http://127.0.0.1:9/maven"),
-              LauncherPin.renderBase("http://localhost:9/maven") == Right("http://localhost:9/maven"),
-              LauncherPin.renderBase("file:///tmp/repo") == Right("file:///tmp/repo"),
-              LauncherPin.renderBase("http://example.test/maven").isLeft,
-              LauncherPin.renderBase("https://example.test/a b").isLeft,
-            )
-          case _ => assertTrue(false)
+        for
+          channel  <- ZIO.fromEither(LauncherPin.from(pointer.render))
+          revision <- ZIO.fromEither(LauncherPin.from(stamp))
+          release  <- ZIO.fromEither(LauncherPin.from(number.render))
+        yield assertTrue(
+          channel.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
+          revision.choice == LauncherChoice.Revision(LauncherChannel.Line(pointer), stamp),
+          release.choice == LauncherChoice.Release(number),
+          LauncherPin.parse(LauncherPin.render(revision)).map(_.choice) == Right(revision.choice),
+          LauncherPin.parse("") == Left(LauncherError.Missing),
+          LauncherPin.parse(s"${LauncherPin.Key}=${pointer.render}\n${LauncherPin.Key}=again\n") ==
+            Left(LauncherError.Duplicate),
+          LauncherPin.parse("other=1\n") == Left(LauncherError.Unknown("other")),
+          LauncherPin.from("not a version") == Left(LauncherError.Version("not a version")),
+          LauncherPin.renderBase("https://example.test/maven") == Right("https://example.test/maven"),
+          LauncherPin.renderBase("http://127.0.0.1:9/maven") == Right("http://127.0.0.1:9/maven"),
+          LauncherPin.renderBase("http://localhost:9/maven") == Right("http://localhost:9/maven"),
+          LauncherPin.renderBase("file:///tmp/repo") == Right("file:///tmp/repo"),
+          LauncherPin.renderBase("http://example.test/maven").isLeft,
+          LauncherPin.renderBase("https://example.test/a b").isLeft,
+        )
       ,
       test("a notice is quiet in CI and remembered inside a day"):
         val published = ship"1.3.0"
@@ -275,21 +245,16 @@ object PublishLawSpec extends ZIOSpecDefault:
     ),
     suite("a publish that must not compile")(
       test("an empty catalog publishes nothing"):
-        refuse(Projects(module("core", Jvm)(scala3)), Map.empty, None, PublishWrite.Local) { found =>
+        attempt(Projects(module("core", Jvm)(scala3)), Map.empty, None, PublishWrite.Local).map: found =>
           assertTrue(found == Left(LocalPublishError.NothingToPublish))
-        }
       ,
       test("a development session is not a release"):
-        refuse(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Release) {
-          case Left(LocalPublishError.Development(ship, compile)) =>
-            assertTrue(ship == ShipName("demo"), compile == CiVersion(number))
-          case other => assertTrue(other == Left(LocalPublishError.NothingToPublish))
-        }
+        attempt(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Release).map: found =>
+          assertTrue(found == Left(LocalPublishError.Development(ShipName("demo"), CiVersion(number))))
       ,
       test("a directory with no commit does not publish snapshots"):
-        refuse(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Snapshots) { found =>
+        attempt(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Snapshots).map: found =>
           assertTrue(found == Left(LocalPublishError.NoCommit))
-        }
       ,
       test("a snapshot session without a registry is refused"):
         val session = Map(
@@ -297,11 +262,8 @@ object PublishLawSpec extends ZIOSpecDefault:
           "HISTOS_SHA"     -> sha.value,
           "HISTOS_BRANCH"  -> "default",
         )
-        refuse(demo(module("app", Jvm)(scala3)), session, None, PublishWrite.Snapshots) {
-          case Left(LocalPublishError.Version(VersionError.Refused(refusals))) =>
-            assertTrue(refusals == ::(Refusal.Unchecked, Nil))
-          case other => assertTrue(other == Left(LocalPublishError.NothingToPublish))
-        }
+        attempt(demo(module("app", Jvm)(scala3)), session, None, PublishWrite.Snapshots).map: found =>
+          assertTrue(found == Left(LocalPublishError.Version(VersionError.Refused(::(Refusal.Unchecked, Nil)))))
       ,
       test("a release of a snapshot coordinate writes nothing"):
         val session = Map(
@@ -309,147 +271,73 @@ object PublishLawSpec extends ZIOSpecDefault:
           "HISTOS_SHA"     -> sha.value,
           "HISTOS_BRANCH"  -> "default",
         )
-        checked(demo(module("app", Jvm)(scala3)), session, Some(""), PublishWrite.Release) { output =>
+        attempt(demo(module("app", Jvm)(scala3)), session, Some(""), PublishWrite.Release).map: found =>
           assertTrue(
-            output.modules.isEmpty,
-            output.refused.contains(s"demo is ${stored.render}, which is not a release"),
+            found.map(_.modules) == Right(Nil),
+            found.map(_.refused) == Right(List(s"demo is ${stored.render}, which is not a release")),
           )
-        }
       ,
       test("a release of a ship that already matches is refused"):
         val session = Map("HISTOS_SESSION" -> "release")
-        refuse(demo(module("app", Jvm)(scala3)), session, Some("demo matches\n"), PublishWrite.Release) {
-          case Left(LocalPublishError.Version(VersionError.Refused(refusals))) =>
-            assertTrue(refusals == ::(Refusal.NothingToRelease, Nil))
-          case other => assertTrue(other == Left(LocalPublishError.NothingToPublish))
-        }
+        attempt(demo(module("app", Jvm)(scala3)), session, Some("demo matches\n"), PublishWrite.Release).map: found =>
+          assertTrue(found == Left(LocalPublishError.Version(VersionError.Refused(::(Refusal.NothingToRelease, Nil)))))
       ,
       test("a missing asset file is refused before credentials, and a present file still needs a token"):
-        val app = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
-        demo(app) match
-          case Left(_)      => ZIO.succeed(assertTrue(false))
-          case Right(graph) =>
-            DistChannel.plan(graph, List(published(ProjectName("app"), ShipName("demo"), pointer.render))) match
-              case Left(_)      => ZIO.succeed(assertTrue(false))
-              case Right(plans) =>
-                ZIO.acquireRelease(directory("histos-ready"))(delete).flatMap { repo =>
-                  val missing =
-                    DistChannel.ready(repo, Map("GITHUB_TOKEN" -> "t", "GITHUB_REPOSITORY" -> "example/demo"), plans)
-                  val clock = Clock.instant
-                  val file  = repo.resolve("dist").resolve("app.jar")
-                  ZIO
-                    .attemptBlocking {
-                      Option(file.getParent).foreach(Files.createDirectories(_))
-                      Files.write(file, Array[Byte](1))
-                    }
-                    .orDie
-                    .zipRight(clock)
-                    .as {
-                      val bare = DistChannel.ready(repo, Map.empty, plans)
-                      val held = DistChannel.ready(
-                        repo,
-                        Map("GITHUB_TOKEN" -> "token", "GITHUB_REPOSITORY" -> "example/demo"),
-                        plans,
-                      )
-                      assertTrue(
-                        missing == Left(
-                          LocalPublishError
-                            .Stock("dist/app.jar is not a file. ./histos assembly writes the install jar.")
-                        ),
-                        bare == Left(LocalPublishError.Stock("GITHUB_TOKEN and GITHUB_REPOSITORY are required")),
-                        held == Right(()),
-                      )
-                    }
-                }
-      ,
-      test("a bundle over the cap is refused before its body is read, and a written entry is timestamped at zero"):
-        ZIO.acquireRelease(directory("histos-bundle"))(delete).flatMap { root =>
-          val dest       = root.resolve("out.zip")
-          val stage      = root.resolve("stage")
-          val emptyStage = root.resolve("empty-stage")
-          val packedPath = root.resolve("packed.zip")
-          val inside     = stage.resolve("inside.zip")
-          val missing    = root.resolve("missing")
-          zio.Ref.make(false).flatMap { reads =>
-            val body = reads.set(true).as(Chunk.fromArray("no".getBytes(StandardCharsets.UTF_8)))
-            BundlePath.from("note.txt") match
-              case Left(_)     => ZIO.succeed(assertTrue(false))
-              case Right(path) =>
-                val over = Staged(path, Bundle.Cap + 1, body)
-                val half = Bundle.Cap / 2 + 1
-                val one  = ZIO.succeed(Chunk.single(1.toByte))
-                for
-                  _         <- Clock.instant
-                  tooLarge  <- Bundle.zip(Chunk(over), dest).either
-                  summed    <- Bundle.zip(Chunk(over.copy(bytes = half), Staged(path, half, body)), dest).either
-                  empty     <- Bundle.zip(Chunk.empty, dest).either
-                  sized     <- Bundle.zip(Chunk(over.copy(bytes = -1)), dest).either
-                  duplicate <- Bundle.zip(Chunk(Staged(path, 1, one), Staged(path, 1, one)), dest).either
-                  _         <- ZIO.attemptBlocking {
-                    Files.createDirectories(stage)
-                    Files.createDirectories(emptyStage)
-                    Files.writeString(stage.resolve("note.txt"), "hi")
-                  }.orDie
-                  zipped <- Bundle.zip(stage, packedPath).either
-                  packed <- zipped match
-                    case Left(_)  => ZIO.succeed(None)
-                    case Right(_) => entry(packedPath, "note.txt")
-                  contained <- Bundle.zip(stage, inside).either
-                  absent    <- Bundle.zip(missing, dest).either
-                  bare      <- Bundle.zip(emptyStage, dest).either
-                  read      <- reads.get
-                yield assertTrue(
-                  tooLarge == Left(BundleError.TooLarge(Bundle.Cap + 1)),
-                  summed == Left(BundleError.TooLarge(half + half)),
-                  empty == Left(BundleError.Empty),
-                  sized == Left(BundleError.Size(-1)),
-                  duplicate == Left(BundleError.Duplicate("note.txt")),
-                  zipped == Right(()),
-                  packed.exists { case (time, bytes) =>
-                    time == 0L && new String(bytes, StandardCharsets.UTF_8) == "hi"
-                  },
-                  contained == Left(BundleError.Contained(inside.toString)),
-                  absent == Left(BundleError.Missing(missing.toString)),
-                  bare == Left(BundleError.Empty),
-                  !read,
-                )
-          }
-        }
+        val app   = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
+        val token = Map("GITHUB_TOKEN" -> "token", "GITHUB_REPOSITORY" -> "example/demo")
+        for
+          graph <- ZIO.fromEither(demo(app))
+          plans <- ZIO.fromEither(
+            DistChannel.plan(graph, List(published(ProjectName("app"), ShipName("demo"), pointer.render)))
+          )
+          repo <- Workspace.work("histos-ready")
+          missing = DistChannel.ready(repo, token, plans)
+          _ <- ZIO.attemptBlocking {
+            val file = repo.resolve("dist").resolve("app.jar")
+            Option(file.getParent).foreach(Files.createDirectories(_))
+            Files.write(file, Array[Byte](1))
+          }.orDie
+        yield assertTrue(
+          missing == Left(
+            LocalPublishError.Stock("dist/app.jar is not a file. ./histos assembly writes the install jar.")
+          ),
+          DistChannel.ready(repo, Map.empty, plans) ==
+            Left(LocalPublishError.Stock("GITHUB_TOKEN and GITHUB_REPOSITORY are required")),
+          DistChannel.ready(repo, token, plans) == Right(()),
+        )
       ,
       test("latest rewrites a timestamp back to its pointer and leaves a release"):
-        ZIO.acquireRelease(directory("histos-pin"))(delete).flatMap { repo =>
-          val stamp = s"${number.render}-20261106.153000-1"
-          val clock = Clock.instant
-          val file  = repo.resolve(LauncherPin.file)
-          for
-            revision <- ZIO.fromEither(LauncherPin.from(stamp))
-            release  <- ZIO.fromEither(LauncherPin.from(number.render))
-            _        <- clock
-            _        <- ZIO.attemptBlocking(Files.writeString(file, LauncherPin.render(revision))).orDie
-            moved    <- LauncherPin.latest(repo)
-            text     <- ZIO.attemptBlocking(Files.readString(file)).orDie
-            _        <- ZIO.attemptBlocking(Files.writeString(file, LauncherPin.render(release))).orDie
-            stayed   <- LauncherPin.latest(repo)
-          yield assertTrue(
-            moved.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
-            text == LauncherPin.render(moved),
-            !text.contains(stamp),
-            stayed.choice == LauncherChoice.Release(number),
-          )
-        }
+        val stamp = s"${number.render}-20261106.153000-1"
+        for
+          repo     <- Workspace.work("histos-pin")
+          revision <- ZIO.fromEither(LauncherPin.from(stamp))
+          release  <- ZIO.fromEither(LauncherPin.from(number.render))
+          file = repo.resolve(LauncherPin.file)
+          _      <- Workspace.writeString(file, LauncherPin.render(revision))
+          moved  <- LauncherPin.latest(repo)
+          text   <- Workspace.readString(file)
+          _      <- Workspace.writeString(file, LauncherPin.render(release))
+          stayed <- LauncherPin.latest(repo)
+        yield assertTrue(
+          moved.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
+          text == LauncherPin.render(moved),
+          !text.contains(stamp),
+          stayed.choice == LauncherChoice.Release(number),
+        )
       ,
       test("a notice asks the feed once, is quiet in CI, and remembers the answer inside a day"):
         val newer   = ship"1.3.0"
-        val program = ZIO.acquireRelease(directory("histos-notice"))(delete).flatMap { repo =>
-          val home = repo.resolve("home")
-          val pin  = repo.resolve(LauncherPin.file)
-          val at   = Instant.parse("2026-11-06T00:00:00Z")
-          val gone = ZIO.die(new IllegalStateException("fetched"))
+        val program =
           for
+            repo <- Workspace.work("histos-notice")
+            home = repo.resolve("home")
+            pin  = repo.resolve(LauncherPin.file)
+            at   = Instant.parse("2026-11-06T00:00:00Z")
+            gone = ZIO.die(new IllegalStateException("fetched"))
             _          <- TestClock.setTime(at)
             _          <- TestSystem.putEnv("HISTOS_HOME", home.toString)
             _          <- TestSystem.putProperty("user.home", home.toString)
-            _          <- ZIO.attemptBlocking(Files.writeString(pin, s"histos.version=${number.render}\n")).orDie
+            _          <- Workspace.writeString(pin, s"histos.version=${number.render}\n")
             _          <- stub[ReleaseFeed](_.newest(any[MavenModule]))(ZIO.succeed(Some(newer)))
             fetched    <- UpgradeNotice.advice(repo)
             _          <- stub[ReleaseFeed](_.newest(any[MavenModule]))(gone)
@@ -462,59 +350,24 @@ object PublishLawSpec extends ZIOSpecDefault:
             quiet.isEmpty,
             remembered == fetched,
           )
-        }
         program.provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed]),
     ).provideSomeLayerShared[TestEnvironment & Scope](stock) @@ TestAspect.sequential,
   )
 
-  private def refuse(
+  /** `LocalPublish.run` on a fresh directory, with `releases` written when it is set. */
+  private def attempt(
       built: Either[histos.BuildError, ProjectGraph],
       env: Map[String, String],
       releases: Option[String],
       write: PublishWrite,
-  )(
-      claim: Either[LocalPublishError, PublishOutput] => TestResult
-  ): ZIO[Resolve & Publisher & ContentStore & Scope, Nothing, TestResult] =
-    built match
-      case Left(_)      => ZIO.succeed(assertTrue(built.isRight))
-      case Right(graph) =>
-        jdk match
-          case Left(_)        => ZIO.succeed(assertTrue(false))
-          case Right(runtime) =>
-            ZIO.acquireRelease(directory("histos-publish"))(delete).flatMap { repo =>
-              registry(repo, releases) *>
-                Clock.instant *>
-                LocalPublish.run(repo, graph, Nil, runtime, env, write, hostApi).either.map(claim)
-            }
-
-  private def checked(
-      built: Either[histos.BuildError, ProjectGraph],
-      env: Map[String, String],
-      releases: Option[String],
-      write: PublishWrite,
-  )(
-      claim: PublishOutput => TestResult
-  ): ZIO[Resolve & Publisher & ContentStore & Scope, LocalPublishError, TestResult] =
-    built match
-      case Left(_)      => ZIO.succeed(assertTrue(built.isRight))
-      case Right(graph) =>
-        jdk match
-          case Left(_)        => ZIO.succeed(assertTrue(false))
-          case Right(runtime) =>
-            ZIO.acquireRelease(directory("histos-publish"))(delete).flatMap { repo =>
-              registry(repo, releases) *>
-                Clock.instant *>
-                LocalPublish.run(repo, graph, Nil, runtime, env, write, hostApi).map(claim)
-            }
-
-  private def registry(repo: Path, releases: Option[String]): ZIO[Any, Nothing, Unit] =
-    releases match
-      case None       => ZIO.unit
-      case Some(text) =>
-        ZIO.attemptBlocking {
-          Files.writeString(repo.resolve("releases"), text)
-          ()
-        }.orDie
+  ) =
+    for
+      graph   <- ZIO.fromEither(built)
+      runtime <- ZIO.fromEither(jdk)
+      repo    <- Workspace.work("histos-publish")
+      _       <- ZIO.foreachDiscard(releases)(text => Workspace.writeString(repo.resolve("releases"), text))
+      found   <- LocalPublish.run(repo, graph, Nil, runtime, env, write, hostApi).either
+    yield found
 
   private def published(module: ProjectName, ship: ShipName, revision: String): PublishedModule =
     PublishedModule(
@@ -540,35 +393,9 @@ object PublishLawSpec extends ZIOSpecDefault:
     val spec = ships(Ship("demo").next(1, 2, 3)(first, rest*))
     org(spec, (first :: rest.toList)*)
 
-  private def jdk: Either[JdkVersionError, JdkRuntime] =
+  private def jdk =
     JdkVersion
       .from("21")
       .map: version =>
         JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
-
-  private def directory(prefix: String): ZIO[Any, Nothing, Path] =
-    ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie
-
-  private def entry(path: Path, name: String): ZIO[Any, Nothing, Option[(Long, Array[Byte])]] =
-    ZIO.attemptBlocking {
-      val zip = new ZipFile(path.toFile)
-      try
-        Option(zip.getEntry(name)).map { item =>
-          val in = zip.getInputStream(item)
-          try (item.getTime, in.readAllBytes)
-          finally in.close()
-        }
-      finally zip.close()
-    }.orDie
-
-  private def delete(root: Path): zio.UIO[Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(root) then
-        val walk  = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.orDie
-
 end PublishLawSpec

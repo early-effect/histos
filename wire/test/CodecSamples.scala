@@ -65,27 +65,23 @@ import zio.{Chunk, Config, NonEmptyChunk}
 object CodecSamples:
   import WireSamples.*
 
-  private val spot        = SourcePos("other.scala", 2, 3)
-  private val otherSha    = Sha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
-  private val otherApi    = ApiDigest("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
-  private val otherId     = PluginId("other")
-  private val otherShip   = ShipName("other")
-  private val release     = JobName("release")
-  private val docs        = TargetName("docs")
-  private val setup       = ActionName("actions/setup")
-  private val macos       = RunnerName("macos")
-  private val otherSecret = SecretName("OTHER_TOKEN")
-  private val jdk17       = JdkVersion.trusted("17.0.2", JdkMajor.trusted(17))
-  private val node20      = NodeVersion.trusted("20.0.0", NodeMajor.trusted(20))
-  private val blob        = Digest.trusted("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
-  private val published   = PluginCoordinate.Published(dep)
-  private val sourced     = PluginCoordinate.Module(core)
-  private val tool        = ToolId(ToolRole.Compiler, scala3, ToolVariant.Jvm)
-  private val found       = ResolveError.NotFound("dev.zio", "zio", "0")
-  private val absent      = ModuleTestError.Absent(core)
-  private val noRoot      = GraphCompileError.NoRoot(core)
-  private val noSources   = CompileError.NoSources
-  private val configBad   = Config.Error.InvalidData(Chunk("jdk"), "bad")
+  private val spot      = SourcePos("other.scala", 2, 3)
+  private val otherSha  = Sha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
+  private val otherApi  = ApiDigest("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
+  private val otherId   = PluginId("other")
+  private val otherShip = ShipName("other")
+  private val release   = JobName("release")
+  private val jdk17     = JdkVersion.trusted("17.0.2", JdkMajor.trusted(17))
+  private val node20    = NodeVersion.trusted("20.0.0", NodeMajor.trusted(20))
+  private val blob      = Digest.trusted("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee")
+  private val published = PluginCoordinate.Published(dep)
+  private val sourced   = PluginCoordinate.Module(core)
+  private val tool      = ToolId(ToolRole.Compiler, scala3, ToolVariant.Jvm)
+  private val found     = ResolveError.NotFound("dev.zio", "zio", "0")
+  private val absent    = ModuleTestError.Absent(core)
+  private val noRoot    = GraphCompileError.NoRoot(core)
+  private val noSources = CompileError.NoSources
+  private val configBad = Config.Error.InvalidData(Chunk("jdk"), "bad")
 
   val toolRoot: ToolRoot =
     ToolRoot("dev.zio", "zio", "2.1.27", Transitivity.Closure, Some(Repository.Central))
@@ -795,19 +791,7 @@ object CodecSamples:
     CiError.Drift("ci.yml", "hint"),
     CiError.Io(io),
     CiError.DuplicateSite(job, release),
-    CiError.IllegalSite(job),
-    CiError.UnknownNeed(job, release),
-    CiError.DuplicateNeed(job, release),
-    CiError.UnknownModule(job, core),
-    CiError.DuplicateTarget(job, docs),
-    CiError.UnpinnedAction(job, setup),
-    CiError.GrantMissing(job, setup),
-    CiError.UnknownRunner(job, macos),
-    CiError.UnknownSecret(otherSecret),
-    CiError.UnreachableCond(job),
-    CiError.DispatchInputConflict("name"),
-    CiError.ConcurrencyConflict("ci.yml"),
-    CiError.UnpinnedWorkflowRun("build"),
+    CiError.Fault(CiFault.UnknownNeed(job, release)),
     CiError.Pins("x"),
     CiError.NoDefaultBranch,
     CiError.JobTimeout(2),

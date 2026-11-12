@@ -1,6 +1,5 @@
 package histos.supply
 
-import histos.plugin.ActionName
 import histos.version.CommitSha
 import histos.workflow.ActionPins
 
@@ -97,9 +96,6 @@ object Plan:
       .filter: (name, sha) =>
         semver(name) && sha.length == 40
 
-  def repoId(body: String): Option[RepoId] =
-    Scan.longs(body, "id").headOption.map(id => RepoId.trusted(id.toString))
-
   def commitDay(body: String): Option[Date] =
     Scan
       .strings(body, "date")
@@ -124,15 +120,12 @@ object Plan:
       today: Date,
       security: Boolean,
       net: Net,
-      knownRepos: Map[String, RepoId],
   ): IO[SupplyFault, Proposal] =
     val rows = roots(lock, graph)
     for
       fetched <- ZIO.foreach(rows)(row => fetchMaven(row, security, net))
       actions <- ZIO.foreach(catalog.toList):
-        case (name, pin) => fetchAction(name, pin, policy, today, net, knownRepos)
-      failed = actions.collect { case Left(fault) => fault }
-      _      <- ZIO.foreachDiscard(failed.headOption)(ZIO.fail(_))
+        case (name, pin) => fetchAction(name, pin, policy, today, net)
       chosen <- ZIO.fromEither:
         val releases = fetched.flatMap(_._2)
         val locked   = rows.map: row =>
@@ -140,7 +133,7 @@ object Plan:
         Bump.choose(locked, releases, policy.updates.versions, today, security, policy.transitive)
     yield
       val marks      = fetched.flatMap(_._1).toMap
-      val actionPlan = actions.collect { case Right(Some(change)) => change }
+      val actionPlan = actions.flatten
       Proposal(render(chosen, actionPlan, Nil, marks), chosen, actionPlan)
 
   def render(
@@ -258,28 +251,17 @@ object Plan:
       policy: SupplyChain,
       today: Date,
       net: Net,
-      knownRepos: Map[String, RepoId],
-  ): IO[SupplyFault, Either[SupplyFault, Option[ActionChange]]] =
+  ): IO[SupplyFault, Option[ActionChange]] =
     val (sha, tag) = pin
     val owner      = name.split("/").take(2).mkString("/")
     val tagsUrl    = s"https://api.github.com/repos/$owner/tags?per_page=30"
-    val repoUrl    = s"https://api.github.com/repos/$owner"
     for
       listed <- get(net, tagsUrl, "github")
-      repo   <- get(net, repoUrl, "github")
       dated  <- ZIO.foreach(tags(listed.body)):
         case (tagName, tagSha) => datedTag(owner, tagName, tagSha, net)
-    yield
-      val now = repoId(repo.body).getOrElse(RepoId.trusted("0"))
-      val was = knownRepos.getOrElse(owner, now)
-      if was != now then Left(SupplyFault.ActionRepoMoved(ActionName.trusted(name), was, now))
-      else
-        Right:
-          chooseAction(name, tag, sha, dated.flatten, policy, today).flatMap: change =>
-            CommitSha.from(change.sha) match
-              case Right(commit) =>
-                Bump.verify(ActionName.trusted(name), change.toTag, commit, true, was, now).map(_ => change).toOption
-              case Left(_) => None
+    yield chooseAction(name, tag, sha, dated.flatten, policy, today).filter(change =>
+      CommitSha.from(change.sha).isRight
+    )
 
   private final case class Dated(tag: String, sha: CommitSha, published: Date)
 

@@ -102,12 +102,12 @@ object BuildFileLawSpec extends ZIOSpecDefault:
                 Files.createDirectories(out)
                 Files.writeString(source, "object Demo\n")
                 Files.writeString(broken, "object Broken { val n: Int = \"no\" }\n")
-              compiled <- BuildFile.compile(source, jars, out).either
+              compiled <- BuildFile.compileLabeled(List(source -> "histos.scala"), jars, out).either
               reporter <- BuildFile.drive(List(source), jars, out)
               notes = BuildFile.notesOf(reporter, display, source)
               failedDrive <- BuildFile.drive(List(broken), jars, out)
               failedNotes = BuildFile.notesOf(failedDrive, display, broken)
-              failed <- BuildFile.compile(broken, jars, out).either
+              failed <- BuildFile.compileLabeled(List(broken -> "histos.scala"), jars, out).either
               messages = failed match
                 case Left(LoadError.CompileFailed(found)) => found.map(_.text)
                 case _                                    => Nil
@@ -123,7 +123,9 @@ object BuildFileLawSpec extends ZIOSpecDefault:
               failedDrive.hasErrors,
               failedNotes.failed,
               failedNotes.problems.nonEmpty,
-              failedNotes.problems.map(_.message) == messages,
+              messages.length == failedNotes.problems.length,
+              messages.forall(_.startsWith("histos.scala:1:")),
+              messages.exists(_.contains(": error: Found:")),
               failedNotes.problems.map(_.severity) == List.fill(failedNotes.problems.length)(CompileSeverity.Error),
               failedNotes.problems.map(_.base) == List.fill(failedNotes.problems.length)(PositionBase.Dotty),
               failedNotes.problems.exists(problem => problem.startLine.isDefined && problem.path.contains(display)),

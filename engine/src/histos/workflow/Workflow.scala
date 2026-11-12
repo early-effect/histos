@@ -221,9 +221,8 @@ object Workflow:
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
-      _        <- ZIO.when(extra.nonEmpty)(
-        ZIO.fail(CiError.Drift(workflowPath(fileNameOf(extra.head)), "this file is not rendered by the graph"))
-      )
+      _        <- ZIO.foreachDiscard(extra.headOption): orphan =>
+        ZIO.fail(CiError.Drift(workflowPath(fileNameOf(orphan)), "this file is not rendered by the graph"))
       _ <- PinScan.check(repo, graph)
     yield path(repo)
 

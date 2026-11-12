@@ -1,18 +1,21 @@
 package histos.supply
 
+import _root_.scala.compiletime.testing.typeCheckErrors
+
 import zio.test.*
 
 object SupplyNameLawSpec extends ZIOSpecDefault:
   private val spans = Gen.int(-3, 12)
 
   def spec = suite("supply name laws")(
-    test("a time zone is an IANA id, and an unknown id is refused"):
-      val chicago = TimeZone.from("America/Chicago")
-      val utc     = TimeZone.from("UTC")
+    test("a time zone is an IANA id, and an offset, an unknown id, or another spelling is refused"):
+      val kept    = List("America/Chicago", "Europe/Berlin", "Etc/UTC", "UTC")
+      val refused = List("Mars/Base", "america/chicago", "+01:00", "Z", "UTC+01:00", "GMT+2", " UTC", "")
       assertTrue(
-        chicago.map(_.value) == Right("America/Chicago"),
-        utc.map(_.value) == Right("UTC"),
-        TimeZone.from("Mars/Base") == Left(TimeZoneError.Unknown("Mars/Base")),
+        kept.map(TimeZone.from(_).map(_.value)) == kept.map(Right(_)),
+        refused.map(TimeZone.from) == refused.map(raw => Left(TimeZoneError.Unknown(raw))),
+        TimeZone("America/Chicago").value == "America/Chicago",
+        typeCheckErrors("""TimeZone("+01:00")""").map(_.message) == List("'+01:00' is not a time zone"),
       )
     ,
     test("a branch name is the git check-ref-format shape"):
@@ -62,14 +65,36 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         AdvisoryId.from("GHSA-1234-abcd") == Left(AdvisoryError.Bad("GHSA-1234-abcd")),
       )
     ,
-    test("a reason, a date, a coordinate, a repository, and a purl each refuse their own shape"):
+    test("a date is yyyy-mm-dd on the calendar, and a leap day is one only in a leap year"):
+      val refused = List(
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-01-00",
+        "2023-02-29",
+        "1900-02-29",
+        "06-11-2026",
+        "2026-1-10",
+        "+12026-01-10",
+        "2026-01-10T00:00:00Z",
+        " 2026-01-10",
+        "٢٠٢٦-٠١-١٠",
+        "",
+      )
+      assertTrue(
+        Date.from("2026-11-06").map(_.value) == Right("2026-11-06"),
+        Date.from("2024-02-29").map(_.value) == Right("2024-02-29"),
+        Date.from("2000-02-29").map(_.value) == Right("2000-02-29"),
+        Date.from("2026-12-31") == Right(Date("2026-12-31")),
+        refused.map(Date.from) == refused.map(raw => Left(DateError.Bad(raw))),
+        typeCheckErrors("""Date("2023-02-29")""").map(_.message) == List("'2023-02-29' is not a date"),
+      )
+    ,
+    test("a reason, a coordinate, a repository, and a purl each refuse their own shape"):
       assertTrue(
         Reason.from("because").map(_.value) == Right("because"),
         Reason.from("") == Left(ReasonError.Bad),
         Reason.from("a\nb") == Left(ReasonError.Bad),
-        Date.from("2026-11-06").map(_.value) == Right("2026-11-06"),
-        Date.from("2026-13-01") == Left(DateError.Bad("2026-13-01")),
-        Date.from("06-11-2026") == Left(DateError.Bad("06-11-2026")),
         Coordinate.from("dev.zio:zio").map(_.value) == Right("dev.zio:zio"),
         Coordinate.from("dev.zio:zio:2") == Left(CoordinateError.Bad("dev.zio:zio:2")),
         Coordinate.from("dev.zio:") == Left(CoordinateError.Bad("dev.zio:")),
@@ -111,7 +136,7 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         ranks == Nil,
       )
     ,
-    test("a label, a source, a person, an email, a cell, and a repository id keep their own refusal"):
+    test("a label, a source, a person, an email, and a cell keep their own refusal"):
       val label = "a" * 50
       assertTrue(
         LabelName.from(label).map(_.value) == Right(label),
@@ -131,9 +156,6 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         CellName.from("core/jvm").map(_.value) == Right("core/jvm"),
         CellName.from("core jvm") == Left(CellNameError.Bad("core jvm")),
         CellName.from("") == Left(CellNameError.Bad("")),
-        RepoId.from("123").map(_.value) == Right("123"),
-        RepoId.from("1 2") == Left(RepoIdError.Bad("1 2")),
-        RepoId.from("") == Left(RepoIdError.Bad("")),
       ),
   )
 end SupplyNameLawSpec

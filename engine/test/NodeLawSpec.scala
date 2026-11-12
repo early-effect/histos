@@ -29,6 +29,11 @@ object NodeLawSpec extends ZIOSpecDefault:
         NodeVersion.from("V1.2.3") == Right(NodeVersion.trusted("1.2.3", NodeMajor.trusted(1))),
         NodeVersion.from("0.1.0") == Left(NodeVersionError.Bad("0.1.0")),
         NodeVersion.from("25") == Left(NodeVersionError.Bad("25")),
+        NodeVersion.from("v25.0.0-rc.1") == Right(NodeVersion.trusted("25.0.0-rc.1", NodeMajor.trusted(25))),
+        NodeVersion.from("v26.0.0-nightly20260101abc+7") ==
+          Right(NodeVersion.trusted("26.0.0-nightly20260101abc+7", NodeMajor.trusted(26))),
+        NodeVersion.from("25.0.0-") == Left(NodeVersionError.Bad("25.0.0-")),
+        NodeVersion.from("25.0.0 rc") == Left(NodeVersionError.Bad("25.0.0 rc")),
         NodeMajor.from(0) == Left(NodeError.BadMajor(0)),
         Node.required(ProjectGraph.trusted(List(module(Platform.Jvm)))) == false,
         Node.required(ProjectGraph.trusted(List(module(Platform.Js)))) == true,

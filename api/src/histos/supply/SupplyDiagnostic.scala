@@ -178,6 +178,16 @@ enum SupplyDiagnostic(
         fixes(Fix.Command(ShellLine.trusted("./histos setup supply-chain --fix"))),
       )
 
+  case DependabotUnread(file: RepoPath)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.dependabot-overlap"),
+        Level.Warning,
+        s"${file.value} was not read",
+        s"${file.value} is not readable text, so its overlap with histos was not checked.",
+        "Doctor reads the ecosystems Dependabot updates there, because histos also bumps GitHub Actions and Maven.",
+        fixes(Fix.Steps(lines(s"Make ${file.value} a readable UTF-8 file, then run histos doctor again."))),
+      )
+
   case DependabotSecurityPrsOn(ecosystems: ::[Ecosystem])
       extends SupplyDiagnostic(
         CheckId.trusted("supply.dependabot-security"),

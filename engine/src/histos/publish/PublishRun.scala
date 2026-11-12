@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.central.Publisher
+import histos.central.{Publisher, SnapshotRepository}
 import histos.jdk.JdkRuntime
 import histos.plugin.ApiDigest
 import histos.version.{Revision as ShipRevision, ShipName}
@@ -124,13 +124,13 @@ object PublishRun:
   private def show(staged: StagedTree, lines: List[String]): List[String] =
     staged.output.skipped ++ staged.output.refused ++ staged.output.held ++ lines
 
-  /** Idle refuses every revision. Workflow reads that stock. A command supplies `SonaStock`. */
+  /** Idle refuses every revision. Workflow reads that stock. A command supplies `SonaStock` on Central's snapshots. */
   private def sonaLayer(
       env: Map[String, String],
       build: histos.HistosBuild,
       note: String => UIO[Unit],
   ): ZLayer[Any, Nothing, histos.Publishing] =
-    SonaStock.layer(env, note) >>> build.sona
+    ZLayer.succeed(SnapshotRepository.central) >>> SonaStock.layer(env, note) >>> build.sona
 
   private def opened(layer: ZLayer[Any, Nothing, histos.Publishing]): UIO[histos.Publishing] =
     ZIO.service[histos.Publishing].provideLayer(layer)

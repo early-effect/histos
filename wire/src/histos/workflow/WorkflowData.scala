@@ -1,9 +1,9 @@
 package histos.workflow
 
 import histos.doctor.{Diagnostic, Noted}
-import histos.plugin.{ActionName, JobName, RunnerName, SecretName, TargetName}
+import histos.plugin.JobName
 import histos.workspace.IoFailure
-import histos.ProjectName
+import histos.{CiFault, ProjectName}
 import histos.version.ShipName
 import java.nio.file.Path
 
@@ -16,19 +16,9 @@ enum CiError:
   case Drift(file: String, hint: String)
   case Io(failure: IoFailure)
   case DuplicateSite(first: JobName, second: JobName)
-  case IllegalSite(name: JobName)
-  case UnknownNeed(job: JobName, need: JobName)
-  case DuplicateNeed(job: JobName, need: JobName)
-  case UnknownModule(job: JobName, module: ProjectName)
-  case DuplicateTarget(job: JobName, target: TargetName)
-  case UnpinnedAction(job: JobName, action: ActionName)
-  case GrantMissing(job: JobName, action: ActionName)
-  case UnknownRunner(job: JobName, runner: RunnerName)
-  case UnknownSecret(secret: SecretName)
-  case UnreachableCond(job: JobName)
-  case DispatchInputConflict(name: String)
-  case ConcurrencyConflict(file: String)
-  case UnpinnedWorkflowRun(name: String)
+
+  /** A job the graph arranges that no workflow can render. */
+  case Fault(fault: CiFault)
   case Pins(text: String)
   case NoDefaultBranch
   case JobTimeout(count: Int)
@@ -45,26 +35,9 @@ enum CiError:
     case Io(failure)                  => failure.message
     case DuplicateSite(first, second) =>
       s"job ${first.value} and job ${second.value} both name a site"
-    case IllegalSite(name)      => s"job ${name.value} does not render one site"
-    case UnknownNeed(job, need) =>
-      s"job ${job.value} needs ${need.value}, which is not a job on this graph"
-    case DuplicateNeed(job, need)   => s"job ${job.value} needs ${need.value} twice"
-    case UnknownModule(job, module) =>
-      s"job ${job.value} names module ${module.value}, which is not a module"
-    case DuplicateTarget(job, target) => s"job ${job.value} names target ${target.value} twice"
-    case UnpinnedAction(job, action)  => s"job ${job.value} uses ${action.value}, which has no pin"
-    case GrantMissing(job, action)    =>
-      s"job ${job.value} uses ${action.value} without its grant"
-    case UnknownRunner(job, runner) =>
-      s"job ${job.value} names runner ${runner.value}, which is not in the catalog"
-    case UnknownSecret(secret)       => s"secret ${secret.value} is not declared"
-    case UnreachableCond(job)        => s"job ${job.value} has a condition its events do not reach"
-    case DispatchInputConflict(name) =>
-      s"workflow_dispatch input $name is declared twice with different types"
-    case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
-    case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
-    case Pins(text)                => text
-    case NoDefaultBranch           =>
+    case Fault(fault)    => fault.message
+    case Pins(text)      => text
+    case NoDefaultBranch =>
       "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD"
     case JobTimeout(count) =>
       s"a job timeout is between 1 and 360 minutes, not $count"

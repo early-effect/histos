@@ -8,6 +8,7 @@ import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers, GraphCompile}
 import histos.{
+  CompilerClosure,
   Dep,
   Module,
   Platform,
@@ -21,67 +22,50 @@ import histos.{
   Splits,
 }
 
-import java.nio.file.{Files, Path}
-
 import zio.*
 import zio.test.*
 
-/** A module with no test main launches the ZIO provider. The jars are the locked ones, read offline. */
+/** A module with no test main launches the ZIO provider. The jars are the locked ones, read offline. The test cell is
+  * the one this checkout locks for `central`, so its zio-test jars are the ones `./histos resolve` fetched.
+  */
 object ProviderLawSpec extends ZIOSpecDefault:
-  private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("probelaw")
 
   def spec = suite("provider laws")(
     test("a zio spec with no test main passes through the provider"):
-      Workspace
-        .work("histos-provider")
-        .flatMap: dir =>
-          Machine
-            .load(dir)
-            .either
-            .flatMap:
-              case Left(error)    => ZIO.succeed(assertTrue(error.message == ""))
-              case Right(machine) =>
-                GraphCompile
-                  .jdk(machine)
-                  .either
-                  .flatMap:
-                    case Left(error) => ZIO.succeed(assertTrue(error.message == ""))
-                    case Right(jdk)  =>
-                      ZIO.serviceWithZIO[DependencyLock]: lock =>
-                        donor(lock) match
-                          case None =>
-                            ZIO.dieMessage("central 3.10.0 jvm test cell is not in the lock")
-                          case Some(held) =>
-                            val main = dir.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-                            val spec = dir.resolve("src").resolve("test").resolve("scala").resolve("Ready.scala")
-                            val ran  =
-                              for
-                                runtimes  <- Runtimes.read(machine, None)
-                                _         <- Workspace.writeString(main, hello)
-                                _         <- Workspace.writeString(spec, ready)
-                                collected <- ModuleTest
-                                  .sessionOn(TestRun(dir, graph(held), List(lawName), jdk, runtimes, TestMode.Run))
-                                  .runCollect
-                                  .either
-                                detail   = collected.fold(_.message, _ => "")
-                                statuses = collected.toOption.toList.flatMap(chunk =>
-                                  chunk.collect { case SessionFeed.Test(TestFeed.Done(cell)) => cell.status }.toList
-                                )
-                                err = collected.toOption.toList.flatMap(chunk =>
-                                  chunk.collect { case SessionFeed.Test(TestFeed.Err(_, _, _, text)) => text }.toList
-                                )
-                                noise = if statuses == List(TestStatus.Passed) then "" else err.mkString("\n")
-                              yield assertTrue(
-                                detail == "",
-                                statuses == List(TestStatus.Passed),
-                                noise == "",
-                              )
-                            ran.provideSomeLayer[TestEnvironment & Scope & Resolve](
-                              graphEnv(pinned(lock, held), dir.resolve("store"))
-                            )
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
+        Workspace
+          .work("histos-provider")
+          .flatMap: dir =>
+            val main = dir.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val spec = dir.resolve("src").resolve("test").resolve("scala").resolve("Ready.scala")
+            for
+              held <- ZIO
+                .fromOption(donor(closure.lock, scala3))
+                .orElse(ZIO.dieMessage(s"central ${scala3.value} jvm test cell is not in the lock"))
+              machine   <- Machine.load(dir)
+              jdk       <- GraphCompile.jdk(machine)
+              runtimes  <- Runtimes.read(machine, None)
+              _         <- Workspace.writeString(main, hello)
+              _         <- Workspace.writeString(spec, ready)
+              collected <- ModuleTest
+                .sessionOn(TestRun(dir, graph(scala3, held), List(lawName), jdk, runtimes, TestMode.Run))
+                .runCollect
+                .provideSomeLayer[TestEnvironment & Scope & Resolve](
+                  ResolutionService.pinned(pinned(closure, held)) ++
+                    CompileMemo.live ++
+                    Compilers.live(1) ++
+                    ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+                )
+            yield
+              val statuses = collected.collect { case SessionFeed.Test(TestFeed.Done(cell)) => cell.status }.toList
+              val err      = collected.collect { case SessionFeed.Test(TestFeed.Err(_, _, _, text)) => text }.toList
+              // A failed run shows its stderr; a JVM warning beside a pass is not a failure.
+              val noise = if statuses == List(TestStatus.Passed) then Nil else err
+              assertTrue(statuses == List(TestStatus.Passed), noise == Nil)
     @@ TestAspect.withLiveSystem
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened)
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
   private val hello =
     """object Hello:
@@ -97,7 +81,7 @@ object ProviderLawSpec extends ZIOSpecDefault:
       |  )
       |""".stripMargin
 
-  private def graph(held: LockedCell): ProjectGraph =
+  private def graph(scala3: ScalaVersion, held: LockedCell): ProjectGraph =
     val law = Module(
       lawName,
       Platforms(Platform.Jvm, Nil),
@@ -117,38 +101,14 @@ object ProviderLawSpec extends ZIOSpecDefault:
       resolution = Resolution.Lock,
     )
 
-  private def donor(lock: DependencyLock): Option[LockedCell] =
+  private def donor(lock: DependencyLock, scala3: ScalaVersion): Option[LockedCell] =
     lock.cells.find: cell =>
       cell.module.value == "central" &&
         cell.scope == ClasspathScope.Test &&
         cell.scalaVersion == scala3 &&
         cell.platform == Platform.Jvm
 
-  private def pinned(lock: DependencyLock, held: LockedCell): DependencyLock =
-    val compile = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    val tests   = held.copy(module = lawName)
-    lock.copy(cells = compile :: tests :: lock.cells)
-
-  private def graphEnv(lock: DependencyLock, store: Path) =
-    ResolutionService.pinned(lock) ++
-      CompileMemo.live ++
-      Compilers.live(1) ++
-      ZLayer.succeed(ContentStore.in(store))
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
+  private def pinned(closure: CompilerClosure, held: LockedCell): DependencyLock =
+    val compiled = closure.pinning(lawName)
+    compiled.copy(cells = held.copy(module = lawName) :: compiled.cells)
 end ProviderLawSpec

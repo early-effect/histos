@@ -15,6 +15,7 @@ import histos.step.{Need, Phase, Step, StepId, StepInfo}
 import histos.workspace.Workspace
 import histos.{Jvm, ProjectName, ScalaVersion}
 
+import java.net.{URL, URLClassLoader}
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Ref, ZIO}
@@ -63,11 +64,15 @@ object PluginAspectLawSpec extends ZIOSpecDefault:
         }
       }
     ,
-    test("the loader aspect returns what the effect returned"):
+    test("the loader aspect runs the step and its blocking work on threads whose context loader is the build's"):
+      val build  = URLClassLoader(Array.empty[URL], getClass.getClassLoader)
+      val loaded = ZIO.succeed(Thread.currentThread.getContextClassLoader)
       ZIO.scoped {
-        PluginThreads.make(getClass.getClassLoader).flatMap { threads =>
-          val step = Step.local[Int](info)(ZIO.succeed(7)) @@ PluginAspects.loader(threads)
-          Step.run(step).map(value => assertTrue(value == 7))
+        PluginThreads.make(build).flatMap { threads =>
+          val step = Step.local[(ClassLoader, ClassLoader)](info)(
+            loaded <*> ZIO.attemptBlocking(Thread.currentThread.getContextClassLoader).orDie
+          ) @@ PluginAspects.loader(threads)
+          Step.run(step).map((main, blocking) => assertTrue(main eq build, blocking eq build))
         }
       },
   )

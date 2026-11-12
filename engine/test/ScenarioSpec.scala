@@ -6,9 +6,12 @@ import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
 
+import java.net.{InetAddress, InetSocketAddress}
+import java.nio.ByteBuffer
+import java.nio.channels.ServerSocketChannel
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, IO, Scope, ZIO, durationInt}
+import zio.{Chunk, IO, Scope, UIO, ZIO, durationInt}
 import zio.test.*
 
 object ScenarioSpec extends ZIOSpecDefault:
@@ -117,12 +120,12 @@ object ScenarioSpec extends ZIOSpecDefault:
           built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).main(MainClass("demo.Wait"))))
           scenario <- Scenario.open
           checkout <- scenario.checkout(built)
-          gate = checkout.root.resolve("gate")
-          _    <- checkout.write("app/src/main/scala/demo/Wait.scala", waiting(gate))
-          seen <- checkout
+          gate     <- listen
+          _        <- checkout.write("app/src/main/scala/demo/Wait.scala", waiting(gate.socket.getLocalPort))
+          seen     <- checkout
             .run("app")
             .tap:
-              case ProgramFeed.Out("ready") => ZIO.attemptBlocking(Files.writeString(gate, "go")).orDie
+              case ProgramFeed.Out("ready") => answer(gate)
               case _                        => ZIO.unit
             .runCollect
             .timeout(60.seconds)
@@ -190,20 +193,38 @@ object ScenarioSpec extends ZIOSpecDefault:
   private def cached(feeds: Chunk[TestFeed]): List[String] =
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList
 
-  /** Prints `ready`, waits until `gate` exists, then prints `done`. A run that holds output until exit never opens it.
+  /** Prints `ready`, then blocks on a read from the gate at `port` and prints `done` once the law answers. A run that
+    * holds output until exit never shows `ready`, so the law never answers.
     */
-  private def waiting(gate: Path): String =
+  private def waiting(port: Int): String =
     s"""package demo
        |
-       |import java.nio.file.{Files, Path}
+       |import java.net.{InetAddress, Socket}
        |
        |object Wait:
        |  def main(args: Array[String]): Unit =
        |    println("ready")
        |    System.out.flush()
-       |    while !Files.exists(Path.of("$gate")) do Thread.sleep(20)
+       |    Socket(InetAddress.getLoopbackAddress, $port).getInputStream.read()
        |    println("done")
        |""".stripMargin
+
+  /** A loopback listener the program connects to. The connection waits in the backlog until the law answers it. */
+  private def listen: ZIO[Scope, Nothing, ServerSocketChannel] =
+    ZIO
+      .fromAutoCloseable(
+        ZIO.attemptBlocking(ServerSocketChannel.open().bind(InetSocketAddress(InetAddress.getLoopbackAddress, 0)))
+      )
+      .orDie
+
+  private def answer(gate: ServerSocketChannel): UIO[Unit] =
+    ZIO
+      .scoped:
+        ZIO
+          .fromAutoCloseable(ZIO.attemptBlockingInterrupt(gate.accept()))
+          .flatMap(peer => ZIO.attemptBlockingInterrupt(peer.write(ByteBuffer.wrap(Array[Byte](1)))))
+      .orDie
+      .unit
 
   private val core =
     """object Core:

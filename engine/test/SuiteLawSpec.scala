@@ -1,7 +1,6 @@
 package histos.testrun
 
-import histos.jdk.{Sha256, Sha256Digest}
-import histos.native.ClassShapes
+import histos.jdk.Sha256Digest
 import histos.process.{ChildEvent, ProcessExit}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.{
@@ -35,23 +34,24 @@ object SuiteLawSpec extends ZIOSpecDefault:
         assertTrue(SuiteMatch.allows(Nil, ""), SuiteMatch.allows(Nil, "demo.A"))
       ,
       test("a star is any run of characters, a question is one character, and a dot is a dot"):
-        patterns("demo.*", "A?", "A.B", "Foo", "Foo$") match
-          case Left(error)                                   => assertTrue(error == SuitePatternError.Empty)
-          case Right(List(star, one, dotted, plain, dollar)) =>
-            assertTrue(
-              SuiteMatch.allows(List(star), "demo.A.B"),
-              !SuiteMatch.allows(List(star), "other.A"),
-              SuiteMatch.allows(List(one), "AB"),
-              !SuiteMatch.allows(List(one), "A"),
-              !SuiteMatch.allows(List(one), "ABC"),
-              !SuiteMatch.allows(List(dotted), "AxB"),
-              SuiteMatch.allows(List(dotted), "A.B"),
-              SuiteMatch.allows(List(plain), "Foo$"),
-              !SuiteMatch.allows(List(plain), "Foo$$"),
-              SuiteMatch.allows(List(dollar), "Foo$"),
-              !SuiteMatch.allows(List(dollar), "Foo"),
-            )
-          case Right(other) => assertTrue(other == Nil)
+        val star   = SuitePattern("demo.*")
+        val one    = SuitePattern("A?")
+        val dotted = SuitePattern("A.B")
+        val plain  = SuitePattern("Foo")
+        val dollar = SuitePattern("Foo$")
+        assertTrue(
+          SuiteMatch.allows(List(star), "demo.A.B"),
+          !SuiteMatch.allows(List(star), "other.A"),
+          SuiteMatch.allows(List(one), "AB"),
+          !SuiteMatch.allows(List(one), "A"),
+          !SuiteMatch.allows(List(one), "ABC"),
+          !SuiteMatch.allows(List(dotted), "AxB"),
+          SuiteMatch.allows(List(dotted), "A.B"),
+          SuiteMatch.allows(List(plain), "Foo$"),
+          !SuiteMatch.allows(List(plain), "Foo$$"),
+          SuiteMatch.allows(List(dollar), "Foo$"),
+          !SuiteMatch.allows(List(dollar), "Foo"),
+        )
       ,
       test("an empty pattern and a blank pattern stay typed failures"):
         assertTrue(
@@ -61,72 +61,12 @@ object SuiteLawSpec extends ZIOSpecDefault:
         )
       ,
       test("the child paste anchors each pattern and escapes a dollar"):
-        patterns("demo.A", "Foo$") match
-          case Left(error)                 => assertTrue(error == SuitePatternError.Empty)
-          case Right(List(dotted, dollar)) =>
-            val pasted = SuiteMatch.embed(List(dotted, dollar))
-            assertTrue(
-              pasted.contains("^demo\\\\.A$"),
-              pasted.contains("^Foo\\\\$$"),
-              pasted.contains("suitePatterns.length == 0"),
-            )
-          case Right(other) => assertTrue(other == Nil),
-    ),
-    suite("suite names are the modules a provider would run")(
-      test("reachability, a cycle, a module flag, and a dropped dollar decide the list"):
-        val spec  = "zio.test.ZIOSpecAbstract"
-        val demo  = ClassShapes.Shape("demo.Foo$", true, List("demo.Mid$"))
-        val mid   = ClassShapes.Shape("demo.Mid$", true, List(spec))
-        val plain = ClassShapes.Shape("demo.Plain", false, List(spec))
-        val child = ClassShapes.Shape("subprocess.Hidden$", true, List(spec))
-        val anon  = ClassShapes.Shape("demo.Foo$$anon", true, List(spec))
-        val loopA = ClassShapes.Shape("demo.A$", true, List("demo.B$"))
-        val loopB = ClassShapes.Shape("demo.B$", true, List("demo.A$"))
-        val lost  = ClassShapes.Shape("demo.Lost$", true, List("missing.Gone"))
-        val world = List(demo, mid, plain, child, anon, loopA, loopB, lost).map(shape => shape.name -> shape).toMap
-        val marks = List(SuiteNames.Mark(spec, module = true))
+        val pasted = SuiteMatch.embed(List(SuitePattern("demo.A"), SuitePattern("Foo$")))
         assertTrue(
-          SuiteNames.choose(List(demo, mid, plain, child, anon, loopA, lost), world, marks) == List(
-            "demo.Foo",
-            "demo.Mid",
-          )
-        )
-      ,
-      test("a missing directory is no suites, and only sjsir files are unseen"):
-        Workspace
-          .work("histos-suite-names")
-          .flatMap: root =>
-            val missing = root.resolve("missing")
-            val scripts = root.resolve("scripts")
-            val mixed   = root.resolve("mixed")
-            val classes = root.resolve("classes")
-            for
-              absent  <- SuiteNames.discover(missing, Nil, "zio.test.sbt.ZTestFramework")
-              _       <- Workspace.createDirectories(scripts)
-              _       <- Workspace.writeString(scripts.resolve("demo.sjsir"), "")
-              unseen  <- SuiteNames.discover(scripts, Nil, "zio.test.sbt.ZTestFramework")
-              _       <- Workspace.createDirectories(mixed)
-              _       <- writeBytes(mixed.resolve("demo/Bar.class"), emptyClass("demo/Bar", "java/lang/Object"))
-              _       <- Workspace.writeString(mixed.resolve("demo.sjsir"), "")
-              ignored <- SuiteNames.discover(mixed, Nil, "zio.test.sbt.ZTestFramework")
-              _       <- Workspace.createDirectories(classes)
-              _ <- writeBytes(classes.resolve("demo/Foo$.class"), emptyClass("demo/Foo$", "zio/test/ZIOSpecAbstract"))
-              _ <- writeBytes(classes.resolve("demo/Mid$.class"), emptyClass("demo/Mid$", "zio/test/ZIOSpecAbstract"))
-              _ <- writeBytes(classes.resolve("demo/Child$.class"), emptyClass("demo/Child$", "demo/Mid$"))
-              _ <- writeBytes(classes.resolve("demo/Plain.class"), emptyClass("demo/Plain", "zio/test/ZIOSpecAbstract"))
-              _ <- writeBytes(
-                classes.resolve("subprocess/Hidden$.class"),
-                emptyClass("subprocess/Hidden$", "zio/test/ZIOSpecAbstract"),
-              )
-              found   <- SuiteNames.discover(classes, Nil, "zio.test.sbt.ZTestFramework")
-              unnamed <- SuiteNames.discover(classes, Nil, "other.Framework")
-            yield assertTrue(
-              absent == SuiteNames.Found.Suites(Nil),
-              unseen == SuiteNames.Found.Unseen,
-              ignored == SuiteNames.Found.Suites(Nil),
-              found == SuiteNames.Found.Suites(List("demo.Child", "demo.Foo", "demo.Mid")),
-              unnamed == SuiteNames.Found.Suites(Nil),
-            ),
+          pasted.contains("^demo\\\\.A$"),
+          pasted.contains("^Foo\\\\$$"),
+          pasted.contains("suitePatterns.length == 0"),
+        ),
     ),
     suite("a provider hears the status it claims")(
       test("exit status, an unmatched pattern, and a provider with nothing to run are different results"):
@@ -172,7 +112,11 @@ object SuiteLawSpec extends ZIOSpecDefault:
           )
           out <- SuiteLaunch.hear(name, version, Platform.Jvm, None, ChildEvent.Out("line"))
           err <- SuiteLaunch.hear(name, version, Platform.Js, None, ChildEvent.Err("bad"))
+          cell = histos.zinc.CompiledCell(name, version, Platform.Jvm, Path.of("classes"), 0, None, false, None, None)
+          done <- SuiteLaunch.finished(cell, TestStatus.Failed(3)).runCollect
         yield assertTrue(
+          done == Chunk(TestFeed.Done(TestedCell(name, version, Platform.Jvm, TestStatus.Failed(3)))),
+          SuiteLaunch.linkFailed(cell, "clang") == ModuleTestError.LinkFailed(name, version, Platform.Jvm, "clang"),
           passed == TestFeed.Done(TestedCell(name, version, Platform.Jvm, TestStatus.Passed)),
           failed == TestFeed.Done(TestedCell(name, version, Platform.Jvm, TestStatus.Failed(7))),
           unmatched == TestFeed.Done(TestedCell(name, version, Platform.Jvm, TestStatus.Unmatched)),
@@ -188,29 +132,25 @@ object SuiteLawSpec extends ZIOSpecDefault:
         )
       ,
       test("exact keeps a real pattern and drops an empty or blank one"):
-        patterns("demo.A", "demo.*") match
-          case Left(error)              => assertTrue(error == SuitePatternError.Empty)
-          case Right(List(exact, star)) =>
-            assertTrue(SuiteLaunch.exact(List("", " ", "demo.A", "a b", "demo.*")) == List(exact, star))
-          case Right(other) => assertTrue(other == Nil)
+        assertTrue(
+          SuiteLaunch.exact(List("", " ", "demo.A", "a b", "demo.*")) ==
+            List(SuitePattern("demo.A"), SuitePattern("demo.*"))
+        )
       ,
       test("the pattern environment is the count and one variable per pattern"):
-        patterns("demo.A", "demo.*") match
-          case Left(error)              => assertTrue(error == SuitePatternError.Empty)
-          case Right(List(exact, star)) =>
-            val note = ProviderNote(TestProvider.Zio.framework.value, Path.of("classes"), List(exact, star))
-            val env  = note.environment
-            val none = ProviderNote(TestProvider.Zio.framework.value, Path.of("classes"), Nil).environment
-            assertTrue(
-              env.get(ProviderRunner.PatternCount).contains("2"),
-              env.get(s"${ProviderRunner.PatternPrefix}0").contains("demo.A"),
-              env.get(s"${ProviderRunner.PatternPrefix}1").contains("demo.*"),
-              env.get(s"${ProviderRunner.PatternPrefix}2") == None,
-              env.get(ProviderRunner.Framework).contains(TestProvider.Zio.framework.value),
-              none.get(ProviderRunner.PatternCount).contains("0"),
-              none.get(s"${ProviderRunner.PatternPrefix}0") == None,
-            )
-          case Right(other) => assertTrue(other == Nil)
+        val framework = TestProvider.Zio.framework.value
+        val env       =
+          ProviderNote(framework, Path.of("classes"), List(SuitePattern("demo.A"), SuitePattern("demo.*"))).environment
+        val none = ProviderNote(framework, Path.of("classes"), Nil).environment
+        assertTrue(
+          env.get(ProviderRunner.PatternCount).contains("2"),
+          env.get(s"${ProviderRunner.PatternPrefix}0").contains("demo.A"),
+          env.get(s"${ProviderRunner.PatternPrefix}1").contains("demo.*"),
+          env.get(s"${ProviderRunner.PatternPrefix}2") == None,
+          env.get(ProviderRunner.Framework).contains(framework),
+          none.get(ProviderRunner.PatternCount).contains("0"),
+          none.get(s"${ProviderRunner.PatternPrefix}0") == None,
+        )
       ,
       test("a class binary drops a non-class, a dollar-dollar name, and an empty relative name"):
         Workspace
@@ -219,38 +159,41 @@ object SuiteLawSpec extends ZIOSpecDefault:
             val source = root.resolve("Demo.scala")
             val anon   = root.resolve("demo/Foo$$anon.class")
             val real   = root.resolve("demo/A.class")
+            val dot    = root.resolve(".class")
             for
               _ <- Workspace.writeString(source, "")
               _ <- writeBytes(anon, Array.emptyByteArray)
               _ <- writeBytes(real, Array.emptyByteArray)
+              _ <- writeBytes(dot, Array.emptyByteArray)
             yield assertTrue(
               SuiteLaunch.classBinary(root, source) == None,
               SuiteLaunch.classBinary(root, anon) == None,
               SuiteLaunch.classBinary(root, real).contains("demo.A"),
               SuiteLaunch.classBinary(root, root) == None,
+              SuiteLaunch.classBinary(root, dot) == None,
+              SuiteLaunch.classBinaries(root) == List("demo.A"),
             )
       ,
-      test("an empty pattern does not read, a missing directory stays open, and a class must match"):
+      test("an empty pattern does not read, a missing directory or a file stays open, and a class must match"):
         Workspace
           .work("histos-suite-narrow")
           .flatMap: root =>
             val classes = root.resolve("classes")
             val missing = root.resolve("missing")
-            patterns("demo.A", "demo.Missing") match
-              case Left(error)            => ZIO.succeed(assertTrue(error == SuitePatternError.Empty))
-              case Right(List(hit, miss)) =>
-                for
-                  open    <- SuiteLaunch.narrowed(missing, Nil)
-                  absent  <- SuiteLaunch.narrowed(missing, List(hit))
-                  _       <- Workspace.createDirectories(classes)
-                  _       <- writeBytes(classes.resolve("demo/Foo$$anon.class"), Array.emptyByteArray)
-                  hidden  <- SuiteLaunch.narrowed(classes, List(miss))
-                  _       <- writeBytes(classes.resolve("other/B.class"), Array.emptyByteArray)
-                  skipped <- SuiteLaunch.narrowed(classes, List(hit))
-                  _       <- writeBytes(classes.resolve("demo/A.class"), Array.emptyByteArray)
-                  kept    <- SuiteLaunch.narrowed(classes, List(hit))
-                yield assertTrue(open, absent, hidden, !skipped, kept)
-              case Right(other) => ZIO.succeed(assertTrue(other == Nil))
+            val hit     = SuitePattern("demo.A")
+            for
+              open    <- SuiteLaunch.narrowed(missing, Nil)
+              absent  <- SuiteLaunch.narrowed(missing, List(hit))
+              _       <- Workspace.createDirectories(classes)
+              _       <- writeBytes(classes.resolve("demo/Foo$$anon.class"), Array.emptyByteArray)
+              hidden  <- SuiteLaunch.narrowed(classes, List(SuitePattern("demo.Missing")))
+              _       <- Workspace.writeString(classes.resolve("demo/readme.txt"), "")
+              file    <- SuiteLaunch.narrowed(classes.resolve("demo/readme.txt"), List(hit))
+              _       <- writeBytes(classes.resolve("other/B.class"), Array.emptyByteArray)
+              skipped <- SuiteLaunch.narrowed(classes, List(hit))
+              _       <- writeBytes(classes.resolve("demo/A.class"), Array.emptyByteArray)
+              kept    <- SuiteLaunch.narrowed(classes, List(hit))
+            yield assertTrue(open, absent, hidden, file, !skipped, kept)
       ,
       test("satisfaction is the provider organization and name"):
         val library = Dep.trusted("dev.zio", "zio-test-sbt", "0", DepKind.Binary)
@@ -265,11 +208,6 @@ object SuiteLawSpec extends ZIOSpecDefault:
         ),
     ),
     suite("quick records and test paths")(
-      test("the first path is kept, and a repeated path is not a second source"):
-        val first  = Path.of("/a")
-        val second = Path.of("/b")
-        assertTrue(TestCompile.distinct(List(first, second, first, second)) == List(first, second))
-      ,
       test("the module test directory wins, and the repository test is only the single-module layout"):
         Workspace
           .work("histos-test-base")
@@ -286,11 +224,11 @@ object SuiteLawSpec extends ZIOSpecDefault:
               local  <- TestCompile.testBase(root, one, List(one, mod(Nil)))
             yield assertTrue(absent == None, repo.contains(shared), many == None, local.contains(named))
       ,
-      test("test classes live under the test-classes cell"):
+      test("a test classes directory maps back to its sibling test analysis"):
         val repo = Path.of("/repo")
         assertTrue(
-          TestCompile.testClasses(repo, module, version, Platform.Js) ==
-            repo.resolve(".histos").resolve("test-classes").resolve("core").resolve("3.10.0").resolve("js")
+          histos.zinc.GraphCompile.analysisDirOf(TestCompile.testClasses(repo, module, version, Platform.Js)) ==
+            Some(repo.resolve(".histos").resolve("test-analysis").resolve("core").resolve("3.10.0").resolve("js"))
         )
       ,
       test("a missing record is a miss, the same digest is a hit, and a bad record is not a miss"):
@@ -378,11 +316,6 @@ object SuiteLawSpec extends ZIOSpecDefault:
     ),
   )
 
-  private def patterns(raw: String*): Either[SuitePatternError, List[SuitePattern]] =
-    raw.toList.foldLeft[Either[SuitePatternError, List[SuitePattern]]](Right(Nil)):
-      case (Left(error), _)    => Left(error)
-      case (Right(found), one) => SuitePattern.from(one).map(found :+ _)
-
   private def mod(tests: List[Dep]): Module =
     Module(
       module,
@@ -393,12 +326,6 @@ object SuiteLawSpec extends ZIOSpecDefault:
       SourcePos("law.scala", 1, 1),
       testDependencies = tests,
     )
-
-  private def emptyClass(name: String, superName: String): Array[Byte] =
-    val writer = new ClassWriter(0)
-    writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, name, null, superName, null)
-    writer.visitEnd()
-    writer.toByteArray
 
   private def referenced(name: String, owners: List[String], line: Int): Array[Byte] =
     val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)

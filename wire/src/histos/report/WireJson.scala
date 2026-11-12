@@ -511,7 +511,9 @@ private object WireBuild extends WireSupport:
   given JsonCodec[NodePathError]        = JsonCodec.derived
   given JsonCodec[NodeVersion]          = parsed(nodeVersion, _.message, _.value)
 
-  /** A probe is `major.minor.patch`. The floor is a trusted major, and a miss carries that text. */
+  /** A probe is `major.minor.patch`, with any pre-release or build. The floor is a trusted major, and a miss carries
+    * that text.
+    */
   private def nodeVersion(raw: String): Either[NodeVersionError, NodeVersion] =
     NodeVersion
       .from(raw)

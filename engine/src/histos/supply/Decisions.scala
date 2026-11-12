@@ -1,6 +1,5 @@
 package histos.supply
 
-import histos.plugin.{ActionName, RepoPath}
 import histos.version.CommitSha
 import histos.Developer
 
@@ -126,27 +125,22 @@ object Bump:
       security: Boolean,
       transitive: TransitiveFix,
   ): Either[SupplyFault, BumpPlan] =
-    val grouped = locked.groupBy(_.coordinate.value)
-    val split   = grouped.collect:
-      case (name, rows) if rows.map(_.version).distinct.length > 1 => name
-    if split.nonEmpty then
-      Left(SupplyFault.CrossVersionSplit(Coordinate.trusted(split.head), split.toList.map(CellName.trusted)))
-    else
-      val chosen          = locked.flatMap(row => pick(row, releases, policy, today, security, transitive))
-      val (listed, apply) = chosen.partition(_.listed)
-      Right(BumpPlan(apply.map(_.bump), listed.map(_.bump)))
+    split(locked) match
+      case Some(fault) => Left(fault)
+      case None        =>
+        val chosen          = locked.flatMap(row => pick(row, releases, policy, today, security, transitive))
+        val (listed, apply) = chosen.partition(_.listed)
+        Right(BumpPlan(apply.map(_.bump), listed.map(_.bump)))
 
-  def verify(
-      action: ActionName,
-      tag: String,
-      sha: CommitSha,
-      reachable: Boolean,
-      was: RepoId,
-      now: RepoId,
-  ): Either[SupplyFault, Unit] =
-    if was != now then Left(SupplyFault.ActionRepoMoved(action, was, now))
-    else if !reachable then Left(SupplyFault.TagNotReachable(action, tag, sha))
-    else Right(())
+  /** The first coordinate, in lock order, that two cells lock at different versions, with the cells that lock it. */
+  private def split(locked: List[LockedDependency]): Option[SupplyFault] =
+    locked
+      .map(_.coordinate)
+      .distinct
+      .map(coordinate => coordinate -> locked.filter(_.coordinate == coordinate))
+      .collectFirst:
+        case (coordinate, rows) if rows.map(_.version).distinct.length > 1 =>
+          SupplyFault.CrossVersionSplit(coordinate, rows.map(row => CellName.trusted(row.cell)).distinct)
 
   private final case class Row(bump: ChosenBump, listed: Boolean)
 

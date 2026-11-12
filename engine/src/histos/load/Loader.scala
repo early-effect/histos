@@ -77,7 +77,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       boundary   <- Boundary.jars(apiJar)
       out        <- BuildFile.tempDir("histos-classes")
       sourceFile <- BuildFile.writeTemp(text)
-      _          <- BuildFile.compile(sourceFile, boundary, out)
+      _          <- BuildFile.compileLabeled(List(sourceFile -> "histos.scala"), boundary, out)
       graph      <- readGraph(out)
       modules    <- PluginModules.compile(repo, graph, boundary)
       ships      <- shipsOf(repo, graph, launcher, source)
