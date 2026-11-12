@@ -1,5 +1,15 @@
 # CLI and toolchain
 
+All work in this plan follows the zio-architect ethos (the agent rules in the local `AGENTS.md`):
+
+- Scala 3, braceless.
+- ZIO services wired by layers, with scoped layers for anything that opens.
+- Typed error enums, opaque values, and exhaustive matches.
+- Total code: no partial accessors, casts, `throw`, `return`, or `null` in contracts.
+- Effects as values, and structured concurrency.
+- Builders that pin the hard type first.
+- Tests that assert values, not `isSuccess`.
+
 ## Why
 
 A product is built by the previous product. Histos almost never pins a stable release to build itself, so the builder is the previous snapshot, and that snapshot is one ship: a jar and the native client linked for that jar. The pull request is the next ship. The launcher that drives the pull request is the pin's client. The client this commit would ship is an output, and it is proved when the ship exists, at publish, before anything uploads ([#159](https://github.com/early-effect/histos/issues/159)).
