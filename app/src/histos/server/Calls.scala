@@ -150,20 +150,6 @@ end Say
 
 /** One graph command, written as the CLI would print it. */
 object Calls:
-  val quiet: PluginRuntime = Quiet
-
-  def idleMachine: Machine =
-    Machine(
-      Map.empty,
-      ".",
-      Os.Other,
-      histos.toolchain.Architecture.Unsupported("fixture"),
-      Path.of(".histos"),
-      Path.of("."),
-      None,
-      NativeOrigin.Central,
-    )
-
   def graph(
       graph: ProjectGraph,
       plugins: PluginRuntime,
@@ -1329,27 +1315,4 @@ object Calls:
     result match
       case CallResult.Reported(report) => CallResult.Reported(report.copy(err = report.err :+ line))
       case fault                       => fault
-
-  private object Quiet extends PluginRuntime:
-    def launcher: ApiDigest = ApiDigest.trusted("a" * 64)
-
-    def run(
-        id: PluginTaskId,
-        args: PluginArgs,
-    ): ZIO[
-      histos.schedule.ActionCache & RemoteCache & Resolve,
-      PluginFault,
-      histos.plugin.PluginOutput,
-    ] =
-      ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
-
-    def bind: ZIO[
-      histos.schedule.ActionCache & RemoteCache & Resolve,
-      TaskError,
-      Map[TaskId, IO[TaskError, TaskResult]],
-    ] =
-      ZIO.succeed(Map.empty)
-
-    def links: List[PluginLink] = Nil
-  end Quiet
 end Calls

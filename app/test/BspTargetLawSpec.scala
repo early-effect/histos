@@ -4,7 +4,6 @@ import histos.cache.ContentStore
 import histos.publish.LauncherPin
 import histos.resolve.{ResolutionService, Resolve}
 import histos.program.Program
-import histos.server.Calls
 import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
@@ -51,7 +50,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                 _        <- Workspace.writeString(source, "object Hello\n")
                 _        <- Workspace.writeString(dir.resolve("histos.scala"), "// law\n")
                 _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
-                runtimes <- Runtimes.read(Calls.idleMachine, None)
+                runtimes <- Runtimes.read(LawMachine.idle, None)
                 session  <- Bsp.open(dir, graph(scala3), LawMachine.fixtureJdk, runtimes)
                 _        <- ask(session, request(1, "build/initialize"))
                 _        <- ask(session, note("build/initialized"))

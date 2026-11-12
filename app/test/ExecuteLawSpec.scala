@@ -7,7 +7,7 @@ import histos.native.NativeOrigin
 import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.toolchain.Architecture
-import histos.LawDir
+import histos.{LawDir, LawMachine}
 import slayer.{Stubbed, any, stub, stubbed}
 
 import java.nio.file.{Files, Path}
@@ -115,6 +115,21 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     ,
     test("setup supply-chain writes the build only with --fix"):
       setup
+    ,
+    test("setup supply-chain on a build it cannot read fails with a line"):
+      open("unreadable") { repo =>
+        val law = Law(
+          List("setup", "supply-chain"),
+          CliExit.Failed,
+          "",
+          s"setup supply-chain could not read or write a file under $repo",
+          Playback.Held,
+        )
+        for
+          _    <- ZIO.attemptBlocking(Files.write(repo.resolve("histos.scala"), Array(0xff.toByte, 0xfe.toByte))).orDie
+          done <- Cli.execute(law.args, repo, apiJar)
+        yield matches(law, done)
+      }
     ,
     test("bare new and init print the directory and histos test"):
       scaffold,
@@ -380,7 +395,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
   private def run(
       repo: Path,
       laws: List[Law],
-  ): ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Scope, Nothing, TestResult] =
+  ): ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Stdio & Scope, Nothing, TestResult] =
     for
       _       <- failLoad
       results <- ZIO.foreach(laws)(law => Cli.execute(law.args, repo, apiJar).map(done => matches(law, done)))
@@ -412,7 +427,11 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       )
 
   private def open[A](prefix: String)(
-      use: Path => ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Scope, Nothing, A]
+      use: Path => ZIO[
+        Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & IvyRoot & Stdio & Scope,
+        Nothing,
+        A,
+      ]
   ): ZIO[Path & TestEnvironment & Scope, Nothing, A] =
     for
       root <- ZIO.service[Path]
@@ -426,7 +445,8 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       stubbed[Resolve] ++
       ZLayer.succeed(ContentStore.in(store)) ++
       ZLayer.succeed(machine(repo, store)) ++
-      ZLayer.succeed(IvyRoot.at(repo.resolve("ivy")))
+      ZLayer.succeed(IvyRoot.at(repo.resolve("ivy"))) ++
+      LawMachine.redirected
 
   private def machine(repo: Path, store: Path): Machine =
     Machine(Map.empty, "/home", Os.Mac, Architecture.X86_64, store, repo, None, NativeOrigin.Central)

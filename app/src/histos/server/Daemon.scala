@@ -304,32 +304,31 @@ object Daemon:
   /** What a connection runs with: the caller's services and the compilers the server opened. */
   private type Served = Needs & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService
 
+  /** `relaunch` starts the successor a reboot hands over to, and `assembly` is the checksum the record carries. */
   def open(
       repo: Path,
-      graph: ProjectGraph,
-      histosBuild: histos.HistosBuild,
+      loaded: histos.load.LoadedBuild,
       jdk: JdkRuntime,
       version: String,
       apiJar: Path,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
-      plugins: histos.load.PluginRuntime = Calls.quiet,
-      machine: histos.jdk.Machine = Calls.idleMachine,
-      relaunch: Path => IO[ServerError, Unit] = spawn,
-      assembly: Option[String] = None,
+      machine: histos.jdk.Machine,
+      relaunch: Path => IO[ServerError, Unit],
+      assembly: Option[String],
   ): ZIO[Scope & Needs, ServerError, Running] =
     for
       listening <- Promise.make[ServerError, Record.Written]
       serving   <- run(
         repo,
-        graph,
-        histosBuild,
+        loaded.graph,
+        loaded.build,
         jdk,
         version,
         apiJar,
         buildClasspath,
         build,
-        plugins,
+        loaded.plugins,
         machine,
         relaunch(repo),
         listening,

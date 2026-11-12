@@ -1656,7 +1656,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
   /** The errors an MCP tool fails with. Their codecs are the client's. */
   private def sessionSums: TestResult =
     import histos.client.ClientJson.given
-    import histos.client.Session.{CallProblem, SessionError as ToolSession}
+    import histos.client.Session.{CallProblem, TransportError}
     import histos.server.{ServerError, ServerIo}
     mixed[ServerError](
       "ServerError",
@@ -1671,17 +1671,17 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       """{"Save":{"path":"/work/repo"}}""",
       ServerIo.Save(home),
     ) &&
-    mixed[ToolSession](
-      "SessionError",
+    mixed[TransportError](
+      "TransportError",
       "DifferentVersion() | Remote(error) | DidNotFinish()",
       """{"Remote":{"error":{"NoServer":{}}}}""",
-      ToolSession.Remote(ServerError.NoServer),
+      TransportError.Remote(ServerError.NoServer),
     ) &&
     mixed[CallProblem](
       "CallProblem",
       "Fault(fault) | Transport(error)",
       """{"Transport":{"error":{"DidNotFinish":{}}}}""",
-      CallProblem.Transport(ToolSession.DidNotFinish),
+      CallProblem.Transport(TransportError.DidNotFinish),
     )
 
   private def sumLaws: TestResult =

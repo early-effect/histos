@@ -2,13 +2,16 @@ package histos.cli
 
 import histos.LawMachine
 import histos.central.ReleaseFeed
+import histos.resolve.Resolve
 import histos.workspace.Workspace
 import slayer.stubbed
 
 import zio.Scope
 import zio.test.{TestEnvironment, TestSystem, ZIOSpecDefault, assertTrue, suite, test}
 
-/** `graph` loads the build. The api jar is the one this process packed, not the classes directory. */
+/** `graph` loads the build. The api jar is the one this process packed, not the classes directory. A build with no
+  * plugins resolves nothing, so `Resolve` and the release feed are stubs that fail any law that reads them.
+  */
 object CliReadyLawSpec extends ZIOSpecDefault:
   private val build =
     """import histos.*
@@ -42,5 +45,5 @@ object CliReadyLawSpec extends ZIOSpecDefault:
         tools.out.contains("node not required"),
         tools.out.contains("clang not required"),
       )
-  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed])
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)
 end CliReadyLawSpec

@@ -1,18 +1,19 @@
 package histos.mcp
 
-import heddle.mcp.protocol.{ListToolsResult, ProtocolVersion, RequestMeta, ToolName}
+import heddle.mcp.{McpBuildError, ToolError}
+import heddle.mcp.protocol.{ListToolsResult, ProtocolVersion, RequestMeta, Tool, ToolName}
 import histos.cache.{CacheCleanMode, CacheCleanModeError, ContentStore}
 import histos.cli.{Grammar, Operation}
 import histos.client.Session
 import histos.format.{FormatMode, FormatTargets}
 import histos.load.Loader
 import histos.publish.IvyRoot
-import histos.report.Rejection
+import histos.report.{ObserveError, Rejection}
 import histos.resolve.Resolve
-import histos.server.{Call, Calls}
+import histos.server.Call
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode, TestModeError}
-import histos.{ProjectName, ProjectNameError}
+import histos.{LawMachine, ProjectName, ProjectNameError}
 import slayer.stubbed
 
 import java.nio.file.Path
@@ -100,38 +101,27 @@ object McpLawSpec extends ZIOSpecDefault:
       )
     ,
     test("tools/list names every tool the server registers, and neither portal nor bsp is one"):
-      val listing = Json.Obj(
-        "jsonrpc" -> Json.Str("2.0"),
-        "id"      -> Json.Num(1),
-        "method"  -> Json.Str("tools/list"),
-        "params"  -> Json.Obj(
-          "_meta" -> Json.Obj(
-            RequestMeta.VersionKey    -> Json.Str(ProtocolVersion.Current.value),
-            RequestMeta.ClientCapsKey -> Json.Obj(),
-          )
-        ),
-      )
-      val program =
-        for
-          desk     <- Session.desk
-          mcp      <- ZIO.fromEither(HistosMcp.tools(Path.of("repo"), Path.of("api.jar"), Calls.idleMachine, desk))
-          answered <- mcp.handle(listing).someOrFail("tools/list had no answer")
-          listed   <- ZIO.fromEither(
-            answered.toJson
-              .fromJson[Json.Obj]
-              .flatMap(_.get("result").toRight("no result"))
-              .flatMap(_.as[ListToolsResult])
-          )
-          names = listed.tools.map(_.name).toSet
-        yield assertTrue(
+      listed.map: tools =>
+        val names = tools.map(_.name).toSet
+        assertTrue(
           names == HistosMcp.toolNames,
           !names.contains(ToolName("portal")),
           !names.contains(ToolName("bsp")),
         )
-      program.provideSomeLayer[Scope](
-        stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
-          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
+    ,
+    test("a title in the tool schemas and the errors the tools fail with names one shape"):
+      import histos.client.ClientJson.given
+      import histos.report.WireJson.given
+      import histos.report.WireSchema.given
+      val errors = List(
+        summon[ToolError[Session.CallProblem]].shape.outputSchema,
+        summon[ToolError[ObserveError]].shape.outputSchema,
       )
+      listed.map: tools =>
+        val documents = tools.flatMap(tool => tool.inputSchema :: tool.outputSchema.toList) ++ errors
+        val shapes    = documents.flatMap(titled).groupMap((title, _) => title)((_, shape) => shape)
+        val clashes   = shapes.collect { case (title, found) if found.distinct.size > 1 => title }
+        assertTrue(clashes.toList.sorted == Nil, shapes.contains("CallProblem"))
     ,
     test("a notice level is sent as info or error"):
       assertTrue(
@@ -142,4 +132,65 @@ object McpLawSpec extends ZIOSpecDefault:
 
   private def args(operation: String, id: String = "api", projects: List[String] = Nil): HistosMcp.PreviewArgs =
     HistosMcp.PreviewArgs(operation, id, projects)
+
+  /** The tools a built server answers `tools/list` with. No tool runs. */
+  private def listed: ZIO[Scope, NonEmptyChunk[McpBuildError] | String, List[Tool]] =
+    val listing = Json.Obj(
+      "jsonrpc" -> Json.Str("2.0"),
+      "id"      -> Json.Num(1),
+      "method"  -> Json.Str("tools/list"),
+      "params"  -> Json.Obj(
+        "_meta" -> Json.Obj(
+          RequestMeta.VersionKey    -> Json.Str(ProtocolVersion.Current.value),
+          RequestMeta.ClientCapsKey -> Json.Obj(),
+        )
+      ),
+    )
+    val program =
+      for
+        desk     <- Session.desk
+        mcp      <- ZIO.fromEither(HistosMcp.tools(Path.of("repo"), Path.of("api.jar"), LawMachine.idle, desk))
+        answered <- mcp.handle(listing).someOrFail("tools/list had no answer")
+        result   <- ZIO.fromEither(
+          answered.toJson
+            .fromJson[Json.Obj]
+            .flatMap(_.get("result").toRight("no result"))
+            .flatMap(_.as[ListToolsResult])
+        )
+      yield result.tools.toList
+    program
+      .provideSomeLayer[Scope](
+        stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
+      )
+
+  /** Every titled type in `json`, with its schema. */
+  private def titled(json: Json): List[(String, Json)] =
+    json match
+      case Json.Obj(fields) =>
+        fields.toList.flatMap:
+          case ("title", Json.Str(title)) => List((title, json))
+          case ("oneOf", Json.Arr(arms))  => arms.toList.flatMap(arm)
+          case (_, value)                 => titled(value)
+      case Json.Arr(items) => items.toList.flatMap(titled)
+      case _               => Nil
+
+  /** One case of a sum: an object whose one property is the case, titled with the case's name. Only the types the case
+    * holds are titled types.
+    */
+  private def arm(json: Json): List[(String, Json)] =
+    json match
+      case Json.Obj(fields) =>
+        fields.toList.flatMap:
+          case ("properties", Json.Obj(cases)) => cases.toList.flatMap((_, held) => untitled(held))
+          case (_, value)                      => titled(value)
+      case other => titled(other)
+
+  private def untitled(json: Json): List[(String, Json)] =
+    json match
+      case Json.Obj(fields) =>
+        fields.toList.flatMap:
+          case ("title", _) => Nil
+          case (_, value)   => titled(value)
+      case other => titled(other)
 end McpLawSpec

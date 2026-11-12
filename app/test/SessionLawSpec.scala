@@ -52,21 +52,21 @@ object SessionLawSpec extends ZIOSpecDefault:
         Feed.Done(kept),
       )
       assertTrue(
-        Session.spoken(repo, Nil) == Left(Session.SessionError.DidNotFinish),
+        Session.spoken(repo, Nil) == Left(Session.TransportError.DidNotFinish),
         Session.spoken(repo, List(Feed.Done(fault))) == Right(fault),
         Session.spoken(repo, live) == Right(CallResult.Reported(Report.empty.copy(out = Chunk("live")))),
         Session.spoken(repo, mixed) == Right(
           CallResult.Reported(Report.empty.copy(out = Chunk("kept", "live"), err = Chunk("e0", "e1")))
         ),
-        Session.SessionError.DidNotFinish.message == "the call did not finish",
-        Session.SessionError.DifferentVersion.message == ServerError.DifferentVersion.message,
+        Session.TransportError.DidNotFinish.message == "the call did not finish",
+        Session.TransportError.DifferentVersion.message == ServerError.DifferentVersion.message,
       )
     ,
     test("a report is the tool value and a fault or a transport error is the problem"):
       for
         reported <- Session.deliver(ZIO.succeed(CallResult.reported(summary = "boom"))).either
         faulted  <- Session.deliver(ZIO.succeed(CallResult.Fault(BuildFault.Interrupted))).either
-        closed   <- Session.deliver(ZIO.fail(Session.SessionError.DidNotFinish)).either
+        closed   <- Session.deliver(ZIO.fail(Session.TransportError.DidNotFinish)).either
       yield assertTrue(
         reported == Right(CallResult.reported(summary = "boom") match
           case CallResult.Reported(report) => report
@@ -76,7 +76,7 @@ object SessionLawSpec extends ZIOSpecDefault:
           case Left(_)       => false
         ,
         faulted == Left(Session.CallProblem.Fault(BuildFault.Interrupted)),
-        closed == Left(Session.CallProblem.Transport(Session.SessionError.DidNotFinish)),
+        closed == Left(Session.CallProblem.Transport(Session.TransportError.DidNotFinish)),
       )
     ,
     test("an event continues, a done stops, and any other frame is protocol"):

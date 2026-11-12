@@ -16,7 +16,7 @@ import histos.task.{RunId, TaskError}
 import histos.testrun.{ModuleTestError, SuitePatternError, TestMode}
 import histos.workflow.WorkflowAction
 import histos.zinc.{CompileError, CompileMemo, Compilers, GraphCompileError}
-import histos.{Platform, ProjectName, ScalaVersion}
+import histos.{LawMachine, Platform, ProjectName, ScalaVersion}
 import slayer.{stub, stubbed}
 
 import java.nio.file.Path
@@ -197,7 +197,7 @@ object PerformLawSpec extends ZIOSpecDefault:
       messages <- Ref.make(Chunk.empty[Message])
       say = new Say(message => messages.update(_ :+ message))
       runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
-      _     <- Perform.run(repo, jar, loaded, Calls.idleMachine, runs, false, version, call, say, edges)
+      _     <- Perform.run(repo, jar, loaded, LawMachine.idle, runs, false, version, call, say, edges)
       heard <- messages.get
     yield heard
 

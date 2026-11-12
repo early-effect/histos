@@ -2,6 +2,7 @@ package histos.cli
 
 import histos.LawMachine
 import histos.central.ReleaseFeed
+import histos.resolve.Resolve
 import histos.workspace.Workspace
 import slayer.stubbed
 
@@ -22,4 +23,4 @@ object CliClasspathLawSpec extends ZIOSpecDefault:
         done.err.contains("histos.scala"),
         !done.err.contains(".histos/classes"),
       )
-  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed])
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)

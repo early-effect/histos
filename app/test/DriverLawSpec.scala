@@ -1,5 +1,6 @@
 package histos.server
 
+import histos.LawMachine
 import histos.bsp.Frame
 import histos.cli.{Cli, CliExit, Completed, Playback}
 import histos.report.CallResult
@@ -12,7 +13,9 @@ import java.nio.file.{Files, Path}
 import zio.*
 import zio.test.*
 
-/** A mismatched record is rebooted. The call runs on the replacement, not on the driver that was already up. */
+/** A mismatched record is rebooted. The call runs on the replacement, not on the driver that was already up. The old
+  * driver records the replacement before it answers the reboot, so the wait for it never sleeps on the test clock.
+  */
 object DriverLawSpec extends ZIOSpecDefault:
   private val pin   = "histos.version=1.2.3\n"
   private val shown = "histos 1.2.3"
@@ -24,16 +27,18 @@ object DriverLawSpec extends ZIOSpecDefault:
     ,
     test("a new assembly checksum reboots when the version line matches"):
       drive(recorded = shown, mark = Some(sha)),
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds)
+  ) @@ TestAspect.timeout(20.seconds)
 
   private def drive(recorded: String, mark: Option[String]): UIO[TestResult] =
     ZIO.scoped {
       for
-        repo  <- short("repo")
-        old   <- short("old")
-        next  <- short("next")
+        root <- short
+        repo = root.resolve("repo")
+        old  = root.resolve("old")
+        next = root.resolve("next")
         heard <- Ref.make(Chunk.empty[String])
         _     <- ZIO.attemptBlocking {
+          List(repo, old, next).foreach(dir => Files.createDirectories(dir))
           Files.writeString(repo.resolve("build.properties"), pin)
           mark.foreach { value =>
             Files.createDirectories(AssemblyMark.file(repo).getParent)
@@ -53,11 +58,13 @@ object DriverLawSpec extends ZIOSpecDefault:
         ).forkScoped
         _      <- answer(nextPeer, heard, ZIO.unit).forkScoped
         missed <- Ref.make(0)
-        done   <- Cli.compileAt(
-          repo,
-          Nil,
-          missed.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
-        )
+        done   <- Cli
+          .compileAt(
+            repo,
+            Nil,
+            missed.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
+          )
+          .provideLayer(LawMachine.redirected)
         n     <- missed.get
         calls <- heard.get
       yield assertTrue(
@@ -68,10 +75,10 @@ object DriverLawSpec extends ZIOSpecDefault:
       )
     }
 
-  /** Unix domain socket names are short, so the peers live under `/tmp`. */
-  private def short(label: String): ZIO[Scope, Nothing, Path] =
+  /** The law's own directory, removed after it. A Unix socket path fits in about 100 bytes, so it is under `/tmp`. */
+  private def short: ZIO[Scope, Nothing, Path] =
     ZIO.acquireRelease(
-      ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), s"hd$label")).orDie
+      ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hd")).orDie
     )(path => Workspace.delete(path).catchAll(error => ZIO.dieMessage(error.message)))
 
   private def listen(socket: Path): ZIO[Scope, Nothing, ServerSocketChannel] =

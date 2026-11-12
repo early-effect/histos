@@ -1,5 +1,6 @@
 package histos
 
+import histos.cli.{Attached, Stdio}
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Os, Sha256}
 import histos.native.NativeOrigin
 import histos.toolchain.{Architecture, RuntimeIdentity}
@@ -7,12 +8,12 @@ import histos.zinc.GraphCompile
 
 import java.nio.file.Path
 
-import zio.{UIO, ZIO}
+import zio.{UIO, ULayer, ZIO, ZLayer}
 import zio.test.TestSystem
 
 /** The machine a law runs on. The JDK, the OS, and the architecture are the test JVM's own. The home and the content
-  * store are under the law's directory and the environment is empty, so nothing reads the developer's home, PATH, or
-  * shell.
+  * store are under the law's directory, the environment is empty, and the standard streams are redirected, so nothing
+  * reads the developer's home, PATH, shell, or terminal.
   */
 object LawMachine:
   def at(dir: Path): UIO[Machine] =
@@ -27,6 +28,23 @@ object LawMachine:
         Some(Path.of(javaHome)),
         NativeOrigin.Central,
       )
+
+  /** A machine for a law that never reads one: no JDK, no environment, and no architecture. */
+  val idle: Machine =
+    Machine(
+      Map.empty,
+      ".",
+      Os.Other,
+      Architecture.Unsupported("fixture"),
+      Path.of(".histos"),
+      Path.of("."),
+      None,
+      NativeOrigin.Central,
+    )
+
+  /** A law's standard streams: nobody reads its output or answers a prompt. */
+  val redirected: ULayer[Stdio] =
+    ZLayer.succeed(Stdio(Attached.Redirected, Attached.Redirected))
 
   /** The same machine through `TestSystem`, for product code that calls `Machine.load` itself. */
   def system(dir: Path): UIO[Unit] =

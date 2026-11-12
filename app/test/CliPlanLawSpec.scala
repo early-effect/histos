@@ -2,6 +2,7 @@ package histos.cli
 
 import histos.LawMachine
 import histos.central.ReleaseFeed
+import histos.resolve.Resolve
 import histos.workspace.Workspace
 import slayer.stubbed
 
@@ -11,7 +12,7 @@ import zio.{Scope, ZIO}
 import zio.test.{TestEnvironment, TestSystem, ZIOSpecDefault, assertTrue, suite, test}
 
 /** `new --bare` writes a project and does not write CI. `preview compile` names sources that have never been compiled.
-  * The release feed is a stub: no law launches against Maven Central.
+  * The release feed and `Resolve` are stubs: no law launches against Maven Central or a Coursier cache.
   */
 object CliPlanLawSpec extends ZIOSpecDefault:
   private val version = "9.9.9-test"
@@ -80,7 +81,7 @@ object CliPlanLawSpec extends ZIOSpecDefault:
               |no previous compile
               |stale previewlaw/src/main/scala/Ready.scala""".stripMargin,
           ),
-  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed])
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)
 
   private def textAt(path: Path): ZIO[Any, Nothing, String] =
     ZIO.attempt(if Files.isRegularFile(path) then Files.readString(path) else "").orDie

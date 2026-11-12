@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.LawDir
+import histos.{LawDir, LawMachine, LawPlugins}
 import histos.build.BuildEvent
 import histos.cache.{CacheProject, ContentStore}
 import histos.clean.Products
@@ -41,7 +41,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
 
   def spec = suite("perform route laws")(
     test("a tracked inspect with arguments names the run and then refuses"):
-      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph))))
+      val loaded  = Right(Some(LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph))))
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
@@ -57,7 +57,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment](services)
     ,
     test("inspect prints project names, and arguments or an empty id are refused"):
-      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph))))
+      val loaded  = Right(Some(LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph))))
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
@@ -175,7 +175,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       messages <- Ref.make(Chunk.empty[Message])
       say = new Say(message => messages.update(_ :+ message))
       runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
-      _     <- Perform.run(where, jar, loaded, Calls.idleMachine, runs, track, version, call, say, edges)
+      _     <- Perform.run(where, jar, loaded, LawMachine.idle, runs, track, version, call, say, edges)
       heard <- messages.get
       left  <- runs.get
     yield (heard, left)

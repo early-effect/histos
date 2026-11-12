@@ -81,5 +81,6 @@ object CliCoverLawSpec extends ZIOSpecDefault:
     Loader.live ++
       ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
       ZLayer.fromZIO(LawMachine.at(dir)) ++
-      ZLayer.succeed(IvyRoot.at(dir.resolve("ivy")))
+      ZLayer.succeed(IvyRoot.at(dir.resolve("ivy"))) ++
+      LawMachine.redirected
 end CliCoverLawSpec

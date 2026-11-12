@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.LawMachine
 import histos.doctor.FaultText
 import histos.load.{LoadError, Loader}
 import histos.report.{BuildFault, CallResult, Rejection}
@@ -85,5 +86,5 @@ object CliRouteLawSpec extends ZIOSpecDefault:
           got <- Cli.watchCall(List("nope"), repo, jar).either
         yield assertTrue(got == Left(BuildFault.Load(LoadError.MissingFile(repo))))
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader]),
-  )
+  ).provideSomeLayer[TestEnvironment & Scope](LawMachine.redirected)
 end CliRouteLawSpec

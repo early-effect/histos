@@ -14,6 +14,7 @@ import histos.workspace.Workspace
 import histos.{
   HistosBuild,
   LawMachine,
+  LawPlugins,
   Module,
   Platform,
   Platforms,
@@ -167,7 +168,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           .updateAndGet(_ + 1)
           .flatMap:
             case 1 => entered.succeed(()) *> ZIO.never.onInterrupt(interrupted.succeed(()))
-            case _ => ZIO.succeed(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph)))
+            case _ => ZIO.succeed(LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph)))
       def loadLocked(repo: Path, apiJar: Path, lock: DependencyLock): ZIO[Scope, LoadError, LoadedBuild] =
         ZIO.dieMessage("the law never loads a locked build")
       def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
@@ -206,16 +207,15 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
       _       <- ZIO.attemptBlocking(Files.write(api, Array.emptyByteArray)).orDie
       running <- Daemon.open(
         repo,
-        graph,
-        HistosBuild.fixed(graph),
+        LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph)),
         LawMachine.fixtureJdk,
         version,
         api,
         Nil,
         ZIO.dieMessage("the law never reports the build"),
-        Calls.quiet,
         machine,
         relaunch,
+        None,
       )
     yield running
 

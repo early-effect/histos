@@ -1,11 +1,10 @@
 package histos.bsp
 
-import histos.LawDir
+import histos.{LawDir, LawMachine}
 import histos.cache.ContentStore
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
 import histos.publish.LauncherPin
 import histos.resolve.{ResolutionService, Resolve}
-import histos.server.Calls
 import histos.toolchain.{RuntimeIdentity, Runtimes}
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileMemo, Compilers}
@@ -95,7 +94,7 @@ object BspOpenLawSpec extends ZIOSpecDefault:
   )
 
   private def open(repo: Path): IO[histos.resolve.ResolveError, Bsp.Session] =
-    Runtimes.read(Calls.idleMachine, None).flatMap(runtimes => Bsp.open(repo, ProjectGraph.trusted(Nil), jdk, runtimes))
+    Runtimes.read(LawMachine.idle, None).flatMap(runtimes => Bsp.open(repo, ProjectGraph.trusted(Nil), jdk, runtimes))
 
   private def ask(session: Bsp.Session, payload: String): ZIO[
     Resolve & ContentStore & Compilers & CompileMemo & ResolutionService,

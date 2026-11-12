@@ -20,7 +20,8 @@ import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO}
 /** One MCP process. It sends [[histos.server.Call]] while the server matches, and keeps a single graph otherwise.
   */
 object Session:
-  enum SessionError:
+  /** A call that reached no result. */
+  enum TransportError:
     case DifferentVersion
     case Remote(error: ServerError)
     case DidNotFinish
@@ -29,12 +30,12 @@ object Session:
       case DifferentVersion => ServerError.DifferentVersion.message
       case Remote(error)    => error.message
       case DidNotFinish     => "the call did not finish"
-  end SessionError
+  end TransportError
 
-  /** A tool failed. A fault is a request that never became a report. Transport never started the call. */
+  /** A tool failed. A fault is a request that never became a report. Transport is a call that reached no result. */
   enum CallProblem:
     case Fault(fault: BuildFault)
-    case Transport(error: SessionError)
+    case Transport(error: TransportError)
 
   final case class Held(
       fingerprint: Fingerprint,
@@ -61,7 +62,7 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     Cli
       .versionText(repo)
       .foldZIO(
@@ -94,7 +95,7 @@ object Session:
                             case Some(fresh) =>
                               ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
                             case None =>
-                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(SessionError.Remote(error)))
+                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(TransportError.Remote(error)))
                           }
                       }
                   case Decision.Open(socket) =>
@@ -131,7 +132,7 @@ object Session:
       call: Call,
       shown: String,
       socket: Path,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     Build
       .attached(socket)
       .perform(call)
@@ -144,13 +145,13 @@ object Session:
         {
           case ServerError.Unreachable(_) =>
             locally(repo, apiJar, machine, desk, call, shown)
-          case other => ZIO.fail(SessionError.Remote(other))
+          case other => ZIO.fail(TransportError.Remote(other))
         },
         beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
       )
 
   /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */
-  def deliver[R](call: ZIO[R, SessionError, CallResult]): ZIO[R, CallProblem, Report] =
+  def deliver[R](call: ZIO[R, TransportError, CallResult]): ZIO[R, CallProblem, Report] =
     call
       .mapError(CallProblem.Transport(_))
       .flatMap:
@@ -184,11 +185,11 @@ object Session:
             case None         => Right(Call.Run(id, None))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
-  def spoken(repo: Path, feeds: List[Feed]): Either[SessionError, CallResult] =
+  def spoken(repo: Path, feeds: List[Feed]): Either[TransportError, CallResult] =
     val events          = Chunk.fromIterable(feeds.collect { case Feed.Event(event) => event })
     val (out, errLines) = Show.transcript(repo, events)
     feeds.reverse.collectFirst { case Feed.Done(result) => result } match
-      case None                              => Left(SessionError.DidNotFinish)
+      case None                              => Left(TransportError.DidNotFinish)
       case Some(fault @ CallResult.Fault(_)) => Right(fault)
       case Some(CallResult.Reported(report)) =>
         Right(
@@ -207,7 +208,7 @@ object Session:
       desk: Desk,
       call: Call,
       shown: String,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     val build =
       Build.here[Env](
         repo,
@@ -223,7 +224,7 @@ object Session:
           case Beat.Finished(_)  => ZIO.unit
         },
       )
-    build.perform(call).runCollect.mapError(SessionError.Remote(_)).flatMap { beats =>
+    build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
       ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList))
     }
 

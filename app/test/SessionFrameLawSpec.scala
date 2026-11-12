@@ -1,13 +1,13 @@
 package histos.client
 
-import histos.LawDir
+import histos.{LawDir, LawMachine, LawPlugins}
 import histos.build.BuildEvent
 import histos.cache.ContentStore
 import histos.load.{LoadedBuild, Loader}
 import histos.publish.{IvyRoot, LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Report}
 import histos.resolve.Resolve
-import histos.server.{Call, Calls, Feed, Fingerprint, Record, ServerError}
+import histos.server.{Call, Feed, Fingerprint, Record, ServerError}
 import histos.{HistosBuild, ProjectGraph}
 import slayer.stubbed
 
@@ -41,7 +41,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           root   <- ZIO.service[Path]
           repo   <- LawDir.child(root, "absent")
           desk   <- Session.desk
-          result <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version)
+          result <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Version)
         yield assertTrue(
           result == CallResult.Fault(BuildFault.Launcher(LauncherError.Absent(repo.resolve(LauncherPin.file))))
         )
@@ -55,7 +55,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           desk   <- Session.desk
           _      <- hold(repo, desk, scope)
           before <- desk.held.get
-          result <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Compile(Nil))
+          result <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Compile(Nil))
           after  <- desk.held.get
           _      <- scope.close(Exit.unit)
         yield assertTrue(
@@ -79,12 +79,12 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock")))
           desk        <- Session.desk
           _           <- hold(repo, desk, scope)
-          result      <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version).either
+          result      <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Version).either
           held        <- desk.held.get
           gone        <- closed.get
         yield assertTrue(
           result == Left(
-            Session.SessionError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
+            Session.TransportError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
           ),
           held.isEmpty,
           gone,
@@ -99,7 +99,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
     val empty = ProjectGraph.trusted(Nil)
     ready(Fingerprint.read(repo)).flatMap { fingerprint =>
       desk.held.set(
-        Some(Session.Held(fingerprint, LoadedBuild(empty, Calls.quiet, HistosBuild.fixed(empty)), scope))
+        Some(Session.Held(fingerprint, LoadedBuild(empty, LawPlugins.none, HistosBuild.fixed(empty)), scope))
       )
     }
 

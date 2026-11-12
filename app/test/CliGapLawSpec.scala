@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.central.ReleaseFeed
+import histos.resolve.Resolve
 import histos.workspace.Workspace
 import histos.zinc.{CompileError, GraphCompileError}
 import histos.{LawGit, LawMachine, Platform, ProjectName, ScalaVersion}
@@ -47,7 +48,7 @@ object CliGapLawSpec extends ZIOSpecDefault:
         _    <- LawGit.commit(dir, "main", "histos.scala")
         done <- Cli.launch(List("affected", "--base", "HEAD"), dir)
       yield assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[]\n"),
-  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed])
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)
 
   private def stand(prefix: String) =
     for
