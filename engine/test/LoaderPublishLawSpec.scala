@@ -5,21 +5,10 @@ import histos.central.Publisher
 import histos.jdk.{Machine, Sha256, Sha256Digest}
 import histos.plugin.ApiDigest
 import histos.publish.{LawGit, LocalPublish, PublishWrite}
-import histos.resolve.{
-  Classpath,
-  ClasspathScope,
-  DependencyLock,
-  LockedCell,
-  Resolve,
-  ResolveCell,
-  ResolveError,
-  ResolvedArtifact,
-  ToolRequest,
-}
+import histos.resolve.{Classpath, DependencyLock, Resolve, ResolveCell, ResolveError, ResolvedArtifact, ToolRequest}
 import histos.workspace.{IoFault, Workspace}
 import histos.zinc.GraphCompile
-import histos.{Dep, Platform, ProjectName}
-import histos.scala
+import histos.{CompilerClosure, Dep, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -32,26 +21,25 @@ import zio.test.*
   * ship pin is a stub, not Coursier.
   */
 object LoaderPublishLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-
   def spec = suite("a published plugin module is the next build's jar")(
     test("the consumer compiles against the published jar after the class directory is deleted"):
       ZIO.scoped {
         Workspace.work("histos-plugin-publish").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              val maven   = repo.resolve("maven")
-              val store   = repo.resolve("store")
-              val classes = GraphCompile.classesDir(repo, ProjectName("plugins"), scala3)
-              val probe   = repo.resolve("probe").resolve("MarkSpec.scala")
-              val probed  = repo.resolve("probe-out")
+              val maven  = repo.resolve("maven")
+              val store  = repo.resolve("store")
+              val probe  = repo.resolve("probe").resolve("MarkSpec.scala")
+              val probed = repo.resolve("probe-out")
               for
-                lock   <- ZIO.service[DependencyLock]
+                closure <- ZIO.service[CompilerClosure]
+                scala3  = closure.scalaVersion
+                classes = GraphCompile.classesDir(repo, ProjectName("plugins"), scala3)
                 api    <- LoaderApiJar.of(classOf[histos.HistosBuild], repo.resolve("histos-api.jar"))
                 digest <- digestOf(api)
-                _      <- Workspace.writeString(repo.resolve("histos.scala"), producer).mapError(LoadError.Io(_))
-                _      <- Workspace.writeString(repo.resolve("histos.wiring.scala"), wiring).mapError(LoadError.Io(_))
-                _      <- Workspace.writeString(
+                _ <- Workspace.writeString(repo.resolve("histos.scala"), producer(scala3)).mapError(LoadError.Io(_))
+                _ <- Workspace.writeString(repo.resolve("histos.wiring.scala"), wiring).mapError(LoadError.Io(_))
+                _ <- Workspace.writeString(
                   repo
                     .resolve("plugins")
                     .resolve("src")
@@ -81,7 +69,7 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
                 unpublished <- ZIO.attemptBlocking(Files.exists(maven)).orDie
                 _           <- Workspace.writeString(
                   repo.resolve("dependencies.lock"),
-                  DependencyLock.render(pinned(lock)),
+                  DependencyLock.render(closure.pinning(ProjectName("plugins"), ProjectName("app"))),
                 )
                 _      <- LawGit.ready(repo)
                 output <- LocalPublish
@@ -97,8 +85,8 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
                 gone     <- ZIO.attemptBlocking(Files.exists(classes)).orDie
                 stamp    <- zipText(jar, ApiDigest.resource)
                 consumer <- Workspace.work("histos-plugin-consume")
-                _        <- Workspace.writeString(consumer.resolve("histos.scala"), consumerBuild(line.revision))
-                _        <- Workspace.writeString(consumer.resolve("histos.wiring.scala"), wiring)
+                _ <- Workspace.writeString(consumer.resolve("histos.scala"), consumerBuild(scala3, line.revision))
+                _ <- Workspace.writeString(consumer.resolve("histos.wiring.scala"), wiring)
                 consumed <- ZIO
                   .serviceWithZIO[Loader](_.load(consumer, api))
                   .provideSomeLayer[Scope](ZLayer.succeed(JarResolve(jar)) >>> Loader.live)
@@ -119,20 +107,20 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
           }
         }
       }
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
-  private val producer =
-    """import histos.*
-      |
-      |object build extends HistosBuild:
-      |  def graph =
-      |    val plugins = module("plugins", Jvm)(scala"3.10.0")
-      |    val app = module("app", Jvm)(scala"3.10.0").dependsOn(plugins)
-      |    Projects
-      |      .organization(organization"example.com")
-      |      .plugins(PluginSources.module(plugins))
-      |      .locked(ships(Ship("demo").next(1, 2, 3)(plugins, app)), plugins, app)
-      |""".stripMargin
+  private def producer(scala3: ScalaVersion): String =
+    s"""import histos.*
+       |
+       |object build extends HistosBuild:
+       |  def graph =
+       |    val plugins = module("plugins", Jvm)(scala"${scala3.value}")
+       |    val app = module("app", Jvm)(scala"${scala3.value}").dependsOn(plugins)
+       |    Projects
+       |      .organization(organization"example.com")
+       |      .plugins(PluginSources.module(plugins))
+       |      .locked(ships(Ship("demo").next(1, 2, 3)(plugins, app)), plugins, app)
+       |""".stripMargin
 
   private val mark =
     """package law
@@ -164,25 +152,14 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
       |  val seen: String = Mark.token
       |""".stripMargin
 
-  private def consumerBuild(revision: String): String =
+  private def consumerBuild(scala3: ScalaVersion, revision: String): String =
     s"""import histos.*
        |
        |object build extends HistosBuild:
        |  def graph =
-       |    val app = module("app", Jvm)(scala"3.10.0")
+       |    val app = module("app", Jvm)(scala"${scala3.value}")
        |    Projects.plugins(PluginSources.ship(dep"example.com::plugins:$revision"))(app)
        |""".stripMargin
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    val added = List(ProjectName("plugins"), ProjectName("app")).map: name =>
-      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    val kept = lock.cells.filterNot: cell =>
-      added.exists: next =>
-        next.module == cell.module &&
-          next.scalaVersion == cell.scalaVersion &&
-          next.platform == cell.platform &&
-          next.scope == cell.scope
-    lock.copy(cells = added ++ kept)
 
   private def digestOf(api: Path) =
     ZIO
@@ -216,23 +193,6 @@ object LoaderPublishLawSpec extends ZIOSpecDefault:
               finally stream.close()
         finally zip.close()
       .orDie
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 
   /** The consumer's ship pin. `resolvePlugin` returns the published jar and nothing else. */
   private final class JarResolve(jar: Path) extends Resolve:

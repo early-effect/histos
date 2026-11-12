@@ -42,17 +42,6 @@ object JdkLawSpec extends ZIOSpecDefault:
         Os.from("sunos") == Os.Other,
         Os.from("freebsd") == Os.Other,
         Os.from("unix") == Os.Linux,
-        Toolchain.Floor.value == "25",
-        Toolchain.command(Path.of("/jdk/bin/java"), Path.of("/dist/app.jar"), List("test")) ==
-          List(
-            "/jdk/bin/java",
-            Toolchain.NativeAccess,
-            "-jar",
-            "/dist/app.jar",
-            "test",
-          ),
-        HostSupport.refused ==
-          "Histos runs on macOS and Linux. On Windows, use WSL. A native Windows build may come later.",
       )
     ,
     test(

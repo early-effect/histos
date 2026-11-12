@@ -2,10 +2,11 @@ package histos.zinc
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
+import histos.resolve.{DependencyLock, Resolve}
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.{
+  CompilerClosure,
   Module,
   Platform,
   Platforms,
@@ -26,13 +27,13 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** Asking for the downstream cell compiles its upstream first. An unknown cell never starts. */
 object GraphCellLawSpec extends ZIOSpecDefault:
-  private val scala3   = ScalaVersion("3.10.0")
   private val coreName = ProjectName.trusted("cellcore")
   private val appName  = ProjectName.trusted("cellapp")
 
   def spec = suite("graph cell laws")(
     test("the downstream cell sees the upstream classes compiled in the same feed"):
-      ZIO.serviceWithZIO[DependencyLock]: lock =>
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
         Workspace
           .work("histos-graph-cell")
           .flatMap: dir =>
@@ -48,9 +49,12 @@ object GraphCellLawSpec extends ZIOSpecDefault:
               jdk   <- found match
                 case Left(error)  => ZIO.dieMessage(error.message)
                 case Right(value) => ZIO.succeed(value)
-              _       <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
+              _ <- Workspace.writeString(
+                dir.resolve("dependencies.lock"),
+                DependencyLock.render(closure.pinning(coreName, appName)),
+              )
               unknown <- GraphCompile
-                .cellFeed(dir, graph, List(missing -> scala3), Platform.Jvm, jdk, machine.native)
+                .cellFeed(dir, graph(scala3), List(missing -> scala3), Platform.Jvm, jdk, machine.native)
                 .runCollect
                 .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
                 .either
@@ -60,7 +64,7 @@ object GraphCellLawSpec extends ZIOSpecDefault:
               _     <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
               feeds <- GraphCompile
                 .strict(
-                  GraphCompile.cellFeed(dir, graph, List(appName -> scala3), Platform.Jvm, jdk, machine.native)
+                  GraphCompile.cellFeed(dir, graph(scala3), List(appName -> scala3), Platform.Jvm, jdk, machine.native)
                 )
                 .runCollect
                 .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
@@ -86,9 +90,9 @@ object GraphCellLawSpec extends ZIOSpecDefault:
                 coreThere,
                 appThere,
               )
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
-  private def graph: ProjectGraph =
+  private def graph(scala3: ScalaVersion): ProjectGraph =
     val core = Module(
       coreName,
       Platforms(Platform.Jvm, Nil),
@@ -113,28 +117,6 @@ object GraphCellLawSpec extends ZIOSpecDefault:
       Nil,
       resolution = Resolution.Lock,
     )
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    val cells = List(coreName, appName).map: name =>
-      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    lock.copy(cells = cells ++ lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 
   private def parentOf(path: Path): Path =
     Option(path.getParent).getOrElse(path)

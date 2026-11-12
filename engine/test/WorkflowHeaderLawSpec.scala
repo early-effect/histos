@@ -50,8 +50,9 @@ object WorkflowHeaderLawSpec extends ZIOSpecDefault:
         case Left(error)  => assertTrue(error.message == "")
         case Right(graph) =>
           Workflow.render(graph) match
-            case Left(error) => assertTrue(error.message == "")
-            case Right(body) =>
+            case Left(error: CiError)    => assertTrue(error.message == "")
+            case Left(error: BuildError) => assertTrue(error.message == "")
+            case Right(body)             =>
               body.split("jobs:", 2).toList match
                 case header :: jobs :: Nil =>
                   assertTrue(

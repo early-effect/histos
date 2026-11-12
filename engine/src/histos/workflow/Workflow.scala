@@ -11,6 +11,7 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  BuildError,
   ClientBuilds,
   CoverageFloors,
   CoverageJob,
@@ -140,14 +141,17 @@ object Workflow:
           case first :: rest => Right(TestTarget.Named(first, rest))
           case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph)(using CiBranch): Either[CiError, String] =
+  def render(graph: ProjectGraph)(using CiBranch): Either[CiError | BuildError, String] =
     prepared(graph).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
     * is Deployment, `histos-snapshots.yml` when a ship names an asset, then one file per dispatch, cron, or trigger
     * that must not wake `ci.yml`.
     */
-  def renderAll(graph: ProjectGraph, sona: Publishing)(using CiBranch): Either[CiError, List[RenderedWorkflow]] =
+  def renderAll(
+      graph: ProjectGraph,
+      sona: Publishing,
+  )(using CiBranch): Either[CiError | BuildError, List[RenderedWorkflow]] =
     for
       (body, files) <- prepared(graph)
       release       <- releaseWorkflow(graph, sona)
@@ -160,7 +164,9 @@ object Workflow:
       RenderedWorkflow(fileName, body) :: release.toList ++ promote ++ snapshots.toList ++ SupplyYaml.files(graph) ++
         files
 
-  private def prepared(graph: ProjectGraph)(using branch: CiBranch): Either[CiError, (String, List[RenderedWorkflow])] =
+  private def prepared(
+      graph: ProjectGraph
+  )(using branch: CiBranch): Either[CiError | BuildError, (String, List[RenderedWorkflow])] =
     for
       _       <- limits(graph)
       _       <- llvmPinned(graph)
@@ -210,7 +216,7 @@ object Workflow:
       .mapError(_ => CiError.Io(IoFailure(path, IoFault.Stat)))
       .flatMap(found => if found then ZIO.unit else ZIO.fail(CiError.Missing(path)))
 
-  def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
+  def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError | BuildError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
@@ -221,7 +227,7 @@ object Workflow:
       _ <- PinScan.check(repo, graph)
     yield path(repo)
 
-  def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
+  def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError | BuildError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))

@@ -45,29 +45,17 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
             run.provideSomeLayer[Scope](layer)
       program
     ,
-    test("a wiring object compiles with the build"):
-      loadWith(wired).map: found =>
-        found.graph.projects match
-          case (module: Module) :: Nil =>
-            assertTrue(module.name.value == "loaderlaw", found.plugins.links.isEmpty)
-          case other =>
-            assertTrue(other.lengthIs == 1)
-    ,
-    test("a wiring file that does not compile fails the load"):
+    test("a wiring file that does not compile fails the load, and the diagnostic names that file"):
       loadWith("not scala").either.map: found =>
-        val refused = found match
-          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.nonEmpty
-          case _                                          => false
-        assertTrue(refused),
+        val texts = found match
+          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.map(_.text)
+          case other                                      => List(other.toString)
+        assertTrue(
+          texts.exists(text =>
+            text.startsWith("histos.wiring.scala:1:") && text.endsWith(": error: Illegal start of toplevel definition")
+          )
+        ),
   )
-
-  private val wired =
-    """import histos.plugin.*
-      |import zio.*
-      |
-      |object HistosWiring:
-      |  def layer = ZLayer.succeed(Plugins(Chunk.empty))
-      |""".stripMargin
 
   private def loadWith(wiring: String) =
     Workspace

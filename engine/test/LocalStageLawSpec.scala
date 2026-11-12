@@ -5,15 +5,15 @@ import histos.central.Publisher
 import histos.jdk.Machine
 import histos.plugin.ApiDigest
 import histos.PluginSources
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
+import histos.resolve.{DependencyLock, Resolve}
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.version.ShipName
 import histos.{
+  CompilerClosure,
   GeneratedAsset,
   Jvm,
   MainClass,
-  Platform,
   ProjectName,
   Projects,
   ResourceName,
@@ -22,7 +22,6 @@ import histos.{
   organization,
   ships,
 }
-import histos.scala
 
 import java.nio.file.{Files, Path}
 
@@ -33,9 +32,7 @@ import zio.test.*
   * one, read offline.
   */
 object LocalStageLawSpec extends ZIOSpecDefault:
-  private val scala3  = scala"3.10.0"
   private val group   = organization"example.com"
-  private val app     = module("stage", Jvm)(scala3)
   private val hostApi = ApiDigest.trusted("ab" * 32)
 
   def spec = suite("local stage")(
@@ -46,7 +43,8 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-stage").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val app    = module("stage", Jvm)(closure.scalaVersion)
                 val source = repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
                 val maven  = repo.resolve("maven")
                 val store  = repo.resolve("store")
@@ -57,7 +55,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   _     <- Workspace.writeString(source, "object Hello:\n  def ready: Int = 1\n")
                   _     <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("stage"))),
+                    DependencyLock.render(closure.pinning(ProjectName("stage"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
@@ -100,9 +98,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-edge").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val base  = module("base", Jvm)(scala3)
-                val edge  = module("edge", Jvm)(scala3).dependsOn(base)
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val base  = module("base", Jvm)(closure.scalaVersion)
+                val edge  = module("edge", Jvm)(closure.scalaVersion).dependsOn(base)
                 val maven = repo.resolve("maven")
                 val store = repo.resolve("store")
                 val built = Projects
@@ -121,7 +119,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   )
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("base"), ProjectName("edge"))),
+                    DependencyLock.render(closure.pinning(ProjectName("base"), ProjectName("edge"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
@@ -168,8 +166,8 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-assembly").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val pack  = module("pack", Jvm)(scala3).assembly(MainClass("Hello"))
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val pack  = module("pack", Jvm)(closure.scalaVersion).assembly(MainClass("Hello"))
                 val maven = repo.resolve("maven")
                 val store = repo.resolve("store")
                 val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(pack)), pack)
@@ -182,7 +180,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   )
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("pack"))),
+                    DependencyLock.render(closure.pinning(ProjectName("pack"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
@@ -216,8 +214,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-resources").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val noted = module("noted", Jvm)(scala3).resources(
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val scala3 = closure.scalaVersion
+                val noted  = module("noted", Jvm)(scala3).resources(
                   GeneratedAsset.Text(ResourceName("note.txt"), "generated")
                 )
                 val maven = repo.resolve("maven")
@@ -240,7 +239,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   )
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("noted"))),
+                    DependencyLock.render(closure.pinning(ProjectName("noted"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
@@ -278,8 +277,8 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-plugin").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val plug  = module("plug", Jvm)(scala3)
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val plug  = module("plug", Jvm)(closure.scalaVersion)
                 val maven = repo.resolve("maven")
                 val store = repo.resolve("store")
                 val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(plug)), plug)
@@ -298,7 +297,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   _ <- Workspace.writeString(entry, "plug\n")
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("plug"))),
+                    DependencyLock.render(closure.pinning(ProjectName("plug"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
@@ -322,9 +321,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-local-stamp").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val plugins = module("plugins", Jvm)(scala3)
-                val sibling = module("sibling", Jvm)(scala3).dependsOn(plugins)
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val plugins = module("plugins", Jvm)(closure.scalaVersion)
+                val sibling = module("sibling", Jvm)(closure.scalaVersion).dependsOn(plugins)
                 val maven   = repo.resolve("maven")
                 val store   = repo.resolve("store")
                 val built   = Projects
@@ -345,7 +344,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   )
                   _ <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
-                    DependencyLock.render(pinned(lock, ProjectName("plugins"), ProjectName("sibling"))),
+                    DependencyLock.render(closure.pinning(ProjectName("plugins"), ProjectName("sibling"))),
                   )
                   found <- LocalPublish
                     .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, stamp)
@@ -372,7 +371,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
           }
         }
       },
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
   private def coordinate(sha: histos.version.CommitSha): String =
     s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
@@ -441,26 +440,4 @@ object LocalStageLawSpec extends ZIOSpecDefault:
     found.modules.find(_.module == name) match
       case Some(line) => ZIO.succeed(line)
       case None       => ZIO.dieMessage(s"${name.value} was not published")
-
-  private def pinned(lock: DependencyLock, names: ProjectName*): DependencyLock =
-    val added = names.toList.map: name =>
-      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    lock.copy(cells = added ++ lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 end LocalStageLawSpec

@@ -32,8 +32,10 @@ Each is one layer of the stack, in this order.
 
 Each bug gets a law that fails on today's code, then the fix.
 
-- [ ] B1 `Cond.Not` renders `!github.event_name == 'push'`. GitHub reads that as `(!github.event_name) == 'push'`, which is always false, so a job that negates an event, input, or branch never runs. `Not` renders `!(…)` always. Owner: engine A-L (`JobCondLawSpec`), and api checks `JobCheckLawSpec:108`.
-- [ ] B2 `JobYaml.lift` ends in `case other => CiError.UnpinnedWorkflowRun(other.message)`, so a `BadName` or a `DuplicatePlugin` reports as an unpinned workflow run. `CiError` gets an honest case for a non-CI build failure. Owner: engine A-L, and engine M-Z points `WorkflowLawSpec:293` at it.
+- [x] B1 `Cond.Not` renders `!github.event_name == 'push'`. GitHub reads that as `(!github.event_name) == 'push'`, which is always false, so a job that negates an event, input, or branch never runs. `Not` renders `!(…)` always. Owner: engine A-L (`JobCondLawSpec`), and api checks `JobCheckLawSpec:108`.
+  - Red: `JobCondLawSpec` rendered `if: "!github.event_name == 'push'"`. Green: `if: "!(github.event_name == 'push')"`, 3 passed. This repository's build renders no `Not`, so its workflows did not move, and `./histos workflow --check` is clean.
+- [x] B2 `JobYaml.lift` ends in `case other => CiError.UnpinnedWorkflowRun(other.message)`, so a `BadName` or a `DuplicatePlugin` reports as an unpinned workflow run. `CiError` gets an honest case for a non-CI build failure. Owner: engine A-L, and engine M-Z points `WorkflowLawSpec:293` at it.
+  - The loader adds the wiring's plugins after `Projects.build` checked its jobs, so a reserved or repeated wiring job first fails in `JobYaml.render`. `lift` now takes a `CiFault`, and every other arrange fault stays the `BuildError` it is (`Either[CiError | BuildError, _]` through `Workflow`). `Calls.workflowWork` reports it as `LoadError.BrokenGraph`, so no new `CiError` case was needed. Red: `JobYamlLawSpec` got `UnpinnedWorkflowRun("job test is reserved")` and `UnpinnedWorkflowRun("job nightly is declared twice")`. Green: `PluginGraph(ReservedJob(test))` and `PluginGraph(DuplicateJob(nightly))`, 11 passed.
 - [ ] B3 `Decisions.scala:133` names a cross-version split's cells with the coordinate (`split.toList.map(CellName.trusted)` over the groupBy keys), and calls `split.head`. The cells are the rows' `cell`. Owner: engine M-Z (`SupplyDecisionLawSpec:135`).
 - [ ] B4 `VersionOrder` collects every digit run, so `1.2.3-RC1` sorts above `1.2.3`, and `NodeToolchain.highest` prefers `v25.0.0-rc.1` over `v25.0.0`. A pre-release sorts below its release. Owner: engine M-Z (`ToolchainLawSpec:13`).
 - [x] B5 `DeploymentId.from` fails a mistyped id with `PortalError.Unnamed`, the portal-response error, so the operator reads "the portal upload did not name a deployment". It gets its own error case. Owner: central, and engine M-Z updates `ReleaseRunLawSpec:168`.
@@ -46,6 +48,10 @@ Each bug gets a law that fails on today's code, then the fix.
 - [x] B11 `PortalServerLawSpec` runs a real heddle server on TestClock, and the suite can hang forever (PR #165 CI hit its 30-minute timeout). heddle halts a server on the Clock it was installed under (`ServerPlatform.scala:36`). The halt polls a busy connection with `Schedule.spaced(10.millis)` up to `gracefulShutdownTimeout` (`LiveConnections.scala:62`). A connection clears `busy` only after `writeResponse` returns (`Http1.scala:56-75`), so the client can read the last response and close the scope first. The uninterruptible finalizer then sleeps on a TestClock nobody advances. heddle documents that contract (`ServerHaltSpec`), so the fault is the law's. Owner: central.
   - Proof: an idle machine ran `nonFlaky(200)` clean. Under 36 CPU burners on 12 cores it hung at iteration 81 with the CI warnings, and the fiber dump showed the halt in `LiveConnections.waitUntilIdle`. A miniature that holds the server's write open after the client has the whole response stayed open on TestClock after the connection went idle until `TestClock.adjust(10.millis)`, and returned on the live clock. With `TestAspect.withLiveClock` on the suite, `nonFlaky(200)` and `nonFlaky(1000)` ran clean under the same load.
 - [x] B12 `ShipLink` checked the catalog rules with positions, then `Catalog.from` checked them again with none, and `asBuild` turned that second refusal into a made-up error: `SourcePos("<catalog>", 1, 1)`, a `DuplicateShip` with one position twice, or a `BadShipName` for a duplicate. `Catalog.from` takes each row with the place it was written and is the one check, so every refusal carries a real position and the fallback cannot be written. Owner: api (`CatalogLawSpec`).
+- [x] B13 A wiring or plugin-module compile failure is the bare compiler message (`Not found: law`), with no file or line, and `compileSources` claimed the message kept its path. Each placed diagnostic is now `file:line:column: error: message` through `Lines.located`, with the wiring's label. Owner: engine A-L (`LoaderProjectLawSpec`, `LoaderPluginLawSpec`).
+  - Red: `Not found: law`, `Illegal start of toplevel definition`, and `Found: ("no" : String) Required: Int`, unplaced. Green: `histos.wiring.scala:4:…: error: Not found: law`, `histos.wiring.scala:1:…: error: Illegal start of toplevel definition`, and `…/law/Mark.scala:4:…`, 10 passed.
+- [x] B14 `CompileMemo` stamped the lock by modified time and size, so a rewrite of the same size in the same tick served the old lock. `CompileMemoLawSpec` failed that way in a full engine run. The stamp is now the sha256 of the bytes it parses. Owner: engine A-L (`CompileMemoLawSpec`).
+  - Red: with the modified time put back, the reread lock was the first one. Green: the second lock, with a new stamp, 3 passed. The source digest memo keys on modified time and size the same way. That is D7.
 
 ## Decisions for Russ
 
@@ -64,14 +70,17 @@ Each bug gets a law that fails on today's code, then the fix.
 
 A law that touches the machine because the product does needs a seam in the product.
 
-- [ ] S1 Compiler closure. About 30 laws compile with Zinc through `Resolve.offline(CacheDefaults.location)` and this checkout's `dependencies.lock`, found by walking up from the working directory, with the Scala version written as a literal. A compile-cache hit fetches nothing, so on a cold Coursier cache these pass or fail with run order (row 48). The fix: one shared fixture in `engine/test` reads the lock's compiler tool rows offline, takes the Scala version from the lock, and fails with a named precondition ("run `./histos resolve`") when a jar is missing. `./histos resolve` is the documented step, and the setup action runs it in CI. Owner: engine A-L. engine M-Z and app move their copies onto the same shape.
-- [ ] S2 `IvyLocal` writes Coursier's static `LocalRepositories.ivy2Local`, so `FilePublishLawSpec`, `IvyLocalLawSpec`, and `PublishInstallLawSpec` write and wipe the real `~/.ivy2/local`, and two worktrees delete each other's install. `IvyLocal` and `LocalStock.layer` take the root. Owner: engine A-L.
+- [x] S1 Compiler closure. About 30 laws compile with Zinc through `Resolve.offline(CacheDefaults.location)` and this checkout's `dependencies.lock`, found by walking up from the working directory, with the Scala version written as a literal. A compile-cache hit fetches nothing, so on a cold Coursier cache these pass or fail with run order (row 48). The fix: one shared fixture in `engine/test` reads the lock's compiler tool rows offline, takes the Scala version from the lock, and fails with a named precondition ("run `./histos resolve`") when a jar is missing. `./histos resolve` is the documented step, and the setup action runs it in CI. Owner: engine A-L. engine M-Z and app move their copies onto the same shape.
+  - `histos.CompilerClosure` (`engine/test/CompilerClosure.scala`): `CompilerClosure.layer: ZLayer[Any, CompilerClosure.Missing, Resolve & CompilerClosure]` is Coursier's cache read offline, the checkout's lock, and every jar of its compiler rows fetched before the first law. `scalaVersion` is the newest locked Scala 3 compiler, `older` the newest of an older series, `pinning(modules*)` the lock with empty JVM cells for a law's modules, and `held(role)` the same offline check for another tool. `Scenario.tools` and the seven per-spec walks in A-L are gone. Proof: `CompilerClosureLawSpec`, where an empty cache is `Missing.Jar` on a compiler row and its message ends with `./histos resolve`. The seven specs and `ScenarioSpec` pass on it.
+- [x] S2 `IvyLocal` writes Coursier's static `LocalRepositories.ivy2Local`, so `FilePublishLawSpec`, `IvyLocalLawSpec`, and `PublishInstallLawSpec` write and wipe the real `~/.ivy2/local`, and two worktrees delete each other's install. `IvyLocal` and `LocalStock.layer` take the root. Owner: engine A-L.
+  - `IvyLocal.install(root, module)`, and `LocalStock.layer(note): URLayer[IvyRoot, LocalPublish]`. `PublishRun.local` needs `IvyRoot`, and `Calls.publishLocal` provides `IvyRoot.ivy2Local`. Red: `IvyLocalLawSpec` wrote `user.home/.ivy2/local/histos.law`. Green: the three laws install under `IvyRoot.at` their own directory, and `~/.ivy2/local` has no `histos.law`, `histos.filelaw`, or `histos.runlaw` after the run.
 - [ ] S3 `Cli.launch` provides `ReleaseFeed.live` inline. Once a law writes a pin, every launch fetches `repo1.maven.org` and writes `$HOME/.histos/upgrade`. `launch` requires `ReleaseFeed` and `Main` provides the live layer. Owner: app.
 - [ ] S4 `SonaStock`'s snapshot repository is fixed to `SnapshotRepository.central`, so only validation order keeps `SonaPublishLawSpec` off central.sonatype.com. The repository becomes a seam, and the law points it at a loopback that fails any request. Owner: engine M-Z.
 - [ ] S5 The supply surface reads `sys.env` (`GITHUB_REPOSITORY`, `HISTOS_DRY_RUN`) and runs `git` synchronously outside ZIO (`Surface.scala`). The laws test whichever branch the shell selects. Both go through `zio.System` and a git reader. Owner: engine M-Z.
 - [x] S6 `SnapshotId.current` runs the real `git` on JVM and Native with the ambient environment and global config. The HEAD read becomes a dependency the law stubs. Owner: wire.
   - `SnapshotId.current(repo, head)` takes the HEAD reader, `ApiClock` and `ToolchainStamp` pass `SnapshotId.head`, and `ApiClockLawSpec` stubs it with a recording `Ref` (HEAD is read only for an `app` ship). No wire law starts a process; `./histos test wire` is green on JVM and Native.
-- [ ] S7 `FormatterLawSpec` uses `Resolve.retained`, which downloads a missing scalafmt jar from Central, and reads this checkout's `.scalafmt.conf`. The scalafmt jars are read offline like S1, and the law writes its own config. Owner: engine A-L.
+- [x] S7 `FormatterLawSpec` uses `Resolve.retained`, which downloads a missing scalafmt jar from Central, and reads this checkout's `.scalafmt.conf`. The scalafmt jars are read offline like S1, and the law writes its own config. Owner: engine A-L.
+  - The suite runs on `CompilerClosure.layer`. `held(ScalafmtDynamic)` and `held(ScalafmtCore)` read both rows offline, and the configuration's version is the `scalafmt-core` root the lock pins. Proof: `FormatterLawSpec`, 6 passed.
 - [ ] S8 Laws read `TestClock.instant` and discard it (`_ <- Clock.instant`), which only starts the "not advancing the test clock" warning. Delete each line: `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec` (and its helpers), `ScaffoldLawSpec`, `SignerLawSpec`. `TaskLawSpec:62` sleeps an hour on an unadjusted clock where `ZIO.never` is the intent. Owner: engine M-Z.
 
 ## api
@@ -174,40 +183,41 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## engine A-L
 
-- [ ] E1 `ApiJarLawSpec:19` DELETE. `ApiJar.locate` has no caller. Delete `ApiJar`.
-- [ ] E2 `ArchiveLawSpec:13` DELETE. `RuntimeCache.prepare` has no caller. Delete it.
-- [ ] E3 `AssetLawSpec:45` WEAK. `isRight` and `isLeft` only. Assert `bases(Map.empty) == Right(Bases(...))`, each override, and the `Left`.
-- [ ] E4 `AssetsLawSpec:12` MERGE. The same refusals as `AssetLawSpec:24`. One `check` over generated parts plus the loopback cases.
-- [ ] E5 `AssetSyncLawSpec:58` WEAK. Matches message text. Assert `Left(AssetError.Collides(...))`.
-- [ ] E6 `CacheLawSpec:117, :139` DELETE. `StoreScope` has no caller, and `:139` reads `published` before the commit can run. Delete `StoreScope`.
-- [ ] E7 `CacheLawSpec:157` DELETE. `histos.cache.Scratch` has no caller. Delete it.
-- [ ] E8 `ChannelLawSpec:8` DELETE. `ChannelRefresh` has no caller, and the shim has its own TTL in shell. Delete it.
-- [ ] E9 `CiBranchLawSpec:13` HOST. Reads this checkout, can run `git remote set-head` and `git ls-remote`. Build a temp repo with a local bare `origin`.
-- [ ] E10 `ClangLawSpec:15` HOST. Needs clang on the host PATH. Prove `resolve` on the scripted `pair` directory only.
-- [ ] E11 `ClassShapeLawSpec:14` HOST. Copies an earlier build's `.histos/classes/api/3.10.0/...`. Emit the class with ASM.
-- [ ] E12 `CleanLawSpec:32` WEAK. Plants files only under two roots and repeats the root list. Plant under every root and assert each is gone.
-- [ ] E13 `CoverageLawSpec:263` DELETE. A copy of `CompileLawSpec:43`. Merge `CompileLawSpec` into `CompileIdentityLawSpec`.
-- [ ] E14 `DoctorProbeLawSpec:228` MERGE. Repeats `DoctorRenderLawSpec:98, :108`. Delete.
-- [ ] E15 `DoctorProbeLawSpec:351` MERGE. Keep only the `Registry.collect` ordering assert.
-- [ ] E16 `AssembleLawSpec:66`, `CoverageOrderLawSpec:41`, `DocLawSpec:39, :84` HOST. S1.
-- [ ] E17 `FilePublishLawSpec:28` HOST. S2. Also L81-82 cannot fail, and L126-135 copies Coursier's ivy-home lookup. Fold the overwrite case into `IvyLocalLawSpec`.
-- [ ] E18 `FormatterLawSpec` (6 laws) HOST. S7.
-- [ ] E19 `GitHubCredentialLawSpec:84` DELETE. Runs the real `gh auth token`. L28 proves `resolve` with an injected `gh`.
-- [ ] E20 `GraphCellLawSpec:34`, `GraphTastyLawSpec:36` HOST. S1.
-- [ ] E21 `GrpcCacheLawSpec:34`, `GrpcChannelLawSpec:27` FLAKY. Bind port 0, close, and hope, with no deadline. One loopback gRPC server for the law that answers `UNAVAILABLE` and `NOT_FOUND`, and a channel deadline.
-- [ ] E22 `GrpcChannelLawSpec:12` DELETE. Restates the method descriptors. Replace with a loopback `store` then `find` through `GrpcCache`.
-- [ ] E23 `IvyLocalLawSpec:20` HOST. S2. It also hard-codes `user.home/.ivy2/local`, which ignores `ivy.home`.
-- [ ] E24 `JdkLawSpec:37` WEAK. L45-55 restate constants. Keep the Os rows.
-- [ ] E25 `JobCondLawSpec:33` REWRITE. Pins B1. Assert `!(github.event_name == 'push')`, and the pages check gets its own law.
-- [ ] E26 `JobYamlLawSpec:56` REWRITE. Pins B2, and the 14-row table restates the match.
-- [ ] E27 `JobYamlLawSpec:90` WEAK. Restates `uses`. Assert the literal `name@sha # tag` line.
-- [ ] E28 `JvmCompileLawSpec:28` DELETE. Unreachable input: `ScalaJs.compile` refuses it first.
+- [x] E1 `ApiJarLawSpec:19` DELETE. `ApiJar.locate` has no caller. Delete `ApiJar`.
+- [x] E2 `ArchiveLawSpec:13` DELETE. `RuntimeCache.prepare` has no caller. Delete it.
+- [x] E3 `AssetLawSpec:45` WEAK. `isRight` and `isLeft` only. Assert `bases(Map.empty) == Right(Bases(...))`, each override, and the `Left`.
+- [x] E4 `AssetsLawSpec:12` MERGE. The same refusals as `AssetLawSpec:24`. One `check` over generated parts plus the loopback cases.
+- [x] E5 `AssetSyncLawSpec:58` WEAK. Matches message text. Assert `Left(AssetError.Collides(...))`.
+- [x] E6 `CacheLawSpec:117, :139` DELETE. `StoreScope` has no caller, and `:139` reads `published` before the commit can run. Delete `StoreScope`.
+- [x] E7 `CacheLawSpec:157` DELETE. `histos.cache.Scratch` has no caller. Delete it.
+- [x] E8 `ChannelLawSpec:8` DELETE. `ChannelRefresh` has no caller, and the shim has its own TTL in shell. Delete it.
+- [x] E9 `CiBranchLawSpec:13` HOST. Reads this checkout, can run `git remote set-head` and `git ls-remote`. Build a temp repo with a local bare `origin`.
+- [x] E10 `ClangLawSpec:15` HOST. Needs clang on the host PATH. Prove `resolve` on the scripted `pair` directory only.
+- [x] E11 `ClassShapeLawSpec:14` HOST. Copies an earlier build's `.histos/classes/api/3.10.0/...`. Emit the class with ASM.
+- [x] E12 `CleanLawSpec:32` WEAK. Plants files only under two roots and repeats the root list. Plant under every root and assert each is gone.
+- [x] E13 `CoverageLawSpec:263` DELETE. A copy of `CompileLawSpec:43`. Merge `CompileLawSpec` into `CompileIdentityLawSpec`.
+- [x] E14 `DoctorProbeLawSpec:228` MERGE. Repeats `DoctorRenderLawSpec:98, :108`. Delete.
+- [x] E15 `DoctorProbeLawSpec:351` MERGE. Keep only the `Registry.collect` ordering assert.
+- [x] E16 `AssembleLawSpec:66`, `CoverageOrderLawSpec:41`, `DocLawSpec:39, :84` HOST. S1.
+- [x] E17 `FilePublishLawSpec:28` HOST. S2. Also L81-82 cannot fail, and L126-135 copies Coursier's ivy-home lookup. Fold the overwrite case into `IvyLocalLawSpec`.
+- [x] E18 `FormatterLawSpec` (6 laws) HOST. S7.
+- [x] E19 `GitHubCredentialLawSpec:84` DELETE. Runs the real `gh auth token`. L28 proves `resolve` with an injected `gh`.
+- [x] E20 `GraphCellLawSpec:34`, `GraphTastyLawSpec:36` HOST. S1.
+- [x] E21 `GrpcCacheLawSpec:34`, `GrpcChannelLawSpec:27` FLAKY. Bind port 0, close, and hope, with no deadline. One loopback gRPC server for the law that answers `UNAVAILABLE` and `NOT_FOUND`, and a channel deadline.
+  - `GrpcLoopback` serves on 127.0.0.1 for the law's scope, as a store or as one fixed status. The bound is each suite's `TestAspect.timeout` on the live clock. `GrpcChannel` still sets no call deadline: picking one for a large blob write is a product choice for Russ.
+- [x] E22 `GrpcChannelLawSpec:12` DELETE. Restates the method descriptors. Replace with a loopback `store` then `find` through `GrpcCache`.
+- [x] E23 `IvyLocalLawSpec:20` HOST. S2. It also hard-codes `user.home/.ivy2/local`, which ignores `ivy.home`.
+- [x] E24 `JdkLawSpec:37` WEAK. L45-55 restate constants. Keep the Os rows.
+- [x] E25 `JobCondLawSpec:33` REWRITE. Pins B1. Assert `!(github.event_name == 'push')`, and the pages check gets its own law.
+- [x] E26 `JobYamlLawSpec:56` REWRITE. Pins B2, and the 14-row table restates the match.
+- [x] E27 `JobYamlLawSpec:90` WEAK. Restates `uses`. Assert the literal `name@sha # tag` line.
+- [x] E28 `JvmCompileLawSpec:28` DELETE. Unreachable input: `ScalaJs.compile` refuses it first.
 - [ ] E29 `LauncherScriptLawSpec:33` REWRITE. Pins `-ge 21` against the floor of 25. Owner: CI setup item (row 29), which renders the floor from `Toolchain.Floor`.
-- [ ] E30 `LoaderPluginLawSpec:26` WEAK. Any diagnostic passes. Assert the unresolved `law` reference.
-- [ ] E31 `LoaderProjectLawSpec:48` DELETE. Passes when the loader ignores the wiring file.
-- [ ] E32 `LoaderProjectLawSpec:56` WEAK. Assert the diagnostic points at the wiring source.
-- [ ] E33 `LoaderPublishLawSpec:38`, `LocalStageLawSpec` (6 laws) HOST. S1.
-- [ ] E34 `LockLawSpec:22` REWRITE. One example. `check(genLock)` with plugin rows and evictions, `parse(render(lock)) == Right(lock)`.
+- [x] E30 `LoaderPluginLawSpec:26` WEAK. Any diagnostic passes. Assert the unresolved `law` reference.
+- [x] E31 `LoaderProjectLawSpec:48` DELETE. Passes when the loader ignores the wiring file.
+- [x] E32 `LoaderProjectLawSpec:56` WEAK. Assert the diagnostic points at the wiring source. The diagnostic had no source (B13).
+- [x] E33 `LoaderPublishLawSpec:38`, `LocalStageLawSpec` (6 laws) HOST. S1.
+- [x] E34 `LockLawSpec:22` REWRITE. One example. `check(genLock)` with plugin rows and evictions, `parse(render(lock)) == Right(lock)`.
 
 ## engine M-Z
 

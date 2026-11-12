@@ -3,11 +3,12 @@ package histos.assembly
 import histos.cache.ContentStore
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Sha256, Sha256Digest}
 import histos.native.NativeOrigin
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{ResolutionService, Resolve}
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.{
+  CompilerClosure,
   Module,
   Platform,
   Platforms,
@@ -34,9 +35,8 @@ import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 /** The launcher jar is `app`, the classes it embeds from `api`, and the modules `app` depends on.
   */
 object AssembleLawSpec extends ZIOSpecDefault:
-  private val scala3 = ScalaVersion("3.10.0")
-  private val api    = ProjectName.trusted("api")
-  private val app    = ProjectName.trusted("app")
+  private val api = ProjectName.trusted("api")
+  private val app = ProjectName.trusted("app")
 
   def spec = suite("assemble laws")(
     test("a graph without app is refused, and app without api is refused, before a compiler starts"):
@@ -45,30 +45,40 @@ object AssembleLawSpec extends ZIOSpecDefault:
         JdkVersion.trusted("21", JdkMajor.trusted(21)),
         RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)),
       )
-      val missing =
-        Assemble
-          .run(Path.of("missing"), empty, jdk, NativeOrigin.Central, Path.of("out.jar"), _ => ZIO.unit)
-          .either
-      val only =
-        Assemble
-          .run(Path.of("missing"), appOnly, jdk, NativeOrigin.Central, Path.of("out.jar"), _ => ZIO.unit)
-          .either
-      missing
-        .zip(only)
-        .provide(stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[ResolutionService])
-        .map { (gone, bare) =>
-          assertTrue(
-            gone == Left(AssembleError.NoModule("app")),
-            bare == Left(AssembleError.NoModule("api")),
-          )
-        }
+      ZIO.serviceWithZIO[CompilerClosure] { closure =>
+        val missing =
+          Assemble
+            .run(Path.of("missing"), empty, jdk, NativeOrigin.Central, Path.of("out.jar"), _ => ZIO.unit)
+            .either
+        val only =
+          Assemble
+            .run(
+              Path.of("missing"),
+              appOnly(closure.scalaVersion),
+              jdk,
+              NativeOrigin.Central,
+              Path.of("out.jar"),
+              _ => ZIO.unit,
+            )
+            .either
+        missing
+          .zip(only)
+          .provide(stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[ResolutionService])
+          .map { (gone, bare) =>
+            assertTrue(
+              gone == Left(AssembleError.NoModule("app")),
+              bare == Left(AssembleError.NoModule("api")),
+            )
+          }
+      }
     ,
     test("app and api compile into one jar, and that jar contains both class files"):
       ZIO.scoped {
         Workspace.work("histos-assemble").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
-              ZIO.serviceWithZIO[DependencyLock] { lock =>
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val scala3      = closure.scalaVersion
                 val destination = repo.resolve("dist").resolve("histos.jar")
                 val run         =
                   for
@@ -92,7 +102,14 @@ object AssembleLawSpec extends ZIOSpecDefault:
                       )
                       .catchAll(error => ZIO.dieMessage(error.message))
                     assembled <- Assemble
-                      .run(repo, graph(List(ProjectDep(api, None))), jdk, machine.native, destination, _ => ZIO.unit)
+                      .run(
+                        repo,
+                        graph(scala3, List(ProjectDep(api, None))),
+                        jdk,
+                        machine.native,
+                        destination,
+                        _ => ZIO.unit,
+                      )
                       .either
                     packed <- ZIO.attemptBlocking(readJar(destination)).orDie
                   yield assertTrue(
@@ -102,7 +119,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
                     packed.contains(Assemble.ApiEntry),
                   )
                 run.provideSomeLayer[Resolve](
-                  ResolutionService.pinned(pinned(lock)) ++
+                  ResolutionService.pinned(closure.pinning(api, app)) ++
                     ZLayer.succeed(ContentStore.in(repo.resolve("store")))
                 )
               }
@@ -110,14 +127,14 @@ object AssembleLawSpec extends ZIOSpecDefault:
           }
         }
       },
-  ).provideSomeLayerShared[zio.test.TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+  ).provideSomeLayerShared[zio.test.TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
   private def empty: ProjectGraph =
     ProjectGraph.trusted(Nil, Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
-  private def appOnly: ProjectGraph =
+  private def appOnly(scala3: ScalaVersion): ProjectGraph =
     ProjectGraph.trusted(
-      List(appModule(Nil)),
+      List(appModule(scala3, Nil)),
       Splits.aggregate,
       Catalog.empty,
       None,
@@ -125,7 +142,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
       resolution = Resolution.Lock,
     )
 
-  private def appModule(dependsOn: List[ProjectDep]): Module =
+  private def appModule(scala3: ScalaVersion, dependsOn: List[ProjectDep]): Module =
     Module(
       app,
       Platforms(Platform.Jvm, Nil),
@@ -135,7 +152,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
       SourcePos("app.scala", 1, 1),
     )
 
-  private def graph(dependsOn: List[ProjectDep]): ProjectGraph =
+  private def graph(scala3: ScalaVersion, dependsOn: List[ProjectDep]): ProjectGraph =
     val apiModule = Module(
       api,
       Platforms(Platform.Jvm, Nil),
@@ -145,7 +162,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
       SourcePos("api.scala", 1, 1),
     )
     ProjectGraph.trusted(
-      List(apiModule, appModule(dependsOn)),
+      List(apiModule, appModule(scala3, dependsOn)),
       Splits.aggregate,
       Catalog.empty,
       None,
@@ -153,34 +170,10 @@ object AssembleLawSpec extends ZIOSpecDefault:
       resolution = Resolution.Lock,
     )
 
-  private def pinned(lock: DependencyLock): DependencyLock =
-    val drop  = Set(api, app)
-    val kept  = lock.cells.filterNot(cell => drop.contains(cell.module))
-    val added = List(api, app).map: name =>
-      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    lock.copy(cells = added ++ kept)
-
   private def readJar(path: Path): Set[String] =
     if !Files.isRegularFile(path) then Set.empty
     else
       val zip = new java.util.zip.ZipFile(path.toFile)
       try zip.entries().asScala.map(_.getName).toSet
       finally zip.close()
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 end AssembleLawSpec

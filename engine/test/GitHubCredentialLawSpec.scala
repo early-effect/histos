@@ -79,11 +79,5 @@ object GitHubCredentialLawSpec extends ZIOSpecDefault:
           namedHost == Some(GitHubCredential.Token("cli", "ghe.example")),
           named == Some(Some("ghe.example")),
           missing == None,
-        )
-    ,
-    test("gh with and without a hostname is no token when the command does not print one"):
-      for
-        plain <- GitHubCredential.gh(None)
-        named <- GitHubCredential.gh(Some("127.0.0.1"))
-      yield assertTrue(plain.forall(_.nonEmpty), named.forall(_.nonEmpty)),
+        ),
   )

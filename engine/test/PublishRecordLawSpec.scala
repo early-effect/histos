@@ -66,7 +66,9 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
               ,
               !classes,
             )
-          program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+          program.provideSomeLayer[Resolve & Scope](
+            ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ZLayer.succeed(IvyRoot.at(dir.resolve("ivy")))
+          )
     ,
     test("a staged jar is the request the build publishes"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
@@ -105,7 +107,9 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
                   artifacts.exists(_.contains("recordlaw")),
                   recorded.exists(_.jars),
                 )
-            program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store")))),
+            program.provideSomeLayer[Resolve & Scope](
+              ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ZLayer.succeed(IvyRoot.at(dir.resolve("ivy")))
+            ),
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private final case class Seen(artifacts: List[String], jars: Boolean)

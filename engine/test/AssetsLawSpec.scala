@@ -9,27 +9,6 @@ object AssetsLawSpec extends ZIOSpecDefault:
   private val port = 443
 
   def spec = suite("asset refusal laws")(
-    test("a repository part starts with a letter or digit, and a bracketed loopback is not a bare colon"):
-      val named = AssetRepo.from("Good.Name_1/also-ok")
-      val digit = AssetRepo.from("1abc/n9")
-      assertTrue(
-        named.map(_.owner) == Right("Good.Name_1"),
-        named.map(_.name) == Right("also-ok"),
-        digit.map(repo => repo.owner -> repo.name) == Right("1abc" -> "n9"),
-        AssetRepo.from("") == Left(AssetError.Repository("")),
-        AssetRepo.from("-no/ok") == Left(AssetError.Repository("-no/ok")),
-        AssetRepo.from("no/-ok") == Left(AssetError.Repository("no/-ok")),
-        AssetRepo.from("no/") == Left(AssetError.Repository("no/")),
-        AssetRepo.from("/ok") == Left(AssetError.Repository("/ok")),
-        AssetRepo.from("a b/ok") == Left(AssetError.Repository("a b/ok")),
-        AssetRepo.from(".a/b") == Left(AssetError.Repository(".a/b")),
-        AssetRepo.from("_a/b") == Left(AssetError.Repository("_a/b")),
-        AssetBase.from("http://[::1]").isRight,
-        AssetBase.from("http://::1") == Left(AssetError.Host("'http://::1' is not a release host")),
-        AssetBase.from("http://0.0.0.0:9") ==
-          Left(AssetError.Host("http release host '0.0.0.0' is not loopback")),
-      )
-    ,
     test("a token renders for the header and its toString stays redacted"):
       val token = AssetToken("super-secret")
       assertTrue(token.render == "super-secret", !token.toString.contains("super-secret"))

@@ -1604,7 +1604,7 @@ object Cli:
             .sonaOf(loaded)
             .flatMap(sona => Calls.workflowWork(repo, loaded.graph, sona, action))
             .fold(
-              fault => held("", CallResult.Fault(BuildFault.Workflow(fault))),
+              fault => held("", CallResult.Fault(fault)),
               file => held(file.toString, CallResult.reported()),
             )
 

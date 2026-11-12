@@ -2,7 +2,7 @@ package histos.resolve
 
 import histos.jdk.Sha256
 import histos.plugin.LinkStrategy
-import histos.{DepKind, Platform, ProjectName, ScalaVersion}
+import histos.{ArtifactBase, DepExclusion, DepKind, Organization, Platform, ProjectName, SbtSeries, ScalaVersion}
 
 import zio.test.*
 
@@ -18,18 +18,101 @@ object LockLawSpec extends ZIOSpecDefault:
        |artifact org.example demo 1.0.0 $hex central
        |""".stripMargin
 
+  private val token    = Gen.alphaNumericStringBounded(1, 6)
+  private val hexDigit = Gen.elements("0123456789abcdef".toList*)
+  private val sha256   = Gen.stringN(64)(hexDigit).map(Sha256.trusted)
+  private val repo     =
+    Gen
+      .elements("central", "ivy-local", "maven:https://repo.example/maven2/")
+      .map(Repository.parse)
+      .collect:
+        case Right(found) => found
+  private val version  = Gen.elements(ScalaVersion("3.3.7"), ScalaVersion("2.13.18"))
+  private val eviction = (token <*> token <*> token <*> token).map(Eviction(_, _, _, _))
+  private val excluded = Gen.elements(
+    DepExclusion(Organization("org.example"), ArtifactBase("other")),
+    DepExclusion(Organization("com.acme"), ArtifactBase("gone")),
+  )
+
+  private val direct =
+    for
+      organization <- token
+      name         <- token
+      revision     <- token
+      kind         <- Gen.elements(DepKind.Java, DepKind.Binary, DepKind.Full)
+      exclusions   <- Gen.listOfBounded(0, 2)(excluded)
+      series       <- Gen.option(Gen.elements(SbtSeries("1"), SbtSeries("2")))
+    yield LockedDirect(organization, name, revision, kind, exclusions, series.filter(_ => kind == DepKind.Binary))
+
+  private val artifact =
+    for
+      organization <- token
+      name         <- token
+      revision     <- token
+      sha          <- sha256
+      repository   <- repo
+      classifier   <- Gen.option(Gen.elements(JarClassifier("jdk8"), JarClassifier("shaded")))
+    yield LockedArtifact(organization, name, revision, sha, repository, classifier)
+
+  private val cell =
+    for
+      module    <- Gen.elements(ProjectName("core"), ProjectName("app"))
+      at        <- version
+      platform  <- Gen.fromIterable(Platform.values)
+      scope     <- Gen.fromIterable(ClasspathScope.values)
+      directs   <- Gen.listOfBounded(0, 2)(direct)
+      artifacts <- Gen.listOfBounded(0, 2)(artifact)
+      evictions <- Gen.listOfBounded(0, 2)(eviction)
+    yield LockedCell(module, at, platform, directs, artifacts, evictions, scope)
+
+  private val plugin =
+    for
+      organization <- token
+      name         <- token
+      revision     <- token
+      link         <- Gen.elements(LinkStrategy.ExactBinary, LinkStrategy.Source, LinkStrategy.BinaryOrSource)
+      directs      <- Gen.listOfBounded(0, 2)(direct)
+      artifacts    <- Gen.listOfBounded(0, 2)(artifact)
+      source       <- artifact
+    yield LockedPlugin(
+      organization,
+      name,
+      revision,
+      link,
+      directs,
+      artifacts,
+      Option.when(link != LinkStrategy.ExactBinary)(source),
+    )
+
+  private val tool =
+    for
+      role    <- Gen.fromIterable(ToolRole.values)
+      at      <- version
+      variant <- Gen.elements(ToolVariant.Jvm, ToolVariant.Node, ToolVariant.Jsdom, ToolVariant.Firefox)
+      roots   <- Gen.listOfBounded(0, 2)(
+        (token <*> token <*> token <*> Gen.fromIterable(Transitivity.values) <*> Gen.option(repo))
+          .map(ToolRoot(_, _, _, _, _))
+      )
+      resolvers <- Gen.listOfBounded(0, 2)(repo)
+      artifacts <- Gen.listOfBounded(0, 2)(artifact)
+      evictions <- Gen.listOfBounded(0, 2)(eviction)
+    yield LockedTool(ToolId(role, at, variant), roots, resolvers, artifacts, evictions)
+
+  private val lock =
+    for
+      cells   <- Gen.listOfBounded(1, 3)(cell)
+      plugins <- Gen.listOfBounded(0, 2)(plugin)
+      tools   <- Gen.listOfBounded(0, 2)(tool)
+    yield DependencyLock(
+      cells.distinctBy(found => (found.module, found.scalaVersion, found.platform, found.scope)),
+      plugins.distinctBy(found => (found.organization, found.name, found.revision)),
+      tools.distinctBy(_.id),
+    )
+
   def spec = suite("lock laws")(
-    test("a synthetic lock parses, renders, and parses back to the same cells"):
-      DependencyLock.parse(text) match
-        case Left(_)     => assertTrue(false)
-        case Right(lock) =>
-          val again = DependencyLock.parse(DependencyLock.render(lock))
-          assertTrue(
-            again == Right(lock),
-            lock.cells.length == 1,
-            lock.plugins.isEmpty,
-            lock.tools.isEmpty,
-          )
+    test("a lock with cells, plugin rows, tool rows, and evictions parses back from its rendering"):
+      check(lock): written =>
+        assertTrue(DependencyLock.parse(DependencyLock.render(written)) == Right(written))
     ,
     test("comments and blank lines are not cells, and an empty file is empty"):
       val noted =
@@ -89,28 +172,16 @@ object LockLawSpec extends ZIOSpecDefault:
         !DependencyLock.render(lock).contains("evict"),
       )
     ,
-    test("a test cell and a tool cell round-trip, and a source before a plugin is a missing plugin"):
-      val testCell =
-        s"""test core 3.3.7 js
-           |direct org.example demo 1.0.0 binary
-           |artifact org.example demo 1.0.0 $hex central
-           |""".stripMargin
-      val tool =
-        s"""tool compiler 3.3.7 jvm
-           |root org.example demo 1.0.0 closure central
-           |artifact org.example demo 1.0.0 $hex central
-           |""".stripMargin
-      val source = s"source org.example demo 1.0.0 $hex central\n"
-      (DependencyLock.parse(testCell), DependencyLock.parse(tool)) match
-        case (Right(tests), Right(tools)) =>
-          assertTrue(
-            DependencyLock.parse(DependencyLock.render(tests)) == Right(tests),
-            tests.cells.exists(_.scope == ClasspathScope.Test),
-            DependencyLock.parse(DependencyLock.render(tools)) == Right(tools),
-            tools.tools.length == 1,
-            DependencyLock.parse(source) == Left(LockError.Missing(LockField.Plugin)),
-          )
-        case _ => assertTrue(false)
+    test("a test header is a test cell, a tool header is a tool row, and a source before a plugin is a missing plugin"):
+      val testCell = s"test core 3.3.7 js\nartifact org.example demo 1.0.0 $hex central\n"
+      val tool     = s"tool compiler 3.3.7 jvm\nroot org.example demo 1.0.0 closure central\n"
+      val source   = s"source org.example demo 1.0.0 $hex central\n"
+      assertTrue(
+        DependencyLock.parse(testCell).map(_.cells.map(_.scope)) == Right(List(ClasspathScope.Test)),
+        DependencyLock.parse(tool).map(_.tools.map(_.id)) ==
+          Right(List(ToolId(ToolRole.Compiler, scala3, ToolVariant.Jvm))),
+        DependencyLock.parse(source) == Left(LockError.Missing(LockField.Plugin)),
+      )
     ,
     test("exclude and series belong to the preceding direct, and a direct without them stays empty"):
       val marked =

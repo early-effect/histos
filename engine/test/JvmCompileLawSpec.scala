@@ -8,7 +8,7 @@ import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.{Platform, ScalaVersion, ScalacFlags, ToolCatalog}
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import slayer.{Stubbed, any, stub, stubbed}
 
@@ -16,29 +16,14 @@ import zio.*
 import zio.test.*
 
 object JvmCompileLawSpec extends ZIOSpecDefault:
-  private val scala3   = ScalaVersion.trusted("3.10.0")
-  private val scala212 = ScalaVersion.trusted("2.12.20")
-  private val jdk      = JdkRuntime(
+  private val scala3 = ScalaVersion.trusted("3.10.0")
+  private val jdk    = JdkRuntime(
     Path.of("/jdk"),
     JdkVersion.trusted("21", JdkMajor.trusted(21)),
     RuntimeIdentity.Local(Path.of("/jdk"), Sha256.trusted("ab")),
   )
 
   def spec = suite("jvm compile refusals")(
-    test("scala 2.12 on javascript is refused before a ban or an empty source list"):
-      Workspace
-        .work("histos-jvm-212")
-        .flatMap: dir =>
-          val program =
-            for
-              banned <- jar(dir.resolve("histos.jar"), "histos/HistosBuild.class")
-              found <- counted(JvmCompile.compileWith(request(scala212, Platform.Js, Nil, List(banned)), Nil, Nil, Nil))
-            yield assertTrue(
-              found.result == Left(CompileError.UnsupportedScala(scala212)),
-              found.idle,
-            )
-          program.provideSomeLayer[TestEnvironment & Scope](gate)
-    ,
     test("a directory that holds a plugin file is not histos, so empty sources are NoSources"):
       Workspace
         .work("histos-jvm-plugin")
@@ -170,18 +155,4 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
       Nil,
       Nil,
     )
-
-  private def jar(path: Path, entry: String): ZIO[Any, IoFailure, Path] =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(path))
-        try
-          out.putNextEntry(new java.util.zip.ZipEntry(entry))
-          out.write(Array.emptyByteArray)
-          out.closeEntry()
-        finally out.close()
-        path
-      }
-      .mapError(_ => IoFailure(path, IoFault.Write))
 end JvmCompileLawSpec

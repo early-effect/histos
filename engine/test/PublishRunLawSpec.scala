@@ -65,6 +65,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
                   _ => ZIO.unit,
                   note(notes),
                 )
+                .provideSomeLayer[Resolve & ContentStore](ZLayer.succeed(IvyRoot.at(repo.resolve("ivy"))))
                 .either
               said  <- notes.get
               wrote <- touched(repo)

@@ -65,7 +65,9 @@ private[load] object BuildFile:
         )
       else ZIO.unit
 
-  /** Each path is rewritten to its label in a diagnostic. The generated wiring file is not a repo path. */
+  /** Each path is rewritten to its label in a diagnostic, which is `label:line:column: error: message` when the
+    * compiler placed it. The generated wiring file is not a repo path.
+    */
   private[load] def compileLabeled(
       labeled: List[(Path, String)],
       classpath: List[Path],
@@ -73,14 +75,27 @@ private[load] object BuildFile:
   ): IO[LoadError, Unit] =
     drive(labeled.map(_._1), classpath, out).flatMap: reporter =>
       if reporter.hasErrors then
-        ZIO.fail(
-          LoadError.CompileFailed(
-            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewriteAll(error.message, labeled)))
-          )
-        )
+        ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => labeledMessage(error, labeled))))
       else ZIO.unit
 
-  /** Sources already live in the repo, so a diagnostic keeps the path the compiler printed. */
+  private def labeledMessage(
+      error: dotty.tools.dotc.reporting.Diagnostic,
+      labeled: List[(Path, String)],
+  ): CompilerMessage =
+    val text = rewriteAll(error.message, labeled)
+    val file = Option.when(error.pos.exists)(error.pos.source.file.path)
+    labeled.collectFirst { case (path, label) if file.exists(found => named(path, found)) => (path, label) } match
+      case None                => CompilerMessage.fromCompiler(text)
+      case Some((path, label)) =>
+        val problem = noted(error, Path.of(label), path, label).copy(message = text)
+        CompilerMessage.fromCompiler(histos.cli.Lines.located(problem))
+
+  private def named(path: Path, compiled: String): Boolean =
+    compiled == path.toString || compiled == path.toAbsolutePath.toString
+
+  /** Sources already live in the repo, so a placed diagnostic is `path:line:column: error: message` with the path the
+    * compiler read.
+    */
   private[load] def compileSources(
       sources: List[Path],
       classpath: List[Path],
@@ -88,12 +103,11 @@ private[load] object BuildFile:
   ): IO[LoadError, Unit] =
     drive(sources, classpath, out).flatMap: reporter =>
       if reporter.hasErrors then
-        ZIO.fail(
-          LoadError.CompileFailed(
-            reporter.allErrors.map(error => CompilerMessage.fromCompiler(error.message))
-          )
-        )
+        ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => labeledMessage(error, sources.map(own)))))
       else ZIO.unit
+
+  private def own(source: Path): (Path, String) =
+    (source, source.toString)
 
   private[load] def drive(
       sources: List[Path],
