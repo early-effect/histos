@@ -88,8 +88,11 @@ object BspRemainLawSpec extends ZIOSpecDefault:
         graph,
         LawMachine.fixtureJdk,
         runtimes,
-        notify = line => notes.update(_ :+ line),
-        build = build,
+        Nil,
+        line => notes.update(_ :+ line),
+        build,
+        compile => compile,
+        None,
       )
       _      <- session.answer("""{"id":1,"method":"build/initialize"}""")
       _      <- session.answer("""{"method":"build/initialized"}""")

@@ -46,7 +46,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       val program =
         for
           _             <- TestRandom.feedUUIDs(runId)
-          (heard, left) <- drive(loaded, Call.Task("inspect", args), track = true)
+          (heard, left) <- drive(repo, loaded, Call.Task("inspect", args), track = true)
         yield assertTrue(
           heard == Chunk(
             Message.Event(BuildEvent.Out(s"run ${runId.toString}")),
@@ -61,9 +61,9 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
-          (names, _)   <- drive(loaded, Call.Task("inspect", PluginArgs.empty))
-          (refused, _) <- drive(loaded, Call.Task("inspect", args))
-          (empty, _)   <- drive(loaded, Call.Task("", PluginArgs.empty))
+          (names, _)   <- drive(repo, loaded, Call.Task("inspect", PluginArgs.empty), track = false)
+          (refused, _) <- drive(repo, loaded, Call.Task("inspect", args), track = false)
+          (empty, _)   <- drive(repo, loaded, Call.Task("", PluginArgs.empty), track = false)
         yield assertTrue(
           names == Chunk(Message.Event(BuildEvent.Out("core,api")), Message.Done(CallResult.reported())),
           refused == Chunk(
@@ -86,10 +86,10 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
             _            <- stub[CompileMemo](_.forget)(ZIO.unit)
             _            <- stub[Compilers](_.drop)(ZIO.unit)
             _            <- stubForget(gone, ZIO.die(new IllegalStateException("clean forgets the store")))
-            (cleaned, _) <- drive(Right(None), Call.Clean(Nil), where = gone)
+            (cleaned, _) <- drive(gone, Right(None), Call.Clean(Nil), track = false)
             removed      <- absent(gone)
             _            <- stubForget(kept, ZIO.fail(failure))
-            (failed, _)  <- drive(Right(None), Call.CleanFull, where = kept)
+            (failed, _)  <- drive(kept, Right(None), Call.CleanFull, track = false)
             wiped        <- absent(kept)
           yield assertTrue(
             cleaned == Chunk(Message.Event(BuildEvent.Out("cleaned")), Message.Done(CallResult.reported())),
@@ -108,9 +108,9 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
             _       <- ZIO.attemptBlocking {
               Files.writeString(present.resolve(LauncherPin.file), "histos.version=9.8.7\n")
             }.orDie
-            (latest, _) <- drive(Right(None), Call.Launcher(LauncherAction.Latest), where = present)
+            (latest, _) <- drive(present, Right(None), Call.Launcher(LauncherAction.Latest), track = false)
             text        <- ZIO.attemptBlocking(Files.readString(present.resolve(LauncherPin.file))).orDie
-            (absent, _) <- drive(Right(None), Call.Launcher(LauncherAction.Latest), where = missing)
+            (absent, _) <- drive(missing, Right(None), Call.Launcher(LauncherAction.Latest), track = false)
           yield assertTrue(
             latest == Chunk(
               Message.Event(BuildEvent.Out("histos.version=9.8.7")),
@@ -159,12 +159,12 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       )
       .orDie
 
+  /** `call` in `where`, with no edge reachable. `track` names the run as the server does. */
   private def drive(
+      where: Path,
       loaded: Either[BuildFault, Option[LoadedBuild]],
       call: Call,
-      edges: Perform.Edges[Any] = quiet,
-      track: Boolean = false,
-      where: Path = repo,
+      track: Boolean,
   ): ZIO[
     Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters &
       histos.publish.IvyRoot,
@@ -175,7 +175,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       messages <- Ref.make(Chunk.empty[Message])
       say = new Say(message => messages.update(_ :+ message))
       runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
-      _     <- Perform.run(where, jar, loaded, LawMachine.idle, runs, track, version, call, say, edges)
+      _     <- Perform.run(where, jar, loaded, LawMachine.idle, runs, track, version, call, say, quiet)
       heard <- messages.get
       left  <- runs.get
     yield (heard, left)

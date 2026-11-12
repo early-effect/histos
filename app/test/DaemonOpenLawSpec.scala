@@ -160,14 +160,16 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
         _ <- running.await
       yield ()
 
-  /** The first load runs until it is interrupted. Every later load is the law's graph. */
+  /** The first load runs until it is interrupted. Every later load is the law's graph. The interrupt hook is in place
+    * before `entered` lets the law close its socket.
+    */
   private def hanging(loads: Ref[Int], entered: Promise[Nothing, Unit], interrupted: Promise[Nothing, Unit]): Loader =
     new Loader:
       def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
         loads
           .updateAndGet(_ + 1)
           .flatMap:
-            case 1 => entered.succeed(()) *> ZIO.never.onInterrupt(interrupted.succeed(()))
+            case 1 => (entered.succeed(()) *> ZIO.never).onInterrupt(interrupted.succeed(()))
             case _ => ZIO.succeed(LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph)))
       def loadLocked(repo: Path, apiJar: Path, lock: DependencyLock): ZIO[Scope, LoadError, LoadedBuild] =
         ZIO.dieMessage("the law never loads a locked build")

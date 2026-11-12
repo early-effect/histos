@@ -13,7 +13,19 @@ import histos.resolve.Resolve
 import histos.server.Call
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode, TestModeError}
-import histos.{LawMachine, ProjectName, ProjectNameError}
+import histos.select.SelectError
+import histos.{
+  LawMachine,
+  Module,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  ProjectNameError,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+}
 import slayer.stubbed
 
 import java.nio.file.Path
@@ -59,45 +71,46 @@ object McpLawSpec extends ZIOSpecDefault:
       )
     ,
     test("preview parses the operation and cleanFull rejects a project"):
-      assertTrue(
-        HistosMcp.previewCall(args("compile", projects = List("api"))) == Right(Call.PreviewCompile(List(api))),
-        HistosMcp.previewCall(args("compile", projects = List("1api"))) == Left(badName),
-        HistosMcp.previewCall(args("test", projects = List("api"))) == Right(Call.PreviewTest(List(api))),
-        HistosMcp.previewCall(args("publishLocal", projects = List("1api"))) == Right(
-          Call.PreviewPublishLocal(List("1api"))
-        ),
-        HistosMcp.previewCall(args("publishSnapshots", projects = List("1api"))) == Right(
+      val rows: List[(HistosMcp.PreviewArgs, Either[Rejection, Call])] = List(
+        HistosMcp.PreviewArgs("compile", "api", List("api"))           -> Right(Call.PreviewCompile(List(api))),
+        HistosMcp.PreviewArgs("compile", "api", List("1api"))          -> Left(badName),
+        HistosMcp.PreviewArgs("test", "api", List("api"))              -> Right(Call.PreviewTest(List(api))),
+        HistosMcp.PreviewArgs("publishLocal", "api", List("1api"))     -> Right(Call.PreviewPublishLocal(List("1api"))),
+        HistosMcp.PreviewArgs("publishSnapshots", "api", List("1api")) -> Right(
           Call.PreviewPublishSnapshots(List("1api"))
         ),
-        HistosMcp.previewCall(args("clean")) == Right(Call.PreviewClean(Nil)),
-        HistosMcp.previewCall(args("clean", projects = List("api"))) == Right(Call.PreviewClean(List(api))),
-        HistosMcp.previewCall(args("cleanFull", projects = List("api"))) == Left(Rejection.PreviewProjects),
-        HistosMcp.previewCall(args("cleanFull")) == Right(Call.PreviewCleanFull),
-        HistosMcp.previewCall(args("run", id = "")) == Left(Rejection.MissingRunName),
-        HistosMcp.previewCall(args("run")) == Right(Call.PreviewRun("api", None)),
-        HistosMcp.previewCall(args("ship")) == Left(Rejection.PreviewOperation("ship")),
+        HistosMcp.PreviewArgs("clean", "api", Nil)             -> Right(Call.PreviewClean(Nil)),
+        HistosMcp.PreviewArgs("clean", "api", List("api"))     -> Right(Call.PreviewClean(List(api))),
+        HistosMcp.PreviewArgs("cleanFull", "api", List("api")) -> Left(Rejection.PreviewProjects),
+        HistosMcp.PreviewArgs("cleanFull", "api", Nil)         -> Right(Call.PreviewCleanFull),
+        HistosMcp.PreviewArgs("run", "", Nil)                  -> Left(Rejection.MissingRunName),
+        HistosMcp.PreviewArgs("run", "api", Nil)               -> Right(Call.PreviewRun("api", None)),
+        HistosMcp.PreviewArgs("ship", "api", Nil)              -> Left(Rejection.PreviewOperation("ship")),
       )
+      val misses = rows.collect { case (args, want) if HistosMcp.previewCall(args) != want => args }
+      assertTrue(misses == Nil)
     ,
     test("fmt sends the same call as the command line, and refuses a bad mode, a bad path, a bad name, or two scopes"):
       val file = Path.of("api/src/A.scala")
-      def fmt(projects: List[String] = Nil, files: List[String] = Nil, mode: Option[String] = None) =
+
+      def fmt(projects: List[String], files: List[String], mode: Option[String]) =
         HistosMcp.fmtCall(HistosMcp.FmtArgs(projects, files, mode))
       for
         build   <- Grammar.parse(List("fmt")).map(Operation.operation)
         checked <- Grammar.parse(List("fmt", "--check", "api")).map(Operation.operation)
         filed   <- Grammar.parse(List("fmt", "--file", "api/src/A.scala")).map(Operation.operation)
       yield assertTrue(
-        fmt() == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
-        fmt() == build,
-        fmt(List("api"), mode = Some("check")) == checked,
+        fmt(Nil, Nil, None) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        fmt(Nil, Nil, None) == build,
+        fmt(List("api"), Nil, Some("check")) == checked,
         checked == Right(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)),
-        fmt(files = List("api/src/A.scala")) == filed,
+        fmt(Nil, List("api/src/A.scala"), None) == filed,
         filed == Right(Call.Format(FormatTargets.Files(NonEmptyChunk(file)), FormatMode.Write)),
-        fmt(mode = Some("write")) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
-        fmt(mode = Some("diff")) == Left(Rejection.FormatMode("diff")),
-        fmt(List("api"), List("api/src/A.scala")) == Left(Rejection.FormatTargets),
-        fmt(files = List("/etc/passwd")) == Left(Rejection.FormatPath("/etc/passwd")),
-        fmt(List("1api")) == Left(badName),
+        fmt(Nil, Nil, Some("write")) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        fmt(Nil, Nil, Some("diff")) == Left(Rejection.FormatMode("diff")),
+        fmt(List("api"), List("api/src/A.scala"), None) == Left(Rejection.FormatTargets),
+        fmt(Nil, List("/etc/passwd"), None) == Left(Rejection.FormatPath("/etc/passwd")),
+        fmt(List("1api"), Nil, None) == Left(badName),
       )
     ,
     test("tools/list names every tool the server registers, and neither portal nor bsp is one"):
@@ -123,15 +136,33 @@ object McpLawSpec extends ZIOSpecDefault:
         val clashes   = shapes.collect { case (title, found) if found.distinct.size > 1 => title }
         assertTrue(clashes.toList.sorted == Nil, shapes.contains("CallProblem"))
     ,
+    test("doctor launches the named modules, and a bad name or an unknown module is a typed refusal"):
+      val core = Module(
+        ProjectName("core"),
+        Platforms(Platform.Jvm, Nil),
+        ScalaVersions(ScalaVersion("3.10.0"), Nil),
+        Nil,
+        Nil,
+        SourcePos("histos.scala", 1, 1),
+      )
+      val graph = ProjectGraph.trusted(List(core))
+      assertTrue(
+        HistosMcp.launched(graph, Nil) == Right(Nil),
+        HistosMcp.launched(graph, List("core")) == Right(List(core)),
+        HistosMcp.launched(graph, List("1api", "nope")) == Left(ProjectNameError.Bad("1api")),
+        HistosMcp.launched(graph, List("nope")) == Left(SelectError.Unknown(ProjectName("nope"), List("core"))),
+        HistosMcp.notLaunched(ProjectNameError.Bad("1api")) == HistosMcp.DoctorText("'1api' is not a project name"),
+        HistosMcp.notLaunched(SelectError.Unknown(ProjectName("nope"), Nil)) == HistosMcp.DoctorText(
+          "'nope' is not a project\nThe name is not a project in this graph.\nfix  histos graph"
+        ),
+      )
+    ,
     test("a notice level is sent as info or error"):
       assertTrue(
         Notice.Level.Info.toJson == "\"info\"",
         Notice.Level.Error.toJson == "\"error\"",
       ),
   )
-
-  private def args(operation: String, id: String = "api", projects: List[String] = Nil): HistosMcp.PreviewArgs =
-    HistosMcp.PreviewArgs(operation, id, projects)
 
   /** The tools a built server answers `tools/list` with. No tool runs. */
   private def listed: ZIO[Scope, NonEmptyChunk[McpBuildError] | String, List[Tool]] =

@@ -47,7 +47,36 @@ object CliGapLawSpec extends ZIOSpecDefault:
         dir  <- stand("histos-cli-gap-empty")
         _    <- LawGit.commit(dir, "main", "histos.scala")
         done <- Cli.launch(List("affected", "--base", "HEAD"), dir)
-      yield assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[]\n"),
+      yield assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[]\n")
+    ,
+    test("the diff names the files committed since the base, and a directory git does not know is git's status"):
+      val source = "gaplaw/src/main/scala/A.scala"
+      for
+        dir <- stand("histos-cli-gap-names")
+        _   <- LawGit.commit(dir, "main", "histos.scala")
+        _   <- Workspace.writeString(dir.resolve(source), "object A\n")
+        _   <- LawGit.git(dir, "add", source)
+        _   <- LawGit.git(
+          dir,
+          "-c",
+          "user.email=law@example.com",
+          "-c",
+          "user.name=Law",
+          "commit",
+          "--no-gpg-sign",
+          "--no-verify",
+          "-m",
+          "a",
+        )
+        named <- Cli.changed(dir, "HEAD~1").either
+        loose <- stand("histos-cli-gap-loose")
+        found <- Cli.changed(loose, "HEAD").either
+      yield assertTrue(
+        named == Right(List(source)),
+        found match
+          case Left(Cli.DiffFault.Status(code)) => code != 0
+          case _                                => false,
+      ),
   ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)
 
   private def stand(prefix: String) =

@@ -30,7 +30,7 @@ object HelpLawSpec extends ZIOSpecDefault:
     test("an unknown command names the near commands and an empty token does not"):
       assertTrue(
         Help.render(Nil) == Right(Help.grouped),
-        Help.unknown("") == "unknown command 'command'\nhistos help\nhistos help <command>",
+        Help.unknown("", Help.names) == "unknown command 'command'\nhistos help\nhistos help <command>",
         Help.unknown("compil", List("compile")) ==
           "unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile",
         Help.unknown("compil", List("compile", "compiles")) ==

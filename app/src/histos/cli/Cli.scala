@@ -44,7 +44,7 @@ import histos.resolve.{Resolve, ResolveError}
 import histos.task.{RunId, TaskError, TaskId}
 import histos.workflow.{Affected, WorkflowAction}
 import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestMode, TestStatus}
-import histos.workspace.IoFailure
+import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.{Platform, PlatformError, ProjectName, ProjectNameError}
 
@@ -174,7 +174,7 @@ enum CliParseError:
     case Help                        => histos.cli.Help.grouped
     case UnknownCommand(token, near) =>
       histos.cli.Help.unknown(token, if near.isEmpty then histos.cli.Help.names else near)
-    case UnknownRoot(token)   => histos.cli.Help.unknown(token)
+    case UnknownRoot(token)   => histos.cli.Help.unknown(token, histos.cli.Help.names)
     case MissingArgument      => "run needs one name"
     case UnexpectedArguments  => "unexpected arguments\nhistos help"
     case BadTaskId            => "a task id is not empty"
@@ -216,7 +216,7 @@ enum CliParseError:
       histos.doctor.Noted.error(
         "cli.unknown-command",
         if token.isEmpty then "unknown command" else s"unknown command '$token'",
-        histos.cli.Help.unknown(token),
+        histos.cli.Help.unknown(token, histos.cli.Help.names),
         histos.doctor.Noted.command("histos help"),
       )
     case Rejected =>
@@ -358,14 +358,7 @@ object Cli:
         )
 
   private def stamped: UIO[Long] =
-    ZIO.attempt(java.time.Instant.now().toEpochMilli).orDie
-
-  private def printed(console: java.io.PrintStream)(line: String): UIO[Unit] =
-    ZIO
-      .attempt:
-        console.println(line)
-        console.flush()
-      .ignore
+    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
   private def cover(
       repo: Path,
@@ -408,8 +401,8 @@ object Cli:
                               at,
                             ),
                             histos.coverage.CoverageLines(
-                              out = printed(java.lang.System.out),
-                              err = printed(java.lang.System.err),
+                              out = line => Console.printLine(line).ignore,
+                              err = line => Console.printLineError(line).ignore,
                             ),
                           )
                           .fold(
@@ -447,40 +440,39 @@ object Cli:
       part: histos.version.BumpPart,
       ships: List[histos.version.ShipName],
   ): URIO[Loader & Scope, Completed] =
-    val source = repo.resolve("histos.scala")
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
-      .either
-      .flatMap:
-        case Left(error) =>
-          ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
-        case Right(loaded) =>
-          ZIO
-            .attemptBlocking(java.nio.file.Files.readString(source))
-            .mapError(_ => histos.version.BumpFault.Io(source.toString))
-            .flatMap: text =>
-              histos.version.ShipBumpRun.run(
-                loaded.graph,
-                part,
-                ships,
-                text,
-                module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
-              )
-            .foldZIO(
-              fault => ZIO.succeed(Completed(bumpExit(fault), "", fault.message, Playback.Held)),
-              report =>
-                report.source match
-                  case None =>
-                    ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held))
-                  case Some(next) =>
-                    ZIO
-                      .attemptBlocking(java.nio.file.Files.writeString(source, next))
-                      .mapError(_ => histos.version.BumpFault.Io(source.toString))
-                      .foldZIO(
-                        fault => ZIO.succeed(Completed(CliExit.Failed, "", fault.message, Playback.Held)),
-                        _ => ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held)),
-                      ),
-            )
+      .foldZIO(
+        error => ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held)),
+        loaded =>
+          rewrite(repo.resolve("histos.scala")): text =>
+            histos.version.ShipBumpRun.run(
+              loaded.graph,
+              part,
+              ships,
+              text,
+              module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
+            ),
+      )
+
+  /** Read `source`, edit its text, and write the text the edit returns. A read and a write each name their fault. */
+  private[cli] def rewrite(
+      source: Path
+  )(edit: String => IO[histos.version.BumpFault, histos.version.ShipBumpRun.Report]): UIO[Completed] =
+    val edited: IO[IoFailure | histos.version.BumpFault, String] =
+      for
+        text   <- ZIO.attemptBlocking(Files.readString(source)).orElseFail(IoFailure(source, IoFault.Read))
+        report <- edit(text)
+        _      <- ZIO.foreachDiscard(report.source): next =>
+          ZIO.attemptBlocking(Files.writeString(source, next)).orElseFail(IoFailure(source, IoFault.Write))
+      yield report.text
+    edited.fold(
+      {
+        case fault: IoFailure                => Completed(CliExit.Failed, "", fault.message, Playback.Held)
+        case fault: histos.version.BumpFault => Completed(bumpExit(fault), "", fault.message, Playback.Held)
+      },
+      text => Completed(CliExit.Success, text, "", Playback.Held),
+    )
 
   private def bumpExit(fault: histos.version.BumpFault): CliExit =
     fault match
@@ -586,9 +578,7 @@ object Cli:
       case _ =>
         UpgradeNotice
           .advice(repo)
-          .flatMap { lag =>
-            ZIO.foreachDiscard(lag)(found => ZIO.succeed(java.lang.System.err.println(found.text)))
-          } *>
+          .flatMap(lag => ZIO.foreachDiscard(lag)(found => sayError(found.text))) *>
           Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
             {
@@ -1585,27 +1575,38 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
         case Right(loaded) =>
-          val text = Affected.report(loaded.graph, base, changed(repo, base))
-          ZIO.succeed(Completed(CliExit.Success, s"$text\n", "", Playback.Held))
+          val diff = if base == "all" then ZIO.none else changed(repo, base).option
+          diff.map: found =>
+            Completed(CliExit.Success, s"${Affected.report(loaded.graph, base, found)}\n", "", Playback.Held)
 
-  private def affectedLocal(
-      repo: Path,
-      apiJar: Path,
-      base: String,
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    affected(repo, apiJar, base)
+  /** Why `git diff` named no files. `affected` then selects the whole suite. */
+  private[cli] enum DiffFault:
+    case Start
+    case Read
+    case Status(code: Int)
 
-  private def changed(repo: Path, base: String): Option[List[String]] =
-    if base == "all" then None
-    else
-      try
-        val process = ProcessBuilder("git", "diff", "--name-only", s"$base...HEAD")
-        process.directory(repo.toFile)
-        process.redirectError(ProcessBuilder.Redirect.DISCARD)
-        val running = process.start()
-        val text    = String(running.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
-        if running.waitFor() == 0 then Some(text.split('\n').toList.filter(_.nonEmpty)) else None
-      catch case _: Throwable => None
+  /** The files `git diff --name-only <base>...HEAD` names in `repo`. */
+  private[cli] def changed(repo: Path, base: String): IO[DiffFault, List[String]] =
+    for
+      running <- ZIO
+        .attemptBlocking(
+          ProcessBuilder("git", "diff", "--name-only", s"$base...HEAD")
+            .directory(repo.toFile)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        )
+        .refineToOrDie[java.io.IOException]
+        .orElseFail(DiffFault.Start)
+      exit <- ZIO
+        .attemptBlocking:
+          val text = String(running.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
+          (running.waitFor(), text)
+        .refineToOrDie[java.io.IOException]
+        .orElseFail(DiffFault.Read)
+      names <- exit match
+        case (0, text)   => ZIO.succeed(text.split('\n').toList.filter(_.nonEmpty))
+        case (status, _) => ZIO.fail(DiffFault.Status(status))
+    yield names
 
   private def workflowLocal(
       repo: Path,
@@ -2125,6 +2126,8 @@ object Cli:
                                 loader
                                   .reportBuild(repo, apiJar)
                                   .provideEnvironment(env),
+                                compile => compile,
+                                None,
                               )
                               .either
                               .flatMap:
@@ -2328,7 +2331,7 @@ object Cli:
         stamped.flatMap: at =>
           inProcessReady(repo)((api, machine) => withLoader(machine)(cover(repo, api, machine, asked, at)))
       case Command.Affected(base) =>
-        inProcessReady(repo)((api, machine) => withLoader(machine)(affectedLocal(repo, api, base)))
+        inProcessReady(repo)((api, machine) => withLoader(machine)(affected(repo, api, base)))
       case Command.TestOnly(modules, patterns) =>
         served(repo, Call.Test(modules, patterns, TestMode.Run))
       case Command.TestQuick(modules, patterns) =>

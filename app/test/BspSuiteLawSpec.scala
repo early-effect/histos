@@ -2,6 +2,7 @@ package histos.bsp
 
 import histos.cache.ContentStore
 import histos.jdk.Sha256
+import histos.load.BuildNotes
 import histos.publish.LauncherPin
 import histos.resolve.{Classpath, Repositories, Repository, ResolutionService, Resolve, ResolveCell, ResolveError}
 import histos.resolve.{LockedArtifact, ResolvedArtifact, ToolRequest}
@@ -69,13 +70,23 @@ object BspSuiteLawSpec extends ZIOSpecDefault:
                 _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 notes    <- Ref.make(Chunk.empty[String])
                 runtimes <- Runtimes.read(machine, None)
-                session  <- Bsp.open(dir, graph(scala3), jdk, runtimes, notify = line => notes.update(_ :+ line))
-                _        <- ask(session, request(1, "build/initialize"))
-                _        <- ask(session, note("build/initialized"))
-                listed   <- ask(session, request(2, "workspace/buildTargets"))
-                sourced  <- ask(session, asked(3, "buildTarget/sources", List(testUri)))
-                opted    <- ask(session, asked(4, "buildTarget/scalacOptions", List(testUri)))
-                jars     <- ask(session, asked(5, "buildTarget/dependencySources", List(mainUri)))
+                session  <- Bsp.open(
+                  dir,
+                  graph(scala3),
+                  jdk,
+                  runtimes,
+                  Nil,
+                  line => notes.update(_ :+ line),
+                  ZIO.succeed(BuildNotes(false, Nil)),
+                  compile => compile,
+                  None,
+                )
+                _            <- ask(session, request(1, "build/initialize"))
+                _            <- ask(session, note("build/initialized"))
+                listed       <- ask(session, request(2, "workspace/buildTargets"))
+                sourced      <- ask(session, asked(3, "buildTarget/sources", List(testUri)))
+                opted        <- ask(session, asked(4, "buildTarget/scalacOptions", List(testUri)))
+                jars         <- ask(session, asked(5, "buildTarget/dependencySources", List(mainUri)))
                 mainCompiled <- ask(session, asked(6, "buildTarget/compile", List(mainUri)))
                 compiled     <- ask(session, asked(11, "buildTarget/compile", List(testUri)))
                 wrote        <- ZIO.attempt(Files.isRegularFile(classFile)).orDie

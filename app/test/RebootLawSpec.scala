@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.Resolution
 import histos.server.{Daemon, Fingerprint, Record, ServerError}
 import histos.workspace.Workspace
 
@@ -32,8 +33,8 @@ object RebootLawSpec extends ZIOSpecDefault:
         _       <- started.await
         _       <- TestClock.adjust(50.millis)
         waiting <- booting.poll
-        print   <- Fingerprint.read(repo)
-        _       <- Record.write(repo, "0.0.0-law", print, socket)
+        print   <- Fingerprint.read(repo, Resolution.Solve)
+        _       <- Record.write(repo, "0.0.0-law", print, socket, None)
         _       <- TestClock.adjust(50.millis)
         found   <- booting.join.either
         count   <- spawned.get

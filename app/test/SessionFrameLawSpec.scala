@@ -8,7 +8,7 @@ import histos.publish.{IvyRoot, LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Report}
 import histos.resolve.Resolve
 import histos.server.{Call, Feed, Fingerprint, Record, ServerError}
-import histos.{HistosBuild, ProjectGraph}
+import histos.{HistosBuild, ProjectGraph, Resolution}
 import slayer.stubbed
 
 import java.nio.file.{Files, Path}
@@ -75,19 +75,21 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           _      <- ZIO
             .attemptBlocking(Files.writeString(repo.resolve(LauncherPin.file), "histos.version=9.8.7\n"))
             .orDie
-          fingerprint <- ready(Fingerprint.read(repo))
-          _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock")))
+          fingerprint <- ready(Fingerprint.read(repo, Resolution.Solve))
+          _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock"), None))
           desk        <- Session.desk
           _           <- hold(repo, desk, scope)
           result      <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Version).either
           held        <- desk.held.get
           gone        <- closed.get
+          said        <- TestConsole.outputErr
         yield assertTrue(
           result == Left(
             Session.TransportError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
           ),
           held.isEmpty,
           gone,
+          said == Vector(s"rebooting server onto none (was none) at ${repo.resolve("server.sock")}\n"),
         ),
     ).provideSomeLayerShared[TestEnvironment & Scope](
       LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
@@ -97,7 +99,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
 
   private def hold(repo: Path, desk: Session.Desk, scope: Scope.Closeable): UIO[Unit] =
     val empty = ProjectGraph.trusted(Nil)
-    ready(Fingerprint.read(repo)).flatMap { fingerprint =>
+    ready(Fingerprint.read(repo, Resolution.Solve)).flatMap { fingerprint =>
       desk.held.set(
         Some(Session.Held(fingerprint, LoadedBuild(empty, LawPlugins.none, HistosBuild.fixed(empty)), scope))
       )

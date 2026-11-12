@@ -1,6 +1,6 @@
 package histos.bsp
 
-import histos.LawDir
+import histos.{LawDir, Resolution}
 import histos.publish.LauncherPin
 import histos.server.Fingerprint
 
@@ -26,7 +26,7 @@ object ConnectionLawSpec extends ZIOSpecDefault:
         _        <- write(unpinned.resolve("histos.scala"), "// law\n")
         file = pinned.resolve(".bsp").resolve("histos.json")
         _           <- Connection.ensure(pinned)
-        fingerprint <- Fingerprint.read(pinned)
+        fingerprint <- Fingerprint.read(pinned, Resolution.Solve)
         written     <- ZIO.attemptBlocking(Files.readString(file)).orDie
         _           <- ZIO.attemptBlocking(Files.setLastModifiedTime(file, FileTime.fromMillis(0))).orDie
         _           <- Connection.ensure(pinned)

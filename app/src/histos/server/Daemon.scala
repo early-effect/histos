@@ -45,9 +45,6 @@ opaque type Fingerprint = String
 object Fingerprint:
   given CanEqual[Fingerprint, Fingerprint] = CanEqual.derived
 
-  def read(repo: Path): IO[ServerError, Fingerprint] =
-    read(repo, Resolution.Solve)
-
   /** Lock hashes the pin. Solve does not, so a resolution report write does not reload the server. */
   def read(repo: Path, resolution: Resolution): IO[ServerError, Fingerprint] =
     val build = repo.resolve("histos.scala")
@@ -64,7 +61,7 @@ object Fingerprint:
   private[server] def trusted(raw: String): Fingerprint = raw
 
   /** The files [[read]] hashes. An unnamed directory is not a root. */
-  def roots(repo: Path, resolution: Resolution = Resolution.Solve): UIO[List[Path]] =
+  def roots(repo: Path, resolution: Resolution): UIO[List[Path]] =
     val build  = repo.resolve("histos.scala")
     val wiring = repo.resolve("histos.wiring.scala")
     val lock   = repo.resolve("dependencies.lock")
@@ -97,7 +94,7 @@ object Record:
       version: String,
       fingerprint: Fingerprint,
       socket: Path,
-      assembly: Option[String] = None,
+      assembly: Option[String],
   )
 
   def file(repo: Path): Path =
@@ -108,7 +105,7 @@ object Record:
       version: String,
       fingerprint: Fingerprint,
       socket: Path,
-      assembly: Option[String] = None,
+      assembly: Option[String],
   ): IO[ServerError, Unit] =
     val dest = file(repo)
     val tmp  = dest.resolveSibling("server.json.tmp")
@@ -797,7 +794,7 @@ object Daemon:
         now        <- Fingerprint.read(repo, generation.graph.resolution)
         held       <-
           if now == generation.fingerprint then acquire(generation).as(Right(generation))
-          else loadInto(repo, apiJar, version, bound, warm, now)
+          else loadInto(repo, apiJar, version, bound, warm)
       yield held
     }
 
@@ -812,19 +809,15 @@ object Daemon:
     ServerError,
     Either[LoadError, Generation],
   ] =
-    warm.reloading.withPermit {
-      Fingerprint
-        .read(repo)
-        .flatMap(now => loadInto(repo, apiJar, version, bound, warm, now))
-    }
+    warm.reloading.withPermit(loadInto(repo, apiJar, version, bound, warm))
 
+  /** The new generation's fingerprint is read after the load, under the graph's own resolution. */
   private def loadInto(
       repo: Path,
       apiJar: Path,
       version: String,
       bound: Path,
       warm: Warm,
-      now: Fingerprint,
   ): ZIO[
     Served,
     ServerError,

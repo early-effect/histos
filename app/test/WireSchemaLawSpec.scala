@@ -1673,7 +1673,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     ) &&
     mixed[TransportError](
       "TransportError",
-      "DifferentVersion() | Remote(error) | DidNotFinish()",
+      "Remote(error) | DidNotFinish()",
       """{"Remote":{"error":{"NoServer":{}}}}""",
       TransportError.Remote(ServerError.NoServer),
     ) &&

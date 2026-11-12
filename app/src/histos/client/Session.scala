@@ -15,21 +15,19 @@ import histos.Platform
 
 import java.nio.file.Path
 
-import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO}
+import zio.{Chunk, Console, Exit, Fiber, Ref, Scope, UIO, ZIO}
 
 /** One MCP process. It sends [[histos.server.Call]] while the server matches, and keeps a single graph otherwise.
   */
 object Session:
   /** A call that reached no result. */
   enum TransportError:
-    case DifferentVersion
     case Remote(error: ServerError)
     case DidNotFinish
 
     def message: String = this match
-      case DifferentVersion => ServerError.DifferentVersion.message
-      case Remote(error)    => error.message
-      case DidNotFinish     => "the call did not finish"
+      case Remote(error) => error.message
+      case DidNotFinish  => "the call did not finish"
   end TransportError
 
   /** A tool failed. A fault is a request that never became a report. Transport is a call that reached no result. */
@@ -79,7 +77,7 @@ object Session:
             case ApiClock.Admit.Stop(fault) => ZIO.succeed(CallResult.Fault(fault))
             case admitted                   =>
               val warned = admitted match
-                case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
+                case ApiClock.Admit.Warn(line) => Console.printLineError(line).ignore
                 case _                         => ZIO.unit
               warned *> ApiClock.drifted(repo).flatMap { stale =>
                 val hold = stale && ApiClock.skipsReboot(call)
@@ -90,7 +88,7 @@ object Session:
                   case Decision.DifferentVersion(socket) =>
                     drop(desk) *>
                       ApiClock.rebootLine(repo).flatMap { line =>
-                        ZIO.succeed(java.lang.System.err.println(line)) *>
+                        Console.printLineError(line).ignore *>
                           Attach.replace(repo, text, socket).flatMap {
                             case Some(fresh) =>
                               ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))

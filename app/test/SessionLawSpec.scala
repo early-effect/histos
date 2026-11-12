@@ -59,7 +59,6 @@ object SessionLawSpec extends ZIOSpecDefault:
           CallResult.Reported(Report.empty.copy(out = Chunk("kept", "live"), err = Chunk("e0", "e1")))
         ),
         Session.TransportError.DidNotFinish.message == "the call did not finish",
-        Session.TransportError.DifferentVersion.message == ServerError.DifferentVersion.message,
       )
     ,
     test("a report is the tool value and a fault or a transport error is the problem"):

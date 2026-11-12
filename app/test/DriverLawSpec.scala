@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.LawMachine
+import histos.{LawMachine, Resolution}
 import histos.bsp.Frame
 import histos.cli.{Cli, CliExit, Completed, Playback}
 import histos.report.CallResult
@@ -45,10 +45,10 @@ object DriverLawSpec extends ZIOSpecDefault:
             Files.writeString(AssemblyMark.file(repo), value + "\n")
           }
         }.orDie
-        fingerprint <- must(Fingerprint.read(repo))
+        fingerprint <- must(Fingerprint.read(repo, Resolution.Solve))
         oldSocket  = old.resolve("s")
         nextSocket = next.resolve("s")
-        _        <- must(Record.write(repo, recorded, fingerprint, oldSocket))
+        _        <- must(Record.write(repo, recorded, fingerprint, oldSocket, None))
         oldPeer  <- listen(oldSocket)
         nextPeer <- listen(nextSocket)
         _        <- answer(

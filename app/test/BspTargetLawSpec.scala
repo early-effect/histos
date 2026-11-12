@@ -1,6 +1,7 @@
 package histos.bsp
 
 import histos.cache.ContentStore
+import histos.load.BuildNotes
 import histos.publish.LauncherPin
 import histos.resolve.{ResolutionService, Resolve}
 import histos.program.Program
@@ -31,6 +32,7 @@ import zio.{Scope, ZIO, ZLayer}
 /** A build target names the module and the build file, and the sources are the files on disk. */
 object BspTargetLawSpec extends ZIOSpecDefault:
   private val lawName = ProjectName.trusted("bsplaw")
+  private val quiet   = ZIO.succeed(BuildNotes(false, Nil))
 
   def spec = suite("bsp target laws")(
     test("a module and the build file are targets, and each source file is named"):
@@ -51,14 +53,24 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                 _        <- Workspace.writeString(dir.resolve("histos.scala"), "// law\n")
                 _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 runtimes <- Runtimes.read(LawMachine.idle, None)
-                session  <- Bsp.open(dir, graph(scala3), LawMachine.fixtureJdk, runtimes)
-                _        <- ask(session, request(1, "build/initialize"))
-                _        <- ask(session, note("build/initialized"))
-                listed   <- ask(session, request(2, "workspace/buildTargets"))
-                sourced  <- ask(session, asked(3, "buildTarget/sources", List(mainUri, buildUri)))
-                opted    <- ask(session, asked(4, "buildTarget/scalacOptions", List(mainUri, buildUri)))
-                unknown  <- ask(session, asked(5, "buildTarget/sources", List("file:///nope")))
-                missing  <- ask(session, request(6, "buildTarget/sources"))
+                session  <- Bsp.open(
+                  dir,
+                  graph(scala3),
+                  LawMachine.fixtureJdk,
+                  runtimes,
+                  Nil,
+                  _ => ZIO.unit,
+                  quiet,
+                  compile => compile,
+                  None,
+                )
+                _       <- ask(session, request(1, "build/initialize"))
+                _       <- ask(session, note("build/initialized"))
+                listed  <- ask(session, request(2, "workspace/buildTargets"))
+                sourced <- ask(session, asked(3, "buildTarget/sources", List(mainUri, buildUri)))
+                opted   <- ask(session, asked(4, "buildTarget/scalacOptions", List(mainUri, buildUri)))
+                unknown <- ask(session, asked(5, "buildTarget/sources", List("file:///nope")))
+                missing <- ask(session, request(6, "buildTarget/sources"))
               yield
                 val targets  = rpcOk[Rpc.BuildTargetsResult](listed).map(_.result.targets)
                 val files    = rpcOk[Rpc.SourcesResult](sourced).map(_.result.items.flatMap(_.sources))
@@ -111,7 +123,8 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                 )
                 _        <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
                 runtimes <- Runtimes.read(machine, None)
-                session  <- Bsp.open(dir, graph(scala3), jdk, runtimes)
+                session  <- Bsp
+                  .open(dir, graph(scala3), jdk, runtimes, Nil, _ => ZIO.unit, quiet, compile => compile, None)
                 _        <- ask(session, request(1, "build/initialize"))
                 _        <- ask(session, note("build/initialized"))
                 compiled <- ask(session, asked(2, "buildTarget/compile", List(uri)))

@@ -81,8 +81,8 @@ object PerformLawSpec extends ZIOSpecDefault:
       val reject  = Chunk(Message.Done(CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed))))
       val program =
         for
-          loaded <- drive(Left(fault), Call.Version)
-          missed <- ZIO.foreach(readers)(call => drive(Right(None), call))
+          loaded <- drive(Left(fault), Call.Version, quietEdges)
+          missed <- ZIO.foreach(readers)(call => drive(Right(None), call, quietEdges))
         yield
           val bad = readers.zip(missed).collect { case (call, heard) if heard != reject => call.productPrefix }
           assertTrue(loaded == Chunk(Message.Done(CallResult.Fault(fault))), bad == Nil)
@@ -90,7 +90,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ,
     test("version prints the fixture and does not ask for a graph"):
       val program =
-        for heard <- drive(Right(None), Call.Version)
+        for heard <- drive(Right(None), Call.Version, quietEdges)
         yield assertTrue(
           heard == Chunk(
             Message.Event(BuildEvent.Out(s"$version\nserver $version\nno local assembly")),
@@ -137,9 +137,9 @@ object PerformLawSpec extends ZIOSpecDefault:
               ZIO.succeed(Nil)
             else ZIO.die(new IllegalStateException(s"clean $now $retention $mode"))
           }
-          path  <- drive(Right(None), Call.CachePath)
-          list  <- drive(Right(None), Call.CacheList)
-          clean <- drive(Right(None), Call.CacheClean(CacheCleanMode.DryRun))
+          path  <- drive(Right(None), Call.CachePath, quietEdges)
+          list  <- drive(Right(None), Call.CacheList, quietEdges)
+          clean <- drive(Right(None), Call.CacheClean(CacheCleanMode.DryRun), quietEdges)
         yield assertTrue(
           path == Chunk(Message.Event(BuildEvent.Out("cas")), Message.Done(CallResult.reported())),
           list == Chunk(Message.Done(CallResult.reported())),
@@ -152,7 +152,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ,
     test("cancel of an unknown id does not boot an edge"):
       val program =
-        for heard <- drive(Right(None), Call.Cancel(runId))
+        for heard <- drive(Right(None), Call.Cancel(runId), quietEdges)
         yield assertTrue(
           heard == Chunk(Message.Done(CallResult.Fault(BuildFault.Task(TaskError.UnknownRun(runId)))))
         )
@@ -187,7 +187,7 @@ object PerformLawSpec extends ZIOSpecDefault:
   private def drive(
       loaded: Either[BuildFault, Option[LoadedBuild]],
       call: Call,
-      edges: Perform.Edges[Any] = quietEdges,
+      edges: Perform.Edges[Any],
   ): ZIO[
     Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters & IvyRoot,
     ServerError,

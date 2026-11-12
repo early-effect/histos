@@ -8,9 +8,10 @@ import histos.workspace.Workspace
 import histos.{CompilerClosure, HistosBuild, LawMachine, ProjectName}
 
 import java.nio.file.{Files, Path}
+import java.time.Instant
 
 import zio.{Scope, ZIO, ZLayer}
-import zio.test.{TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
+import zio.test.{TestClock, TestConsole, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
 /** `coverage` on a Scala 3 module writes the report and does not fetch a coverage plugin. Resolve reads the Coursier
   * cache offline, so a cold cache is the closure's precondition and never a download.
@@ -26,11 +27,13 @@ object CliCoverLawSpec extends ZIOSpecDefault:
 
   private val probe =
     """object Probe:
-      |  def main(args: Array[String]): Unit = ()
+      |  def main(args: Array[String]): Unit = println("probe ran")
       |""".stripMargin
 
+  private val started = Instant.ofEpochMilli(1700000000123L)
+
   def spec = suite("cli coverage laws")(
-    test("a test main that calls nothing meets an empty floor, names its statements, and writes both reports"):
+    test("a test main meets an empty floor, prints through the console, and the report is stamped by the clock"):
       ZIO.serviceWithZIO[CompilerClosure]: closure =>
         Workspace
           .work("histos-cli-cover")
@@ -50,18 +53,22 @@ object CliCoverLawSpec extends ZIOSpecDefault:
               _ <- Workspace.writeString(dir.resolve("histos.scala"), build)
               _ <- Workspace
                 .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(closure.pinning(coverlaw)))
-              _    <- Workspace.writeString(source, hello)
-              _    <- Workspace.writeString(test, probe)
-              api  <- apiJar(dir.resolve("cache"))
-              ran  <- Cli.execute(List("coverage"), dir, api).provideSomeLayer[Resolve & Scope](services(dir))
-              xml  <- ZIO.attempt(Files.readString(report.resolve("scoverage.xml"))).orDie
-              html <- ZIO.attempt(Files.isRegularFile(report.resolve("index.html"))).orDie
+              _       <- Workspace.writeString(source, hello)
+              _       <- Workspace.writeString(test, probe)
+              api     <- apiJar(dir.resolve("cache"))
+              _       <- TestClock.setTime(started)
+              ran     <- Cli.execute(List("coverage"), dir, api).provideSomeLayer[Resolve & Scope](services(dir))
+              xml     <- ZIO.attempt(Files.readString(report.resolve("scoverage.xml"))).orDie
+              html    <- ZIO.attempt(Files.isRegularFile(report.resolve("index.html"))).orDie
+              printed <- TestConsole.output
             yield assertTrue(
               ran.exit == CliExit.Success,
               ran.err == "",
               ran.out.linesIterator.toList.take(2) == List("statements 0/4 0.00", "branches 0/0 0.00"),
               html,
               xml.contains("coverlaw"),
+              xml.contains(s"timestamp=\"${started.toEpochMilli}\""),
+              printed.contains("probe ran\n"),
             )
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
