@@ -1474,7 +1474,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "LockDrift(module,scalaVersion,platform,scope,changed) | " +
               "PluginDrift(dependency,changed) | NoLock(path) | " +
               "UnsupportedPlatform(platform) | Lock(error) | Io(failure) | " +
-              "Plugin(error) | Repository(op) | Scalafmt(error)"
+              "Plugin(error) | Repository(op) | Download(misses) | Scalafmt(error)"
           ),
           """{"NotFound":{"organization":"dev.zio","name":"zio","revision":"0"}}""",
           histos.resolve.ResolveError.NotFound("dev.zio", "zio", "0"),

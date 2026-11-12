@@ -42,7 +42,7 @@ object JdkLawSpec extends ZIOSpecDefault:
         Os.from("sunos") == Os.Other,
         Os.from("freebsd") == Os.Other,
         Os.from("unix") == Os.Linux,
-        Toolchain.Floor.value == "21",
+        Toolchain.Floor.value == "25",
         Toolchain.command(Path.of("/jdk/bin/java"), Path.of("/dist/app.jar"), List("test")) ==
           List(
             "/jdk/bin/java",

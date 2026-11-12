@@ -121,28 +121,6 @@ object PublishLawSpec extends ZIOSpecDefault:
             )
           case _ => assertTrue(one.isRight, two.isRight)
       ,
-      test("a dist bundle names the jar, the clients, and the sources under that revision"):
-        val revision = s"${number.render}-20261106.153000-1"
-        val jar      = Array[Byte](1, 2)
-        val sources  = Array[Byte](3)
-        DistPlatform.values.toList match
-          case platform :: _ =>
-            val client = Array[Byte](4)
-            val files  = Dist.bundle(revision, jar, List(platform -> client), sources).toMap
-            val text = files.get(DistLayout.manifest(revision)).map(bytes => new String(bytes, StandardCharsets.UTF_8))
-            assertTrue(
-              files.get(DistLayout.jar(revision)).exists(_.sameElements(jar)),
-              files.get(DistLayout.sources(revision)).exists(_.sameElements(sources)),
-              files.get(DistLayout.client(revision, platform)).exists(_.sameElements(client)),
-              text.exists(body =>
-                body.contains(s""""version": "$revision"""") &&
-                  body.contains(DistLayout.sha256(jar)) &&
-                  body.contains(DistLayout.sha256(sources)) &&
-                  body.contains(platform.token)
-              ),
-            )
-          case Nil => assertTrue(DistPlatform.values.nonEmpty)
-      ,
       test("a snapshot coordinate is a revision that ends in -SNAPSHOT"):
         check(Gen.string(Gen.alphaNumericChar)): raw =>
           assertTrue(

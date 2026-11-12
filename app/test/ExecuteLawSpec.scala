@@ -25,11 +25,12 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     val text = Help.grouped
     if text.startsWith(helpHeader) then s"$text\n" else helpHeader
   private val jdkExplain =
-    "Histos runs on JDK 21 or newer. The home is the absolute path in " +
+    "Histos runs on JDK 25 or newer. Test, run, and link compile a java.lang.foreign bootstrap, which JDK 21 marks " +
+      "preview. The home is the absolute path in " +
       ".histos/toolchain.local when that file exists. Otherwise it is java.home, " +
       "the JVM that launched this process. Histos does not fetch a JDK and does not " +
       "fall through from a toolchain.local that is too old.\n\n" +
-      "Install a JDK 21 (or newer). Write its home, one absolute path, to " +
+      "Install a JDK 25 (or newer). Write its home, one absolute path, to " +
       ".histos/toolchain.local. Remove that file to use java.home."
   private val previewRoots =
     List(

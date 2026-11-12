@@ -83,8 +83,10 @@ import histos.process.{ChildError, GroupOp, ProcessOutput}
 import histos.program.ProgramError
 import histos.publish.{LauncherError, LocalPublishError, ScriptError}
 import histos.resolve.{
+  ArtifactMiss,
   ClasspathScope,
   ClassifierError,
+  DownloadFault,
   JarClassifier,
   LockError,
   LockField,
@@ -436,6 +438,10 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[LockError] = Schema.derived
 
   given Schema[RepositoryIo] = Schema.derived
+
+  given Schema[DownloadFault] = Schema.derived
+
+  given Schema[ArtifactMiss] = Schema.derived
 
   given Schema[PluginLoadError] = Schema.derived
 

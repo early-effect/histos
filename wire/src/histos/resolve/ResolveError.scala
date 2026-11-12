@@ -32,7 +32,13 @@ enum ResolveError:
   case Io(failure: IoFailure)
   case Plugin(error: PluginLoadError)
   case Repository(op: RepositoryIo)
+  case Download(misses: ::[ArtifactMiss])
   case Scalafmt(error: ScalafmtConfError)
+
+  /** Every artifact that failed did so in transit, after Coursier's own retries, so a later fetch may succeed. */
+  def transient: Boolean = this match
+    case ResolveError.Download(misses) => misses.forall(_.fault == DownloadFault.Transient)
+    case _                             => false
 
   def message: String = this match
     case ResolveError.ToolRoot(id, root, fault) =>
@@ -61,6 +67,8 @@ enum ResolveError:
     case ResolveError.Plugin(error)  => error.message
     case ResolveError.Repository(op) =>
       s"resolve failed while ${op.toString.toLowerCase}"
+    case ResolveError.Download(misses) =>
+      ("could not download:" :: misses.map(miss => s"${miss.url}: ${miss.detail}")).mkString("\n")
     case ResolveError.Scalafmt(error) => error.message
 
   def diagnose: Diagnostic = this match
@@ -85,6 +93,13 @@ enum ResolveError:
         .binary(organization, name, revision)
         .getOrElse("The coordinate is not in the configured repositories.")
       Noted.carry("resolve.not-found", message, explain, "histos resolve --update")
+    case ResolveError.Download(_) if transient =>
+      Noted.carry(
+        "resolve.download",
+        message,
+        "Each download failed in transit, after Coursier's own retries. A file already in the cache is not fetched again.",
+        "histos resolve",
+      )
     case other =>
       Noted.carry("resolve.failed", other.message, other.message, "histos resolve --update")
 
