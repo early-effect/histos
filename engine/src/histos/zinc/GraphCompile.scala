@@ -256,13 +256,6 @@ object GraphCompile:
       .resolve(machine)
       .mapError(GraphCompileError.Runtime(_))
 
-  /** This process's JVM. Plugin compile and tests run on it. */
-  def jdkHere: IO[GraphCompileError, JdkRuntime] =
-    histos.jdk.Machine
-      .load(Path.of("."))
-      .mapError(GraphCompileError.Runtime(_))
-      .flatMap(jdk)
-
   /** `<module>/src` wins. The repository `src` is only for a graph with one module. The build file stays outside it.
     */
   def sourceBase(
