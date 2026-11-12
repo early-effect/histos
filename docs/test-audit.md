@@ -50,6 +50,8 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] D2 `~ publishLocal <x>` watches every module, and `preview publishLocal <x>` watches only the build file, because `PublishLocal` and `PublishSnapshots` fall through `case _ => Every` in `Watching`. The recommendation is to route both through `publish(graph, tokens)`. Owner: app (`DaemonWatchLawSpec:41`).
 - [ ] D3 The rehearsal portal reports no finding for an empty bundle, so it marks an empty upload `VALIDATED`. The recommendation is that an empty bundle is a layout finding. Owner: central (`PortalReportLawSpec:42`).
 - [ ] D4 The rehearsal portal accepts a `.sha256` file with a wrong digest. The recommendation is that a checksum file that is present is checked. Owner: central (`PortalReportLawSpec:89`).
+- [x] D5 `JobCheck` read tag and label conditions from the triggers alone. A `workflow_dispatch` run from a tag never made `Event(Tag)` or `TagMatches` reachable, and `HasLabel` needed a labeled pull-request type, so `ci.yml` refused both. Owner: api (`JobCheckLawSpec`).
+  - Russ: reachable means GitHub can make it true. A dispatch runs from any ref, so a ref condition (`TagMatches`, `Event(Tag)`, which renders as a ref test, and `DefaultBranch`) is reachable in a file with dispatch. An event condition is the event name the start sets, so dispatch never makes a push condition true. A label condition reads `github.event.pull_request`, so it is reachable in a file with any `pull_request` trigger.
 
 ## Shared seams
 
@@ -111,6 +113,7 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] A43 `BuilderMacro.module` widens its `Expr` with `asInstanceOf`. `asExprOf` checks the type and keeps the tree, so `module(...)` still carries its platforms.
 - [x] A44 WEAK. `GraphShapeLawSpec`'s `fault` helper and `GraphLawSpec`'s `kind` helper compare error names as `productPrefix` strings, so the wrong project, platform, or position passes. Assert exact error values, as A37 did.
 - [x] A45 B12.
+- [x] A46 D5. `JobCheck` evaluates the rendered expression on each start GitHub can give the file (its event name and the refs that run can be on), and a condition is reachable when it is not false on every start. One run has one event, so `All` of two event names, or of a label and a dispatch input, is refused.
 
 ## wire
 

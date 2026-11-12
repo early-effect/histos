@@ -116,19 +116,17 @@ object JobCheckLawSpec extends ZIOSpecDefault:
       )
     ,
     test("ci.yml hears push, and a condition its events never reach is refused"):
-      val tag       = TaskJob(JobName("release"), TaskName("echo"), trigger = Trigger.Tag("v*"))
-      val labeled   = TaskJob(JobName("labeled"), TaskName("echo"), trigger = Trigger.Label("ship"))
-      val schedule  = rendered(Cond.Event(EventKind.Schedule), List(On.pullRequest))
-      val tagless   = rendered(Cond.TagMatches("v*"), List(On.pullRequest))
-      val labelOnCi = rendered(Cond.HasLabel("ship"), List(On.pullRequest))
-      val affected  = rendered(Cond.Affected(ProjectName("core")), Nil, JobName("marked"))
-      val steady    = rendered(Cond.NoUpstreamFailed, Nil, JobName("steady"))
-      val branch    = rendered(Cond.DefaultBranch, Nil, JobName("branch"))
-      val tagged    = rendered(Cond.Event(EventKind.Tag), List(On.Push(Nil, List("v*"), Nil)), JobName("tagged"))
-      val any       = rendered(Cond.AnyOf(List(Cond.True, Cond.Event(EventKind.Schedule))), Nil)
-      val all       = rendered(Cond.All(List(Cond.True, Cond.Event(EventKind.Schedule))), Nil)
-      val input     = InputKey("mode")
-      val asked     = rendered(
+      val tag      = TaskJob(JobName("release"), TaskName("echo"), trigger = Trigger.Tag("v*"))
+      val labeled  = TaskJob(JobName("labeled"), TaskName("echo"), trigger = Trigger.Label("ship"))
+      val schedule = rendered(Cond.Event(EventKind.Schedule), List(On.pullRequest))
+      val affected = rendered(Cond.Affected(ProjectName("core")), Nil, JobName("marked"))
+      val steady   = rendered(Cond.NoUpstreamFailed, Nil, JobName("steady"))
+      val branch   = rendered(Cond.DefaultBranch, Nil, JobName("branch"))
+      val tagged   = rendered(Cond.Event(EventKind.Tag), List(On.Push(Nil, List("v*"), Nil)), JobName("tagged"))
+      val any      = rendered(Cond.AnyOf(List(Cond.True, Cond.Event(EventKind.Schedule))), Nil)
+      val all      = rendered(Cond.All(List(Cond.True, Cond.Event(EventKind.Schedule))), Nil)
+      val input    = InputKey("mode")
+      val asked    = rendered(
         Cond.InputIs(input, "no"),
         List(On.Dispatch(List(DispatchInput(input, InputKind.Text, Some("yes"))))),
       )
@@ -137,8 +135,6 @@ object JobCheckLawSpec extends ZIOSpecDefault:
         headerOf(arrange(List(tag))).map(_.tags) == Right(List("v*")),
         fileOf(arrange(List(labeled))) == Right(List(WorkflowFile.Named("histos-labeled.yml"))),
         arrange(List(schedule)) == unreachable(nightly),
-        arrange(List(tagless)) == unreachable(nightly),
-        arrange(List(labelOnCi)) == unreachable(nightly),
         fileOf(arrange(List(affected), projects = List(coreModule))) == inCi,
         fileOf(arrange(List(steady))) == inCi,
         fileOf(arrange(List(branch))) == inCi,
@@ -146,6 +142,33 @@ object JobCheckLawSpec extends ZIOSpecDefault:
         fileOf(arrange(List(any))) == inCi,
         arrange(List(all)) == unreachable(nightly),
         fileOf(arrange(List(asked))) == inCi,
+      )
+    ,
+    test(
+      "a condition is reachable when GitHub can make it true: dispatch runs from any ref, and a pull request opens with labels"
+    ):
+      val tagPaths    = List(On.Push(Nil, List("v*"), List("docs/**")))
+      val fromTag     = Cond.All(List(Cond.Event(EventKind.Dispatch), Cond.TagMatches("v*")))
+      val bothEvents  = Cond.All(List(Cond.Event(EventKind.PullRequest), Cond.Event(EventKind.Push)))
+      val tagGlob     = rendered(Cond.TagMatches("v*"), Nil, JobName("glob"))
+      val tagRef      = rendered(Cond.Event(EventKind.Tag), Nil, JobName("tagref"))
+      val dispatched  = rendered(fromTag, Nil, JobName("dispatched"))
+      val labelled    = rendered(Cond.HasLabel("ship"), Nil, JobName("labelled"))
+      val noPayload   = Rendered.schedule(base(JobName("nolabel"), Cond.HasLabel("ship"), List(On.Dispatch(Nil))))
+      val pushName    = Rendered.schedule(base(JobName("pushname"), Cond.Event(EventKind.Push), List(On.Dispatch(Nil))))
+      val tagPush     = rendered(Cond.DefaultBranchPush, tagPaths, JobName("tagpush"))
+      val tagOnly     = rendered(Cond.Not(Cond.Event(EventKind.Tag)), tagPaths, JobName("tagonly"))
+      val contradicts = rendered(bothEvents, Nil, JobName("contradicts"))
+      assertTrue(
+        fileOf(arrange(List(tagGlob))) == inCi,
+        fileOf(arrange(List(tagRef))) == inCi,
+        fileOf(arrange(List(dispatched))) == inCi,
+        fileOf(arrange(List(labelled))) == inCi,
+        arrange(List(noPayload)) == unreachable(JobName("nolabel")),
+        arrange(List(pushName)) == unreachable(JobName("pushname")),
+        arrange(List(tagPush)) == unreachable(JobName("tagpush")),
+        arrange(List(tagOnly)) == unreachable(JobName("tagonly")),
+        arrange(List(contradicts)) == unreachable(JobName("contradicts")),
       )
     ,
     test("a negation runs when its condition can be false on that file, and is refused when it is always true"):

@@ -197,44 +197,29 @@ object JobCheck:
       _ <- workflows(graph, placed, picture)
     yield ()
 
+  /** A condition is reachable when GitHub can make it true on some start of this file. */
   private def reachable(name: JobName, cond: Cond, picture: Picture): Either[BuildError, Unit] =
-    if covers(cond, picture) then Right(()) else Left(BuildError.Ci(CiFault.UnreachableCond(name)))
+    if picture.starts.exists(start => truth(cond, start, picture) != Truth.No) then Right(())
+    else Left(BuildError.Ci(CiFault.UnreachableCond(name)))
 
-  /** Can `cond` be true on some run of this file. */
-  private def covers(cond: Cond, picture: Picture): Boolean =
-    cond match
-      case Cond.True | Cond.Affected(_) | Cond.AffectedAll | Cond.NoUpstreamFailed => true
-      case Cond.Event(kind)                                                        => picture.kinds.contains(kind)
-      case Cond.DefaultBranchPush => picture.kinds.contains(EventKind.Push)
-      case Cond.DefaultBranch     => picture.kinds.exists(onDefault.contains)
-      case Cond.TagMatches(_)     => picture.kinds.contains(EventKind.Tag)
-      case Cond.HasLabel(_)       => labeled(picture)
-      case Cond.InputIs(name, _)  => picture.inputs.exists(_.name == name)
-      case Cond.All(parts)        => parts.forall(covers(_, picture))
-      case Cond.AnyOf(parts)      => parts.exists(covers(_, picture))
-      case Cond.Not(inner)        => !always(inner, picture)
-
-  /** Is `cond` true on every run of this file. The event and the kind of ref decide it. A tag glob, a label, an input,
-    * the affected list, and an upstream result can each be false on some run.
+  /** What the rendered expression is on one start. The event name and the kind of ref decide it. A tag glob, a label,
+    * an input, the affected list, and an upstream result are known only at run time.
     */
-  private def always(cond: Cond, picture: Picture): Boolean =
+  private def truth(cond: Cond, start: Start, picture: Picture): Truth =
     cond match
-      case Cond.True                      => true
-      case Cond.Event(EventKind.Schedule) => picture.cron && picture.events.isEmpty
-      case Cond.Event(EventKind.Tag)      => !picture.cron && picture.events.forall(tagPush)
-      case Cond.Event(kind)               => !picture.cron && picture.events.forall(kindsOf(_).contains(kind))
-      case Cond.DefaultBranchPush         => !picture.cron && picture.events.forall(defaultPush)
-      case Cond.DefaultBranch             => picture.events.forall(defaultRef)
-      case Cond.All(parts)                => parts.forall(always(_, picture))
-      case Cond.AnyOf(parts)              => parts.exists(always(_, picture))
-      case Cond.Not(inner)                => !covers(inner, picture)
-      case Cond.TagMatches(_) | Cond.HasLabel(_) | Cond.InputIs(_, _) | Cond.Affected(_) | Cond.AffectedAll |
-          Cond.NoUpstreamFailed =>
-        false
-
-  /** The events whose run can be on the default branch. A schedule and a workflow run always are. */
-  private val onDefault: Set[EventKind] =
-    Set(EventKind.Push, EventKind.Dispatch, EventKind.Schedule, EventKind.WorkflowRun)
+      case Cond.True                 => Truth.Yes
+      case Cond.Event(EventKind.Tag) => start.ref(Ref.Tag)
+      case Cond.Event(kind)          => Truth.of(start.event == kind)
+      case Cond.DefaultBranch        => start.ref(Ref.Default)
+      case Cond.DefaultBranchPush    => Truth.of(start.event == EventKind.Push).and(start.ref(Ref.Default))
+      case Cond.TagMatches(_)        => start.ref(Ref.Tag).and(Truth.Maybe)
+      case Cond.HasLabel(_)          => Truth.of(start.event == EventKind.PullRequest).and(Truth.Maybe)
+      case Cond.InputIs(name, _)     =>
+        Truth.of(start.event == EventKind.Dispatch && picture.inputs.exists(_.name == name)).and(Truth.Maybe)
+      case Cond.Affected(_) | Cond.AffectedAll | Cond.NoUpstreamFailed => Truth.Maybe
+      case Cond.All(parts)   => parts.foldLeft(Truth.Yes)((acc, part) => acc.and(truth(part, start, picture)))
+      case Cond.AnyOf(parts) => parts.foldLeft(Truth.No)((acc, part) => acc.or(truth(part, start, picture)))
+      case Cond.Not(inner)   => truth(inner, start, picture).not
 
   private def inputs(picture: Picture): Either[BuildError, Unit] =
     picture.inputs
@@ -294,42 +279,16 @@ object JobCheck:
       case JobRender.Schedule(_, _)                                       => true
       case JobRender.Task(_) | JobRender.Fan(_, _) | JobRender.Site(_, _) => false
 
-  /** The events one trigger starts this file with. A push that names a tag can also start it as a tag. */
-  private def kindsOf(on: On): Set[EventKind] =
-    on match
-      case On.Push(_, Nil, _)   => Set(EventKind.Push)
-      case On.Push(_, _, _)     => Set(EventKind.Push, EventKind.Tag)
-      case On.PullRequest(_, _) => Set(EventKind.PullRequest)
-      case On.Dispatch(_)       => Set(EventKind.Dispatch)
-      case On.MergeGroup        => Set(EventKind.MergeGroup)
-      case On.WorkflowRun(Nil)  => Set.empty
-      case On.WorkflowRun(_)    => Set(EventKind.WorkflowRun)
-      case On.Release           => Set(EventKind.Release)
-
-  /** Every run of this trigger is a tag push. */
-  private def tagPush(on: On): Boolean =
-    on match
-      case On.Push(branches, tags, _) => branches.isEmpty && tags.nonEmpty
-      case On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.WorkflowRun(_) | On.Release => false
-
-  /** Every run of this trigger is a push to the default branch. */
-  private def defaultPush(on: On): Boolean =
-    on match
-      case On.Push(branches, tags, _) =>
-        tags.isEmpty && branches.nonEmpty && branches.forall(_ == PushBranch.Default)
-      case On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.WorkflowRun(_) | On.Release => false
-
-  /** Every run of this trigger is on the default branch. A schedule is too, and it is not an `On`. */
-  private def defaultRef(on: On): Boolean =
-    on match
-      case On.WorkflowRun(_)                                                                     => true
-      case On.Push(_, _, _) | On.PullRequest(_, _) | On.Dispatch(_) | On.MergeGroup | On.Release => defaultPush(on)
-
-  private def labeled(picture: Picture): Boolean =
-    picture.events.exists:
-      case On.PullRequest(types, _) =>
-        types.contains(PullType.Labeled) || types.contains(PullType.Unlabeled)
-      case _ => false
+  /** The refs a push can run on. The file renders one `push` block, so the branches and the tags of every push merge.
+    * No filter is every branch and every tag.
+    */
+  private def pushRefs(branches: List[PushBranch], tags: List[String]): Set[Ref] =
+    if branches.isEmpty && tags.isEmpty then Set(Ref.Default, Ref.Other, Ref.Tag)
+    else
+      val heads = branches.toSet.flatMap:
+        case PushBranch.Default  => Set(Ref.Default)
+        case PushBranch.Named(_) => Set(Ref.Default, Ref.Other)
+      if tags.isEmpty then heads else heads + Ref.Tag
 
   private def mergeInputs(events: List[On]): List[DispatchInput] =
     events.collect { case On.Dispatch(inputs) => inputs }.flatten.distinctBy(_.name)
@@ -451,9 +410,60 @@ object JobCheck:
       needs: List[JobName],
   )
 
+  /** The kind of `github.ref` a run is on. A pull request runs on its merge ref, and a merge group on a queue branch.
+    */
+  private enum Ref:
+    case Default
+    case Other
+    case Tag
+    case Pull
+
+  /** One way GitHub starts a file: the `github.event_name` it sets, and the refs that run can be on. */
+  private final case class Start(event: EventKind, refs: Set[Ref]):
+    def ref(wanted: Ref): Truth =
+      if refs == Set(wanted) then Truth.Yes else if refs.contains(wanted) then Truth.Maybe else Truth.No
+
+  /** A rendered expression on one start: always true, true on some runs, or never true. */
+  private enum Truth:
+    case Yes
+    case Maybe
+    case No
+
+    def not: Truth = this match
+      case Yes   => No
+      case Maybe => Maybe
+      case No    => Yes
+
+    def and(other: Truth): Truth = (this, other) match
+      case (No, _) | (_, No) => No
+      case (Yes, Yes)        => Yes
+      case _                 => Maybe
+
+    def or(other: Truth): Truth = (this, other) match
+      case (Yes, _) | (_, Yes) => Yes
+      case (No, No)            => No
+      case _                   => Maybe
+  end Truth
+
+  private object Truth:
+    def of(known: Boolean): Truth = if known then Yes else No
+
   private final case class Picture(events: List[On], cron: Boolean):
-    def kinds: Set[EventKind] =
-      events.flatMap(kindsOf).toSet ++ (if cron then Set(EventKind.Schedule) else Set.empty)
+    /** A dispatch can run from any ref, a schedule and a workflow run on the default branch, and a release on its tag.
+      */
+    def starts: List[Start] =
+      val pushes = events.collect { case On.Push(branches, tags, _) => (branches, tags) }
+      val push   =
+        if pushes.isEmpty then Nil
+        else List(Start(EventKind.Push, pushRefs(pushes.flatMap(_._1), pushes.flatMap(_._2))))
+      val pull     = events.collectFirst { case On.PullRequest(_, _) => Start(EventKind.PullRequest, Set(Ref.Pull)) }
+      val dispatch = events.collectFirst:
+        case On.Dispatch(_) => Start(EventKind.Dispatch, Set(Ref.Default, Ref.Other, Ref.Tag))
+      val merge    = events.collectFirst { case On.MergeGroup => Start(EventKind.MergeGroup, Set(Ref.Other)) }
+      val release  = events.collectFirst { case On.Release => Start(EventKind.Release, Set(Ref.Tag)) }
+      val follow   = if workflows.isEmpty then Nil else List(Start(EventKind.WorkflowRun, Set(Ref.Default)))
+      val schedule = if cron then List(Start(EventKind.Schedule, Set(Ref.Default))) else Nil
+      push ++ pull ++ dispatch ++ merge ++ release ++ follow ++ schedule
 
     def inputs: List[DispatchInput] =
       events.collect { case On.Dispatch(found) => found }.flatten
