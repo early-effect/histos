@@ -90,6 +90,9 @@ object build extends HistosBuild:
       .dependsOn(wire)
       .libraryDependencies(zio, zioJson)
       .main(MainClass("histos.client.Main"))
+    val plugins = module("plugins", Jvm)(scala3)
+      .dependsOn(api)
+      .testDependencies(zioTest, zioTestSbt)
     val app = module("app", Jvm)(scala3)
       .scalac(ScalacFlag.MaxInlines)
       .artifact(artifact"histos")
@@ -139,6 +142,7 @@ object build extends HistosBuild:
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .scalafmt
+      .plugins(PluginSources.module(plugins))
       .docCheck(
         ships(Ship("histos").next(0, 2, 10)(api, app).clients(ClientBuilds.ReleasesAndSnapshots)),
         api,
@@ -147,4 +151,5 @@ object build extends HistosBuild:
         central,
         engine,
         app,
+        plugins,
       )

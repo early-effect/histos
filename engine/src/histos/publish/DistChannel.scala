@@ -23,7 +23,8 @@ final case class ChannelPlan(
 /** The shim reads `channel-<version>` from the existing `dist` release for a pin that ends in `-SNAPSHOT`. The body is
   * the timestamp Maven stored for that coordinate. The manifest, the jar, and any clients use that same timestamp. A
   * stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel. A ship whose
-  * snapshots build clients reads each one from [[DistLayout.builtClient]].
+  * snapshots build clients reads each linked binary from [[DistLayout.builtClient]]. A platform this publish did not
+  * link is omitted. None at all is refused before a token.
   */
 object DistChannel:
   val Tag: String = "dist"
@@ -166,12 +167,24 @@ object DistChannel:
         )
 
   private def clientsPresent(repo: Path, plan: ChannelPlan): Either[LocalPublishError, Unit] =
-    plan.clients.foldLeft[Either[LocalPublishError, Unit]](Right(())): (acc, platform) =>
-      val relative = Path.of(DistLayout.builtClient(platform))
-      acc.flatMap: _ =>
-        isFile(repo.resolve(relative).normalize).flatMap:
-          case true  => Right(())
-          case false => Left(LocalPublishError.MissingClient(plan.ship, relative))
+    linked(repo, plan).map(_ => ())
+
+  /** The clients this publish linked. The ship asked, and every file is absent: refuse before a token. One machine
+    * links the platforms it can, and the manifest names those.
+    */
+  private def linked(repo: Path, plan: ChannelPlan): Either[LocalPublishError, List[DistPlatform]] =
+    plan.clients match
+      case Nil                  => Right(Nil)
+      case asked @ (first :: _) =>
+        val gathered =
+          asked.foldLeft[Either[LocalPublishError, List[DistPlatform]]](Right(Nil)): (acc, platform) =>
+            acc.flatMap: found =>
+              val relative = Path.of(DistLayout.builtClient(platform))
+              isFile(repo.resolve(relative).normalize).map: exists =>
+                if exists then found :+ platform else found
+        gathered.flatMap:
+          case Nil   => Left(LocalPublishError.MissingClient(plan.ship, Path.of(DistLayout.builtClient(first))))
+          case found => Right(found)
 
   private def isFile(path: Path): Either[LocalPublishError, Boolean] =
     try Right(Files.isRegularFile(path))
@@ -185,9 +198,10 @@ object DistChannel:
       lines: List[String],
   ): IO[LocalPublishError, String] =
     for
-      unique  <- ZIO.fromEither(timestamp(plan, lines))
-      jar     <- bytes(repo.resolve(plan.asset.value).normalize)
-      clients <- ZIO.foreach(plan.clients)(platform =>
+      unique    <- ZIO.fromEither(timestamp(plan, lines))
+      jar       <- bytes(repo.resolve(plan.asset.value).normalize)
+      platforms <- ZIO.fromEither(linked(repo, plan))
+      clients   <- ZIO.foreach(platforms)(platform =>
         bytes(repo.resolve(DistLayout.builtClient(platform)).normalize).map(platform -> _)
       )
       _ <- replace(access, bases, plan, files(plan.revision, unique, jar, clients))

@@ -510,7 +510,7 @@ Audited while reading the CI model and the generator: `CiJob`, `JobWhen`, `JobNa
 | [x] | booleanly | `nodeStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 660. | 1. Split the deploy job |
 | [x] | booleanly | `llvmStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 670. | 1. Split the deploy job |
 | [x] | booleanly | `playwrightStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 697. | 1. Split the deploy job |
-| [x] | booleanly | `clientStep` takes `present: Boolean` and `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 756. | 1. Split the deploy job |
+| [x] | booleanly | `clientStep` took `present: Boolean` and `gate: Boolean`. That method is gone. The generator does not emit a test-job client step. Install and snapshot client jobs stay, and they are not a boolean pair. | 1. Split the deploy job |
 | [x] | booleanly | `include` takes `flags: Boolean` to mean "emit the tool columns." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 762. | 1. Split the deploy job |
 | [x] | booleanly | `releaseJob` takes `install: Boolean` to mean "append the install uploads." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 277. | 1. Split the deploy job |
 | [x] | stringly | The push branch is the literal `main` in the workflow header. The cache expressions use the same spelling for `CacheNamespace.Main`, which is a different fact. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 573-584, 849-852, and 884-885. | 1. Split the deploy job |

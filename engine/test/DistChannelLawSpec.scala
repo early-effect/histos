@@ -135,24 +135,58 @@ object DistChannelLawSpec extends ZIOSpecDefault:
                 }
       }
     ,
-    test("a ship that builds snapshot clients refuses a missing client before a token"):
+    test("a ship that builds snapshot clients refuses when none were linked, before a token"):
       ZIO.acquireRelease(directory("histos-channel-no-client"))(delete).flatMap { repo =>
         clientPlans match
           case Left(_)      => ZIO.succeed(assertTrue(clientPlans.isRight))
           case Right(plans) =>
             for
               _       <- plant(repo)
-              _       <- plantClient(repo, DistPlatform.LinuxX86_64)
               missing <- DistChannel.prepare(repo, Map.empty, plans, ZIO.dieMessage("gh"), _ => None).either
             yield assertTrue(
               plans.map(_.clients) == List(DistPlatform.values.toList),
               missing == Left(
                 LocalPublishError.MissingClient(
                   ShipName("demo"),
-                  Path.of("dist/clients/client-macos-aarch64/histos-client"),
+                  Path.of("dist/clients/client-linux-x86_64/histos-client"),
                 )
               ),
             )
+      }
+    ,
+    test("a platform this machine did not link is omitted from the manifest"):
+      ZIO.acquireRelease(directory("histos-channel-one-client"))(delete).flatMap { repo =>
+        clientPlans match
+          case Left(_)      => ZIO.succeed(assertTrue(clientPlans.isRight))
+          case Right(plans) =>
+            val seen = new ConcurrentLinkedQueue[Hit]()
+            ZIO.scoped {
+              for
+                port <- listen(seen)
+                _    <- plant(repo)
+                _    <- plantClient(repo, DistPlatform.LinuxX86_64)
+                env = Map(
+                  "HISTOS_GITHUB"     -> s"http://127.0.0.1:$port",
+                  "GITHUB_TOKEN"      -> "secret",
+                  "GITHUB_REPOSITORY" -> "early-effect/histos",
+                )
+                _ <- DistChannel.upload(repo, env, plans, List(receipt(pointer.render)))
+              yield
+                val posts    = seen.toArray(Array.empty[Hit]).toList.filter(_.method == "POST")
+                val manifest = body(posts, DistLayout.manifest(pointerUnique)).getOrElse("")
+                assertTrue(
+                  posts.map(hit => value(hit.query, "name")) == List(
+                    Some(DistLayout.jar(pointerUnique)),
+                    Some(s"$pointerUnique-client-linux-x86_64"),
+                    Some(DistLayout.manifest(pointerUnique)),
+                    Some(DistLayout.channel(pointer.render)),
+                  ),
+                  manifest.contains(
+                    s""""linux-x86_64": "${DistLayout.sha256(clientBytes(DistPlatform.LinuxX86_64))}""""
+                  ),
+                  !manifest.contains("macos-aarch64"),
+                )
+            }
       }
     ,
     test("snapshot clients upload before the manifest that names their shas, and the channel goes last"):

@@ -327,9 +327,8 @@ object Workflow:
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(formatJob(graph))
     val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
-    val boot = if selfHosted(graph) then List(toolchainJob(graph)) else Nil
     val body =
-      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ format ++ planned.ci ++ seed ++
+      List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ format ++ planned.ci ++ seed ++
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -361,7 +360,7 @@ object Workflow:
           case None        => Right(SnapshotLink.JarOnly)
           case Some(found) =>
             clientHosts(found.llvm.value).map: hosts =>
-              SnapshotLink.WithClients(clientJob(graph, Nil, buildAssembly(graph), found.llvm.value, hosts))
+              SnapshotLink.WithClients(clientJob(graph, Nil, found.llvm.value, hosts))
 
   private def asksSnapshotClients(ship: Ship): Boolean =
     ship.clients match
@@ -394,7 +393,7 @@ object Workflow:
       "      contents: write",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "snapshots", build = true) ++ List(
+    ) ++ coursierCli(graph, "snapshots") ++ List(
       s"      - run: ${quote("./histos assembly")}"
     ) ++ fetch ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
@@ -456,14 +455,14 @@ object Workflow:
     ) ++ releasePermissions(shape) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, s"release-$name", build = true) ++ List(
+    ) ++ coursierCli(graph, s"release-$name") ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}",
       "        env:",
       "          HISTOS_SESSION: release",
     ) ++ sona.secretNames.map(secret)
     shape match
       case ReleaseShape.Publish     => published
-      case ReleaseShape.WithInstall => published ++ jarArtifact ++ bootstrapUpload(graph) ++ shimArtifact
+      case ReleaseShape.WithInstall => published ++ jarArtifact ++ shimArtifact
 
   /** `upload-artifact` writes through the Actions API. A permissions block that omits `actions` sets it to none. */
   private def releasePermissions(shape: ReleaseShape): List[String] =
@@ -517,7 +516,7 @@ object Workflow:
     val revision = install.llvm.value
     val needed   = ships.map(row => s"release-${row.name.value}")
     clientHosts(revision).map: hosts =>
-      clientJob(graph, needed, fetchAssembly(graph, Bootstrap.Required), revision, hosts) ++
+      clientJob(graph, needed, revision, hosts) ++
         distJob(graph, shipVersion(install.ship))
 
   /** The runner that links one platform's client, and the LLVM release name for that runner. */
@@ -547,13 +546,10 @@ object Workflow:
               s"            sha256: $hex",
             )
 
-  /** The client matrix. A release waits on its publish jobs and runs that assembly. A snapshot needs no job first and
-    * builds the tree when the pinned jar is too old, the same as the snapshots job.
-    */
+  /** The client matrix. A release waits on its publish jobs. A snapshot needs no job first. The pin runs `client`. */
   private def clientJob(
       graph: ProjectGraph,
       needed: List[String],
-      bootstrap: List[String],
       revision: String,
       hosts: List[String],
   ): List[String] =
@@ -575,7 +571,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ bootstrap ++ SupplyYaml
+    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ SupplyYaml
       .preflight(
         graph,
         "client",
@@ -663,7 +659,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
-    ) ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml.preflight(graph, "install") ++ List(
+    ) ++ SupplyYaml.preflight(graph, "install") ++ List(
       s"      - uses: ${ActionPins.downloadArtifact.line}",
       "        with:",
       "          path: dist-in",
@@ -722,7 +718,7 @@ object Workflow:
     ) ++ jobLimit(graph) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "promote", bootstrap = Bootstrap.Omit) ++ List(
+    ) ++ coursierCli(graph, "promote") ++ List(
       "      - run: \"./histos publish promote ${{ inputs.deployment }}\""
     ) ++ secretEnv(promoteSecrets)
     lines.mkString("\n") + "\n"
@@ -739,11 +735,6 @@ object Workflow:
   private enum MatrixScope:
     case Whole
     case Cell
-
-  /** The native client is linked for the whole job, or only on the matrix cells that need it. */
-  private enum ClientLink:
-    case Skip
-    case Run(scope: MatrixScope)
 
   /** Matrix rows are a name and a command, or those plus the tool flags. */
   private enum ToolColumns:
@@ -922,146 +913,8 @@ object Workflow:
   /** The composite action in this repo. It installs the shim and restores the caches. It does not install a JDK. */
   private val Setup = "./.github/actions/setup"
 
-  /** This checkout's scm. Other builds do not assemble Histos in their own CI. */
-  private val OwnScm = "https://github.com/early-effect/histos"
-
-  private[workflow] def selfHosted(graph: ProjectGraph): Boolean =
-    graph.facts.scm.exists(_.url.value == OwnScm)
-
-  /** Where `histos-bootstrap` comes from. `AfterToolchain` skips the download when that job did not upload. */
-  private[workflow] enum Bootstrap:
-    case AfterToolchain
-    case Required
-    case Omit
-
-  private def coursierCli(
-      graph: ProjectGraph,
-      job: String,
-      build: Boolean = false,
-      bootstrap: Bootstrap = Bootstrap.AfterToolchain,
-  ): List[String] =
-    val extra = if build then buildAssembly(graph) else fetchAssembly(graph, bootstrap)
-    List(s"      - uses: $Setup") ++ extra ++ SupplyYaml.preflight(graph, job)
-
-  private[workflow] def toolchainNeeds(graph: ProjectGraph): List[String] =
-    if selfHosted(graph) then List("    needs: toolchain") else Nil
-
-  private def needsAffected(graph: ProjectGraph): List[String] =
-    if selfHosted(graph) then List("    needs: [affected, toolchain]") else List("    needs: affected")
-
-  /** Download uses the Actions API. A permissions block that omits `actions` sets it to none. */
-  private[workflow] def actionsRead(graph: ProjectGraph): List[String] =
-    if selfHosted(graph) then List("      actions: read") else Nil
-
-  private[workflow] def fetchAssembly(
-      graph: ProjectGraph,
-      bootstrap: Bootstrap = Bootstrap.AfterToolchain,
-  ): List[String] =
-    if !selfHosted(graph) || bootstrap == Bootstrap.Omit then Nil
-    else
-      val gate = bootstrap match
-        case Bootstrap.AfterToolchain =>
-          List(s"        if: ${quote("needs.toolchain.outputs.built == 'true'")}")
-        case Bootstrap.Required => Nil
-        case Bootstrap.Omit     => Nil
-      List(
-        s"      - uses: ${ActionPins.downloadArtifact.line}"
-      ) ++ gate ++ List(
-        "        with:",
-        "          name: histos-bootstrap",
-        "          path: histos-bootstrap",
-        "      - run: |",
-        "          if [ -f histos-bootstrap/dist/histos.jar ]; then",
-        "            jar=histos-bootstrap/dist/histos.jar",
-        "            sum=histos-bootstrap/dist/assembly.sha256",
-        "          else",
-        "            jar=histos-bootstrap/histos.jar",
-        "            sum=histos-bootstrap/assembly.sha256",
-        "          fi",
-        "          if [ -f \"$jar\" ] && [ -f \"$sum\" ]; then",
-        "            mkdir -p dist .histos",
-        "            mv \"$jar\" dist/histos.jar",
-        "            mv \"$sum\" .histos/assembly.sha256",
-        "          fi",
-      )
-
-  /** The shared bootstrap, or an assembly of this checkout when the pin skipped that upload. `workflow --check` renders
-    * with the running jar. A pin that already lists `doctor` does not upload `histos-bootstrap`, and that pin does not
-    * know a workflow file this checkout just added.
-    */
-  private[workflow] def branchJar(graph: ProjectGraph): List[String] =
-    if !selfHosted(graph) then Nil
-    else
-      fetchAssembly(graph) ++ List(
-        "      - run: |",
-        "          if [ ! -f dist/histos.jar ]; then",
-        "            ./histos assembly",
-        "          fi",
-      )
-
-  /** The published jar is the one the version line names. Build this tree only when that jar has no `doctor`. */
-  private[workflow] def buildAssembly(graph: ProjectGraph): List[String] =
-    if !selfHosted(graph) then Nil
-    else
-      List(
-        "      - run: |",
-        "          usage=$(./histos 2>&1 || true)",
-        "          case \"$usage\" in",
-        "            *\" doctor \"*) ;;",
-        "            *) ./histos assembly ;;",
-        "          esac",
-      )
-
-  /** The assembly `ci.yml` shares. The release file uploads the same name after it has built the install jar. */
-  private def bootstrapUpload(graph: ProjectGraph): List[String] =
-    if !selfHosted(graph) then Nil
-    else
-      List(
-        "      - run: cp .histos/assembly.sha256 dist/assembly.sha256",
-        s"      - uses: ${ActionPins.uploadArtifact.line}",
-        "        with:",
-        "          name: histos-bootstrap",
-        "          if-no-files-found: error",
-        "          path: |",
-        "            dist/histos.jar",
-        "            dist/assembly.sha256",
-      )
-
-  private def toolchainJob(graph: ProjectGraph): String =
-    (List(
-      "  toolchain:",
-      s"    runs-on: $Runner",
-    ) ++ jobLimit(graph) ++ List(
-      "    outputs:",
-      "      built: ${{ steps.jar.outputs.built }}",
-      "    permissions:",
-      "      actions: write",
-      "      contents: read",
-      "    steps:",
-      s"      - uses: $Checkout",
-      s"      - uses: $Setup",
-      "      - id: jar",
-      "        run: |",
-      "          usage=$(./histos 2>&1 || true)",
-      "          case \"$usage\" in",
-      "            *\" doctor \"*)",
-      "              echo \"built=false\" >> \"$GITHUB_OUTPUT\"",
-      "              ;;",
-      "            *)",
-      "              ./histos assembly",
-      "              cp .histos/assembly.sha256 dist/assembly.sha256",
-      "              echo \"built=true\" >> \"$GITHUB_OUTPUT\"",
-      "              ;;",
-      "          esac",
-      s"      - uses: ${ActionPins.uploadArtifact.line}",
-      "        if: steps.jar.outputs.built == 'true'",
-      "        with:",
-      "          name: histos-bootstrap",
-      "          if-no-files-found: error",
-      "          path: |",
-      "            dist/histos.jar",
-      "            dist/assembly.sha256",
-    )).mkString("\n")
+  private def coursierCli(graph: ProjectGraph, job: String): List[String] =
+    List(s"      - uses: $Setup") ++ SupplyYaml.preflight(graph, job)
 
   private def nodeStep(floor: Option[NodeFloor], scope: MatrixScope): List[String] =
     floor match
@@ -1143,7 +996,7 @@ object Workflow:
           |          echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
     (List(
       "  affected:"
-    ) ++ toolchainNeeds(graph) ++ List(
+    ) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
@@ -1154,7 +1007,7 @@ object Workflow:
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
       s"      - uses: $Setup"
-    ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
+    ) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
@@ -1171,7 +1024,7 @@ object Workflow:
     val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole)
     (List(
       "  cache-seed:"
-    ) ++ toolchainNeeds(graph) ++ List(
+    ) ++ List(
       s"    if: ${quote(OnDefaultPush)}",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
@@ -1192,16 +1045,14 @@ object Workflow:
       case TestJob.Split(_, _, _) => true
       case _                      => false
     }
-    val client  = jobs.exists(job => linksClient(modulesOf(job, modules)))
     val scope   = if matrix then MatrixScope.Cell else MatrixScope.Whole
     val prepare = steps(graph.runnerTools, graph.resolution, any, scope)
-    val link    = clientStep(if client then ClientLink.Run(scope) else ClientLink.Skip)
-    val columns = if matrix && (any.any || client) then ToolColumns.On else ToolColumns.Off
+    val columns = if matrix && any.any then ToolColumns.On else ToolColumns.Off
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
           "  test:"
-        ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
+        ) ++ List("    needs: affected") ++ verifyNeeds ++ List(
           s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:",
@@ -1209,17 +1060,17 @@ object Workflow:
           "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli(graph, "test") ++ prepare ++ storeRestore ++ link ++ testRun(
+        ) ++ coursierCli(graph, "test") ++ prepare ++ storeRestore ++ testRun(
           argv(aggregate).mkString(" ")
         ) ++ storeSave
       case _ =>
         List(
           "  test:"
-        ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
+        ) ++ List("    needs: affected") ++ verifyNeeds ++ List(
           s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:"
-        ) ++ actionsRead(graph) ++ List(
+        ) ++ List(
           "      contents: read",
           "    strategy:",
           "      fail-fast: false",
@@ -1228,22 +1079,7 @@ object Workflow:
         ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli(graph, "test") ++ prepare ++ link ++ testRun("${{ matrix.command }}")
-
-  /** The pin runs the suite. Link a client only beside a bootstrap `dist/histos.jar`, which is the only jar the
-    * launcher replaces with that binary.
-    */
-  private def clientStep(link: ClientLink): List[String] =
-    link match
-      case ClientLink.Skip       => Nil
-      case ClientLink.Run(scope) =>
-        val guard = cellFlag(scope, "client").toList.map(text => s"        if: $text")
-        List(
-          "      - run: |",
-          "          if [ -f dist/histos.jar ]; then",
-          "            ./histos client",
-          "          fi",
-        ) ++ guard
+        ) ++ coursierCli(graph, "test") ++ prepare ++ testRun("${{ matrix.command }}")
 
   private def include(job: TestJob, modules: List[Module], tools: RunnerTools, columns: ToolColumns): List[String] =
     val rows = List(
@@ -1253,13 +1089,11 @@ object Workflow:
     columns match
       case ToolColumns.Off => rows
       case ToolColumns.On  =>
-        val need   = toolNeed(modulesOf(job, modules), tools)
-        val chosen = modulesOf(job, modules)
+        val need = toolNeed(modulesOf(job, modules), tools)
         rows ++ List(
           s"            node: ${quote(need.node.toString)}",
           s"            llvm: ${quote(need.llvm.toString)}",
           s"            playwright: ${quote(need.playwright.toString)}",
-          s"            client: ${quote(linksClient(chosen).toString)}",
         )
 
   private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean):
@@ -1292,12 +1126,6 @@ object Workflow:
         platform match
           case PlatformRef.All           => named
           case PlatformRef.One(selected) => named.filter(_.platforms.all.contains(selected))
-
-  private def linksClient(modules: List[Module]): Boolean =
-    modules.exists: module =>
-      module.name.value == ClientBinary.moduleName &&
-        module.platforms.all.contains(Platform.Native) &&
-        module.application.nonEmpty
 
   private def slug(job: TestJob): String =
     job match
@@ -1413,9 +1241,7 @@ object Workflow:
 
   private[workflow] def onDefaultPush: String = OnDefaultPush
 
-  /** Beside the suite. It does not wait for the suite, so a scaladoc warning does not hold the tests. This repository
-    * also waits for the shared assembly.
-    */
+  /** Beside the suite. It does not wait for the suite, so a scaladoc warning does not hold the tests. */
   private def docJob(graph: ProjectGraph): String =
     val modules   = graph.projects.collect { case module: Module => module }
     val published = graph.catalog.ships.flatMap(_.members.toList)
@@ -1423,11 +1249,11 @@ object Workflow:
     val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), MatrixScope.Whole)
     val lines     = List(
       "  scaladoc:"
-    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
-    ) ++ actionsRead(graph) ++ List(
+    ) ++ List(
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
@@ -1444,11 +1270,11 @@ object Workflow:
     val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
     val lines   = List(
       "  coverage:"
-    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
-    ) ++ actionsRead(graph) ++ List(
+    ) ++ List(
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
@@ -1462,11 +1288,11 @@ object Workflow:
     val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
     (List(
       "  format:"
-    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
-    ) ++ actionsRead(graph) ++ List(
+    ) ++ List(
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
@@ -1479,21 +1305,21 @@ object Workflow:
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
-  /** The required check. It runs on a pull request, uses this checkout's jar, and runs the full doctor. */
+  /** The required check. It runs on a pull request and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph): String =
     (List(
       "  workflow:"
-    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
-    ) ++ actionsRead(graph) ++ List(
+    ) ++ List(
       "      contents: read",
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: $Setup",
-    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ SupplyYaml.fullDoctor(
+    ) ++ SupplyYaml.preflight(graph, "workflow") ++ SupplyYaml.fullDoctor(
       graph.supply.updates.author
     ) ++ List(
       "      - run: \"./histos workflow --check\""
@@ -1502,16 +1328,16 @@ object Workflow:
   private def versionsJob(graph: ProjectGraph): String =
     (List(
       "  versions:"
-    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
-    ) ++ actionsRead(graph) ++ List(
+    ) ++ List(
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
-    ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "versions") ++ List(
+    ) ++ SupplyYaml.preflight(graph, "versions") ++ List(
       "      - run: \"./histos run versions\""
     )).mkString("\n")
 
