@@ -12,7 +12,7 @@ object PreflightReadLawSpec extends ZIOSpecDefault:
   private val gav     = Gav("com.demo", "widget", "1.0.0")
   private val pom     = "com/demo/widget/1.0.0/widget-1.0.0.pom"
   private val repo    = s"https://repo1.maven.org/maven2/$pom"
-  private val hex     = "0123456789abcdef0123456789abcdef01234567"
+  private val key     = Fingerprint("0123456789abcdef0123456789abcdef01234567")
   private val armor   = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
   private val keyHost = "https://keyserver.ubuntu.com/pks/lookup"
 
@@ -56,29 +56,26 @@ object PreflightReadLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(misses => assertTrue(misses.flatten == Nil))
     ,
     test("a key is present only when the body is armored, and a miss or a status stays typed"):
+      val lookup = s"$keyHost?op=get&search=0x0123456789ABCDEF0123456789ABCDEF01234567"
+      val rows: List[(String, IO[ClientError, Response], Either[PreflightError, Unit])] = List(
+        ("armored", ZIO.succeed(Response.text(armor)), Right(())),
+        ("plain", ZIO.succeed(Response.text("nope")), Left(PreflightError.KeyMissing(key))),
+        ("404", ZIO.succeed(Response(Status.NotFound)), Left(PreflightError.KeyMissing(key))),
+        ("500", ZIO.succeed(Response(Status.InternalServerError)), Left(PreflightError.KeyStatus(500))),
+        (
+          "timeout",
+          ZIO.fail(ClientError.ReadTimeout(Authority("keyserver.ubuntu.com", 443))),
+          Left(PreflightError.KeyDown(TransportFault.ReadTimeout("keyserver.ubuntu.com", 443))),
+        ),
+      )
       val program =
-        ZIO
-          .fromEither(Fingerprint.from(hex))
-          .flatMap: key =>
-            val lookup = s"$keyHost?op=get&search=0x${key.value}"
-            val rows: List[(String, IO[ClientError, Response], Either[PreflightError, Unit])] = List(
-              ("armored", ZIO.succeed(Response.text(armor)), Right(())),
-              ("plain", ZIO.succeed(Response.text("nope")), Left(PreflightError.KeyMissing(key))),
-              ("404", ZIO.succeed(Response(Status.NotFound)), Left(PreflightError.KeyMissing(key))),
-              ("500", ZIO.succeed(Response(Status.InternalServerError)), Left(PreflightError.KeyStatus(500))),
-              (
-                "timeout",
-                ZIO.fail(ClientError.ReadTimeout(Authority("keyserver.ubuntu.com", 443))),
-                Left(PreflightError.KeyDown(TransportFault.ReadTimeout("keyserver.ubuntu.com", 443))),
-              ),
-            )
-            ZIO.foreach(rows) { (label, response, expected) =>
-              asked(response)(client => Preflight.lookup(client, Preflight.Hosts.central.keyserver, key)).map {
-                (found, requests) =>
-                  val seen = (found, requests.map(aimed))
-                  Option.when(seen != (expected, Chunk((Method.GET, lookup, Some("histos")))))(label -> seen)
-              }
-            }
+        ZIO.foreach(rows) { (label, response, expected) =>
+          asked(response)(client => Preflight.lookup(client, Preflight.Hosts.central.keyserver, key)).map {
+            (found, requests) =>
+              val seen = (found, requests.map(aimed))
+              Option.when(seen != (expected, Chunk((Method.GET, lookup, Some("histos")))))(label -> seen)
+          }
+        }
       program.provideSomeLayer[TestEnvironment](stubbed[Client]).map(misses => assertTrue(misses.flatten == Nil)),
   )
 

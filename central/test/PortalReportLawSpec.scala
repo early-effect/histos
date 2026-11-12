@@ -81,7 +81,7 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       assertTrue(
         judged(upper) == Right(Report(Chunk.empty, Chunk(gav))),
         judged(wrong) == Right(
-          Report(Chunk(Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.jar.md5")), Chunk(gav))
+          Report(Chunk(Finding.Checksum(EntryPath("demo/widget/1.0.0/widget-1.0.0.jar.md5"))), Chunk(gav))
         ),
       )
     ,
@@ -103,24 +103,32 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         judged(wrong) == Right(
           Report(
             Chunk(
-              Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.jar.sha256"),
-              Finding.Checksum("demo/widget/1.0.0/widget-1.0.0.pom.sha512"),
+              Finding.Checksum(EntryPath("demo/widget/1.0.0/widget-1.0.0.jar.sha256")),
+              Finding.Checksum(EntryPath("demo/widget/1.0.0/widget-1.0.0.pom.sha512")),
             ),
             Chunk(gav),
           )
         )
       )
     ,
-    test("a missing sources jar is a file set, and an empty signature is a file set"):
+    test("a missing or non-zip jar is a file set, and an empty signature is a file set"):
       val dropped = bundle("1.0.0", pom(release)).map: entries =>
         entries.filterNot(_._1 == "demo/widget/1.0.0/widget-1.0.0-sources.jar")
+      val plain = bundle("1.0.0", pom(release)).map: entries =>
+        entries.map:
+          case ("demo/widget/1.0.0/widget-1.0.0-javadoc.jar", _) =>
+            "demo/widget/1.0.0/widget-1.0.0-javadoc.jar" -> utf8("not a zip")
+          case other => other
       val blank = rewrite("demo/widget/1.0.0/widget-1.0.0.jar.asc", "")
       assertTrue(
         judged(dropped) == Right(
-          Report(Chunk(Finding.FileSet("demo/widget/1.0.0/widget-1.0.0-sources.jar")), Chunk(gav))
+          Report(Chunk(Finding.FileSet(EntryPath("demo/widget/1.0.0/widget-1.0.0-sources.jar"))), Chunk(gav))
+        ),
+        judged(plain) == Right(
+          Report(Chunk(Finding.FileSet(EntryPath("demo/widget/1.0.0/widget-1.0.0-javadoc.jar"))), Chunk(gav))
         ),
         judged(blank) == Right(
-          Report(Chunk(Finding.FileSet("demo/widget/1.0.0/widget-1.0.0.jar.asc")), Chunk(gav))
+          Report(Chunk(Finding.FileSet(EntryPath("demo/widget/1.0.0/widget-1.0.0.jar.asc"))), Chunk(gav))
         ),
       )
     ,
@@ -130,47 +138,52 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       val typed = judged(bundle("1.0.0", Right("<!DOCTYPE a><project></project>")))
       assertTrue(
         empty.map(_.findings) == Right(Chunk(Finding.EmptyPom)),
-        alien.map(_.findings.contains(Finding.PomFields("pom"))) == Right(true),
-        typed.map(_.findings.contains(Finding.PomFields("pom"))) == Right(true),
+        alien.map(_.findings) == Right(Chunk(Finding.PomFields(PomField.Project))),
+        typed.map(_.findings) == Right(Chunk(Finding.PomFields(PomField.Project))),
       )
     ,
     test("a pom field that does not match the path is named"):
       val shifted = pom(release).map(_.replace("<groupId>demo</groupId>", "<groupId>other</groupId>"))
       assertTrue(
-        judged(bundle("1.0.0", shifted)).map(_.findings) == Right(Chunk(Finding.PomFields("groupId")))
+        judged(bundle("1.0.0", shifted)).map(_.findings) == Right(Chunk(Finding.PomFields(PomField.GroupId)))
       )
     ,
     test("a snapshot version on the path or in the pom is a snapshot finding"):
       val onPath = judged(bundle("1.0.0-SNAPSHOT", pom(snapshot)))
       val inPom  = pom(release).map(_.replace("<version>1.0.0</version>", "<version>9.9.9-SNAPSHOT</version>"))
       assertTrue(
-        onPath.map(_.findings) == Right(Chunk(Finding.SnapshotVersion("1.0.0-SNAPSHOT"))),
+        onPath.map(_.findings) == Right(Chunk(Finding.SnapshotVersion(SnapshotRevision("1.0.0-SNAPSHOT")))),
         onPath.map(_.gavs) == Right(Chunk(Gav("demo", "widget", "1.0.0-SNAPSHOT"))),
         judged(bundle("1.0.0", inPom)).map(_.findings) == Right(
-          Chunk(Finding.PomFields("version"), Finding.SnapshotVersion("9.9.9-SNAPSHOT"))
+          Chunk(Finding.PomFields(PomField.Version), Finding.SnapshotVersion(SnapshotRevision("9.9.9-SNAPSHOT")))
         ),
       )
     ,
-    test("a snapshot parent or dependency is named by its gav"):
-      val parent = pom(release).map: text =>
-        text.replace(
-          "</project>",
-          """  <parent><groupId>demo</groupId><artifactId>parent</artifactId><version>1.0.0-SNAPSHOT</version></parent>
-            |</project>""".stripMargin,
-        )
-      val depends = pom(release).map: text =>
-        text.replace(
-          "</project>",
-          """  <dependencies><dependency><groupId>demo</groupId><artifactId>core</artifactId><version>2.0.0-SNAPSHOT</version></dependency></dependencies>
-            |</project>""".stripMargin,
-        )
+    test("a snapshot parent or dependency is named by its gav, and one that is not a coordinate is that field"):
+      def inserted(element: String) = pom(release).map(_.replace("</project>", s"  $element\n</project>"))
+      val parent                    = inserted(
+        "<parent><groupId>demo</groupId><artifactId>parent</artifactId><version>1.0.0-SNAPSHOT</version></parent>"
+      )
+      val depends = inserted(
+        "<dependencies><dependency><groupId>demo</groupId><artifactId>core</artifactId><version>2.0.0-SNAPSHOT</version></dependency></dependencies>"
+      )
+      val coloned = inserted(
+        "<parent><groupId>a:b</groupId><artifactId>parent</artifactId><version>1.0.0-SNAPSHOT</version></parent><dependencies><dependency><groupId>demo</groupId><artifactId>c:d</artifactId><version>2.0.0-SNAPSHOT</version></dependency></dependencies>"
+      )
+      val released = inserted(
+        "<dependencies><dependency><groupId>a:b</groupId><artifactId>core</artifactId><version>2.0.0</version></dependency></dependencies>"
+      )
       assertTrue(
         judged(bundle("1.0.0", parent)).map(_.findings) == Right(
-          Chunk(Finding.SnapshotDependency("demo:parent:1.0.0-SNAPSHOT"))
+          Chunk(Finding.SnapshotDependency(Gav("demo", "parent", "1.0.0-SNAPSHOT")))
         ),
         judged(bundle("1.0.0", depends)).map(_.findings) == Right(
-          Chunk(Finding.SnapshotDependency("demo:core:2.0.0-SNAPSHOT"))
+          Chunk(Finding.SnapshotDependency(Gav("demo", "core", "2.0.0-SNAPSHOT")))
         ),
+        judged(bundle("1.0.0", coloned)).map(_.findings) == Right(
+          Chunk(Finding.PomFields(PomField.Parent), Finding.PomFields(PomField.Dependency))
+        ),
+        judged(bundle("1.0.0", released)).map(_.findings) == Right(Chunk.empty),
       )
     ,
     test("an extra file is layout, and a gav already published stays in the report"):
@@ -179,7 +192,7 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       val taken = judged(bundle("1.0.0", pom(release)), Set(gav))
       assertTrue(
         judged(extra).map(_.findings) == Right(Chunk(entry(EntryPath("demo/widget/1.0.0/notes.txt")))),
-        taken == Right(Report(Chunk(Finding.AlreadyPublished(gav.render)), Chunk(gav))),
+        taken == Right(Report(Chunk(Finding.AlreadyPublished(gav)), Chunk(gav))),
       )
     ,
     test("a gav line is three fields, and a bad line names what is missing"):
@@ -198,19 +211,31 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a finding token is its kind and detail, the upload is a bare layout, and a newline becomes _"):
+      val fields = List(
+        PomField.Project    -> "pom-fields:pom",
+        PomField.GroupId    -> "pom-fields:groupId",
+        PomField.ArtifactId -> "pom-fields:artifactId",
+        PomField.Version    -> "pom-fields:version",
+        PomField.Name       -> "pom-fields:name",
+        PomField.License    -> "pom-fields:license",
+        PomField.Developer  -> "pom-fields:developer",
+        PomField.Scm        -> "pom-fields:scm",
+        PomField.Parent     -> "pom-fields:parent",
+        PomField.Dependency -> "pom-fields:dependency",
+      ).map((field, text) => Finding.PomFields(field) -> text)
       val tokens = List(
-        upload                                       -> "layout",
-        entry(EntryPath("zip"))                      -> "layout:zip",
-        Finding.FileSet("demo/w.jar")                -> "file-set:demo/w.jar",
-        Finding.Checksum("demo/w.jar.md5")           -> "checksum:demo/w.jar.md5",
-        Finding.PomFields("scm")                     -> "pom-fields:scm",
-        Finding.SnapshotVersion("1.0.0-SNAPSHOT")    -> "snapshot-version:1.0.0-SNAPSHOT",
-        Finding.SnapshotDependency("d:c:1-SNAPSHOT") -> "snapshot-dependency:d:c:1-SNAPSHOT",
-        Finding.AlreadyPublished("demo:w:1.0.0")     -> "already-published:demo:w:1.0.0",
-        Finding.EmptyPom                             -> "empty-pom",
-        Finding.TooLarge                             -> "too-large",
-      )
+        upload                                                      -> "layout",
+        entry(EntryPath("zip"))                                     -> "layout:zip",
+        Finding.FileSet(EntryPath("demo/w.jar"))                    -> "file-set:demo/w.jar",
+        Finding.Checksum(EntryPath("demo/w.jar.md5"))               -> "checksum:demo/w.jar.md5",
+        Finding.SnapshotVersion(SnapshotRevision("1.0.0-SNAPSHOT")) -> "snapshot-version:1.0.0-SNAPSHOT",
+        Finding.SnapshotDependency(Gav("d", "c", "1-SNAPSHOT"))     -> "snapshot-dependency:d:c:1-SNAPSHOT",
+        Finding.AlreadyPublished(Gav("demo", "w", "1.0.0"))         -> "already-published:demo:w:1.0.0",
+        Finding.EmptyPom                                            -> "empty-pom",
+        Finding.TooLarge                                            -> "too-large",
+      ) ++ fields
       assertTrue(
+        fields.collect { case (Finding.PomFields(field), _) => field } == PomField.values.toList,
         tokens.map((finding, _) => finding.token) == tokens.map((_, text) => text),
         tokens.map((_, text) => Finding.from(text)) == tokens.map((finding, _) => Right(finding)),
         entry(EntryPath("a\nb\rc")).token == "layout:a_b_c",
@@ -220,13 +245,29 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         Finding.from("bogus:x") == Left(FindingError.Unknown("bogus:x")),
         Finding.from("layout:") == Left(FindingError.Bare("layout")),
         Finding.from("file-set") == Left(FindingError.Bare("file-set")),
+        Finding.from("checksum:") == Left(FindingError.Bare("checksum")),
+        Finding.from("already-published:") == Left(FindingError.Bare("already-published")),
         Finding.from("empty-pom:x") == Left(FindingError.Extra("empty-pom")),
+        Finding.from("pom-fields:homepage") == Left(FindingError.Field("homepage")),
+        Finding.from("snapshot-version:1.0.0") ==
+          Left(FindingError.Version(SnapshotRevisionError.NotSnapshot("1.0.0"))),
+        Finding.from("snapshot-dependency:d:c") == Left(FindingError.Coordinate(GavError.Fields("d:c"))),
+        Finding.from("already-published::w:1.0.0") == Left(FindingError.Coordinate(GavError.NoGroup(":w:1.0.0"))),
         FindingError.Unknown("nope").message == "'nope' is not a finding",
         FindingError.Bare("layout").message == "finding 'layout' needs a detail after ':'",
         FindingError.Extra("empty-pom").message == "finding 'empty-pom' takes no detail",
+        FindingError.Field("homepage").message == "'homepage' is not a pom field",
+        FindingError.Version(SnapshotRevisionError.NotSnapshot("1.0.0")).message == "'1.0.0' is not a snapshot",
+        FindingError.Coordinate(GavError.Fields("d:c")).message == "'d:c' is not group:artifact:version",
         EntryPath.from("") == Left(EntryPath.Error.Empty),
         EntryPath.Error.Empty.message == "a bundle entry path is empty",
         typeCheckErrors("""EntryPath("")""").map(_.message) == List("a bundle entry path is empty"),
+        EntryPath("demo/w.jar").name == "w.jar",
+        EntryPath("demo").child("w.jar") == EntryPath("demo/w.jar"),
+        EntryPath("demo/w.jar").suffixed(".md5") == EntryPath("demo/w.jar.md5"),
+        SnapshotRevision.from("-SNAPSHOT").map(_.value) == Right("-SNAPSHOT"),
+        SnapshotRevision.from("1.0.0") == Left(SnapshotRevisionError.NotSnapshot("1.0.0")),
+        typeCheckErrors("""SnapshotRevision("1.0.0")""").map(_.message) == List("'1.0.0' is not a snapshot"),
       )
     ,
     test("render then parse keeps the state and the findings, and a bad state, list, or token says which"):

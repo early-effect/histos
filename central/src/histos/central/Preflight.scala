@@ -2,6 +2,8 @@ package histos.central
 
 import java.nio.charset.StandardCharsets
 
+import scala.annotation.publicInBinary
+
 import heddle.client.Client
 import heddle.http.{Body, Method, Path, QueryParams, Request, Response, Scheme, Url}
 import heddle.http.header.Headers
@@ -14,15 +16,21 @@ opaque type Fingerprint = String
 object Fingerprint:
   given CanEqual[Fingerprint, Fingerprint] = CanEqual.derived
 
+  inline def apply(inline raw: String): Fingerprint = ${ FingerprintMacro.literal('raw) }
+
   def from(raw: String): Either[PreflightError, Fingerprint] =
     val text = raw.filter(ch => !ch.isWhitespace)
     val hex  =
       if text.length >= 2 && text.substring(0, 2).equalsIgnoreCase("0x") then text.substring(2)
       else text
-    if (hex.length == 16 || hex.length == 40 || hex.length == 64) && hex.forall(isHex) then Right(hex.toUpperCase)
+    if (hex.length == 16 || hex.length == 40 || hex.length == 64) && hex.forall(isHex) then
+      Right(trusted(hex.toUpperCase))
     else Left(PreflightError.BadFingerprint)
 
   extension (fingerprint: Fingerprint) def value: String = fingerprint
+
+  /** Spliced by the literal macro. Source code cannot call it. */
+  @publicInBinary private[central] def trusted(raw: String): Fingerprint = raw
 
   private def isHex(char: Char): Boolean =
     char.isDigit || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')

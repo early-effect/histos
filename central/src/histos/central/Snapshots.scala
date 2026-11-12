@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets
 import java.time.{Instant, ZoneOffset}
 import java.time.format.DateTimeFormatter
 
+import scala.annotation.publicInBinary
+
 import heddle.client.{Authority, Client, ClientError}
 import heddle.http.{Body, Method, Request, Response, Scheme, Url}
 import heddle.http.header.{BasicCredentials, Headers}
@@ -112,13 +114,22 @@ object SnapshotBase:
   extension (base: SnapshotBase) def value: String = base
 end SnapshotBase
 
-/** The `<version>` a snapshot directory is named with, including `-SNAPSHOT`. */
+/** A version that ends in `-SNAPSHOT`, as a snapshot directory or a pom names it. */
 opaque type SnapshotRevision = String
 
 object SnapshotRevision:
-  private[central] def trusted(raw: String): SnapshotRevision = raw
+  given CanEqual[SnapshotRevision, SnapshotRevision] = CanEqual.derived
+
+  inline def apply(inline raw: String): SnapshotRevision = ${ SnapshotRevisionMacro.literal('raw) }
+
+  /** Only the suffix. `SnapshotMetadata.parse` also needs the text before it. */
+  def from(raw: String): Either[SnapshotRevisionError, SnapshotRevision] =
+    if raw.endsWith("-SNAPSHOT") then Right(trusted(raw)) else Left(SnapshotRevisionError.NotSnapshot(raw))
 
   extension (revision: SnapshotRevision) def value: String = revision
+
+  /** Spliced by the literal macro. Source code cannot call it. */
+  @publicInBinary private[central] def trusted(raw: String): SnapshotRevision = raw
 end SnapshotRevision
 
 final case class SnapshotName(base: SnapshotBase, revision: SnapshotRevision)
@@ -168,10 +179,13 @@ final case class SnapshotDocument(
 
 object SnapshotMetadata:
   def parse(revision: String): Either[SnapshotRevisionError, SnapshotName] =
-    val stripped = revision.stripSuffix("-SNAPSHOT")
-    if stripped.nonEmpty && stripped != revision && !stripped.contains("..") then
-      Right(SnapshotName(SnapshotBase.trusted(stripped), SnapshotRevision.trusted(revision)))
-    else Left(SnapshotRevisionError.NotSnapshot(revision))
+    SnapshotRevision
+      .from(revision)
+      .flatMap: snapshot =>
+        val stripped = revision.stripSuffix("-SNAPSHOT")
+        if stripped.nonEmpty && !stripped.contains("..") then
+          Right(SnapshotName(SnapshotBase.trusted(stripped), snapshot))
+        else Left(SnapshotRevisionError.NotSnapshot(revision))
 
   def buildNumber(xml: String): Either[MetadataFault, Int] =
     val open  = "<buildNumber>"

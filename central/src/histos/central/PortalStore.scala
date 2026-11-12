@@ -10,8 +10,10 @@ import zio.{Chunk, IO, ZIO}
 object PortalStore:
   final case class Record(state: DeploymentState, findings: Chunk[Finding], gavs: Chunk[Gav])
 
+  /** `Read` and `Write` name the path that failed. An id or a gav that would leave the store fails as its call. */
   enum Error:
-    case Io(path: Path)
+    case Read(path: Path)
+    case Write(path: Path)
     case Missing(id: DeploymentId)
     case NotPromotable(id: DeploymentId)
     case Unreadable(path: Path, fault: Fault)
@@ -23,7 +25,7 @@ object PortalStore:
     case Coordinates(error: GavError)
 
   def published(root: Path): IO[Error, Set[Gav]] =
-    blocking(root):
+    blocking(Error.Read(root)):
       val base = root.resolve("published")
       if !Files.exists(base) then Right(Set.empty)
       else
@@ -39,10 +41,10 @@ object PortalStore:
         finally walk.close()
 
   def read(root: Path, id: DeploymentId): IO[Error, Option[Record]] =
-    folder(root, id) match
+    folder(root, id, Error.Read(_)) match
       case Left(error) => ZIO.fail(error)
       case Right(dir)  =>
-        blocking(dir):
+        blocking(Error.Read(dir)):
           if !Files.isDirectory(dir) then Right(None)
           else
             for
@@ -78,7 +80,7 @@ object PortalStore:
       case None         => ZIO.fail(Error.Missing(id))
 
   private def write(root: Path, id: DeploymentId, record: Record): IO[Error, Unit] =
-    folder(root, id) match
+    folder(root, id, Error.Write(_)) match
       case Left(error) => ZIO.fail(error)
       case Right(dir)  =>
         for
@@ -99,13 +101,13 @@ object PortalStore:
   private def unmark(root: Path, gavs: Chunk[Gav]): IO[Error, Unit] =
     ZIO.foreachDiscard(gavs): gav =>
       placed(root, gav).flatMap: path =>
-        blocking(path)(Right(Files.deleteIfExists(path))).unit
+        blocking(Error.Write(path))(Right(Files.deleteIfExists(path))).unit
 
   private def remove(root: Path, id: DeploymentId): IO[Error, Unit] =
-    folder(root, id) match
+    folder(root, id, Error.Write(_)) match
       case Left(error) => ZIO.fail(error)
       case Right(dir)  =>
-        blocking(dir):
+        blocking(Error.Write(dir)):
           if !Files.exists(dir) then Right(())
           else
             val walk = Files.walk(dir)
@@ -117,20 +119,20 @@ object PortalStore:
               Right(())
             finally walk.close()
 
+  /** Only a mark or an unmark asks, so a gav that leaves the store is a write. */
   private def placed(root: Path, gav: Gav): IO[Error, Path] =
     ZIO.fromEither:
       val base   = root.resolve("published").toAbsolutePath.normalize
       val target = gav.directory.split("/", -1).foldLeft(base)(_.resolve(_)).normalize
-      if target.startsWith(base) then Right(target) else Left(Error.Io(root))
+      if target.startsWith(base) then Right(target) else Left(Error.Write(root))
 
-  private def folder(root: Path, id: DeploymentId): Either[Error, Path] =
+  private def folder(root: Path, id: DeploymentId, refused: Path => Error): Either[Error, Path] =
     val name = id.value
-    if name.isEmpty || name.contains('/') || name.contains('\\') || name == "." || name == ".." then
-      Left(Error.Io(root))
+    if name.isEmpty || name.contains('/') || name.contains('\\') || name == "." || name == ".." then Left(refused(root))
     else
       val base = root.resolve("deployments").toAbsolutePath.normalize
       val dir  = base.resolve(name).normalize
-      if dir.startsWith(base) then Right(dir) else Left(Error.Io(root))
+      if dir.startsWith(base) then Right(dir) else Left(refused(root))
 
   private def marker(base: Path, path: Path): Option[Gav] =
     if !Files.isRegularFile(path) then None
@@ -170,7 +172,7 @@ object PortalStore:
 
   private def text(path: Path): Either[Error, String] =
     try Right(Files.readString(path, StandardCharsets.UTF_8))
-    catch case _: IOException => Left(Error.Io(path))
+    catch case _: IOException => Left(Error.Read(path))
 
   private def wire(state: DeploymentState): String = state match
     case DeploymentState.Pending    => "PENDING"
@@ -181,11 +183,11 @@ object PortalStore:
     case DeploymentState.Failed     => "FAILED"
 
   private def atomic(path: Path, text: String): IO[Error, Unit] =
-    ZIO.attemptBlocking(writeAtomically(path, text)).mapError(_ => Error.Io(path)).flatMap(ZIO.fromEither(_))
+    blocking(Error.Write(path))(writeAtomically(path, text))
 
   private def writeAtomically(path: Path, text: String): Either[Error, Unit] =
     val parent = path.getParent
-    if parent == null then Left(Error.Io(path))
+    if parent == null then Left(Error.Write(path))
     else
       try
         Files.createDirectories(parent)
@@ -197,8 +199,8 @@ object PortalStore:
         catch
           case _: IOException =>
             Files.deleteIfExists(tmp)
-            Left(Error.Io(path))
-      catch case _: IOException => Left(Error.Io(path))
+            Left(Error.Write(path))
+      catch case _: IOException => Left(Error.Write(path))
 
   private def move(tmp: Path, path: Path): Unit =
     try Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
@@ -206,6 +208,7 @@ object PortalStore:
       case _: AtomicMoveNotSupportedException =>
         Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING)
 
-  private def blocking[A](path: Path)(body: => Either[Error, A]): IO[Error, A] =
-    ZIO.attemptBlocking(body).mapError(_ => Error.Io(path)).flatMap(ZIO.fromEither(_))
+  /** `failed` is the error when `body` throws. A `Left` from `body` is kept. */
+  private def blocking[A](failed: Error)(body: => Either[Error, A]): IO[Error, A] =
+    ZIO.attemptBlocking(body).mapError(_ => failed).flatMap(ZIO.fromEither(_))
 end PortalStore
