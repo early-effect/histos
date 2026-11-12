@@ -1,5 +1,5 @@
 import histos.*
-import histos.plugin.{CommandJob, HistosCommand, JobName, PinClient, SecretName}
+import histos.plugin.SecretName
 import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
@@ -139,7 +139,6 @@ object build extends HistosBuild:
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .scalafmt
-      .job(CommandJob(JobName("link-client"), HistosCommand.Client).unless(PinClient.Present))
       .docCheck(
         ships(Ship("histos").next(0, 3, 0)(api, app).clients(ClientBuilds.ReleasesAndSnapshots)),
         api,

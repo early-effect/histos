@@ -272,7 +272,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
     built.map(JobCheck.header)
 
   private def base(name: String, cond: Cond = Cond.True, events: List[On] = Nil): TaskArrange =
-    TaskArrange(job(name), RunLine.Task(TaskName("echo")), JobPermissions.read, Nil, cond, events)
+    TaskArrange(job(name), TaskName("echo"), JobPermissions.read, Nil, cond, events)
 
   private def job(raw: String): JobName =
     JobName.from(raw) match
@@ -293,7 +293,7 @@ private object Rendered:
   def task(arranged: TaskArrange): CiJob =
     new CiJob:
       def name: JobName               = arranged.name
-      def step: JobStep               = stepOf(arranged.line)
+      def task: TaskName              = arranged.task
       def permissions: JobPermissions = arranged.permissions
       def needs: List[JobName]        = arranged.needs
       def render: List[JobRender]     = List(JobRender.Task(arranged))
@@ -301,7 +301,7 @@ private object Rendered:
   def fan(arranged: TaskArrange, targets: ::[Target]): CiJob =
     new CiJob:
       def name: JobName               = arranged.name
-      def step: JobStep               = stepOf(arranged.line)
+      def task: TaskName              = arranged.task
       def permissions: JobPermissions = arranged.permissions
       def needs: List[JobName]        = arranged.needs
       def render: List[JobRender]     = List(JobRender.Fan(arranged, targets))
@@ -320,13 +320,8 @@ private object Rendered:
     )
     new CiJob:
       def name: JobName               = arranged.name
-      def step: JobStep               = JobStep.Task(arranged.task)
+      def task: TaskName              = arranged.task
       def permissions: JobPermissions = arranged.permissions
       def needs: List[JobName]        = arranged.needs
       def render: List[JobRender]     = shapes.map(shape => JobRender.Site(arranged, shape))
-
-  private def stepOf(line: RunLine): JobStep =
-    line match
-      case RunLine.Task(name)   => JobStep.Task(name)
-      case RunLine.Client(when) => JobStep.Command(HistosCommand.Client, when)
 end Rendered

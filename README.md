@@ -173,7 +173,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 - `workflow` runs `doctor` and `workflow --check`.
 - `supply-chain` checks the workflows, the lock, and the advisories.
 - `dependency-snapshot` submits the dependency graph on a push to the default branch.
-- Plugin jobs (`TaskJob`, `SiteJob`) and command jobs the build declares.
+- Plugin jobs (`TaskJob`, `SiteJob`). Each runs one task of the plugin that contributes it.
 
 Each job runs `./.github/actions/setup`, which installs the shim, installs the pinned toolchain, and restores `~/.histos/toolchains` and the Coursier cache. That action lives in this repository. A consumer repository has to provide it today (see [Known gaps](#known-gaps)). Node and LLVM are installed only in jobs that need them: the test job for the modules it runs, `scaladoc` for the build's JavaScript and native modules, and `cache-seed` for every module. Playwright, and Node with it, is installed in those jobs whenever the build names a Playwright revision.
 
