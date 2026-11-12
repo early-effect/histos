@@ -2,12 +2,13 @@ package histos.program
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{ResolutionService, Resolve}
 import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.{
+  CompilerClosure,
   GeneratedAsset,
   MainClass,
   Module,
@@ -23,129 +24,57 @@ import histos.{
   Splits,
 }
 
-import java.nio.file.{Files, Path}
-
 import zio.*
 import zio.test.*
 
 /** Runs the main a one-platform module names. The compiler jars are the locked ones, read offline. */
 object ProgramRunLawSpec extends ZIOSpecDefault:
-  private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("law")
 
   def spec = suite("program run laws")(
-    test("a main that returns exits 0"):
-      Workspace
-        .work("histos-program-run")
-        .flatMap: dir =>
-          Machine
-            .load(dir)
-            .either
-            .flatMap:
-              case Left(error)    => ZIO.succeed(assertTrue(error.message == ""))
-              case Right(machine) =>
-                GraphCompile
-                  .jdk(machine)
-                  .either
-                  .flatMap:
-                    case Left(error) => ZIO.succeed(assertTrue(error.message == ""))
-                    case Right(jdk)  =>
-                      ZIO.serviceWithZIO[DependencyLock]: lock =>
-                        val probe = dir.resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
-                        val ran   =
-                          for
-                            runtimes <- Runtimes.read(machine, None)
-                            _        <- Workspace.writeString(
-                              probe,
-                              "object Probe:\n  def main(args: Array[String]): Unit = ()\n",
-                            )
-                            collected <- Program
-                              .console(
-                                dir,
-                                graph,
-                                lawName.value,
-                                jdk,
-                                runtimes,
-                                None,
-                                _ => ZIO.unit,
-                                ZIO.unit,
-                              )
-                              .runCollect
-                              .either
-                            detail = collected.fold(_.message, _ => "")
-                            codes  = collected.toOption.toList
-                              .flatMap(chunk => chunk.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList)
-                            err = collected.toOption.toList
-                              .flatMap(chunk => chunk.collect { case ProgramFeed.Err(text) => text }.toList)
-                            noise = if codes == List(0) then "" else err.mkString("\n")
-                          yield assertTrue(
-                            detail == "",
-                            codes == List(0),
-                            noise == "",
-                          )
-                        ran.provideSomeLayer[TestEnvironment & Scope & Resolve](
-                          ResolutionService.pinned(pinned(lock)) ++
-                            ZLayer.succeed(ContentStore.in(dir.resolve("store")))
-                        )
-    ,
-    test("generated text replaces the unmanaged resource the main reads"):
-      Workspace
-        .work("histos-program-resource")
-        .flatMap: dir =>
-          Machine
-            .load(dir)
-            .either
-            .flatMap:
-              case Left(error)    => ZIO.succeed(assertTrue(error.message == ""))
-              case Right(machine) =>
-                GraphCompile
-                  .jdk(machine)
-                  .either
-                  .flatMap:
-                    case Left(error) => ZIO.succeed(assertTrue(error.message == ""))
-                    case Right(jdk)  =>
-                      ZIO.serviceWithZIO[DependencyLock]: lock =>
-                        val probe = dir.resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
-                        val note  = dir.resolve("src").resolve("main").resolve("resources").resolve("note.txt")
-                        val ran   =
-                          for
-                            runtimes  <- Runtimes.read(machine, None)
-                            _         <- Workspace.writeString(probe, generatedProbe)
-                            _         <- Workspace.writeString(note, "plain")
-                            collected <- Program
-                              .console(
-                                dir,
-                                graphWith(List(GeneratedAsset.Text(ResourceName("note.txt"), "generated"))),
-                                lawName.value,
-                                jdk,
-                                runtimes,
-                                None,
-                                _ => ZIO.unit,
-                                ZIO.unit,
-                              )
-                              .runCollect
-                              .either
-                            landed <- Workspace.readIfPresent(
-                              GraphCompile.classesDir(dir, lawName, scala3).resolve("note.txt")
-                            )
-                            detail = collected.fold(_.message, _ => "")
-                            codes  = collected.toOption.toList
-                              .flatMap(chunk => chunk.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList)
-                            err = collected.toOption.toList
-                              .flatMap(chunk => chunk.collect { case ProgramFeed.Err(text) => text }.toList)
-                            noise = if codes == List(0) then "" else err.mkString("\n")
-                            found = landed.getOrElse("")
-                          yield assertTrue(
-                            detail == "",
-                            codes == List(0),
-                            noise == "",
-                            found == "generated",
-                          )
-                        ran.provideSomeLayer[TestEnvironment & Scope & Resolve](
-                          ResolutionService.pinned(pinned(lock)) ++
-                            ZLayer.succeed(ContentStore.in(dir.resolve("store")))
-                        ),
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+    test("generated text replaces the unmanaged resource the main reads, and the main exits 0"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val scala3 = closure.scalaVersion
+        Workspace
+          .work("histos-program-resource")
+          .flatMap: dir =>
+            val probe = dir.resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
+            val note  = dir.resolve("src").resolve("main").resolve("resources").resolve("note.txt")
+            val ran   =
+              for
+                machine   <- Machine.load(dir)
+                jdk       <- GraphCompile.jdk(machine)
+                runtimes  <- Runtimes.read(machine, None)
+                _         <- Workspace.writeString(probe, generatedProbe)
+                _         <- Workspace.writeString(note, "plain")
+                collected <- Program
+                  .console(
+                    dir,
+                    graph(scala3, List(GeneratedAsset.Text(ResourceName("note.txt"), "generated"))),
+                    lawName.value,
+                    jdk,
+                    runtimes,
+                    None,
+                    _ => ZIO.unit,
+                    ZIO.unit,
+                  )
+                  .runCollect
+                landed <- Workspace.readIfPresent(GraphCompile.classesDir(dir, lawName, scala3).resolve("note.txt"))
+              yield
+                val codes = collected.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList
+                val err   = collected.collect { case ProgramFeed.Err(text) => text }.toList
+                // A failed run shows its stderr; a JVM warning beside a clean exit is not a failure.
+                val noise = if codes == List(0) then Nil else err
+                assertTrue(
+                  codes == List(0),
+                  noise == Nil,
+                  landed.contains("generated"),
+                )
+            ran.provideSomeLayer[TestEnvironment & Scope & Resolve](
+              ResolutionService.pinned(closure.pinning(lawName)) ++
+                ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+            )
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 
   private val generatedProbe =
     """object Probe:
@@ -159,10 +88,7 @@ object ProgramRunLawSpec extends ZIOSpecDefault:
       |    if text != "generated" then sys.error(text)
       |""".stripMargin
 
-  private def graph: ProjectGraph =
-    graphWith(Nil)
-
-  private def graphWith(resources: List[GeneratedAsset]): ProjectGraph =
+  private def graph(scala3: ScalaVersion, resources: List[GeneratedAsset]): ProjectGraph =
     val law = Module(
       lawName,
       Platforms(Platform.Jvm, Nil),
@@ -181,24 +107,4 @@ object ProgramRunLawSpec extends ZIOSpecDefault:
       Nil,
       resolution = Resolution.Lock,
     )
-
-  private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 end ProgramRunLawSpec

@@ -24,9 +24,13 @@ object Products:
     "jars",
     "link",
     "run",
+    "doc",
+    "coverage/classes",
+    "coverage/analysis",
   )
 
-  val sharedRoots: List[String] = List("provider", "provider-src")
+  /** The coverage report spans every module, so only the full wipe removes it. */
+  val sharedRoots: List[String] = List("provider", "provider-src", "coverage")
 
   /** The compile tally `observe` reads. A successful clean deletes it. */
   def observation(repo: Path): Path =

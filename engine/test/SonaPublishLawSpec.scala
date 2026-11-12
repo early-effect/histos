@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.central.SnapshotRepository
 import histos.version.{AbbrevSha, Revision, ShipNumber, SnapshotCoordinate}
 import histos.workspace.Workspace
 import histos.version.ShipName
@@ -16,11 +17,12 @@ import histos.{
   StagedModule,
 }
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
-import zio.{Chunk, ZIO}
+import zio.{Chunk, Scope, ZIO, ZLayer}
 import zio.test.*
 
+/** The snapshot repository is a loopback that fails every request, so a law that reaches it fails on its count. */
 object SonaPublishLawSpec extends ZIOSpecDefault:
   private val creds  = Map("SONATYPE_USERNAME" -> "user", "SONATYPE_PASSWORD" -> "pw")
   private val number = ShipNumber("1.2.3")
@@ -32,45 +34,66 @@ object SonaPublishLawSpec extends ZIOSpecDefault:
       val snapshot = Revision.Snapshot(SnapshotCoordinate(number, AbbrevSha.trusted("abcdefabcdef")))
       val pointer  = Revision.Pointer(histos.version.SnapshotPointer(number))
       for
-        empty   <- publish(creds, PublishRequest(snapshot, false, Path.of("stage"), Path.of("checkout"), Chunk.empty))
-        pointed <- publish(creds, PublishRequest(pointer, true, Path.of("stage"), Path.of("checkout"), Chunk.empty))
-        secrets <- ZIO.serviceWith[SonaPublish](_.secretNames).provide(SonaStock.layer(creds, _ => ZIO.unit))
-        follow  <- ZIO.serviceWith[SonaPublish](_.followUp).provide(SonaStock.layer(creds, _ => ZIO.unit))
+        loop    <- RefusingLoopback.bound
+        empty   <- publish(loop, PublishRequest(snapshot, false, Path.of("stage"), Path.of("checkout"), Chunk.empty))
+        pointed <- publish(loop, PublishRequest(pointer, true, Path.of("stage"), Path.of("checkout"), Chunk.empty))
+        stock   <- ZIO.service[SonaPublish].provide(stocked(loop))
+        reached <- loop.connections
       yield assertTrue(
         empty == Right(PublishReceipt(Chunk.empty, Chunk.empty)),
         pointed == Right(PublishReceipt(Chunk.empty, Chunk.empty)),
-        secrets == Sona.secrets,
-        follow == FollowUp.Finished,
+        stock.secretNames == Sona.secrets,
+        stock.followUp == FollowUp.Finished,
+        reached == 0,
       )
     ,
     test("a missing jar, a bad artifact, and a bad dependency fail before an upload"):
-      Workspace
-        .work("histos-sona-stage")
-        .flatMap: root =>
-          val jar = root.resolve("core.jar")
-          val pom = root.resolve("core.pom")
-          for
-            _       <- write(jar, Array(1, 2))
-            _       <- write(pom, Array(3))
-            missing <- publish(creds, request(root.resolve("missing.jar"), pom, "core", Chunk.empty))
-            named   <- publish(creds, request(jar, pom, "1bad", Chunk.empty))
-            ranged  <- publish(
-              creds,
-              request(
-                jar,
-                pom,
-                "core",
-                Chunk(
-                  StagedDependency(group, "core", "1.0.0"),
-                  StagedDependency(group, "kit", ".."),
-                ),
-              ),
-            )
-          yield assertTrue(
-            missing == Left(PublishFault.Write(root.resolve("missing.jar").toString)),
-            named == Left(PublishFault.Artifact("1bad")),
-            ranged == Left(PublishFault.Dependency("..")),
+      for
+        root <- Workspace.work("histos-sona-stage")
+        loop <- RefusingLoopback.bound
+        jar = root.resolve("core.jar")
+        pom = root.resolve("core.pom")
+        _       <- Workspace.writeString(jar, "jar")
+        _       <- Workspace.writeString(pom, "pom")
+        missing <- publish(loop, request(root.resolve("missing.jar"), pom, "core", Chunk.empty))
+        named   <- publish(loop, request(jar, pom, "1bad", Chunk.empty))
+        ranged  <- publish(
+          loop,
+          request(
+            jar,
+            pom,
+            "core",
+            Chunk(
+              StagedDependency(group, "core", "1.0.0"),
+              StagedDependency(group, "kit", ".."),
+            ),
           ),
+        )
+        reached <- loop.connections
+      yield assertTrue(
+        missing == Left(PublishFault.Write(root.resolve("missing.jar").toString)),
+        named == Left(PublishFault.Artifact("1bad")),
+        ranged == Left(PublishFault.Dependency("..")),
+        reached == 0,
+      )
+    ,
+    test("a staged module that passes every check is a transport fault at the loopback"):
+      for
+        root <- Workspace.work("histos-sona-upload")
+        loop <- RefusingLoopback.bound
+        jar = root.resolve("core.jar")
+        pom = root.resolve("core.pom")
+        _       <- Workspace.writeString(pom, "pom")
+        _       <- ZIO.attemptBlocking(java.nio.file.Files.write(jar, Array[Byte](0x50, 0x4b, 3, 4))).orDie
+        sent    <- publish(loop, request(jar, pom, "core", Chunk.empty))
+        reached <- loop.connections
+      yield assertTrue(
+        sent match
+          case Left(PublishFault.Transport(_)) => true
+          case _                               => false
+        ,
+        reached > 0,
+      ),
   )
 
   private def request(
@@ -107,21 +130,15 @@ object SonaPublishLawSpec extends ZIOSpecDefault:
       dependencies,
     )
 
-  private def publish(
-      env: Map[String, String],
-      request: PublishRequest,
-  ): ZIO[Any, Nothing, Either[PublishFault, PublishReceipt]] =
-    ZIO
-      .serviceWithZIO[SonaPublish](_.publish(request))
-      .provide(SonaStock.layer(env, _ => ZIO.unit))
-      .either
+  private def stocked(loop: RefusingLoopback): ZLayer[Any, SnapshotRepository.Error, SonaPublish] =
+    ZLayer.fromZIO(ZIO.fromEither(SnapshotRepository.from(s"${loop.url}/repository"))) >>>
+      SonaStock.layer(creds, _ => ZIO.unit)
 
-  private def write(path: Path, bytes: Array[Byte]): ZIO[Any, Nothing, Unit] =
+  private def publish(
+      loop: RefusingLoopback,
+      request: PublishRequest,
+  ): ZIO[Scope, SnapshotRepository.Error, Either[PublishFault, PublishReceipt]] =
     ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.write(path, bytes)
-        ()
-      }
-      .catchAll(error => ZIO.dieMessage(error.getClass.getName))
+      .serviceWithZIO[SonaPublish](_.publish(request).either)
+      .provide(stocked(loop))
 end SonaPublishLawSpec

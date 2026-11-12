@@ -50,26 +50,29 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
       )
     ,
     test("central has no origin, ivy and a file maven do, and a snapshot repository is added once"):
-      fileOrigin match
-        case None        => assertTrue(false)
-        case Some(maven) =>
+      val names     = "nscplugin_3.10.0" :: NativeComponent.libraries(scala3).map(_.artifact(central, scala3))
+      val snapshots = Repository.Maven(RepoUrl.trusted("https://central.sonatype.com/repository/maven-snapshots/"))
+      val file      = Repository.Maven(RepoUrl.trusted("file:/tmp/m2"))
+      zio.ZIO
+        .fromEither(NativeToolchain.parse("file:/tmp/m2"))
+        .map: source =>
           val asked    = NativeRequests.libraries(scala3, central, repos)
           val fromIvy  = NativeRequests.libraries(scala3, ivy, repos)
-          val fromFile = NativeRequests.libraries(scala3, maven, repos)
+          val fromFile = NativeRequests.libraries(scala3, NativeToolchain(source, release), repos)
           val snapshot = NativeRequests.libraries(scala3, NativeToolchain(NativeSource.Central, snap), repos)
           val again    =
             NativeRequests.libraries(scala3, NativeToolchain(NativeSource.Central, snap), snapshot.repositories)
-          val url = "https://central.sonatype.com/repository/maven-snapshots/"
           assertTrue(
-            asked.roots.forall(_.origin.isEmpty),
+            names.length == 9,
+            asked.roots.map(root => root.name -> root.origin) == names.map(_ -> None),
             asked.repositories == repos,
             asked.id.role == ToolRole.NativeLibraries,
             asked.id.variant == ToolVariant.Native(release),
-            fromIvy.roots.forall(_.origin == Some(Repository.IvyLocal)),
-            fromFile.roots.forall(_.origin == Some(Repository.Maven(RepoUrl.trusted("file:/tmp/m2")))),
-            snapshot.repositories.all.head == Repository.Maven(RepoUrl.trusted(url)),
+            fromIvy.roots.map(root => root.name -> root.origin) == names.map(_ -> Some(Repository.IvyLocal)),
+            fromFile.roots.map(root => root.name -> root.origin) == names.map(_ -> Some(file)),
+            snapshot.repositories.all.headOption.contains(snapshots),
             snapshot.repositories.all.contains(Repository.Central),
-            again.repositories.all.count(_ == Repository.Maven(RepoUrl.trusted(url))) == 1,
+            again.repositories.all.count(_ == snapshots) == 1,
           )
     ,
     test("the linker, the test interface, and the suite are those roots"):
@@ -111,9 +114,4 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
       case Array("3", _, _)       => "3"
       case Array(major, minor, _) => s"$major.$minor"
       case _                      => version.value
-
-  private def fileOrigin: Option[NativeToolchain] =
-    NativeToolchain.parse("file:/tmp/m2") match
-      case Right(source) => Some(NativeToolchain(source, release))
-      case Left(_)       => None
 end NativeRequestLawSpec

@@ -6,6 +6,7 @@ import histos.select.SelectError
 import histos.supply.{
   ApiCall,
   DoctorSurface,
+  GitAnswers,
   Net,
   OutageStrategy,
   Reply,
@@ -708,19 +709,21 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       launch: List[Module],
       machine: Machine,
   ): URIO[ReleaseFeed, (Int, String)] =
-    DoctorSurface.runWith(
-      repo,
-      graph,
-      DoctorSurface.Request(Some("toolchain"), false, None, false, false, launch, true),
-      machine,
-      Quiet,
-      Map.empty,
-      None,
-      false,
-      _ => ZIO.dieMessage("doctor asked"),
-      line => ZIO.dieMessage(s"doctor ran $line"),
-      url => ZIO.dieMessage(s"doctor wrote $url"),
-    )
+    DoctorSurface
+      .runWith(
+        repo,
+        graph,
+        DoctorSurface.Request(Some("toolchain"), false, None, false, false, launch, true),
+        machine,
+        Quiet,
+        Map.empty,
+        None,
+        false,
+        _ => ZIO.dieMessage("doctor asked"),
+        line => ZIO.dieMessage(s"doctor ran $line"),
+        url => ZIO.dieMessage(s"doctor wrote $url"),
+      )
+      .provideSomeLayer[ReleaseFeed](GitAnswers().layer)
 
   private def floorText(outcomes: List[Outcome]): String =
     outcomes match

@@ -190,7 +190,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
             graph <- load(
               Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(packed)), packed)
             )
-            id      <- ZIO.fromEither(DeploymentId.from("dep-1")).orDieWith(blow)
+            id = DeploymentId("dep-1")
             quiet   <- PublishRun.assets(repo, graph, Nil, Map.empty)
             named   <- PublishRun.assets(repo, graph, List("demo"), Map.empty)
             _       <- DeploymentFile.write(repo, ShipName("demo"), id, DeploymentState.Validated, "9.9.9")

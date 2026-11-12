@@ -16,25 +16,50 @@ import zio.test.*
   */
 object SuiteNamesLawSpec extends ZIOSpecDefault:
   def spec = suite("suite names")(
-    test("an empty directory has no suites, only sjsir is unseen, and a jar of sjsir is still no suites"):
+    test("an empty directory has no suites, only sjsir is unseen, and sjsir beside a class or in a jar is no suites"):
       ZIO.scoped {
         Workspace.work("histos-suite-names-empty").flatMap { root =>
           val empty   = root.resolve("empty")
           val scripts = root.resolve("scripts")
+          val mixed   = root.resolve("mixed")
           val packed  = root.resolve("scripts.jar")
           for
             _       <- ZIO.attemptBlocking(Files.createDirectories(empty)).orDie
             _       <- writeBytes(scripts.resolve("demo").resolve("App.sjsir"), Array[Byte](1))
+            _       <- writeBytes(mixed.resolve("demo").resolve("App.sjsir"), Array[Byte](1))
+            _       <- writeClass(mixed.resolve("demo/Bar.class"), "demo/Bar", "java/lang/Object")
             _       <- jar(packed, "demo/App.sjsir" -> Array[Byte](1))
             none    <- SuiteNames.discover(empty, Nil, "fw.Marker")
             unseen  <- SuiteNames.discover(scripts, Nil, "fw.Marker")
+            beside  <- SuiteNames.discover(mixed, Nil, "fw.Marker")
             archive <- SuiteNames.discover(packed, Nil, "fw.Marker")
             missing <- SuiteNames.discover(root.resolve("absent"), Nil, "fw.Marker")
           yield assertTrue(
             none == SuiteNames.Found.Suites(Nil),
             unseen == SuiteNames.Found.Unseen,
+            beside == SuiteNames.Found.Suites(Nil),
             archive == SuiteNames.Found.Suites(Nil),
             missing == SuiteNames.Found.Suites(Nil),
+          )
+        }
+      }
+    ,
+    test("ZIO's framework knows its spec base without a jar, through a subclass, and another framework names none"):
+      ZIO.scoped {
+        Workspace.work("histos-suite-names-zio").flatMap { root =>
+          val classes = root.resolve("classes")
+          val spec    = "zio/test/ZIOSpecAbstract"
+          for
+            _       <- writeClass(classes.resolve("demo/Foo$.class"), "demo/Foo$", spec)
+            _       <- writeClass(classes.resolve("demo/Mid$.class"), "demo/Mid$", spec)
+            _       <- writeClass(classes.resolve("demo/Child$.class"), "demo/Child$", "demo/Mid$")
+            _       <- writeClass(classes.resolve("demo/Plain.class"), "demo/Plain", spec)
+            _       <- writeClass(classes.resolve("subprocess/Hidden$.class"), "subprocess/Hidden$", spec)
+            found   <- SuiteNames.discover(classes, Nil, "zio.test.sbt.ZTestFramework")
+            unnamed <- SuiteNames.discover(classes, Nil, "other.Framework")
+          yield assertTrue(
+            found == SuiteNames.Found.Suites(List("demo.Child", "demo.Foo", "demo.Mid")),
+            unnamed == SuiteNames.Found.Suites(Nil),
           )
         }
       }
@@ -73,17 +98,22 @@ object SuiteNamesLawSpec extends ZIOSpecDefault:
         }
       }
     ,
-    test("a cycle is not a reach, and dollars or a subprocess prefix are dropped before the mark"):
+    test("a reach is transitive, a cycle or a missing parent is not, and dollars or a subprocess prefix are dropped"):
       val parent = ClassShapes.Shape("demo.Parent", false, Nil)
       val loop   = ClassShapes.Shape("demo.Loop", false, List("demo.Loop"))
       val anon   = ClassShapes.Shape("demo.A$$anon", false, List("demo.Parent"))
       val hidden = ClassShapes.Shape("subprocess.Hidden", false, List("demo.Parent"))
       val hit    = ClassShapes.Shape("demo.Hit", true, List("demo.Parent"))
-      val world  = List(parent, loop, anon, hidden, hit).map(shape => shape.name -> shape).toMap
+      val mid    = ClassShapes.Shape("demo.Mid$", true, List("demo.Parent"))
+      val deep   = ClassShapes.Shape("demo.Deep$", true, List("demo.Mid$"))
+      val lost   = ClassShapes.Shape("demo.Lost$", true, List("missing.Gone"))
+      val world  = List(parent, loop, anon, hidden, hit, mid, deep, lost).map(shape => shape.name -> shape).toMap
       val marks  = List(SuiteNames.Mark("demo.Parent", module = true), SuiteNames.Mark("demo.Parent", module = false))
+      val module = List(SuiteNames.Mark("demo.Parent", module = true))
       assertTrue(
         SuiteNames.choose(List(loop, anon, hidden, hit, parent), world, marks) == List("demo.Hit", "demo.Parent"),
         SuiteNames.choose(List(hit), world, List(SuiteNames.Mark("demo.Parent", module = false))) == Nil,
+        SuiteNames.choose(List(deep, mid, lost, parent), world, module) == List("demo.Deep", "demo.Mid"),
       ),
   )
 

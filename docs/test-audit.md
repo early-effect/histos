@@ -36,8 +36,10 @@ Each bug gets a law that fails on today's code, then the fix.
   - Red: `JobCondLawSpec` rendered `if: "!github.event_name == 'push'"`. Green: `if: "!(github.event_name == 'push')"`, 3 passed. This repository's build renders no `Not`, so its workflows did not move, and `./histos workflow --check` is clean.
 - [x] B2 `JobYaml.lift` ends in `case other => CiError.UnpinnedWorkflowRun(other.message)`, so a `BadName` or a `DuplicatePlugin` reports as an unpinned workflow run. `CiError` gets an honest case for a non-CI build failure. Owner: engine A-L, and engine M-Z points `WorkflowLawSpec:293` at it.
   - The loader adds the wiring's plugins after `Projects.build` checked its jobs, so a reserved or repeated wiring job first fails in `JobYaml.render`. `lift` now takes a `CiFault`, and every other arrange fault stays the `BuildError` it is (`Either[CiError | BuildError, _]` through `Workflow`). `Calls.workflowWork` reports it as `LoadError.BrokenGraph`, so no new `CiError` case was needed. Red: `JobYamlLawSpec` got `UnpinnedWorkflowRun("job test is reserved")` and `UnpinnedWorkflowRun("job nightly is declared twice")`. Green: `PluginGraph(ReservedJob(test))` and `PluginGraph(DuplicateJob(nightly))`, 11 passed.
-- [ ] B3 `Decisions.scala:133` names a cross-version split's cells with the coordinate (`split.toList.map(CellName.trusted)` over the groupBy keys), and calls `split.head`. The cells are the rows' `cell`. Owner: engine M-Z (`SupplyDecisionLawSpec:135`).
-- [ ] B4 `VersionOrder` collects every digit run, so `1.2.3-RC1` sorts above `1.2.3`, and `NodeToolchain.highest` prefers `v25.0.0-rc.1` over `v25.0.0`. A pre-release sorts below its release. Owner: engine M-Z (`ToolchainLawSpec:13`).
+- [x] B3 `Decisions.scala:133` names a cross-version split's cells with the coordinate (`split.toList.map(CellName.trusted)` over the groupBy keys), and calls `split.head`. The cells are the rows' `cell`. Owner: engine M-Z (`SupplyDecisionLawSpec:135`).
+  - Red: a split of `org.example:demo` named the cells `List(org.example:demo)`, and a lock that split two coordinates named both coordinates as cells of the one it reported. Green: `CrossVersionSplit(demo, List(core, other))`, and the first coordinate in lock order with its own cells. The fault is a `collectFirst`, so the `split.head` is gone.
+- [x] B4 `VersionOrder` collects every digit run, so `1.2.3-RC1` sorts above `1.2.3`, and `NodeToolchain.highest` prefers `v25.0.0-rc.1` over `v25.0.0`. A pre-release sorts below its release. Owner: engine M-Z (`ToolchainLawSpec:13`).
+  - Red: `compare("1.2.3-RC1", "1.2.3")` was 1, `atLeast("25.0.0-rc.1", "25")` was true, and `shadow` chose `/rc/bin/node` in either PATH order. Green: a version is the numbers before `-`, the pre-release numbers, then the `+` build, so a pre-release sorts below its release and above the one before it, `RC10` sorts above `RC2`, and `shadow` chooses `25.0.0`. A JDK floor reads `JAVA_VERSION`, which carries no pre-release, so the JDK check does not move. A Node `25.0.0-rc.1` is now below the Node floor of 25.
 - [x] B5 `DeploymentId.from` fails a mistyped id with `PortalError.Unnamed`, the portal-response error, so the operator reads "the portal upload did not name a deployment". It gets its own error case. Owner: central, and engine M-Z updates `ReleaseRunLawSpec:168`.
   - Proof: `PublishIdentityLawSpec` "a deployment id names an empty or spaced id" was red on the old parser (`"  "` and `" a b "` both read "the portal upload did not name a deployment"). Green with `DeploymentId.Error` (`Empty`, `Spaced(text)`). `ReleaseError.Deployment` carries it, so `publish drop "has space"` prints "deployment id 'has space' contains whitespace" (`ReleaseRunLawSpec`, edited only to keep engine green). The portal client still maps an unparseable upload body to `PortalError.Unnamed`.
 - [ ] B6 The daemon outbox `close` is `outbound.shutdown *> fiber.join`. A shut-down queue does not hand its remaining lines to the sender, so the BSP exit `Marker` that `Daemon.scala` offers just before `close` can be dropped. Prove the queue behavior in a miniature spec first. Owner: app (`DaemonOutboxLawSpec`).
@@ -52,6 +54,8 @@ Each bug gets a law that fails on today's code, then the fix.
   - Red: `Not found: law`, `Illegal start of toplevel definition`, and `Found: ("no" : String) Required: Int`, unplaced. Green: `histos.wiring.scala:4:…: error: Not found: law`, `histos.wiring.scala:1:…: error: Illegal start of toplevel definition`, and `…/law/Mark.scala:4:…`, 10 passed.
 - [x] B14 `CompileMemo` stamped the lock by modified time and size, so a rewrite of the same size in the same tick served the old lock. `CompileMemoLawSpec` failed that way in a full engine run. The stamp is now the sha256 of the bytes it parses. Owner: engine A-L (`CompileMemoLawSpec`).
   - Red: with the modified time put back, the reread lock was the first one. Green: the second lock, with a new stamp, 3 passed. The source digest memo keys on modified time and size the same way. That is D7.
+- [x] B15 `DepsSurface.githubName` fell back to `early-effect/histos` when neither `GITHUB_REPOSITORY` nor `origin` named a GitHub repository, so `deps pr`, `deps alert`, and `deps snapshot --submit` in any other checkout wrote to this repository. With no name, each one fails with "no GitHub repository: set GITHUB_REPOSITORY or add a github.com origin" and sends nothing. Owner: engine M-Z (`SurfaceExchangeLawSpec`).
+  - Red: `snapshot` returned `submitted early-effect/histos` and POSTed `repos/early-effect/histos/dependency-graph/snapshots`. Green: the snapshot and the pull request are that refusal, and no URL is sent.
 
 ## Decisions for Russ
 
@@ -75,13 +79,16 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] S2 `IvyLocal` writes Coursier's static `LocalRepositories.ivy2Local`, so `FilePublishLawSpec`, `IvyLocalLawSpec`, and `PublishInstallLawSpec` write and wipe the real `~/.ivy2/local`, and two worktrees delete each other's install. `IvyLocal` and `LocalStock.layer` take the root. Owner: engine A-L.
   - `IvyLocal.install(root, module)`, and `LocalStock.layer(note): URLayer[IvyRoot, LocalPublish]`. `PublishRun.local` needs `IvyRoot`, and `Calls.publishLocal` provides `IvyRoot.ivy2Local`. Red: `IvyLocalLawSpec` wrote `user.home/.ivy2/local/histos.law`. Green: the three laws install under `IvyRoot.at` their own directory, and `~/.ivy2/local` has no `histos.law`, `histos.filelaw`, or `histos.runlaw` after the run.
 - [ ] S3 `Cli.launch` provides `ReleaseFeed.live` inline. Once a law writes a pin, every launch fetches `repo1.maven.org` and writes `$HOME/.histos/upgrade`. `launch` requires `ReleaseFeed` and `Main` provides the live layer. Owner: app.
-- [ ] S4 `SonaStock`'s snapshot repository is fixed to `SnapshotRepository.central`, so only validation order keeps `SonaPublishLawSpec` off central.sonatype.com. The repository becomes a seam, and the law points it at a loopback that fails any request. Owner: engine M-Z.
-- [ ] S5 The supply surface reads `sys.env` (`GITHUB_REPOSITORY`, `HISTOS_DRY_RUN`) and runs `git` synchronously outside ZIO (`Surface.scala`). The laws test whichever branch the shell selects. Both go through `zio.System` and a git reader. Owner: engine M-Z.
+- [x] S4 `SonaStock`'s snapshot repository is fixed to `SnapshotRepository.central`, so only validation order keeps `SonaPublishLawSpec` off central.sonatype.com. The repository becomes a seam, and the law points it at a loopback that fails any request. Owner: engine M-Z.
+  - `SonaStock.layer(env, note): URLayer[SnapshotRepository, SonaPublish]`, and `PublishRun` provides `SnapshotRepository.central`. `RefusingLoopback` (`engine/test`) holds a loopback port for the law's scope and closes every connection unread. The sona laws assert the loopback saw no connection, and a staged module that passes every check is a `PublishFault.Transport` with a connection counted, which fails if the stock ignores its repository. `SignerLawSpec` and `ReleaseRunLawSpec` use the same loopback where they named `127.0.0.1:9`. The red run was not taken: a stock that ignores the layer would send that request to Central.
+- [x] S5 The supply surface reads `sys.env` (`GITHUB_REPOSITORY`, `HISTOS_DRY_RUN`) and runs `git` synchronously outside ZIO (`Surface.scala`). The laws test whichever branch the shell selects. Both go through `zio.System` and a git reader. Owner: engine M-Z.
+  - `GitRead` (`origin`, `head`, `tip`, `changed`) is a service with `GitRead.live`, and `DepsSurface.pullRequest`, `alert`, `snapshot`, and `DoctorSurface.runWith` need it. Every variable, `GITHUB_SHA` and `GITHUB_REF` too, is read through `zio.System`, and the advisory cache reads `user.home` through it and writes nothing without one. `DoctorSurface` read the host's `sys.env` for the central credentials check while `runWith` was handed an environment; it reads that environment now. `pullRequest` lost its `files` parameter, which only laws passed: they stub `changed`. `GitAnswers` (`engine/test`) answers git from fixed values. Proof: `SurfaceExchangeLawSpec` and `SupplySurfaceLawSpec` assert the live and the dry branch under `TestSystem` (an empty token is `GH_TOKEN is not set` live and the plan dry, and a dry pull request prints its calls and sends none), the `GITHUB_REPOSITORY` and `GITHUB_SHA` a job sets, and the repository `origin` names. B15 came out of this seam.
 - [x] S6 `SnapshotId.current` runs the real `git` on JVM and Native with the ambient environment and global config. The HEAD read becomes a dependency the law stubs. Owner: wire.
   - `SnapshotId.current(repo, head)` takes the HEAD reader, `ApiClock` and `ToolchainStamp` pass `SnapshotId.head`, and `ApiClockLawSpec` stubs it with a recording `Ref` (HEAD is read only for an `app` ship). No wire law starts a process; `./histos test wire` is green on JVM and Native.
 - [x] S7 `FormatterLawSpec` uses `Resolve.retained`, which downloads a missing scalafmt jar from Central, and reads this checkout's `.scalafmt.conf`. The scalafmt jars are read offline like S1, and the law writes its own config. Owner: engine A-L.
   - The suite runs on `CompilerClosure.layer`. `held(ScalafmtDynamic)` and `held(ScalafmtCore)` read both rows offline, and the configuration's version is the `scalafmt-core` root the lock pins. Proof: `FormatterLawSpec`, 6 passed.
-- [ ] S8 Laws read `TestClock.instant` and discard it (`_ <- Clock.instant`), which only starts the "not advancing the test clock" warning. Delete each line: `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec` (and its helpers), `ScaffoldLawSpec`, `SignerLawSpec`. `TaskLawSpec:62` sleeps an hour on an unadjusted clock where `ZIO.never` is the intent. Owner: engine M-Z.
+- [x] S8 Laws read `TestClock.instant` and discard it (`_ <- Clock.instant`), which only starts the "not advancing the test clock" warning. Delete each line: `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec` (and its helpers), `ScaffoldLawSpec`, `SignerLawSpec`. `TaskLawSpec:62` sleeps an hour on an unadjusted clock where `ZIO.never` is the intent. Owner: engine M-Z.
+  - Every read is gone, `engine/test` reads no `Clock`, and the cancelled task is `ZIO.never`.
 
 ## api
 
@@ -229,46 +236,62 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## engine M-Z
 
-- [ ] E35 `PublishLawSpec:282, :294, :319` WEAK. The fallback arm accepts `NothingToPublish`. Assert the one expected `Left`.
-- [ ] E36 `PublishInstallLawSpec:26` HOST. S2.
-- [ ] E37 `ProgramLawSpec:37` WEAK. No positive case, and the `$$anon` file is garbage bytes. Write real classes with ASM: a `Main` that is found and a `Foo$$anon` that is not.
-- [ ] E38 `PluginAspectLawSpec:66` WEAK. Only checks a value passes through. Read the context loader inside `ZIO.succeed` and `ZIO.attemptBlocking` and assert `eq` to a fresh loader.
-- [ ] E39 `NodeChooseLawSpec:18` HOST. Reads the host PATH under `withLiveSystem`, and runs a 2 s timeout on an unadjusted clock. Use `goodHome/bin` as `PATH`.
-- [ ] E40 `ModuleMissLawSpec:35` WEAK. Assert the test class exists after the run.
-- [ ] E41 `NativeRequestLawSpec:52` WEAK. `forall` on lists that may be empty, and `.head`. Assert the names, and `headOption.contains`.
-- [ ] E42 `PublishRecordLawSpec:71` WEAK. `contains("recordlaw")`. Assert `List("recordlaw_3")` and the revision.
-- [ ] E43 `ModuleTestLawSpec:36`, `ProgramRunLawSpec:37`, `NativeLawSpec:116`, `ProcessLawSpec:14`, `PublishLawSpec:124, :205` DELETE. Subsets of another law, or restatements.
-- [ ] E44 `PluginRunLawSpec:42` MERGE into `PluginOutcomeLawSpec:104`.
-- [ ] E45 `PreviewLawSpec:112` MERGE into `PlanShowLawSpec:17` with an `idle` module.
-- [ ] E46 `PublishLawSpec:365` MERGE. Move `summed` and `sized` into `BundleLawSpec`.
-- [ ] E47 `PublishReleaseLawSpec:47` MERGE. Move `promote` next to `ReleaseRunLawSpec:206`.
-- [ ] E48 `ProviderInstallLawSpec:46` REWRITE. `libs.head`. `libraries` returns a `NonEmptyChunk`.
-- [ ] E49 `ProvisionLawSpec:34` MERGE. Keep the `made.out` asserts.
-- [ ] E50 `ProvisionLawSpec:129` REWRITE. `withLiveClock` does nothing and its comment is false. Remove both.
-- [ ] E51 S8 lines in `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec`, `ScaffoldLawSpec`, `SignerLawSpec`, and `TaskLawSpec:62`.
-- [ ] E52 `SupplyDecisionLawSpec:135` REWRITE. Pins B3.
-- [ ] E53 `SurfaceExchangeLawSpec:78, :121, :138`, `SupplySurfaceLawSpec:124` HOST. S5.
-- [ ] E54 `SurveyLawSpec:69, :93` HOST. `withLiveSystem` where `Machine.load` already reads `zio.System`. Use `TestSystem`, and drop the JDK assert.
-- [ ] E55 `ZincCompileLawSpec` (4 laws) HOST. S1.
-- [ ] E56 `ScheduleLawSpec:394, :412` FLAKY. `observe` yields 32 times and reads. Wait on the terminal-event Promise, as `watch` does.
-- [ ] E57 `ScheduleLawSpec:227` WEAK. Renders only `url.absolute`. Assert the url renders back to the input.
-- [ ] E58 `ScheduleLawSpec:131` (and L619) DELETE. Enum declaration order.
-- [ ] E59 `ScheduleLawSpec:46` MERGE into L41 over generated `Need` subsets.
-- [ ] E60 `ScheduleLawSpec:355, :362` MERGE. One law over both `Promote` values.
-- [ ] E61 `ScheduleLawSpec:689` DELETE. L660 and L676 cover it.
-- [ ] E62 `SuiteLawSpec:268` DELETE. `TestCompile.distinct` is `List.distinct`. Replace the helper.
-- [ ] E63 `SuiteLawSpec:289` REWRITE. Assert `analysisDirOf(testClasses(...))` is the sibling `test-analysis`.
-- [ ] E64 `SuiteLawSpec:76, :95`, `SuiteFilterLawSpec:42, :52, :91` MERGE into `SuiteNamesLawSpec` and `SuiteLawSpec`'s unique cases.
-- [ ] E65 `ResolutionServiceLawSpec:226` REWRITE. Assert no `dependencies.lock` exists after a solve, in L105.
-- [ ] E66 `ReleaseRunLawSpec:168` REWRITE. Pins B5.
-- [ ] E67 `ToolchainLawSpec:13` REWRITE. Pins B4.
-- [ ] E68 `WorkflowLawSpec:214` MERGE. Repeats `WorkflowFileLawSpec:71`.
-- [ ] E69 `WorkflowLawSpec:293` REWRITE. B2.
-- [ ] E70 `WorkflowLawSpec:338` WEAK. No overlapping keys, so a shortest-prefix bug passes. Add an overlapping pin.
-- [ ] E71 `SignerMessageLawSpec:8` DELETE. Restates `SignerError.message` without coverage.
-- [ ] E72 `SonaPublishLawSpec:31, :46` HOST. S4.
-- [ ] E73 `ReapiLawSpec:13` REWRITE. Hand-picked ASCII values. `check` over long and non-ASCII strings, digests, and payloads.
-- [ ] E74 `Sha256DigestLawSpec:8` REWRITE. Tests the JDK. Keep the parse round trip.
+- [x] E35 `PublishLawSpec:282, :294, :319` WEAK. The fallback arm accepts `NothingToPublish`. Assert the one expected `Left`.
+- [x] E36 `PublishInstallLawSpec:26` HOST. S2. The ivy root was already the law's own (S2); the compile now runs on `CompilerClosure`.
+- [x] E37 `ProgramLawSpec:37` WEAK. No positive case, and the `$$anon` file is garbage bytes. Write real classes with ASM: a `Main` that is found and a `Foo$$anon` that is not.
+  - ASM writes `demo/Main` and `demo/Main$` with a public static main, `demo/Foo$$anon` with one, a private `main`, a class with none, and garbage bytes. Only `demo.Main` is found, once.
+- [x] E38 `PluginAspectLawSpec:66` WEAK. Only checks a value passes through. Read the context loader inside `ZIO.succeed` and `ZIO.attemptBlocking` and assert `eq` to a fresh loader.
+- [x] E39 `NodeChooseLawSpec:18` HOST. Reads the host PATH under `withLiveSystem`, and runs a 2 s timeout on an unadjusted clock. Use `goodHome/bin` as `PATH`.
+  - `PATH` is `goodHome/bin`, and the chosen node is that binary at 26.0.0. `withLiveSystem` stays because the `node --version` child is launched with the running JVM's `java.home`. The suite runs on the live clock, because a PATH sight bounds that real child with a timeout.
+- [x] E40 `ModuleMissLawSpec:35` WEAK. Assert the test class exists after the run.
+  - The row was wrong about the product: a test main is its module's one suite, so a pattern that does not name it is a miss before the tests compile. The fixture also wrote its probe outside the module's sources. The law now asserts the miss, the main classes, and no test classes, and that `Probe` itself runs, passes, and compiles `Probe.class`.
+- [x] E41 `NativeRequestLawSpec:52` WEAK. `forall` on lists that may be empty, and `.head`. Assert the names, and `headOption.contains`.
+- [x] E42 `PublishRecordLawSpec:71` WEAK. `contains("recordlaw")`. Assert `List("recordlaw_3")` and the revision.
+- [x] E43 `ModuleTestLawSpec:36`, `ProgramRunLawSpec:37`, `NativeLawSpec:116`, `ProcessLawSpec:14`, `PublishLawSpec:124, :205` DELETE. Subsets of another law, or restatements. `BundleLawSpec` gained the `..` path the deleted bundle-path law had.
+- [x] E44 `PluginRunLawSpec:42` MERGE into `PluginOutcomeLawSpec:104`.
+- [x] E45 `PreviewLawSpec:112` MERGE into `PlanShowLawSpec:17` with an `idle` module.
+- [x] E46 `PublishLawSpec:365` MERGE. Move `summed` and `sized` into `BundleLawSpec`.
+- [x] E47 `PublishReleaseLawSpec:47` MERGE. Move `promote` next to `ReleaseRunLawSpec:206`.
+- [x] E48 `ProviderInstallLawSpec:46` REWRITE. `libs.head`. `libraries` returns a `NonEmptyChunk`.
+- [x] E49 `ProvisionLawSpec:34` MERGE. Keep the `made.out` asserts.
+- [x] E50 `ProvisionLawSpec:129` REWRITE. `withLiveClock` does nothing and its comment is false. Remove both.
+- [x] E51 S8 lines in `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec`, `ScaffoldLawSpec`, `SignerLawSpec`, and `TaskLawSpec:62`.
+- [x] E52 `SupplyDecisionLawSpec:135` REWRITE. Pins B3.
+- [x] E53 `SurfaceExchangeLawSpec:78, :121, :138`, `SupplySurfaceLawSpec:124` HOST. S5. The audit law also wrote the developer's `~/.cache/histos/advisories`; it now sets `user.home` under `TestSystem` and asserts the cached body.
+- [x] E54 `SurveyLawSpec:69, :93` HOST. `withLiveSystem` where `Machine.load` already reads `zio.System`. Use `TestSystem`, and drop the JDK assert. The laws build their `Machine` with no PATH and no java home, so nothing reads the host.
+- [x] E55 `ZincCompileLawSpec` (4 laws) HOST. S1. With it, `ModuleMissLawSpec`, `ModuleReportLawSpec`, `ModuleTestLawSpec`, `PluginCompileCellLawSpec`, `ProgramRunLawSpec`, `ProviderInstallLawSpec`, `ProviderLawSpec`, `PublishInstallLawSpec`, `PublishRecordLawSpec`, `PublishReleaseLawSpec`, and `PublishSnapshotLawSpec` run on `CompilerClosure` at its locked Scala version, and their checkout walks are deleted.
+- [x] E56 `ScheduleLawSpec:394, :412` FLAKY. `observe` yields 32 times and reads. Wait on the terminal-event Promise, as `watch` does.
+  - `observe` waits for the event that ends the goal's own step, which is the last event the run emits. The `exclude` helper still yields 32 times before it reads the peak. That is E81.
+- [x] E57 `ScheduleLawSpec:227` WEAK. Renders only `url.absolute`. Assert the url renders back to the input. A bare host renders with its root path, `http://cache.example/`.
+- [x] E58 `ScheduleLawSpec:131` (and L619) DELETE. Enum declaration order.
+- [x] E59 `ScheduleLawSpec:46` MERGE into L41 over generated `Need` subsets.
+- [x] E60 `ScheduleLawSpec:355, :362` MERGE. One law over both `Promote` values.
+- [x] E61 `ScheduleLawSpec:689` DELETE. L660 and L676 cover it.
+- [x] E62 `SuiteLawSpec:268` DELETE. `TestCompile.distinct` is `List.distinct`. Replace the helper.
+- [x] E63 `SuiteLawSpec:289` REWRITE. Assert `analysisDirOf(testClasses(...))` is the sibling `test-analysis`.
+- [x] E64 `SuiteLawSpec:76, :95`, `SuiteFilterLawSpec:42, :52, :91` MERGE into `SuiteNamesLawSpec` and `SuiteLawSpec`'s unique cases.
+  - `SuiteNamesLawSpec` took the transitive reach, the missing parent, sjsir beside a class, and the ZIO framework's built-in mark. `SuiteLawSpec` took the finished cell, the link failure, `classBinaries`, the `.class` name, and the file that stays open, and its patterns are `SuitePattern` literals.
+- [x] E65 `ResolutionServiceLawSpec:226` REWRITE. Assert no `dependencies.lock` exists after a solve, in L105.
+- [x] E66 `ReleaseRunLawSpec:168` REWRITE. Pins B5. The law already pinned `DeploymentId.Error.Spaced` after B5. The local is `spaced` (E78).
+- [x] E67 `ToolchainLawSpec:13` REWRITE. Pins B4.
+- [x] E68 `WorkflowLawSpec:214` MERGE. Repeats `WorkflowFileLawSpec:71`.
+- [x] E69 `WorkflowLawSpec:293` REWRITE. B2. Deleted: `JobYamlLawSpec` pins B2 through `JobYaml.render`, and E80 removed `lift`, the only thing the law called.
+- [x] E70 `WorkflowLawSpec:338` WEAK. No overlapping keys, so a shortest-prefix bug passes. Add an overlapping pin.
+- [x] E71 `SignerMessageLawSpec:8` DELETE. Restates `SignerError.message` without coverage.
+- [x] E72 `SonaPublishLawSpec:31, :46` HOST. S4.
+- [x] E73 `ReapiLawSpec:13` REWRITE. Hand-picked ASCII values. `check` over long and non-ASCII strings, digests, and payloads.
+  - Two `check` laws: every request and response round-trips for a Unicode instance up to 300 characters, any digest, size, and payload, and frames of any length up to three chunks join back to the payload with the resource once and the offsets counted. The service names and the omitted empty fields stay as fixed rows.
+- [x] E74 `Sha256DigestLawSpec:8` REWRITE. Tests the JDK. Keep the parse round trip.
+- [x] E75 `.histos/doc` and `.histos/coverage` are not product roots, so `clean` leaves them, although the README says clean wipes every product root. Owner: engine M-Z (`CleanLawSpec`).
+  - `doc`, `coverage/classes`, and `coverage/analysis` are module roots, and `coverage`, which holds the report for every module, is a shared root. Red: the full wipe left seven planted files and the module wipe left three. Green: both laws pass, and the README names the scaladoc and coverage output.
+- [x] E76 `Workflow.check` uses `extra.head` behind a `nonEmpty` guard. It is `foreachDiscard(extra.headOption)`, and `WorkflowFileLawSpec` still pins the stale-file drift.
+- [x] E77 A `histos.scala` compile failure (`BuildFile.compile`) is message-only in `LoadError.CompileFailed`. Owner: engine M-Z (`LoaderProjectLawSpec`).
+  - `BuildFile.compile` is gone, and the loader compiles the build file through `compileLabeled` with the label `histos.scala`, the same path B13 gave the wiring. Red: `Found: ("no" : String) Required: Int`, unplaced. Green: `histos.scala:5:…: error: Found: …`, and the temp file's name is not in the text.
+- [x] E78 `ReleaseReportLawSpec:13` uses `case Left(_) => assertTrue(false)`, and `ReleaseReportLawSpec:13`, `PublishRunLawSpec:192`, and `ReleaseRunLawSpec:259` parse a constant deployment id. Each uses the `DeploymentId("…")` literal, and `ReleaseRunLawSpec` parses its portal parts with `ZIO.fromEither` steps.
+- [x] E79 The `SuitePattern.from(...) match` fallbacks in `ModuleMissLawSpec:44` and `SuiteFilterLawSpec:53` are `SuitePattern("…")` literals. The `SuiteFilterLawSpec` law moved into `SuiteLawSpec` (E64).
+- [x] E80 `CiError` had 13 cases that only mirrored `CiFault`. They are one case, `CiError.Fault(fault: CiFault)`, whose sentence is the fault's, and `JobYaml.lift` is gone. `DuplicateSite` stays: it comes from `PluginGraphFault`.
+  - The wire shape changed, and the native client still links. `CodecSamples` carries one `Fault` sample, `GoldenLawSpec` pins `{"Files":{"error":{"Fault":{"fault":{"UnknownNeed":{"job":"docs","need":"release"}}}}}}` on JVM and Native, `MessageLawSpec` and `WireSchemaLawSpec` name the 14 cases, and `docs/ci-job-trait.md` says the wire carries the fault.
+- [ ] E81 FLAKY. `ScheduleLawSpec`'s `exclude` helper (the three "one permit per need" exclusion laws) yields 32 times after the first step enters, then reads the peak. A broken permit can let the second step in after that read, so the law can pass on the bug. The second step's `Started` event is offered before it takes the permit, so no event marks it blocked. The deterministic form is `TestClock.adjust` with `TestAspect.fibers`, so the adjust waits until every Histos fiber is suspended; prove that in a miniature spec before the law moves onto it. Owner: engine M-Z follow-up.
 
 ## app
 

@@ -126,15 +126,22 @@ object Bump:
       security: Boolean,
       transitive: TransitiveFix,
   ): Either[SupplyFault, BumpPlan] =
-    val grouped = locked.groupBy(_.coordinate.value)
-    val split   = grouped.collect:
-      case (name, rows) if rows.map(_.version).distinct.length > 1 => name
-    if split.nonEmpty then
-      Left(SupplyFault.CrossVersionSplit(Coordinate.trusted(split.head), split.toList.map(CellName.trusted)))
-    else
-      val chosen          = locked.flatMap(row => pick(row, releases, policy, today, security, transitive))
-      val (listed, apply) = chosen.partition(_.listed)
-      Right(BumpPlan(apply.map(_.bump), listed.map(_.bump)))
+    split(locked) match
+      case Some(fault) => Left(fault)
+      case None        =>
+        val chosen          = locked.flatMap(row => pick(row, releases, policy, today, security, transitive))
+        val (listed, apply) = chosen.partition(_.listed)
+        Right(BumpPlan(apply.map(_.bump), listed.map(_.bump)))
+
+  /** The first coordinate, in lock order, that two cells lock at different versions, with the cells that lock it. */
+  private def split(locked: List[LockedDependency]): Option[SupplyFault] =
+    locked
+      .map(_.coordinate)
+      .distinct
+      .map(coordinate => coordinate -> locked.filter(_.coordinate == coordinate))
+      .collectFirst:
+        case (coordinate, rows) if rows.map(_.version).distinct.length > 1 =>
+          SupplyFault.CrossVersionSplit(coordinate, rows.map(row => CellName.trusted(row.cell)).distinct)
 
   def verify(
       action: ActionName,

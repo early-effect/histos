@@ -46,18 +46,37 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
       program
     ,
     test("a wiring file that does not compile fails the load, and the diagnostic names that file"):
-      loadWith("not scala").either.map: found =>
-        val texts = found match
-          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.map(_.text)
-          case other                                      => List(other.toString)
+      loadWith(buildFile, Some("not scala")).either.map: found =>
         assertTrue(
-          texts.exists(text =>
+          texts(found).exists(text =>
             text.startsWith("histos.wiring.scala:1:") && text.endsWith(": error: Illegal start of toplevel definition")
           )
+        )
+    ,
+    test("a build file that does not compile fails the load, and the diagnostic names histos.scala and the line"):
+      val broken =
+        """import histos.*
+          |
+          |object build extends HistosBuild:
+          |  def graph =
+          |    val count: Int = "no"
+          |    Projects(module("loaderlaw", Jvm)(scala"3.10.0"))
+          |""".stripMargin
+      loadWith(broken, None).either.map: found =>
+        assertTrue(
+          texts(found).exists(text =>
+            text.startsWith("histos.scala:5:") && text.contains(": error: ") && text.contains("Required: Int")
+          ),
+          !texts(found).exists(_.contains("histos-build")),
         ),
   )
 
-  private def loadWith(wiring: String) =
+  private def texts(found: Either[LoadError, LoadedBuild]): List[String] =
+    found match
+      case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.map(_.text)
+      case other                                      => List(other.toString)
+
+  private def loadWith(build: String, wiring: Option[String]) =
     Workspace
       .work("histos-load-wiring")
       .mapError(LoadError.Io(_))
@@ -66,9 +85,11 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
           (stubbed[Resolve] ++ ZLayer.succeed(ContentStore.in(root.resolve("store")))) >>> Loader.live
         val run =
           for
-            api   <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
-            _     <- Workspace.writeString(root.resolve("histos.scala"), buildFile).mapError(LoadError.Io(_))
-            _     <- Workspace.writeString(root.resolve("histos.wiring.scala"), wiring).mapError(LoadError.Io(_))
+            api <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            _   <- Workspace.writeString(root.resolve("histos.scala"), build).mapError(LoadError.Io(_))
+            _   <- ZIO.foreachDiscard(wiring)(text =>
+              Workspace.writeString(root.resolve("histos.wiring.scala"), text).mapError(LoadError.Io(_))
+            )
             found <- ZIO.serviceWithZIO[Loader](_.load(root, api))
           yield found
         run.provideSomeLayer[Scope](layer)

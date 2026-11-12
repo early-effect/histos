@@ -1,7 +1,8 @@
 package histos
 
-import histos.plugin.JobName
+import histos.plugin.{ActionName, ActionPin, JobName}
 import histos.supply.{Snapshot, SupplyChain, SupplyFault}
+import histos.version.CommitSha
 import histos.workflow.*
 
 import java.nio.file.{Files, Path}
@@ -211,13 +212,6 @@ object WorkflowLawSpec extends ZIOSpecDefault:
           )
         case _ => assertTrue(false)
     ,
-    test("equal workflow text matches, and the first different line is the drift"):
-      assertTrue(
-        Workflow.differs("same\n", "same\n") == Right(()),
-        Workflow.differs("same\n", "other\n") ==
-          Left(CiError.Drift(".github/workflows/ci.yml", "line 1\n- other\n+ same")),
-      )
-    ,
     test("a job timeout outside 1 to 360 fails the render, and an unbounded job omits the cap"):
       val zero = Projects
         .organization(organization"example.com")
@@ -290,14 +284,6 @@ object WorkflowLawSpec extends ZIOSpecDefault:
               )
             case _ => assertTrue(moduleNamed(graph, "core").isDefined, moduleNamed(graph, "app").isDefined)
     ,
-    test("a ci fault lifts to that ci error"):
-      val doc  = JobName.trusted("doc")
-      val test = JobName.trusted("test")
-      assertTrue(
-        JobYaml.lift(CiFault.UnknownNeed(doc, test)) == CiError.UnknownNeed(doc, test),
-        JobYaml.lift(CiFault.UnpinnedWorkflowRun("other.yml")) == CiError.UnpinnedWorkflowRun("other.yml"),
-      )
-    ,
     test("an unpinned action is a fault, a local action is not, and a catalog miss is not a mismatch"):
       val built = Projects(module("core", Jvm)(scala3))
       built match
@@ -333,10 +319,15 @@ object WorkflowLawSpec extends ZIOSpecDefault:
           }
     ,
     test("lookup prefers an exact action, then the longest prefix"):
-      val catalog = ActionPins.catalog(Map.empty)
+      val restore = ActionPin(CommitSha("0123456789abcdef0123456789abcdef01234567"), "v9")
+      val catalog = ActionPins.catalog(Map(ActionName("actions/cache/restore") -> restore))
       assertTrue(
         ActionPins.lookup(catalog, "actions/checkout") == Some(ActionPins.checkout.pin),
-        ActionPins.lookup(catalog, "actions/cache/restore") == Some(ActionPins.cache.pin),
+        ActionPins.lookup(catalog, "actions/cache") == Some(ActionPins.cache.pin),
+        ActionPins.lookup(catalog, "actions/cache/save") == Some(ActionPins.cache.pin),
+        ActionPins.lookup(catalog, "actions/cache/restore") == Some(restore),
+        ActionPins.lookup(catalog, "actions/cache/restore/deep") == Some(restore),
+        ActionPins.lookup(catalog, "actions/cache-other") == None,
         ActionPins.lookup(catalog, "actions/unknown") == None,
       ),
   )

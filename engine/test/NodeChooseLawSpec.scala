@@ -9,7 +9,7 @@ import histos.NodePath
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 
-import zio.{Exit, System, ZIO}
+import zio.{Exit, ZIO}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, test}
 
 /** A chosen Node is the binary that answered, and a named file that cannot run is that miss. */
@@ -30,12 +30,8 @@ object NodeChooseLawSpec extends ZIOSpecDefault:
             val local    = repo.resolve(".histos").resolve("node.local")
             val oldNode  = oldHome.resolve("bin").resolve("node")
             val badNode  = badHome.resolve("bin").resolve("node")
+            val path     = goodHome.resolve("bin").toString
             for
-              path <- System
-                .env("PATH")
-                .flatMap:
-                  case Some(value) if value.nonEmpty => ZIO.succeed(value)
-                  case _                             => ZIO.dieMessage("PATH is empty")
               _    <- script(oldNode, "v20.0.0")
               _    <- script(goodHome.resolve("bin").resolve("node"), "v26.0.0")
               _    <- script(badNode, "nope")
@@ -68,16 +64,15 @@ object NodeChooseLawSpec extends ZIOSpecDefault:
               several    <- NodeToolchain.choose(machine(repo, Map.empty), None).exit
               _          <- Workspace.writeString(local, "\u0000\n")
               invalid    <- NodeToolchain.choose(machine(repo, Map.empty), None).exit
-              configured <- NodePath.from(live.runtime.binary.path.toString) match
-                case Left(error) => ZIO.dieMessage(error.message)
-                case Right(node) =>
-                  NodeToolchain.choose(machine(repo, Map("PATH" -> quiet.toString)), Some(node))
+              node       <- ZIO.fromEither(NodePath.from(live.runtime.binary.path.toString))
+              configured <- NodeToolchain.choose(machine(repo, Map("PATH" -> quiet.toString)), Some(node))
+              goodNode   <- ZIO.attempt(goodHome.resolve("bin").resolve("node").toRealPath().normalize).orDie
             yield
               val absent = NodeMiss.Absent(NodeToolchain.Floor, NodeSource.Path)
               assertTrue(
                 live.source == NodeSource.Path,
-                live.runtime.version.major.value >= NodeToolchain.Floor.major.value,
-                live.runtime.binary.path.getFileName.toString == "node",
+                live.runtime.version == NodeVersion.trusted("26.0.0", NodeMajor.trusted(26)),
+                live.runtime.binary.path == goodNode,
                 told.binary == live.runtime.binary,
                 told.version == live.runtime.version,
                 NodeToolchain.text(told) == s"node ${told.version.value} ${told.binary.path}",
@@ -108,7 +103,10 @@ object NodeChooseLawSpec extends ZIOSpecDefault:
                 seen.map(_.binary) == List(sightNode),
                 seen.map(_.version) == List(NodeVersion.trusted("26.0.0", NodeMajor.trusted(26))),
               )
-  ) @@ TestAspect.withLiveSystem
+  )
+    // The `node --version` child is launched with the running JVM's java.home, and a PATH sight bounds it with a
+    // timeout. Every PATH the law reads is one it wrote.
+    @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock
 
   private def machine(repo: Path, env: Map[String, String]): Machine =
     Machine(env, "/home", Os.Mac, Architecture.Aarch64, repo, repo, None, NativeOrigin.Central)

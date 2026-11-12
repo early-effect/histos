@@ -550,12 +550,14 @@ object Cli:
               histos.supply.DepsSurface.alert(repo, policy, net, token)
             case DepsAction.Snapshot(submit) =>
               histos.supply.DepsSurface.snapshot(repo, net, token, submit)
-          effect.map: result =>
-            val exit =
-              if result.code == 0 then CliExit.Success
-              else if result.code == 2 then CliExit.Usage
-              else CliExit.Failed
-            Completed(exit, result.text, "", Playback.Held)
+          effect
+            .provide(histos.supply.GitRead.live)
+            .map: result =>
+              val exit =
+                if result.code == 0 then CliExit.Success
+                else if result.code == 2 then CliExit.Usage
+                else CliExit.Failed
+              Completed(exit, result.text, "", Playback.Held)
 
   private def setup(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): Completed =
     val (code, text) = histos.supply.SetupSurface.run(repo, from, fix, yes)

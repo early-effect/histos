@@ -44,8 +44,12 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       ".histos/jars",
       ".histos/link",
       ".histos/run",
+      ".histos/doc",
+      ".histos/coverage/classes",
+      ".histos/coverage/analysis",
       ".histos/provider",
       ".histos/provider-src",
+      ".histos/coverage",
     ).mkString("\n")
 
   private final case class Law(args: List[String], exit: CliExit, out: String, err: String, playback: Playback)

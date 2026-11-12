@@ -121,25 +121,37 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
-    test("an empty token is not a pull request, and Actions does not commit a workflow file"):
-      val dry     = sys.env.get("HISTOS_DRY_RUN").exists(value => value == "true" || value == "1")
-      val program =
+    test("an empty token is not a pull request unless the run is dry, and Actions does not commit a workflow file"):
+      val workflow = ".github/workflows/ci.yml"
+      val nothing  = DepsSurface.DepsResult(0, "deps pr: nothing to commit\n")
+      val program  =
         for
           repo <- Workspace.work("surface-pr")
+          _    <- Workspace.writeString(repo.resolve(workflow), "name: ci")
           _    <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net <- ZIO.service[Net]
           policy = SupplyChain(updates = UpdatePolicy(author = PrAuthor.Actions))
-          files  = Some(List(".github/workflows/ci.yml" -> "name: ci"))
-          empty <- DepsSurface.pullRequest(repo, policy, net, None, false, true, files)
-          kept  <- DepsSurface.pullRequest(repo, policy, net, Some("token"), false, true, files)
+          empty <- DepsSurface.pullRequest(repo, policy, net, None, false, true)
+          kept  <- DepsSurface.pullRequest(repo, policy, net, Some("token"), false, true)
+          _     <- TestSystem.putEnv("HISTOS_DRY_RUN", "true")
+          dry   <- DepsSurface.pullRequest(repo, policy, net, None, false, true)
         yield assertTrue(
-          if dry then empty.code == 0 && empty.text.contains("nothing to commit")
-          else empty.code == 1 && empty.text.contains("GH_TOKEN is not set"),
-          kept.code == 0 && kept.text.contains("nothing to commit"),
+          empty == DepsSurface.DepsResult(1, "GH_TOKEN is not set\n"),
+          kept == nothing,
+          dry == nothing,
         )
-      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(diff = List(workflow)).layer)
+    ,
+    test("an origin names its GitHub repository over https or ssh, and anything else names none"):
+      assertTrue(
+        GitRead.repository("https://github.com/acme/demo.git\n") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("git@github.com:acme/demo.git") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("acme/demo") == Some(RepoName.trusted("acme/demo")),
+        GitRead.repository("https://github.com/acme") == None,
+        GitRead.repository("") == None,
+      )
     ,
     test("a snapshot that is not submitted renders the purl and does not send it"):
       val program =
@@ -153,9 +165,10 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           result <- DepsSurface.snapshot(repo, net, None, false)
         yield assertTrue(
           result.code == 0,
+          result.text.contains(s""""sha":"${sha.value}","ref":"refs/heads/main""""),
           result.text.contains("pkg:maven/org.example/demo@1.0.0"),
         )
-      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(commit = Some(sha)).layer)
     ,
     test("setup writes the policy once, and a zipx import asks before it deletes"):
       val program =

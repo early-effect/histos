@@ -41,7 +41,7 @@ import histos.zinc.{
   PositionBase,
   SourceCount,
 }
-import histos.{JsonLaw, Platform, PlatformError, ProjectNameError, WireSamples}
+import histos.{CiFault, JsonLaw, Platform, PlatformError, ProjectNameError, WireSamples}
 
 import zio.{Chunk, NonEmptyChunk}
 import zio.test.*
@@ -221,6 +221,12 @@ object GoldenLawSpec extends ZIOSpecDefault:
     WorkflowFault.Scripts(ScriptError.Revision)  -> """{"Scripts":{"error":{"Revision":{}}}}""",
   )
 
+  /** A job the graph cannot render carries its `CiFault`. */
+  private val arranged: List[(WorkflowFault, String)] = List(
+    WorkflowFault.Files(CiError.Fault(CiFault.UnknownNeed(job, histos.plugin.JobName("release")))) ->
+      """{"Files":{"error":{"Fault":{"fault":{"UnknownNeed":{"job":"docs","need":"release"}}}}}}"""
+  )
+
   private val severities: List[(CompileSeverity, String)] = List(
     CompileSeverity.Error -> "\"Error\"",
     CompileSeverity.Warn  -> "\"Warn\"",
@@ -265,6 +271,7 @@ object GoldenLawSpec extends ZIOSpecDefault:
     JsonLaw.golden("every build fault is its document", faults),
     JsonLaw.golden("every rejection is its document", rejections),
     JsonLaw.golden("every workflow fault is its document", workflowFaults),
+    JsonLaw.sent("a ci error from a job the graph arranges is its ci fault's document", arranged),
     JsonLaw.golden("every compile severity is its case name", severities),
     JsonLaw.golden("every position base is its case name", bases),
     JsonLaw.golden("every io fault is its case name", ioFaults),

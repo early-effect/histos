@@ -5,7 +5,7 @@ import histos.doctor.{Fix, FixApply, GitHubCredential}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
-import histos.supply.{DoctorSurface, Net, PrAuthor, Reply, SupplyChain, UpdatePolicy}
+import histos.supply.{DoctorSurface, GitAnswers, Net, PrAuthor, Reply, SupplyChain, UpdatePolicy}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -104,7 +104,7 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                           !supply._2.contains("this run does not launch Node"),
                           missing._2 == emptyJson,
                         )
-        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed])
+        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer)
     ,
     test("preflight does not open a socket, and an unseen Actions fact is a skip"):
       ZIO
@@ -166,7 +166,7 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     failed._2.contains("supply.app-token"),
                     failed._2.contains("failure"),
                   )
-        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]),
+        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
 end DoctorSurfaceLawSpec
 

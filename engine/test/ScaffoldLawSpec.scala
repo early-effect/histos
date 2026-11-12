@@ -1,10 +1,10 @@
 package histos.scaffold
 
-import java.nio.file.{Files, Path}
+import histos.workspace.Workspace
 
-import scala.jdk.CollectionConverters.*
+import java.nio.file.Files
 
-import zio.{Clock, ZIO}
+import zio.ZIO
 import zio.test.*
 
 object ScaffoldLawSpec extends ZIOSpecDefault:
@@ -25,9 +25,8 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a full project writes the wrapper and the ignore file, and a bare project does not"):
-      ZIO.acquireRelease(directory("histos-scaffold"))(delete).flatMap { parent =>
+      Workspace.work("histos-scaffold").flatMap { parent =>
         for
-          _          <- Clock.instant
           demo       <- Skeleton.create(parent, "demo", pin, ScaffoldKind.Full)
           bare       <- Skeleton.create(parent, "bare", pin, ScaffoldKind.Bare)
           build      <- ZIO.attemptBlocking(Files.readString(demo.resolve("histos.scala"))).orDie
@@ -54,10 +53,9 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
       }
     ,
     test("a bad name is refused, and a second create does not overwrite"):
-      ZIO.acquireRelease(directory("histos-scaffold-name"))(delete).flatMap { parent =>
+      Workspace.work("histos-scaffold-name").flatMap { parent =>
         val occupied = parent.resolve("demo")
         for
-          _      <- Clock.instant
           bad    <- Skeleton.create(parent, "1bad", pin).either
           _      <- Skeleton.create(parent, "demo", pin, ScaffoldKind.Bare)
           second <- Skeleton.create(parent, "demo", pin, ScaffoldKind.Bare).either
@@ -68,13 +66,12 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
       }
     ,
     test("init writes the draft it was given, and an existing build file is refused"):
-      ZIO.acquireRelease(directory("histos-scaffold-init"))(delete).flatMap { parent =>
+      Workspace.work("histos-scaffold-init").flatMap { parent =>
         val demo     = parent.resolve("demo")
         val bad      = parent.resolve("1bad")
         val occupied = parent.resolve("taken")
         val draft    = "object build extends HistosBuild:\n"
         for
-          _ <- Clock.instant
           _ <- ZIO.attemptBlocking {
             Files.createDirectories(demo)
             Files.createDirectories(bad)
@@ -97,17 +94,4 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
         )
       },
   )
-
-  private def directory(prefix: String): ZIO[Any, Nothing, Path] =
-    ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie
-
-  private def delete(root: Path): zio.UIO[Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(root) then
-        val walk  = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.orDie
 end ScaffoldLawSpec

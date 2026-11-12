@@ -58,8 +58,12 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
         ".histos/jars",
         ".histos/link",
         ".histos/run",
+        ".histos/doc",
+        ".histos/coverage/classes",
+        ".histos/coverage/analysis",
         ".histos/provider",
         ".histos/provider-src",
+        ".histos/coverage",
       ).mkString("\n")
       val full    = s"$clean\ncontent-store entries for this repo would be forgotten"
       val program =

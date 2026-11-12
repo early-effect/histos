@@ -5,7 +5,7 @@ import histos.doctor.{FixApply, GitHubCredential}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
-import histos.supply.{DoctorSurface, Net, PrAuthor, Reply, SupplyChain, SupplyFault, UpdatePolicy}
+import histos.supply.{DoctorSurface, GitAnswers, Net, PrAuthor, Reply, SupplyChain, SupplyFault, UpdatePolicy}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -91,7 +91,8 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
           ok(text).contains("supply.app-permissions"),
           ok(text).contains("supply.app-token"),
         ),
-  ).provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]) @@ TestAspect.withLiveClock // probes run under a timeout
+  ).provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer) @@
+    TestAspect.withLiveClock // probes run under a timeout
 
   private def survey(env: Map[String, String], installations: Reply) =
     ZIO.scoped:

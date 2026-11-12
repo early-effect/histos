@@ -13,7 +13,7 @@ import histos.{
   SourcePos,
 }
 
-import zio.{Promise, Ref, ZIO, durationInt}
+import zio.{Promise, Ref, ZIO}
 import zio.test.*
 
 object TaskLawSpec extends ZIOSpecDefault:
@@ -78,7 +78,7 @@ object TaskLawSpec extends ZIOSpecDefault:
                 absent.causeOption.flatMap(_.failureOption) ==
                   Some(TaskError.UnknownRun(RunId.trusted("absent"))),
               )
-          .provide(Tasks.live(graph, Map(slow -> ZIO.sleep(1.hour).as(TaskResult.Doc))))
+          .provide(Tasks.live(graph, Map(slow -> ZIO.never.as(TaskResult.Doc))))
         _ <- ZIO
           .scoped(ZIO.serviceWithZIO[Tasks](_.run(slow) *> entered.await))
           .provide(
