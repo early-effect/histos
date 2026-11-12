@@ -86,8 +86,16 @@ object Lines:
 
   /** The CLI line and the structured diagnostic. Callers use both so the two cannot drift. */
   def heard(repo: Path, problem: CompileProblem): (Diagnostic, String) =
-    val found = Diagnostic(
-      problem.path.map(path => relative(repo, path)),
+    val found = located(problem, problem.path.map(path => relative(repo, path)))
+    (found, render(found))
+
+  /** `path:line:column: severity: message`, with the path as the compiler gave it. A failure message carries this. */
+  def located(problem: CompileProblem): String =
+    render(located(problem, problem.path.map(_.toString)))
+
+  private def located(problem: CompileProblem, shown: Option[String]): Diagnostic =
+    Diagnostic(
+      shown,
       problem.startLine.map(line => place(line, problem.base)),
       problem.startColumn.map(column => place(column, problem.base)),
       problem.endLine.map(line => place(line, problem.base)),
@@ -95,7 +103,6 @@ object Lines:
       severity(problem.severity),
       problem.message,
     )
-    (found, render(found))
 
   def diagnostic(repo: Path, problem: CompileProblem): String =
     heard(repo, problem)._2
