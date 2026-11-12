@@ -1,11 +1,13 @@
 package histos.native
 
-import histos.jdk.Sha256
+import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.{
   ClangMajor,
   ClangPin,
   Module,
+  NativeVersion,
   Platform,
   Platforms,
   ProjectGraph,
@@ -13,6 +15,7 @@ import histos.{
   ScalaVersion,
   ScalaVersions,
   SourcePos,
+  ThreadStack,
 }
 
 import java.nio.file.Path
@@ -26,6 +29,32 @@ object NativeLawSpec extends ZIOSpecDefault:
   private val jar     = Sha256.trusted("cd")
 
   def spec = suite("native laws")(
+    test("a suite binary gets its module's thread stack over the suite environment's, beside the adapter's keys"):
+      val jdk = JdkRuntime(
+        Path.of("/jdk"),
+        JdkVersion.trusted("25", JdkMajor.trusted(25)),
+        RuntimeIdentity.Local(Path.of("/jdk"), sources),
+      )
+      val request = NativeSuiteRequest(
+        NativeToolchain(NativeSource.Central, NativeVersion("0.5.9")),
+        "zio.test.sbt.ZTestFramework",
+        Path.of("/work/link/hello"),
+        Nil,
+        Path.of("/work"),
+        jdk,
+        Map("HISTOS_REPO" -> "/repo", "SCALANATIVE_THREAD_STACK_SIZE" -> "1m"),
+        ThreadStack("16m"),
+      )
+      assertTrue(
+        NativeSuite.environment(request) == Map(
+          "HISTOS_REPO"                   -> "/repo",
+          "SCALANATIVE_THREAD_STACK_SIZE" -> "16m",
+          "NATIVE_BINARY"                 -> "/work/link/hello",
+          "NATIVE_FRAMEWORK"              -> "zio.test.sbt.ZTestFramework",
+          "NATIVE_SHAPES"                 -> "/work/shapes.txt",
+        )
+      )
+    ,
     test("clang text is a version and a target, or the gap that text actually has"):
       val happy = ClangReport.parse("clang version 21.0.0\nTarget: arm64-apple-darwin27.0.0")
       assertTrue(

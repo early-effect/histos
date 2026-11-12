@@ -65,6 +65,16 @@ sealed trait ModuleDef[P] extends ProjectDef:
   ): ModuleDef[P] =
     rewriteNativeVersion(version)
 
+  /** The stack every thread of this module's binary gets under `histos run` and `histos test`. Unset is
+    * [[ThreadStack.default]].
+    */
+  def threadStack(stack: ThreadStack)(using
+      @implicitNotFound(
+        "threadStack is a Native setting, and this module does not build Native"
+      ) native: Platform.Native.type <:< P
+  ): ModuleDef[P] =
+    rewriteThreadStack(stack)
+
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef[P]
 
@@ -136,6 +146,7 @@ sealed trait ModuleDef[P] extends ProjectDef:
   private[histos] def rewriteJsModule(kind: JsModuleKind): ModuleDef[P]
   private[histos] def rewriteNativeVersion(version: NativeVersion): ModuleDef[P]
   private[histos] def rewriteClang(major: ClangMajor): ModuleDef[P]
+  private[histos] def rewriteThreadStack(stack: ThreadStack): ModuleDef[P]
 end ModuleDef
 
 object ModuleDef:
@@ -171,6 +182,7 @@ object ModuleDef:
       Nil,
       TestStore.Off,
       Set.empty,
+      ThreadStack.default,
     )
 
 /** The stored module. Graph reads these fields. Callers see [[ModuleDef]]. */
@@ -199,6 +211,7 @@ private[histos] final class ModuleBody[P](
     val resources: List[GeneratedAsset],
     val testStore: TestStore,
     val needs: Set[Need],
+    val threadStack: ThreadStack,
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -273,6 +286,9 @@ private[histos] final class ModuleBody[P](
   override private[histos] def rewriteClang(major: ClangMajor): ModuleDef[P] =
     revise(clang = ClangPin.Major(major))
 
+  override private[histos] def rewriteThreadStack(stack: ThreadStack): ModuleDef[P] =
+    revise(threadStack = stack)
+
   private def add(edges: List[ProjectEdge]): ModuleDef[P] =
     revise(edges = dependsOn ++ edges)
 
@@ -297,6 +313,7 @@ private[histos] final class ModuleBody[P](
       resources: List[GeneratedAsset] = this.resources,
       testStore: TestStore = this.testStore,
       needs: Set[Need] = this.needs,
+      threadStack: ThreadStack = this.threadStack,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -323,6 +340,7 @@ private[histos] final class ModuleBody[P](
       resources,
       testStore,
       needs,
+      threadStack,
     )
 end ModuleBody
 

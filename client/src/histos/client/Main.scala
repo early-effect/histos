@@ -15,17 +15,27 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.CInt
 
 import zio.json.*
-import zio.{ExitCode, IO, Scope, ZIO, ZIOAppDefault, durationInt}
+import zio.{ExitCode, IO, Runtime, Scope, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer, durationInt}
 
 /** Batch commands. `server`, `bsp`, and `mcp` never reach this process. Zinc stays in the JVM server.
   *
   * ZIO never installs its shutdown hook on Scala Native, and nothing there consults `gracefulShutdownTimeout`.
   * Returning from `run` calls `exit`, which can hang while the pool and the GC threads are still up. This process
-  * flushes and calls `_exit` after a batch session and after the JVM child returns. SIGINT and SIGTERM do the same.
+  * flushes and calls `_exit` after a batch session, after the JVM child returns, and after a fatal error. SIGINT and
+  * SIGTERM do the same.
   */
 object Main extends ZIOAppDefault:
   signal.signal(signal.SIGINT, onSignal(_))
   signal.signal(signal.SIGTERM, onSignal(_))
+
+  /** ZIO on Native rethrows a fatal error into the worker thread, which dies without ending its fiber, so the run would
+    * wait forever. `leave` ends the process first. ZIO's own handler after it only gives the hook its `Nothing`.
+    */
+  override val bootstrap: ZLayer[ZIOAppArgs, Any, Any] =
+    Runtime.setReportFatal: thrown =>
+      val fatal = Fatal.of(thrown)
+      leave(fatal.exit.code, Some(fatal.line))
+      Runtime.defaultReportFatal(thrown)
 
   private def onSignal(sig: CInt): Unit =
     unistd._exit((128 + sig).toInt)

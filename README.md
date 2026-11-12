@@ -97,6 +97,8 @@ object build extends HistosBuild:
 - `.excluding(organization, artifact)` excludes a published artifact. `.sbt(sbt"2")` makes an sbt plugin coordinate.
 - A dependency on a ship this build owns is a pin: `.pointer` is `<ship>-SNAPSHOT`, `.commit(sha)` is `<ship>-<12 hex>-SNAPSHOT`, and `.released` is the ship number.
 
+A Native module names the clang major it must find on `PATH` with `.clang(ClangMajor(21))`, and may name its Scala Native with `.nativeVersion(...)`. `.threadStack(ThreadStack("16m"))` is the stack every thread of its binary gets when Histos runs or tests it: a byte count, or a count of `k` or `m`, from `64k` to `1024m`. A module that names none gets `8m`. A Js or JVM module that names a Native setting does not compile.
+
 `Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`.
 
 ## Commands
