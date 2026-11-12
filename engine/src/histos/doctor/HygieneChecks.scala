@@ -13,8 +13,7 @@ object HygieneChecks:
   def publishesPages(graph: ProjectGraph): Boolean =
     graph.plugins.exists: plugin =>
       plugin.contribution.jobs.exists: job =>
-        job
-          .render(plugin.id)
+        job.render
           .exists:
             case JobRender.Site(_, _) => true
             case _                    => false

@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.{DepExclusion, Developer, License, Scm}
+import histos.{DepExclusion, Developer, License, MavenScope, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -78,10 +78,17 @@ object Layout:
             s"""    <dependency>
                |      <groupId>${xml(dependency.group.value)}</groupId>
                |      <artifactId>${xml(dependency.name.value)}</artifactId>
-               |      <version>${xml(dependency.version.value)}</version>${exclusions(dependency.exclusions)}
+               |      <version>${xml(dependency.version.value)}</version>${scope(dependency.scope)}${exclusions(
+                dependency.exclusions
+              )}
                |    </dependency>""".stripMargin
           .mkString("\n")
         Some(s"  <dependencies>\n$rows\n  </dependencies>")
+
+  private def scope(scope: MavenScope): String =
+    scope match
+      case MavenScope.Compile  => ""
+      case MavenScope.Provided => "\n      <scope>provided</scope>"
 
   private def exclusions(listed: List[DepExclusion]): String =
     listed match

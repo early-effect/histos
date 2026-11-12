@@ -1,12 +1,16 @@
 package histos.load
 
 import histos.plugin.{PluginCoordinate, PluginLoadError}
+import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileError, GraphCompile, Sources}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
+import java.util.zip.{ZipException, ZipFile}
 
-import zio.{Scope, ZIO}
+import scala.jdk.CollectionConverters.*
+
+import zio.{IO, Scope, ZIO}
 
 /** In-repo plugin modules, compiled so the wiring can name them. Upstream modules compile first. A ship pin is not
   * resolved here.
@@ -80,17 +84,20 @@ private[load] object PluginModules:
             case None =>
               missing(module, need)
             case Some(base) =>
-              Sources
-                .select(base, version, Platform.Jvm)
-                .mapError(failed)
-                .flatMap: found =>
-                  val sources = scalaSources(found)
-                  if sources.isEmpty then missing(module, need)
-                  else
-                    for
-                      out <- BuildFile.tempDir("histos-plugin")
-                      _   <- BuildFile.compileSources(sources, classpath, out)
-                    yield List(out)
+              onBoundary(base, classpath).flatMap:
+                case true  => ZIO.succeed(Nil)
+                case false =>
+                  Sources
+                    .select(base, version, Platform.Jvm)
+                    .mapError(failed)
+                    .flatMap: found =>
+                      val sources = scalaSources(found)
+                      if sources.isEmpty then missing(module, need)
+                      else
+                        for
+                          out <- BuildFile.tempDir("histos-plugin")
+                          _   <- BuildFile.compileSources(sources, classpath, out)
+                        yield List(out)
 
   /** The wiring compiler is this process. A module that names it uses that source tree. One declared version uses that
     * version. Several versions, none of them this compiler, are not a guess.
@@ -104,6 +111,37 @@ private[load] object PluginModules:
         versions match
           case only :: Nil => Some(only)
           case _           => None
+
+  /** The running process already loaded this module: its sources define [[histos.HistosBuild]] and the boundary jar
+    * contains that class. Compiling it again, against an assembly, collides with packages the assembly also contains.
+    * The plugin links the boundary jar.
+    */
+  private def onBoundary(base: Path, boundary: List[Path]): IO[LoadError, Boolean] =
+    ZIO
+      .attemptBlocking(definesHost(base) && boundary.exists(hasHost))
+      .mapError(_ => LoadError.Io(IoFailure(base, IoFault.Walk)))
+
+  private def definesHost(base: Path): Boolean =
+    if !Files.isDirectory(base) then false
+    else
+      val walk = Files.walk(base)
+      try
+        walk.iterator.asScala.exists: path =>
+          Files.isRegularFile(path) &&
+            Option(path.getFileName).exists(_.toString.endsWith(".scala")) &&
+            Files.readString(path).contains("trait HistosBuild")
+      finally walk.close()
+
+  private def hasHost(jar: Path): Boolean =
+    if !Files.isRegularFile(jar) then false
+    else
+      try
+        val zip = new ZipFile(jar.toFile)
+        try zip.getEntry(HostClass) != null
+        finally zip.close()
+      catch case _: ZipException => false
+
+  private val HostClass: String = "histos/HistosBuild.class"
 
   private def scalaSources(paths: List[Path]): List[Path] =
     paths.filter: path =>

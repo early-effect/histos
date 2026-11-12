@@ -49,6 +49,10 @@ object LoaderPluginLawSpec extends ZIOSpecDefault:
       load(coordinated, List(coreSource, needsSource), Some(wiringProvides)).map: found =>
         assertTrue(found.plugins.links.map(_.id.value) == List("law.needs"))
     ,
+    test("the host api stays the boundary jar, so a broken copy is not compiled"):
+      load(hostBuild, List(hostSource, hostPlugin), Some(wiringSeesPlugin)).map: found =>
+        assertTrue(found.plugins.links.map(_.id.value) == List("law.mark"))
+    ,
     test("a plugin module with no sources fails the load"):
       load(coordinated, Nil, None).either.map: found =>
         val missing = found match
@@ -68,6 +72,39 @@ object LoaderPluginLawSpec extends ZIOSpecDefault:
       |    val app = module("app", Jvm)(scala"3.10.0")
       |    Projects.plugins(PluginSources.module(plugins))(core, plugins, app)
       |""".stripMargin
+
+  private val hostBuild =
+    """import histos.*
+      |
+      |object build extends HistosBuild:
+      |  def graph =
+      |    val api = module("api", Jvm)(scala"3.10.0")
+      |    val plugins = module("plugins", Jvm)(scala"3.10.0").dependsOn(api)
+      |    Projects.plugins(PluginSources.module(plugins))(api, plugins)
+      |""".stripMargin
+
+  private val hostSource =
+    "api/src/main/scala/histos/Host.scala" ->
+      """package histos
+        |
+        |trait HistosBuild
+        |object Broken:
+        |  val no: Int = "no"
+        |""".stripMargin
+
+  private val hostPlugin =
+    "plugins/src/main/scala/law/Mark.scala" ->
+      """package law
+        |
+        |import histos.plugin.*
+        |import zio.*
+        |
+        |object Mark extends HistosPlugin:
+        |  def id: PluginId = PluginId("law.mark")
+        |  def contribute: Contribution = Contribution(Nil, Nil, Nil)
+        |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+        |    ZIO.succeed(PluginOutput("mark", Nil))
+        |""".stripMargin
 
   private val plain =
     """import histos.*

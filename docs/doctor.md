@@ -37,7 +37,7 @@ Release checks read the catalog, `releases`, `histos.version`, and the newest re
 
 - `ship.session` is an error when `HISTOS_SESSION` is `snapshot`, `pr`, or `release` and a required variable is missing. The fix completes that session, then `histos run versions`. Development's versions line is `<ship>-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write the snapshot coordinate. `publish release` requires `HISTOS_SESSION=release`.
 - `ship.releases` is an error when a line catalog has no readable `releases` file. Create `releases`. An empty file is fine. A line is `<ship> matches`, `<ship> moved`, or `<ship> unknown`.
-- `ship.should-bump` is a warning when a catalog number is already `matches` or `moved`, or when Central lists a release of that ship at or above it. `releases` speaks first. Edit `Ship("name").next(...)` in `histos.scala`. Do not open a bump pull request.
+- `ship.should-bump` is a warning when a catalog number is already `matches` or `moved`, or when Central lists a release of that ship at or above it. `releases` speaks first. `histos bump` rewrites `.next`. The default is the next patch. `--minor` and `--major` move that component. The command does not change `histos.version`.
 - `ship.pin` is a warning when `histos.version` trails a published Histos release: a release pin behind a newer release, or a snapshot pin whose line is released (`0.2.1-SNAPSHOT` after `0.2.1`). The fix is `histos update` for a release pin and `histos update --stable` for a snapshot pin.
 - Both registry checks are skipped, not failed, when Central does not answer.
 

@@ -7,8 +7,7 @@ import histos.workflow.*
 import zio.test.*
 
 /** The release install file exists only for one non-snapshot ship that owns an asset, a native module named `client`
-  * with a main, and an LLVM pin that has both install archives. The toolchain job exists only when the graph's scm is
-  * this checkout.
+  * with a main, and an LLVM pin that has both install archives. No graph grows a toolchain job from its scm.
   */
 object WorkflowInstallLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
@@ -27,7 +26,7 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
   )
 
   def spec = suite("workflow install laws")(
-    test("one release asset and a native client emit the install jobs, both digests, and the toolchain"):
+    test("one release asset and a native client emit the install jobs and both digests"):
       val app      = demoApp
       val rendered = assemble(
         ToolRevision("21.1.8"),
@@ -55,26 +54,25 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         "      actions: write",
         "          name: histos-jar",
         "          name: shim",
-        "          name: histos-bootstrap",
         "- runner: ubuntu-26.04",
         "- runner: macos-26",
       ).filterNot(release.contains)
       val ciMissing = List(
-        "  toolchain:",
-        "built=false",
-        "built=true",
         """node-version: "25"""",
         "playwright@1.56.0",
         "install firefox",
         "archive.ubuntu.com",
         "timeout 180s",
-        "needs.toolchain.outputs.built == 'true'",
       ).filterNot(ci.contains)
       assertTrue(
         fault(rendered) == "",
         missing == Nil,
         ciMissing == Nil,
+        !release.contains("histos-bootstrap"),
         !release.contains("needs.toolchain.outputs.built"),
+        !ci.contains("\n  toolchain:"),
+        !ci.contains("dist/histos.jar"),
+        !ci.contains("./histos client"),
       )
     ,
     test("the install matrix asks for the mac archive, and a pin that lacks it fails before any text"):
@@ -128,7 +126,7 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         !release.contains("actions: write"),
       )
     ,
-    test("the toolchain job follows this checkout's scm, and the client job does not"):
+    test("the install client is not a toolchain job, with or without this checkout's scm"):
       val app      = demoApp
       val rendered = assemble(
         ToolRevision("21.1.8"),

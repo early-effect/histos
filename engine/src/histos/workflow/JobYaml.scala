@@ -18,12 +18,14 @@ import histos.plugin.{
   JobRender,
   NeedsPolicy,
   On,
+  PinClient,
   PinnedAction,
   PushBranch,
   Placed,
   PluginId,
   PluginTaskId,
   PullType,
+  RunLine,
   Runner,
   SiteArrange,
   SiteShape,
@@ -52,7 +54,7 @@ object JobYaml:
         val ci = placed.collect:
           case item @ Placed(WorkflowFile.Ci, _, _) => jobBlock(graph, item)
         val pages = placed.collect:
-          case Placed(WorkflowFile.Pages, plugin, JobRender.Site(job, SiteShape.Dispatch)) =>
+          case Placed(WorkflowFile.Pages, Some(plugin), JobRender.Site(job, SiteShape.Dispatch)) =>
             RenderedWorkflow(Workflow.pagesName, dispatch(graph, plugin, job))
         val owned = ownedFiles(graph, placed, defaultBranch)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
@@ -80,8 +82,11 @@ object JobYaml:
     val body = item.render match
       case JobRender.Task(job)        => List(task(graph, item.plugin, job, None))
       case JobRender.Fan(job, rows)   => List(fan(graph, item.plugin, job, rows))
-      case JobRender.Site(job, shape) => site(graph, item.plugin, job, shape)
-      case JobRender.Schedule(_, _)   => Nil
+      case JobRender.Site(job, shape) =>
+        item.plugin match
+          case Some(plugin) => site(graph, plugin, job, shape)
+          case None         => Nil
+      case JobRender.Schedule(_, _) => Nil
     body.map(_.mkString("\n"))
 
   private def ownedFiles(graph: ProjectGraph, placed: List[Placed], defaultBranch: String): List[RenderedWorkflow] =
@@ -107,7 +112,10 @@ object JobYaml:
         case JobRender.Schedule(_, job) => List(task(graph, item.plugin, job, None).mkString("\n"))
         case JobRender.Task(job)        => List(task(graph, item.plugin, job, None).mkString("\n"))
         case JobRender.Fan(job, rows)   => List(fan(graph, item.plugin, job, rows).mkString("\n"))
-        case JobRender.Site(job, shape) => site(graph, item.plugin, job, shape).map(_.mkString("\n"))
+        case JobRender.Site(job, shape) =>
+          item.plugin match
+            case Some(plugin) => site(graph, plugin, job, shape).map(_.mkString("\n"))
+            case None         => Nil
     val lines = List(s"name: ${name.stripSuffix(".yml")}", "on:") ++ onLines(events, cron, defaultBranch) ++ List(
       "permissions:",
       "  contents: read",
@@ -121,6 +129,12 @@ object JobYaml:
       case JobRender.Schedule(_, job) => job.events
       case JobRender.Fan(job, _)      => job.events
       case JobRender.Site(job, _)     => job.events
+
+  private def runOf(plugin: Option[PluginId], line: RunLine): Option[String] =
+    line match
+      case RunLine.Client(when) => Some(PinClient.line(when))
+      case RunLine.Task(task)   =>
+        plugin.map(id => s"./histos run ${PluginTaskId(id, task).render}")
 
   private def site(
       graph: ProjectGraph,
@@ -136,7 +150,7 @@ object JobYaml:
 
   private def task(
       graph: ProjectGraph,
-      plugin: PluginId,
+      plugin: Option[PluginId],
       job: TaskArrange,
       rows: Option[List[Target]],
   ): List[String] =
@@ -147,7 +161,7 @@ object JobYaml:
           graph,
           plugin,
           job.name,
-          job.task,
+          job.line,
           job.permissions,
           job.needs,
           job.cond,
@@ -164,7 +178,7 @@ object JobYaml:
 
   private def fan(
       graph: ProjectGraph,
-      plugin: PluginId,
+      plugin: Option[PluginId],
       job: TaskArrange,
       rows: List[Target],
   ): List[String] =
@@ -172,7 +186,7 @@ object JobYaml:
       graph,
       plugin,
       job.name,
-      job.task,
+      job.line,
       job.permissions,
       job.needs,
       job.cond,
@@ -198,9 +212,9 @@ object JobYaml:
       else job.permissions
     stepJob(
       graph,
-      plugin,
+      Some(plugin),
       job.name,
-      job.task,
+      RunLine.Task(job.task),
       grants,
       job.needs,
       job.cond,
@@ -217,9 +231,9 @@ object JobYaml:
 
   private def stepJob(
       graph: ProjectGraph,
-      plugin: PluginId,
+      plugin: Option[PluginId],
       name: JobName,
-      taskName: TaskName,
+      line: RunLine,
       permissions: JobPermissions,
       needs: List[JobName],
       cond: Cond,
@@ -251,7 +265,7 @@ object JobYaml:
       List("    steps:", s"      - uses: $Checkout", s"      - uses: $Setup") ++
       SupplyYaml.preflight(graph, name.value) ++
       pre.flatMap(action => actionStep(graph.ci, action)) ++
-      List(s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin, taskName).render}")}") ++
+      runOf(plugin, line).toList.map(text => s"      - run: ${quote(text)}") ++
       upload.toList.flatMap(uploadStep)
 
   private def pages(graph: ProjectGraph, name: JobName): List[String] =

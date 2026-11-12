@@ -92,8 +92,7 @@ object CiArrangeLawSpec extends ZIOSpecDefault:
   )
 
   private def renders(job: CiJob): List[String] =
-    job
-      .render(PluginId("test.echo"))
+    job.render
       .map:
         case JobRender.Task(_)                         => "task"
         case JobRender.Schedule(_, _)                  => "schedule"
@@ -103,10 +102,10 @@ object CiArrangeLawSpec extends ZIOSpecDefault:
         case JobRender.Site(_, SiteShape.Dispatch)     => "dispatch"
 
   private def condOf(job: CiJob): Cond =
-    job.render(PluginId("test.echo")).map(view).headOption.getOrElse(Cond.True)
+    job.render.map(view).headOption.getOrElse(Cond.True)
 
   private def eventsOf(job: CiJob): List[On] =
-    job.render(PluginId("test.echo")).flatMap(events)
+    job.render.flatMap(events)
 
   private def view(render: JobRender): Cond =
     render match

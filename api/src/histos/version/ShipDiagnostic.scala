@@ -64,12 +64,12 @@ enum ShipDiagnostic(
         Level.Warning,
         s"${ship.value} ${number.render} should move",
         ShipAdvice.shouldBump(ship, number, reason),
-        "The catalog stores the next release. After that number is tagged or published, edit .next(...). Histos does not rewrite the catalog or open a bump pull request.",
+        "The catalog stores the next release. histos bump asks coursier.Versions and rewrites .next when a stable has caught that number. It does not change histos.version.",
         fixes(
           Fix.Steps(
             lines(
-              s"Edit Ship(\"${ship.value}\").next(...) in histos.scala.",
-              "Do not open a bump pull request.",
+              "Run histos bump.",
+              "The default is the next patch. histos bump --minor or histos bump --major moves that component.",
             )
           )
         ),

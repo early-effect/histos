@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.{DepExclusion, Developer, HttpUrl, License, Organization, PomText, Scm}
+import histos.{DepExclusion, Developer, HttpUrl, License, MavenScope, Organization, PomText, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -34,6 +34,7 @@ final case class MavenDependency(
     name: ArtifactId,
     version: DependencyVersion,
     exclusions: List[DepExclusion] = Nil,
+    scope: MavenScope = MavenScope.Compile,
 )
 
 /** The pom fields beyond the coordinate. `name` is the artifact id and is not stored here. */

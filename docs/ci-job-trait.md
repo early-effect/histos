@@ -1,6 +1,8 @@
 # CiJob as an open trait
 
-A plugin contributes jobs by implementing `CiJob`. The trait is open. Histos ships `TaskJob` and `SiteJob`. The engine never matches on the trait. It matches the sealed `JobRender` vocabulary that `render` returns: one task, one cron, one site shape, or one fan.
+A plugin contributes task jobs by implementing `CiJob`. A build declares a command job with `.job` and no plugin. The trait is open. Histos ships `TaskJob`, `CommandJob`, and `SiteJob`. The engine never matches on the trait. It matches the sealed `JobRender` vocabulary that `render` returns: one task, one cron, one site shape, or one fan.
+
+`CommandJob(JobName("link-client"), HistosCommand.Client).unless(PinClient.Present)` runs `./histos client` only when the pin has no executable client for this platform. The check is a step after setup, because setup is what installs the toolchain. A build that does not declare the job does not get the step.
 
 A fan is one module. Each `Target` is a matrix row (a region, an account), not a second job. `needs` names another contribution job or a generated job that is actually on the graph: `test`, `scaladoc`, `coverage`, `format`, `workflow`, `launcher`, `affected`, and `cache-seed` when that job is rendered. `pages` is not a `CiJob` and is not a legal need. A job that names itself is `UnknownNeed`. A repeated name is `DuplicateNeed`. The message is `job X needs Y, which is not a job on this graph`.
 

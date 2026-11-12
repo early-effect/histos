@@ -116,7 +116,15 @@ private[load] object PluginCells:
           service <- ZIO.service[histos.resolve.ResolutionService]
           tools = ZLayer.fromZIO(LockedTools.make(lock, graph, service))
           paths <- Program
-            .classpath(repo, modules, cell.module, compiled, lock, repositories)
+            .classpath(
+              repo,
+              modules,
+              cell.module,
+              compiled,
+              lock,
+              repositories,
+              Dep.select(cell.module.dependencies, cell.platform),
+            )
             .provideSome[Resolve](tools)
             .mapError(error => PluginFault.Task(failed(error.message)))
           _      <- Workspace.recreate(work).mapError(error => PluginFault.Task(failed(error.message)))

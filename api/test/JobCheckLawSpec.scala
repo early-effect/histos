@@ -106,7 +106,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
       val notPush   = rendered(Cond.Not(Cond.DefaultBranchPush), List(On.Dispatch(Nil)))
       val notHeard  = rendered(Cond.Not(Cond.DefaultBranchPush), List(On.pushDefault), "push")
       val notCron   = rendered(Cond.Not(Cond.Event(EventKind.Schedule)), List(On.Dispatch(Nil)))
-      val affected  = rendered(Cond.Affected(ProjectName("core")), Nil, "affected")
+      val affected  = rendered(Cond.Affected(ProjectName("core")), Nil, "marked")
       val steady    = rendered(Cond.NoUpstreamFailed, Nil, "steady")
       val branch    = rendered(Cond.DefaultBranch, Nil, "branch")
       val tagged    = rendered(Cond.Event(EventKind.Tag), List(On.Push(Nil, List("v*"), Nil)), "tagged")
@@ -272,7 +272,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
     built.map(JobCheck.header)
 
   private def base(name: String, cond: Cond = Cond.True, events: List[On] = Nil): TaskArrange =
-    TaskArrange(job(name), TaskName("echo"), JobPermissions.read, Nil, cond, events)
+    TaskArrange(job(name), RunLine.Task(TaskName("echo")), JobPermissions.read, Nil, cond, events)
 
   private def job(raw: String): JobName =
     JobName.from(raw) match
@@ -292,21 +292,19 @@ end JobCheckLawSpec
 private object Rendered:
   def task(arranged: TaskArrange): CiJob =
     new CiJob:
-      def name: JobName                             = arranged.name
-      def task: TaskName                            = arranged.task
-      def permissions: JobPermissions               = arranged.permissions
-      def needs: List[JobName]                      = arranged.needs
-      def render(plugin: PluginId): List[JobRender] =
-        List(JobRender.Task(arranged))
+      def name: JobName               = arranged.name
+      def step: JobStep               = stepOf(arranged.line)
+      def permissions: JobPermissions = arranged.permissions
+      def needs: List[JobName]        = arranged.needs
+      def render: List[JobRender]     = List(JobRender.Task(arranged))
 
   def fan(arranged: TaskArrange, targets: ::[Target]): CiJob =
     new CiJob:
-      def name: JobName                             = arranged.name
-      def task: TaskName                            = arranged.task
-      def permissions: JobPermissions               = arranged.permissions
-      def needs: List[JobName]                      = arranged.needs
-      def render(plugin: PluginId): List[JobRender] =
-        List(JobRender.Fan(arranged, targets))
+      def name: JobName               = arranged.name
+      def step: JobStep               = stepOf(arranged.line)
+      def permissions: JobPermissions = arranged.permissions
+      def needs: List[JobName]        = arranged.needs
+      def render: List[JobRender]     = List(JobRender.Fan(arranged, targets))
 
   def site(name: String, shapes: List[SiteShape]): CiJob =
     val arranged = SiteArrange(
@@ -321,10 +319,14 @@ private object Rendered:
       List(On.Dispatch(Nil)),
     )
     new CiJob:
-      def name: JobName                             = arranged.name
-      def task: TaskName                            = arranged.task
-      def permissions: JobPermissions               = arranged.permissions
-      def needs: List[JobName]                      = arranged.needs
-      def render(plugin: PluginId): List[JobRender] =
-        shapes.map(shape => JobRender.Site(arranged, shape))
+      def name: JobName               = arranged.name
+      def step: JobStep               = JobStep.Task(arranged.task)
+      def permissions: JobPermissions = arranged.permissions
+      def needs: List[JobName]        = arranged.needs
+      def render: List[JobRender]     = shapes.map(shape => JobRender.Site(arranged, shape))
+
+  private def stepOf(line: RunLine): JobStep =
+    line match
+      case RunLine.Task(name)   => JobStep.Task(name)
+      case RunLine.Client(when) => JobStep.Command(HistosCommand.Client, when)
 end Rendered

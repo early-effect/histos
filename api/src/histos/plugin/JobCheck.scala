@@ -15,7 +15,7 @@ import histos.{
 }
 
 /** One rendered job, and the workflow file it belongs in. */
-final case class Placed(file: WorkflowFile, plugin: PluginId, render: JobRender)
+final case class Placed(file: WorkflowFile, plugin: Option[PluginId], render: JobRender)
 
 enum WorkflowFile:
   case Ci
@@ -38,6 +38,7 @@ object JobCheck:
   def arrange(graph: ProjectGraph): Either[BuildError, List[Placed]] =
     val items = renders(graph)
     for
+      _      <- reserved(items)
       _      <- sites(items)
       _      <- needs(graph, items)
       _      <- fold(items)(item => viewChecks(graph, view(item.render)))
@@ -80,12 +81,20 @@ object JobCheck:
         module.application.nonEmpty
       case _ => false
 
-  private final case class Item(plugin: PluginId, job: CiJob, render: JobRender)
+  private final case class Item(plugin: Option[PluginId], job: CiJob, render: JobRender)
 
   private def renders(graph: ProjectGraph): List[Item] =
-    graph.plugins.flatMap: plugin =>
+    val contributed = graph.plugins.flatMap: plugin =>
       plugin.contribution.jobs.flatMap: job =>
-        job.render(plugin.id).map(render => Item(plugin.id, job, render))
+        job.render.map(render => Item(Some(plugin.id), job, render))
+    val declared = graph.jobs.flatMap: job =>
+      job.render.map(render => Item(None, job, render))
+    contributed ++ declared
+
+  private def reserved(items: List[Item]): Either[BuildError, Unit] =
+    items.map(item => nameOf(item.render)).find(_.isReserved) match
+      case Some(name) => Left(BuildError.PluginGraph(PluginGraphFault.ReservedJob(name)))
+      case None       => Right(())
 
   private def sites(items: List[Item]): Either[BuildError, Unit] =
     val names = items

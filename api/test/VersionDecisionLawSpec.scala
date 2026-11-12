@@ -131,7 +131,14 @@ object VersionDecisionLawSpec extends ZIOSpecDefault:
         steps(moved).nonEmpty,
         listed.summary.contains("histos 2.0.0 is published"),
         listed.summary.contains(one.render),
-        steps(listed).exists(_.contains("Ship(\"histos\").next(...) in histos.scala")),
+        listed.fixes match
+          case Fix.Steps(items) :: Nil =>
+            items.toList == List(
+              "Run histos bump.",
+              "The default is the next patch. histos bump --minor or histos bump --major moves that component.",
+            )
+          case _ => false
+        ,
         Catalog.Empty.get(histos).isEmpty,
         single.get(histos).contains(row),
         single.get(api).isEmpty,

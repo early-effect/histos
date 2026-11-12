@@ -29,5 +29,5 @@ object ShipAdvice:
       case BumpReason.Shadowed           => s"${ship.value} ${number.render} is released and has changes since its tag"
       case BumpReason.Published(release) =>
         s"${ship.value} ${release.render} is published and the catalog still names ${number.render}"
-    s"$state. Edit Ship(\"${ship.value}\").next(...) to the next number. Do not open a bump pull request."
+    s"$state. Run histos bump."
 end ShipAdvice

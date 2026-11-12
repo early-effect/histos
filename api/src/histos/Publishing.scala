@@ -40,11 +40,16 @@ final case class PublishRequest(
     modules: Chunk[StagedModule],
 )
 
+/** A pom scope. `Compile` writes no element. `Provided` writes `<scope>provided</scope>`. */
+enum MavenScope:
+  case Compile, Provided
+
 final case class StagedDependency(
     group: Organization,
     artifact: String,
     revision: String,
     exclusions: List[DepExclusion] = Nil,
+    scope: MavenScope = MavenScope.Compile,
 )
 
 final case class StagedModule(

@@ -14,6 +14,7 @@ import java.nio.file.Path
 
 import zio.NonEmptyChunk
 import histos.scaffold.ImportSource
+import histos.version.{BumpPart, ShipName}
 import histos.{Platform, ProjectName}
 
 import zio.json.*
@@ -80,6 +81,7 @@ object Grammar:
     )
     case Deps(action: DepsAction)
     case Setup(from: Option[String], fix: Boolean, yes: Boolean)
+    case Bump(part: BumpPart, ships: List[String])
     case Help(words: List[String])
 
   private val version = CliCommand("version").map(_ => Wire.Version)
@@ -254,13 +256,24 @@ object Grammar:
     CliCommand("init", freshFlags ++ Options.text("from").optional).map { case (bare, yes, branch, from) =>
       Wire.Init(bare, yes, from, branch)
     }
-  private val observe = CliCommand("observe").map(_ => Wire.Observe)
+  private val observe  = CliCommand("observe").map(_ => Wire.Observe)
+  private val bumpPart =
+    (Options.boolean("major") ++ Options.boolean("minor") ++ Options.boolean("patch")).mapOrFail:
+      case (true, false, false)  => Right(BumpPart.Major)
+      case (false, true, false)  => Right(BumpPart.Minor)
+      case (false, false, true)  => Right(BumpPart.Patch)
+      case (false, false, false) => Right(BumpPart.Patch)
+      case _                     => refused
+  private val bump =
+    CliCommand("bump", bumpPart, Args.text("ship").*).map { (part, ships) =>
+      Wire.Bump(part, ships.toList)
+    }
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
+      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -376,7 +389,13 @@ object Grammar:
       case Wire.Observe                                                    => ZIO.succeed(Command.Observe)
       case Wire.Doctor(area, json, preflight, fix, yes, verbose, projects) =>
         projectList("doctor", projects).map(names => Command.Doctor(area, json, preflight, fix, yes, verbose, names))
-      case Wire.Deps(action)          => ZIO.succeed(Command.Deps(action))
+      case Wire.Deps(action)      => ZIO.succeed(Command.Deps(action))
+      case Wire.Bump(part, ships) =>
+        ZIO
+          .foreach(ships)(raw =>
+            ZIO.fromEither(ShipName.from(raw).left.map(error => CliParseError.Pattern(error.message)))
+          )
+          .map(names => Command.Bump(part, names))
       case Wire.Setup(from, fix, yes) =>
         ZIO.succeed(Command.Setup(from, fix, yes))
       case Wire.Help(words) =>
