@@ -3,7 +3,7 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.{ClientBuilds, HttpUrl, PomText, ProjectName}
+import histos.{BuildError, ClientBuilds, HttpUrl, PomText, ProjectName, SourcePos}
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
 opaque type ShipName = String
@@ -97,24 +97,24 @@ end Catalog
 object Catalog:
   val empty: Catalog = Empty
 
-  def from(ships: List[Ship]): Either[CatalogError, Catalog] =
-    ships
-      .foldLeft[Either[CatalogError, List[Ship]]](Right(Nil)): (acc, ship) =>
+  /** Each row comes with the place the build wrote it, so a refusal names that place. */
+  def from(rows: List[(Ship.Line, SourcePos)]): Either[BuildError, Catalog] =
+    rows
+      .foldLeft[Either[BuildError, List[(Ship.Line, SourcePos)]]](Right(Nil)): (acc, row) =>
         acc.flatMap: seen =>
-          if seen.exists(_.name == ship.name) then Left(CatalogError.DuplicateName(ship.name))
-          else
-            repeated(ship) match
-              case Some(member) => Left(CatalogError.RepeatedMember(ship.name, member))
-              case None         =>
-                clash(seen, ship) match
-                  case Some(member, first) => Left(CatalogError.InTwoShips(member, first, ship.name))
-                  case None                => Right(seen :+ ship)
-      .flatMap(assemble)
-
-  private def assemble(ships: List[Ship]): Either[CatalogError, Catalog] =
-    ships.collect { case line: Ship.Line => line } match
-      case Nil           => Right(Empty)
-      case first :: rest => Right(Lines(::(first, rest)))
+          val (ship, at) = row
+          seen.collectFirst { case (other, first) if other.name == ship.name => first } match
+            case Some(first) => Left(BuildError.DuplicateShip(ship.name, first, at))
+            case None        =>
+              repeated(ship) match
+                case Some(member) => Left(BuildError.RepeatedShipMember(ship.name, member, at))
+                case None         =>
+                  clash(seen.map(_._1), ship) match
+                    case Some(member, first) => Left(BuildError.MemberInTwoShips(member, first, ship.name, at))
+                    case None                => Right(seen :+ row)
+      .map:
+        case Nil           => Empty
+        case first :: rest => Lines(::(first._1, rest.map(_._1)))
 
   private def repeated(ship: Ship): Option[ProjectName] =
     ship.members
@@ -130,16 +130,3 @@ object Catalog:
         seen.collectFirst:
           case other if other.members.contains(member) => (member, other.name)
 end Catalog
-
-enum CatalogError:
-  case DuplicateName(name: ShipName)
-  case RepeatedMember(ship: ShipName, member: ProjectName)
-  case InTwoShips(member: ProjectName, first: ShipName, second: ShipName)
-
-  def message: String = this match
-    case DuplicateName(name)          => s"ship '${name.value}' is declared twice"
-    case RepeatedMember(ship, member) =>
-      s"ship '${ship.value}' lists '${member.value}' twice"
-    case InTwoShips(member, first, second) =>
-      s"'${member.value}' is in ship '${first.value}' and ship '${second.value}'"
-end CatalogError

@@ -23,7 +23,7 @@ import histos.supply.{
   SupplyFault,
   TimeZone,
 }
-import histos.version.{AbbrevSha, Catalog, CatalogError, CommitSha, Ship, ShipName, ShipNumber}
+import histos.version.{AbbrevSha, Catalog, CommitSha, Ship, ShipName, ShipNumber}
 
 import zio.test.*
 
@@ -137,17 +137,20 @@ object SentenceLawSpec extends ZIOSpecDefault:
         PublishFault.Client.message == "the portal rejected the upload",
       )
     ,
-    test("a catalog clash names the ship and the module"):
+    test("a catalog clash names the ship, the module, and the place the second row was written"):
+      val here  = SourcePos("histos.scala", 3, 5)
+      val there = SourcePos("histos.scala", 9, 5)
       val api   = line("core", "api")
       val again = line("core", "app")
       val left  = line("left", "api")
       val right = line("right", "api")
       val twice = line("core", "api", "api")
       assertTrue(
-        Catalog.from(List(api, again)).left.map(_.message) == Left("ship 'core' is declared twice"),
-        Catalog.from(List(twice)).left.map(_.message) == Left("ship 'core' lists 'api' twice"),
-        Catalog.from(List(left, right)).left.map(_.message) == Left("'api' is in ship 'left' and ship 'right'"),
-        CatalogError.DuplicateName(api.name).message == "ship 'core' is declared twice",
+        Catalog.from(List(api -> here, again -> there)).left.map(_.message) ==
+          Left("ship 'core' is declared twice (9:5)"),
+        Catalog.from(List(twice -> there)).left.map(_.message) == Left("ship 'core' lists 'api' twice (9:5)"),
+        Catalog.from(List(left -> here, right -> there)).left.map(_.message) ==
+          Left("'api' is in ship 'left' and ship 'right' (9:5)"),
       )
     ,
     test("a plugin that names a cell the module does not build says which cell"):

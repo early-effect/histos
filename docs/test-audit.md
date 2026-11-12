@@ -42,6 +42,7 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
 - [ ] B9 `Perform.jdkMissed` has a `Test` branch that is the same as every other call, and its scaladoc claims a distinction that does not exist. Delete it. Owner: app (`PerformLawSpec:46`).
 - [x] B10 `JobCheck` reads `Not(c)` as reachable exactly when `c` is. `Not(Event(Schedule))` in `ci.yml`, which has no schedule and so is always true, is refused as `UnreachableCond`, and `Not(True)`, which never runs, is accepted. `Not(c)` is reachable when `c` can be false for the file's events, and refused when `c` is always true. The same model found `DefaultBranch` refused on a schedule, which always runs on the default branch. Rendering is B1. Owner: api (`JobCheckLawSpec`).
+- [x] B12 `ShipLink` checked the catalog rules with positions, then `Catalog.from` checked them again with none, and `asBuild` turned that second refusal into a made-up error: `SourcePos("<catalog>", 1, 1)`, a `DuplicateShip` with one position twice, or a `BadShipName` for a duplicate. `Catalog.from` takes each row with the place it was written and is the one check, so every refusal carries a real position and the fallback cannot be written. Owner: api (`CatalogLawSpec`).
 
 ## Decisions for Russ
 
@@ -109,6 +110,7 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] A42 `JobCheck` uses `isInstanceOf` for its event tests. Use a pattern match or an exhaustive function.
 - [x] A43 `BuilderMacro.module` widens its `Expr` with `asInstanceOf`. `asExprOf` checks the type and keeps the tree, so `module(...)` still carries its platforms.
 - [x] A44 WEAK. `GraphShapeLawSpec`'s `fault` helper and `GraphLawSpec`'s `kind` helper compare error names as `productPrefix` strings, so the wrong project, platform, or position passes. Assert exact error values, as A37 did.
+- [x] A45 B12.
 
 ## wire
 
