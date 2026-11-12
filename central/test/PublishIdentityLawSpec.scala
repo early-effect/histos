@@ -3,6 +3,10 @@ package histos.central
 import histos.version.{CiVersion, CommitSha, ReleaseVersion, ShipNumber, SnapshotCoordinate, SnapshotPointer}
 import histos.{Organization, OrganizationError}
 
+import java.util.UUID
+
+import scala.compiletime.testing.typeCheckErrors
+
 import zio.{Chunk, Config}
 import zio.test.*
 
@@ -139,6 +143,17 @@ object PublishIdentityLawSpec extends ZIOSpecDefault:
         DeploymentId.from(" deploy-1\n").map(_.value) == Right("deploy-1"),
         DeploymentId.from("a/b").map(_.value) == Right("a/b"),
         DeploymentId.from("..").map(_.value) == Right(".."),
+      )
+    ,
+    test("a deployment id literal is checked when it compiles, and a uuid is always an id"):
+      assertTrue(
+        DeploymentId("deploy-1").value == "deploy-1",
+        DeploymentId.of(UUID.fromString("00000000-0000-0000-0000-000000000001")).value ==
+          "00000000-0000-0000-0000-000000000001",
+        typeCheckErrors("""DeploymentId("a b")""").map(_.message) == List("deployment id 'a b' contains whitespace"),
+        typeCheckErrors("""DeploymentId("  ")""").map(_.message) == List("a deployment id is empty"),
+        typeCheckErrors("def raw: String = \"deploy-1\"\nDeploymentId(raw)").map(_.message) ==
+          List("DeploymentId(...) takes a literal. Use DeploymentId.from at runtime."),
       ),
   )
 end PublishIdentityLawSpec

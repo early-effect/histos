@@ -24,25 +24,21 @@ object PortalClientLawSpec extends ZIOSpecDefault:
   def spec = suite("portal client laws")(
     test("hold stops at validated, names the deployment, and sends the bearer token"):
       val program =
-        for
-          id     <- deployId
-          spoken <- drive(List(created("deploy-1"), json("VALIDATED")))(_.upload(bundle, ReleaseMode.Hold))
-        yield assertTrue(
-          spoken.result == Right(Deployment(id, DeploymentState.Validated)),
-          spoken.requests.map(shown) == List(
-            s"POST $origin/api/v1/publisher/upload?publishingType=USER_MANAGED",
-            s"POST $origin/api/v1/publisher/status?id=deploy-1",
-          ),
-          spoken.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is VALIDATED"),
-          spoken.requests.forall(authorized),
-        )
+        drive(List(created("deploy-1"), json("VALIDATED")))(_.upload(bundle, ReleaseMode.Hold)).map: spoken =>
+          assertTrue(
+            spoken.result == Right(Deployment(id, DeploymentState.Validated)),
+            spoken.requests.map(shown) == List(
+              s"POST $origin/api/v1/publisher/upload?publishingType=USER_MANAGED",
+              s"POST $origin/api/v1/publisher/status?id=deploy-1",
+            ),
+            spoken.notes == Chunk("uploading bundle to the portal", "portal deploy-1 is VALIDATED"),
+            spoken.requests.forall(authorized),
+          )
       program.provideSomeLayer[TestEnvironment](stubbed[Client])
     ,
     test("a non-terminal state waits, a repeat is quiet, and validated ends the poll"):
       val program =
-        for
-          id     <- deployId
-          spoken <- driveAfter(
+        for spoken <- driveAfter(
             List(created("deploy-1"), json("PENDING"), json("PENDING"), json("VALIDATING"), json("VALIDATED")),
             3,
           )(_.upload(bundle, ReleaseMode.Hold))
@@ -60,9 +56,7 @@ object PortalClientLawSpec extends ZIOSpecDefault:
     ,
     test("automatic does not stop at validated and asks for an automatic publish"):
       val program =
-        for
-          id     <- deployId
-          spoken <- driveAfter(List(created("deploy-1"), json("VALIDATED"), json("PUBLISHED")), 1)(
+        for spoken <- driveAfter(List(created("deploy-1"), json("VALIDATED"), json("PUBLISHED")), 1)(
             _.upload(bundle, ReleaseMode.Automatic)
           )
         yield assertTrue(
@@ -117,7 +111,6 @@ object PortalClientLawSpec extends ZIOSpecDefault:
       val broken   = List("""{"deploymentState":"VALIDATED}""", """{"deploymentState" "VALIDATED"}""")
       val program  =
         for
-          id   <- deployId
           held <- drive(List(created("deploy-1"), ZIO.succeed(Response.text(accepted))))(
             _.upload(bundle, ReleaseMode.Hold)
           )
@@ -135,7 +128,6 @@ object PortalClientLawSpec extends ZIOSpecDefault:
     test("a failed deployment is that id, and a status rejection is not a state"):
       val program =
         for
-          id     <- deployId
           failed <- drive(List(created("deploy-1"), json("FAILED")))(_.upload(bundle, ReleaseMode.Hold))
           denied <- drive(List(created("deploy-1"), ZIO.succeed(Response(Status.Unauthorized))))(
             _.upload(bundle, ReleaseMode.Hold)
@@ -154,7 +146,6 @@ object PortalClientLawSpec extends ZIOSpecDefault:
     test("promote and drop are the deployment path, and 401 and 409 stay typed"):
       val program =
         for
-          id       <- deployId
           promoted <- drive(List(ZIO.succeed(Response.empty())))(_.promote(id))
           dropped  <- drive(List(ZIO.succeed(Response.empty())))(_.drop(id))
           conflict <- drive(List(ZIO.succeed(Response(Status.Conflict))))(_.promote(id))
@@ -284,8 +275,7 @@ object PortalClientLawSpec extends ZIOSpecDefault:
   private def json(token: String): IO[ClientError, Response] =
     ZIO.succeed(Response.text(s"""{"deploymentState":"$token"}"""))
 
-  private val deployId: IO[DeploymentId.Error, DeploymentId] =
-    ZIO.fromEither(DeploymentId.from("deploy-1"))
+  private val id = DeploymentId("deploy-1")
 
   private def shown(req: Request): String =
     s"${req.method} ${req.url.render}"

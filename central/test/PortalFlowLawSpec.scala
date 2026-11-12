@@ -92,12 +92,11 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a loopback portal skips the reads and maps an upload failure"):
-      val gavs = Chunk(Gav("demo", "widget", "1.0.0"))
-      val env  = Map("HISTOS_PORTAL" -> "http://127.0.0.1:9")
+      val gavs       = Chunk(Gav("demo", "widget", "1.0.0"))
+      val env        = Map("HISTOS_PORTAL" -> "http://127.0.0.1:9")
+      val deployment = Deployment(DeploymentId("deploy-1"), DeploymentState.Validated)
       for
-        key <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
-        id  <- ZIO.fromEither(DeploymentId.from("deploy-1"))
-        deployment = Deployment(id, DeploymentState.Validated)
+        key     <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
         refused <- Preflight.release(env, gavs, key, ZIO.fail(PortalError.Unauthorized)).either
         passed  <- Preflight.release(env, gavs, key, ZIO.succeed(deployment))
       yield assertTrue(

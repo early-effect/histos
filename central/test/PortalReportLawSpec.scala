@@ -7,7 +7,9 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
-import zio.{Chunk, ZIO}
+import scala.compiletime.testing.typeCheckErrors
+
+import zio.Chunk
 import zio.test.*
 
 object PortalReportLawSpec extends ZIOSpecDefault:
@@ -33,25 +35,21 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       val edge = PortalReport.inspect(Chunk[Byte](1, 2, 3), PortalReport.Cap, Set.empty)
       assertTrue(
         over == Report(Chunk(Finding.TooLarge), Chunk.empty),
-        edge == Report(Chunk(Finding.Layout("zip")), Chunk.empty),
+        edge == Report(Chunk(upload), Chunk.empty),
       )
     ,
-    test("a non-zip, an empty zip, a duplicate name, and a root file are layout"):
+    test("a non-zip, an empty zip, a nameless entry, a duplicate name, and a root file are layout"):
       val empty  = zipped(Nil)
       val rooted = bundle("1.0.0", pom(release)).map(entries => ("README" -> utf8("note")) :: entries)
       val copied = duplicateZip("demo/widget/1.0.0/widget-1.0.0.jar")
       assertTrue(
-        PortalReport.inspect(Chunk[Byte](1, 2, 3), 3L, Set.empty) == Report(Chunk(Finding.Layout("zip")), Chunk.empty),
-        PortalReport.inspect(empty, empty.length.toLong, Set.empty) == Report(
-          Chunk(Finding.Layout("zip")),
-          Chunk.empty,
-        ),
-        judged(Right(List("demo/widget/1.0.0/" -> Chunk.empty))) == Right(
-          Report(Chunk(Finding.Layout("zip")), Chunk.empty)
-        ),
+        PortalReport.inspect(Chunk[Byte](1, 2, 3), 3L, Set.empty) == Report(Chunk(upload), Chunk.empty),
+        PortalReport.inspect(empty, empty.length.toLong, Set.empty) == Report(Chunk(upload), Chunk.empty),
+        judged(Right(List("demo/widget/1.0.0/" -> Chunk.empty))) == Right(Report(Chunk(upload), Chunk.empty)),
+        judged(Right(List("" -> utf8("x")))) == Right(Report(Chunk(upload), Chunk.empty)),
         PortalReport.inspect(copied, copied.length.toLong, Set.empty) ==
-          Report(Chunk(Finding.Layout("demo/widget/1.0.0/widget-1.0.0.jar")), Chunk.empty),
-        judged(rooted).map(_.findings) == Right(Chunk(Finding.Layout("README"))),
+          Report(Chunk(entry(EntryPath("demo/widget/1.0.0/widget-1.0.0.jar"))), Chunk.empty),
+        judged(rooted).map(_.findings) == Right(Chunk(entry(EntryPath("README")))),
         judged(rooted).map(_.gavs) == Right(Chunk(gav)),
       )
     ,
@@ -60,21 +58,21 @@ object PortalReportLawSpec extends ZIOSpecDefault:
       val short   = judged(Right(List("demo/widget/readme.txt" -> utf8("x"))))
       assertTrue(
         judged(withDir) == Right(Report(Chunk.empty, Chunk(gav))),
-        short == Right(Report(Chunk(Finding.Layout("demo/widget")), Chunk.empty)),
+        short == Right(Report(Chunk(entry(EntryPath("demo/widget"))), Chunk.empty)),
       )
     ,
     test("an illegal path segment is layout and does not invent a gav"):
       val dirs = List(
-        "demo/./1.0.0",
-        "demo/../1.0.0",
-        "demo/wid get/1.0.0",
-        "demo/a:b/1.0.0",
-        "demo//1.0.0",
-        "demo/widget\\x/1.0.0",
+        EntryPath("demo/./1.0.0"),
+        EntryPath("demo/../1.0.0"),
+        EntryPath("demo/wid get/1.0.0"),
+        EntryPath("demo/a:b/1.0.0"),
+        EntryPath("demo//1.0.0"),
+        EntryPath("demo/widget\\x/1.0.0"),
       )
       val misses = dirs.flatMap: dir =>
-        val report = judged(Right(List(s"$dir/readme.txt" -> utf8("x"))))
-        if report == Right(Report(Chunk(Finding.Layout(dir)), Chunk.empty)) then Nil else List(dir)
+        val report = judged(Right(List(s"${dir.value}/readme.txt" -> utf8("x"))))
+        if report == Right(Report(Chunk(entry(dir)), Chunk.empty)) then Nil else List(dir)
       assertTrue(misses == Nil)
     ,
     test("uppercase checksum text still matches, and a wrong md5 is a checksum"):
@@ -180,29 +178,60 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         entries :+ ("demo/widget/1.0.0/notes.txt" -> utf8("x"))
       val taken = judged(bundle("1.0.0", pom(release)), Set(gav))
       assertTrue(
-        judged(extra).map(_.findings) == Right(Chunk(Finding.Layout("demo/widget/1.0.0/notes.txt"))),
+        judged(extra).map(_.findings) == Right(Chunk(entry(EntryPath("demo/widget/1.0.0/notes.txt")))),
         taken == Right(Report(Chunk(Finding.AlreadyPublished(gav.render)), Chunk(gav))),
       )
     ,
-    test("a gav line is three fields and a finding token survives a newline by replacing it"):
-      val token = Finding.Layout("a\nb\rc").token
+    test("a gav line is three fields, and a bad line names what is missing"):
       assertTrue(
-        Gav.from("demo:widget:1.0.0") == Some(gav),
-        Gav.from("demo.group:widget:1.0.0").map(_.directory) == Some("demo/group/widget/1.0.0"),
-        Gav.from("demo:widget") == None,
-        Gav.from(":widget:1.0.0") == None,
-        Gav.from("demo::1.0.0") == None,
-        Gav.from("demo:widget:") == None,
-        token == "layout:a_b_c",
-        Finding.from(token) == Some(Finding.Layout("a_b_c")),
-        Finding.from("empty-pom") == Some(Finding.EmptyPom),
-        Finding.from("too-large") == Some(Finding.TooLarge),
-        Finding.from("nope") == None,
-        Finding.from(":nope") == None,
+        Gav.from("demo:widget:1.0.0") == Right(gav),
+        Gav.from("demo.group:widget:1.0.0").map(_.directory) == Right("demo/group/widget/1.0.0"),
+        Gav.from("demo:widget") == Left(GavError.Fields("demo:widget")),
+        Gav.from("demo:widget:1.0.0:extra") == Left(GavError.Fields("demo:widget:1.0.0:extra")),
+        Gav.from(":widget:1.0.0") == Left(GavError.NoGroup(":widget:1.0.0")),
+        Gav.from("demo::1.0.0") == Left(GavError.NoArtifact("demo::1.0.0")),
+        Gav.from("demo:widget:") == Left(GavError.NoVersion("demo:widget:")),
+        GavError.Fields("demo:widget").message == "'demo:widget' is not group:artifact:version",
+        GavError.NoGroup(":widget:1.0.0").message == "':widget:1.0.0' has no group",
+        GavError.NoArtifact("demo::1.0.0").message == "'demo::1.0.0' has no artifact",
+        GavError.NoVersion("demo:widget:").message == "'demo:widget:' has no version",
       )
     ,
-    test("render then parse keeps the state and the findings, and an unknown token does not"):
-      val findings = Chunk(Finding.Layout("demo/widget"), Finding.EmptyPom, Finding.TooLarge)
+    test("a finding token is its kind and detail, the upload is a bare layout, and a newline becomes _"):
+      val tokens = List(
+        upload                                       -> "layout",
+        entry(EntryPath("zip"))                      -> "layout:zip",
+        Finding.FileSet("demo/w.jar")                -> "file-set:demo/w.jar",
+        Finding.Checksum("demo/w.jar.md5")           -> "checksum:demo/w.jar.md5",
+        Finding.PomFields("scm")                     -> "pom-fields:scm",
+        Finding.SnapshotVersion("1.0.0-SNAPSHOT")    -> "snapshot-version:1.0.0-SNAPSHOT",
+        Finding.SnapshotDependency("d:c:1-SNAPSHOT") -> "snapshot-dependency:d:c:1-SNAPSHOT",
+        Finding.AlreadyPublished("demo:w:1.0.0")     -> "already-published:demo:w:1.0.0",
+        Finding.EmptyPom                             -> "empty-pom",
+        Finding.TooLarge                             -> "too-large",
+      )
+      assertTrue(
+        tokens.map((finding, _) => finding.token) == tokens.map((_, text) => text),
+        tokens.map((_, text) => Finding.from(text)) == tokens.map((finding, _) => Right(finding)),
+        entry(EntryPath("a\nb\rc")).token == "layout:a_b_c",
+        Finding.from("layout:a_b_c") == Right(entry(EntryPath("a_b_c"))),
+        Finding.from("nope") == Left(FindingError.Unknown("nope")),
+        Finding.from(":nope") == Left(FindingError.Unknown(":nope")),
+        Finding.from("bogus:x") == Left(FindingError.Unknown("bogus:x")),
+        Finding.from("layout:") == Left(FindingError.Bare("layout")),
+        Finding.from("file-set") == Left(FindingError.Bare("file-set")),
+        Finding.from("empty-pom:x") == Left(FindingError.Extra("empty-pom")),
+        FindingError.Unknown("nope").message == "'nope' is not a finding",
+        FindingError.Bare("layout").message == "finding 'layout' needs a detail after ':'",
+        FindingError.Extra("empty-pom").message == "finding 'empty-pom' takes no detail",
+        EntryPath.from("") == Left(EntryPath.Error.Empty),
+        EntryPath.Error.Empty.message == "a bundle entry path is empty",
+        typeCheckErrors("""EntryPath("")""").map(_.message) == List("a bundle entry path is empty"),
+      )
+    ,
+    test("render then parse keeps the state and the findings, and a bad state, list, or token says which"):
+      val id       = DeploymentId("deploy-1")
+      val findings = Chunk(upload, entry(EntryPath("demo/widget")), Finding.EmptyPom, Finding.TooLarge)
       val states   = List(
         DeploymentState.Pending,
         DeploymentState.Validating,
@@ -211,20 +240,26 @@ object PortalReportLawSpec extends ZIOSpecDefault:
         DeploymentState.Published,
         DeploymentState.Failed,
       )
-      ZIO
-        .fromEither(DeploymentId.from("deploy-1"))
-        .map: id =>
-          val misses = states.flatMap: state =>
-            val json = PortalReport.render(id, state, findings)
-            if PortalReport.parse(json) == Some((state, findings)) && json.contains("deploy-1") then Nil
-            else List(state)
-          val validated = PortalReport.render(id, DeploymentState.Validated, Chunk.empty)
-          assertTrue(
-            misses == Nil,
-            PortalReport.parse(validated.replace("VALIDATED", "NOPE")) == None,
-            PortalReport.parse(validated.replace(""""report":[]""", """"report":["nope"]""")) == None,
-          ),
+      val misses = states.flatMap: state =>
+        val json = PortalReport.render(id, state, findings)
+        if PortalReport.parse(json) == Right((state, findings)) && json.contains("deploy-1") then Nil
+        else List(state)
+      val validated = PortalReport.render(id, DeploymentState.Validated, Chunk.empty)
+      assertTrue(
+        misses == Nil,
+        PortalReport.parse(validated.replace("VALIDATED", "NOPE")) == Left(StatusError.NoState),
+        PortalReport.parse(validated.replace(""""report":[]""", """"report":"x"""")) == Left(StatusError.NoReport),
+        PortalReport.parse(validated.replace(""""report":[]""", """"report":["nope"]""")) ==
+          Left(StatusError.Token(FindingError.Unknown("nope"))),
+        StatusError.NoState.message == "the status body names no deployment state",
+        StatusError.NoReport.message == "the status body has no report list",
+        StatusError.Token(FindingError.Unknown("nope")).message == "'nope' is not a finding",
+      ),
   )
+
+  private val upload: Finding = Finding.Layout(LayoutPlace.Upload)
+
+  private def entry(path: EntryPath): Finding = Finding.Layout(LayoutPlace.Entry(path))
 
   private def pom(revision: Revision): Either[ArtifactIdError, String] =
     ArtifactId

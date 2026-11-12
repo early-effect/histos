@@ -1,14 +1,13 @@
 package histos.central
 
 import java.nio.file.{Files, Path}
-import java.util.UUID
 
 import heddle.{Body, FormField, Handler, Method, Request, Response, Routes, Server, Status, string}
 import heddle.http.header.{BasicCredentials, Headers}
 import heddle.route.PathDsl.*
 import heddle.server.{BodyBytes, Port}
 
-import zio.{Chunk, Config, Scope, UIO, ZIO}
+import zio.{Chunk, Config, Random, Scope, UIO, ZIO}
 
 /** `./histos portal`. Loopback only. Deployments stay on disk. */
 object PortalServer:
@@ -87,29 +86,21 @@ object PortalServer:
         )
 
   private def accept(root: Path, data: Chunk[Byte], mode: ReleaseMode): ZIO[Any, Nothing, Response] =
-    PortalStore
-      .published(root)
-      .foldZIO(
-        failed,
-        known =>
-          val report = PortalReport.inspect(data, data.length.toLong, known)
-          val state  =
-            if report.findings.nonEmpty then DeploymentState.Failed
-            else
-              mode match
-                case ReleaseMode.Hold      => DeploymentState.Validated
-                case ReleaseMode.Automatic => DeploymentState.Published
-          DeploymentId.from(UUID.randomUUID.toString) match
-            case Left(_) =>
-              ZIO.succeed(Response.internalServerError("the rehearsal portal could not name a deployment"))
-            case Right(id) =>
-              PortalStore
-                .create(root, id, PortalStore.Record(state, report.findings, report.gavs))
-                .foldZIO(
-                  failed,
-                  _ => ZIO.succeed(Response.text(id.value + "\n", Status.Created)),
-                ),
-      )
+    val created =
+      for
+        known <- PortalStore.published(root)
+        report = PortalReport.inspect(data, data.length.toLong, known)
+        id <- Random.nextUUID.map(DeploymentId.of)
+        _  <- PortalStore.create(root, id, PortalStore.Record(judged(report, mode), report.findings, report.gavs))
+      yield Response.text(id.value + "\n", Status.Created)
+    created.catchAll(failed)
+
+  private def judged(report: Report, mode: ReleaseMode): DeploymentState =
+    if report.findings.nonEmpty then DeploymentState.Failed
+    else
+      mode match
+        case ReleaseMode.Hold      => DeploymentState.Validated
+        case ReleaseMode.Automatic => DeploymentState.Published
 
   private def status(root: Path, request: Request): ZIO[Any, Nothing, Response] =
     request.query.get("id") match
@@ -154,6 +145,8 @@ object PortalServer:
           Response.text("the deployment cannot be promoted", Status.Conflict)
         case PortalStore.Error.Io(_) =>
           Response.internalServerError("the rehearsal portal could not store the deployment")
+        case PortalStore.Error.Unreadable(_, _) =>
+          Response.internalServerError("the rehearsal portal could not read the deployment")
 end PortalServer
 
 enum PortalOpenError:

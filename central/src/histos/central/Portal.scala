@@ -1,8 +1,9 @@
 package histos.central
 
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
-import scala.annotation.tailrec
+import scala.annotation.{publicInBinary, tailrec}
 
 import heddle.client.Client
 import heddle.http.{Body, FormField, Method, Path, QueryParams, Request, Response, Scheme, Url}
@@ -35,13 +36,21 @@ object DeploymentId:
       case Spaced(text) => s"deployment id '$text' contains whitespace"
   end Error
 
+  inline def apply(inline raw: String): DeploymentId = ${ DeploymentIdMacro.literal('raw) }
+
   def from(raw: String): Either[Error, DeploymentId] =
     val text = raw.trim
     if text.isEmpty then Left(Error.Empty)
     else if text.exists(_.isWhitespace) then Left(Error.Spaced(text))
-    else Right(text)
+    else Right(trusted(text))
+
+  /** A UUID's text is never empty and has no whitespace. */
+  def of(uuid: UUID): DeploymentId = uuid.toString
 
   extension (id: DeploymentId) def value: String = id
+
+  /** Spliced by the literal macro. Source code cannot call it. */
+  @publicInBinary private[central] def trusted(raw: String): DeploymentId = raw
 end DeploymentId
 
 /** Where a release deploy goes. `https` anywhere, `http` only on loopback. */

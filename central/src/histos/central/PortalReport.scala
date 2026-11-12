@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets
 import java.util.zip.{ZipException, ZipInputStream}
 import javax.xml.parsers.{DocumentBuilderFactory, ParserConfigurationException}
 
+import scala.annotation.{publicInBinary, tailrec}
+
 import org.w3c.dom.Element
 import org.xml.sax.SAXException
 
@@ -19,15 +21,72 @@ final case class Gav(group: String, artifact: String, version: String):
 end Gav
 
 object Gav:
-  def from(line: String): Option[Gav] =
-    val first  = line.indexOf(':')
-    val second = if first < 0 then -1 else line.indexOf(':', first + 1)
-    if first <= 0 || second <= first + 1 || second >= line.length - 1 then None
-    else Some(Gav(line.substring(0, first), line.substring(first + 1, second), line.substring(second + 1)))
+  /** `group:artifact:version`, the line the store writes. */
+  def from(line: String): Either[GavError, Gav] =
+    line.split(":", -1).toList match
+      case group :: artifact :: version :: Nil =>
+        if group.isEmpty then Left(GavError.NoGroup(line))
+        else if artifact.isEmpty then Left(GavError.NoArtifact(line))
+        else if version.isEmpty then Left(GavError.NoVersion(line))
+        else Right(Gav(group, artifact, version))
+      case _ => Left(GavError.Fields(line))
+
+enum GavError:
+  case Fields(line: String)
+  case NoGroup(line: String)
+  case NoArtifact(line: String)
+  case NoVersion(line: String)
+
+  def message: String = this match
+    case Fields(line)     => s"'$line' is not group:artifact:version"
+    case NoGroup(line)    => s"'$line' has no group"
+    case NoArtifact(line) => s"'$line' has no artifact"
+    case NoVersion(line)  => s"'$line' has no version"
+end GavError
+
+/** A path inside an uploaded bundle, as the zip names it. Never empty. */
+opaque type EntryPath = String
+
+object EntryPath:
+  given CanEqual[EntryPath, EntryPath] = CanEqual.derived
+
+  enum Error:
+    case Empty
+
+    def message: String = this match
+      case Empty => "a bundle entry path is empty"
+  end Error
+
+  inline def apply(inline raw: String): EntryPath = ${ EntryPathMacro.literal('raw) }
+
+  def from(raw: String): Either[Error, EntryPath] =
+    if raw.isEmpty then Left(Error.Empty) else Right(trusted(raw))
+
+  extension (path: EntryPath)
+    def value: String = path
+
+    /** The directory that holds this entry. An entry at the root has none. */
+    def parent: Option[EntryPath] =
+      val cut = path.lastIndexOf('/')
+      if cut <= 0 then None else Some(path.substring(0, cut))
+  end extension
+
+  /** Spliced by the literal macro. Source code cannot call it. */
+  @publicInBinary private[central] def trusted(raw: String): EntryPath = raw
+end EntryPath
+
+/** What a layout finding names. */
+enum LayoutPlace:
+  /** The upload itself: not a zip, or a zip that holds no file. */
+  case Upload
+
+  /** One entry, or a directory of entries that is not `group/artifact/version`. */
+  case Entry(path: EntryPath)
+end LayoutPlace
 
 /** Why a bundle is not a release Central would publish. */
 enum Finding:
-  case Layout(path: String)
+  case Layout(place: LayoutPlace)
   case FileSet(name: String)
   case Checksum(name: String)
   case PomFields(field: String)
@@ -37,44 +96,76 @@ enum Finding:
   case EmptyPom
   case TooLarge
 
+  /** The upload is `layout` with no detail, so a root entry named `zip` is not mistaken for it. */
   def token: String = this match
-    case Layout(path)                   => s"layout:${Finding.sane(path)}"
-    case FileSet(name)                  => s"file-set:${Finding.sane(name)}"
-    case Checksum(name)                 => s"checksum:${Finding.sane(name)}"
-    case PomFields(field)               => s"pom-fields:${Finding.sane(field)}"
-    case SnapshotVersion(version)       => s"snapshot-version:${Finding.sane(version)}"
-    case SnapshotDependency(coordinate) => s"snapshot-dependency:${Finding.sane(coordinate)}"
-    case AlreadyPublished(gav)          => s"already-published:${Finding.sane(gav)}"
-    case EmptyPom                       => "empty-pom"
-    case TooLarge                       => "too-large"
+    case Layout(LayoutPlace.Upload)      => "layout"
+    case Layout(LayoutPlace.Entry(path)) => s"layout:${Finding.sane(path.value)}"
+    case FileSet(name)                   => s"file-set:${Finding.sane(name)}"
+    case Checksum(name)                  => s"checksum:${Finding.sane(name)}"
+    case PomFields(field)                => s"pom-fields:${Finding.sane(field)}"
+    case SnapshotVersion(version)        => s"snapshot-version:${Finding.sane(version)}"
+    case SnapshotDependency(coordinate)  => s"snapshot-dependency:${Finding.sane(coordinate)}"
+    case AlreadyPublished(gav)           => s"already-published:${Finding.sane(gav)}"
+    case EmptyPom                        => "empty-pom"
+    case TooLarge                        => "too-large"
 end Finding
 
 object Finding:
-  def from(token: String): Option[Finding] =
-    token match
-      case "empty-pom" => Some(EmptyPom)
-      case "too-large" => Some(TooLarge)
-      case other       =>
-        val cut = other.indexOf(':')
-        if cut <= 0 then None
-        else
-          val detail = other.substring(cut + 1)
-          other.substring(0, cut) match
-            case "layout"              => Some(Layout(detail))
-            case "file-set"            => Some(FileSet(detail))
-            case "checksum"            => Some(Checksum(detail))
-            case "pom-fields"          => Some(PomFields(detail))
-            case "snapshot-version"    => Some(SnapshotVersion(detail))
-            case "snapshot-dependency" => Some(SnapshotDependency(detail))
-            case "already-published"   => Some(AlreadyPublished(detail))
-            case _                     => None
+  def from(token: String): Either[FindingError, Finding] =
+    token.indexOf(':') match
+      case -1 =>
+        token match
+          case "empty-pom" => Right(EmptyPom)
+          case "too-large" => Right(TooLarge)
+          case "layout"    => Right(Layout(LayoutPlace.Upload))
+          case kind        => named(token, kind, "")
+      case cut => named(token, token.substring(0, cut), token.substring(cut + 1))
 
   /** A report line is one token. A newline in a path would split it. */
   def sane(raw: String): String =
     raw.flatMap:
       case '\n' | '\r' => "_"
       case char        => String.valueOf(char)
+
+  private def named(token: String, kind: String, detail: String): Either[FindingError, Finding] =
+    def text(make: String => Finding): Either[FindingError, Finding] =
+      if detail.isEmpty then Left(FindingError.Bare(kind)) else Right(make(detail))
+    kind match
+      case "empty-pom" | "too-large" => Left(FindingError.Extra(kind))
+      case "layout"                  =>
+        EntryPath.from(detail).left.map(_ => FindingError.Bare(kind)).map(path => Layout(LayoutPlace.Entry(path)))
+      case "file-set"            => text(FileSet(_))
+      case "checksum"            => text(Checksum(_))
+      case "pom-fields"          => text(PomFields(_))
+      case "snapshot-version"    => text(SnapshotVersion(_))
+      case "snapshot-dependency" => text(SnapshotDependency(_))
+      case "already-published"   => text(AlreadyPublished(_))
+      case _                     => Left(FindingError.Unknown(token))
 end Finding
+
+/** Why a report token is not a finding. */
+enum FindingError:
+  case Unknown(token: String)
+  case Bare(kind: String)
+  case Extra(kind: String)
+
+  def message: String = this match
+    case Unknown(token) => s"'$token' is not a finding"
+    case Bare(kind)     => s"finding '$kind' needs a detail after ':'"
+    case Extra(kind)    => s"finding '$kind' takes no detail"
+end FindingError
+
+/** Why a status body does not read as a state and a report. */
+enum StatusError:
+  case NoState
+  case NoReport
+  case Token(error: FindingError)
+
+  def message: String = this match
+    case NoState      => "the status body names no deployment state"
+    case NoReport     => "the status body has no report list"
+    case Token(error) => error.message
+end StatusError
 
 /** The validation report a deployment carries. `size` is the upload the server measured. */
 final case class Report(findings: Chunk[Finding], gavs: Chunk[Gav])
@@ -88,50 +179,50 @@ object PortalReport:
     else
       unzip(zip) match
         case Left(findings)                => Report(findings, Chunk.empty)
-        case Right(files) if files.isEmpty => Report(Chunk(Finding.Layout("zip")), Chunk.empty)
+        case Right(files) if files.isEmpty => Report(Chunk(Finding.Layout(LayoutPlace.Upload)), Chunk.empty)
         case Right(files)                  => judge(files, published)
 
   def render(id: DeploymentId, state: DeploymentState, findings: Chunk[Finding]): String =
     val report = findings.map(finding => quote(finding.token)).mkString("[", ",", "]")
     s"""{"deploymentId":${quote(id.value)},"deploymentState":${quote(wire(state))},"report":$report}"""
 
-  def parse(json: String): Option[(DeploymentState, Chunk[Finding])] =
+  def parse(json: String): Either[StatusError, (DeploymentState, Chunk[Finding])] =
     for
-      state <- stateOf(json)
+      state <- stateOf(json).toRight(StatusError.NoState)
       found <- reportOf(json)
     yield (state, found)
 
-  private def judge(files: Map[String, Chunk[Byte]], published: Set[Gav]): Report =
-    val grouped       = files.groupBy((path, _) => directoryOf(path))
+  private def judge(files: Map[EntryPath, Chunk[Byte]], published: Set[Gav]): Report =
+    val grouped       = files.groupBy((path, _) => path.parent)
     val (found, gavs) = grouped.foldLeft((Chunk.empty[Finding], Chunk.empty[Gav])):
-      case ((acc, gavs), ("", entries)) =>
-        (acc ++ entries.map((path, _) => Finding.Layout(path)), gavs)
-      case ((acc, gavs), (dir, entries)) =>
+      case ((acc, gavs), (None, entries)) =>
+        (acc ++ entries.map((path, _) => Finding.Layout(LayoutPlace.Entry(path))), gavs)
+      case ((acc, gavs), (Some(dir), entries)) =>
         val (more, gav) = module(dir, entries)
         (acc ++ more, gav.fold(gavs)(gavs :+ _))
     val taken = gavs.filter(published.contains).map(gav => Finding.AlreadyPublished(gav.render))
     Report(found ++ taken, gavs)
 
-  private def module(dir: String, entries: Map[String, Chunk[Byte]]): (Chunk[Finding], Option[Gav]) =
-    val segments = dir.split("/", -1).toList
+  private def module(dir: EntryPath, entries: Map[EntryPath, Chunk[Byte]]): (Chunk[Finding], Option[Gav]) =
+    val segments = dir.value.split("/", -1).toList
     segments match
       case group :+ artifact :+ version if group.nonEmpty && group.forall(legal) && legal(artifact) && legal(version) =>
         val gav   = Gav(group.mkString("."), artifact, version)
         val stem  = s"$artifact-$version"
         val names = entries.map((path, bytes) => (fileName(dir, path), bytes))
-        val extra = names.collect:
-          case (name, _) if !allowed(stem, name) => Finding.Layout(s"$dir/$name")
+        val extra = entries.collect:
+          case (path, _) if !allowed(stem, fileName(dir, path)) => Finding.Layout(LayoutPlace.Entry(path))
         val jars = Chunk(
-          artifactFile(names, dir, s"$stem.jar", zip = true),
-          artifactFile(names, dir, s"$stem-sources.jar", zip = true),
-          artifactFile(names, dir, s"$stem-javadoc.jar", zip = true),
+          artifactFile(names, dir.value, s"$stem.jar", zip = true),
+          artifactFile(names, dir.value, s"$stem-sources.jar", zip = true),
+          artifactFile(names, dir.value, s"$stem-javadoc.jar", zip = true),
         ).flatten
-        val (pomFound, _) = pomFile(names, dir, s"$stem.pom", gav)
+        val (pomFound, _) = pomFile(names, dir.value, s"$stem.pom", gav)
         val snapshot      =
           if version.endsWith("-SNAPSHOT") then Chunk(Finding.SnapshotVersion(version)) else Chunk.empty
         (Chunk.fromIterable(extra) ++ jars ++ pomFound ++ snapshot, Some(gav))
       case _ =>
-        (Chunk(Finding.Layout(dir)), None)
+        (Chunk(Finding.Layout(LayoutPlace.Entry(dir))), None)
 
   private def artifactFile(
       files: Map[String, Chunk[Byte]],
@@ -279,12 +370,8 @@ object PortalReport:
         if text.isEmpty then None else Some(text)
       case _ => None
 
-  private def directoryOf(path: String): String =
-    val cut = path.lastIndexOf('/')
-    if cut <= 0 then "" else path.substring(0, cut)
-
-  private def fileName(dir: String, path: String): String =
-    if path.startsWith(s"$dir/") then path.substring(dir.length + 1) else path
+  private def fileName(dir: EntryPath, path: EntryPath): String =
+    if path.value.startsWith(s"${dir.value}/") then path.value.substring(dir.value.length + 1) else path.value
 
   private def legal(segment: String): Boolean =
     segment.nonEmpty && segment != "." && segment != ".." && !segment.exists(_.isWhitespace) &&
@@ -301,26 +388,31 @@ object PortalReport:
       case first +: second +: Chunk() => first == 0x50.toByte && second == 0x4b.toByte
       case _                          => false
 
-  private def unzip(bytes: Chunk[Byte]): Either[Chunk[Finding], Map[String, Chunk[Byte]]] =
-    if !zipMagic(bytes) then Left(Chunk(Finding.Layout("zip")))
+  /** An entry with no name makes the whole upload unreadable as a bundle. */
+  private def unzip(bytes: Chunk[Byte]): Either[Chunk[Finding], Map[EntryPath, Chunk[Byte]]] =
+    val unbundled = Chunk(Finding.Layout(LayoutPlace.Upload))
+    if !zipMagic(bytes) then Left(unbundled)
     else
       val zip = new ZipInputStream(new ByteArrayInputStream(bytes.toArray))
       try
-        val found = List.newBuilder[(String, Chunk[Byte])]
+        val found = List.newBuilder[(EntryPath, Chunk[Byte])]
         var entry = zip.getNextEntry
         var stop  = Option.empty[Chunk[Finding]]
         while entry != null && stop.isEmpty do
           val name = entry.getName
           if !entry.isDirectory && !name.endsWith("/") then
-            readEntry(zip) match
-              case Left(finding) => stop = Some(Chunk(finding))
-              case Right(data)   => found += ((name, data))
+            EntryPath.from(name) match
+              case Left(EntryPath.Error.Empty) => stop = Some(unbundled)
+              case Right(path)                 =>
+                readEntry(zip) match
+                  case Left(finding) => stop = Some(Chunk(finding))
+                  case Right(data)   => found += ((path, data))
           zip.closeEntry()
           entry = zip.getNextEntry
         stop match
           case Some(findings) => Left(findings)
           case None           => unique(found.result())
-      catch case _: ZipException => Left(Chunk(Finding.Layout("zip")))
+      catch case _: ZipException => Left(unbundled)
       finally
         try zip.close()
         catch case _: IOException => ()
@@ -339,12 +431,12 @@ object PortalReport:
         else if n > 0 then out.write(buffer, 0, n)
     if total > Cap then Left(Finding.TooLarge) else Right(Chunk.fromArray(out.toByteArray))
 
-  private def unique(pairs: List[(String, Chunk[Byte])]): Either[Chunk[Finding], Map[String, Chunk[Byte]]] =
-    pairs.foldLeft[Either[Chunk[Finding], Map[String, Chunk[Byte]]]](Right(Map.empty)):
+  private def unique(pairs: List[(EntryPath, Chunk[Byte])]): Either[Chunk[Finding], Map[EntryPath, Chunk[Byte]]] =
+    pairs.foldLeft[Either[Chunk[Finding], Map[EntryPath, Chunk[Byte]]]](Right(Map.empty)):
       case (Left(findings), _)                             => Left(findings)
-      case (Right(have), (name, _)) if have.contains(name) =>
-        Left(Chunk(Finding.Layout(name)))
-      case (Right(have), (name, data)) => Right(have.updated(name, data))
+      case (Right(have), (path, _)) if have.contains(path) =>
+        Left(Chunk(Finding.Layout(LayoutPlace.Entry(path))))
+      case (Right(have), (path, data)) => Right(have.updated(path, data))
 
   private def wire(state: DeploymentState): String = state match
     case DeploymentState.Pending    => "PENDING"
@@ -375,28 +467,29 @@ object PortalReport:
               case "FAILED"     => Some(DeploymentState.Failed)
               case _            => None
 
-  private def reportOf(json: String): Option[Chunk[Finding]] =
+  private def reportOf(json: String): Either[StatusError, Chunk[Finding]] =
     val key = "\"report\""
     val at  = json.indexOf(key)
-    if at < 0 then None
+    if at < 0 then Left(StatusError.NoReport)
     else
       val after = json.substring(at + key.length).dropWhile(_.isWhitespace)
-      if !after.startsWith(":") then None
+      if !after.startsWith(":") then Left(StatusError.NoReport)
       else
         val list = after.drop(1).dropWhile(_.isWhitespace)
-        if !list.startsWith("[") then None else readList(list.drop(1), Chunk.empty)
+        if !list.startsWith("[") then Left(StatusError.NoReport) else readList(list.drop(1), Chunk.empty)
 
-  private def readList(text: String, acc: Chunk[Finding]): Option[Chunk[Finding]] =
+  @tailrec
+  private def readList(text: String, acc: Chunk[Finding]): Either[StatusError, Chunk[Finding]] =
     val rest = text.dropWhile(char => char.isWhitespace || char == ',')
-    if rest.startsWith("]") then Some(acc)
+    if rest.startsWith("]") then Right(acc)
     else if rest.startsWith("\"") then
       readString(rest.drop(1)) match
-        case None              => None
+        case None              => Left(StatusError.NoReport)
         case Some(token, next) =>
           Finding.from(token) match
-            case None          => None
-            case Some(finding) => readList(next, acc :+ finding)
-    else None
+            case Left(error)    => Left(StatusError.Token(error))
+            case Right(finding) => readList(next, acc :+ finding)
+    else Left(StatusError.NoReport)
 
   private def readString(text: String): Option[(String, String)] =
     val out                                      = new StringBuilder
