@@ -4,7 +4,7 @@ import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
 import histos.js.{JsRequests, ScalaJs}
-import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
+import histos.native.{NativeClasspath, NativeCompile, NativeOrigin, NativeRequests, NativeToolchain}
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -13,6 +13,7 @@ import histos.resolve.{
   ResolutionService,
   Resolve,
   ResolveError,
+  ToolInput,
 }
 import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
@@ -531,9 +532,12 @@ object GraphCompile:
 
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
-  /** Lock checksums and source bytes. A hit does not fetch jars or open a compiler. A deleted source is not a hit: the
-    * path memo drops it, so the key no longer matches. The bytes are hashed on every call, so an edit that keeps the
-    * size and the modified time is still a miss.
+  /** The tools a platform's compile adds to the key, and the plugins it adds to the compiler row. */
+  private final case class PlatformTools(compilation: List[ToolInput], plugins: List[ToolInput])
+
+  /** Lock checksums and source bytes. A hit does not fetch jars, read the store, or open a compiler. The caller listed
+    * the sources and this hashes their bytes, so an added, deleted, or edited source is a miss whatever the modified
+    * times say. The key is the one that platform's compile stores, so a Native cell hits here as a Jvm cell does.
     */
   private def recall(
       work: CellWork,
@@ -552,14 +556,24 @@ object GraphCompile:
           case Some(hashes) =>
             val compiler = plan.tools.pinned(CompilerRequests.compiler(version, plan.tools.repositories))
             val tools    = platform match
-              case Platform.Js =>
+              case Platform.Jvm => Some(PlatformTools(Nil, Nil))
+              case Platform.Js  =>
                 val revision = module.jsVersion.getOrElse(plan.tools.catalog.js.revision)
                 plan.tools
                   .pinned(JsRequests.libraries(version, revision, plan.tools.repositories, plan.tools.catalog))
-                  .map(List(_))
-              case _ => Some(Nil)
+                  .map(libraries => PlatformTools(List(libraries), Nil))
+              case Platform.Native =>
+                NativeToolchain
+                  .of(module.nativeVersion.getOrElse(plan.tools.catalog.native.revision), plan.native)
+                  .toOption
+                  .flatMap: toolchain =>
+                    plan.tools
+                      .pinned(NativeRequests.libraries(version, toolchain, plan.tools.repositories))
+                      .map(libraries =>
+                        PlatformTools(List(libraries), List(NativeClasspath.plugin(libraries, toolchain, version)))
+                      )
             (compiler, tools) match
-              case (Some(compilerInput), Some(compilation)) =>
+              case (Some(compilerInput), Some(PlatformTools(compilation, plugins))) =>
                 JvmCompile.sourceDigest(sources).flatMap { digest =>
                   val request = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
@@ -574,7 +588,7 @@ object GraphCompile:
                   )
                   val key = CompileKey.withTools(
                     CompileKey.of(request, digest),
-                    List(compilerInput.fingerprint),
+                    (compilerInput :: plugins).map(_.fingerprint),
                   )
                   CompileReplay.recall(request, key)
                 }
@@ -588,11 +602,11 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      listed <- ZIO.serviceWithZIO[CompileMemo](_.sources(base, version, platform)).mapError(failed)
+      listed <- Sources.select(base, version, platform).mapError(failed)
       extraRoot = Sources.unmanagedRoot(plan.repo, module.name.value)
       extra <- Sources.select(extraRoot, version, platform).mapError(failed)
       sources = Sources.prefer(base, listed, extraRoot, extra)
-      tests    <- ZIO.serviceWithZIO[CompileMemo](_.tests(base, version, platform)).mapError(failed)
+      tests    <- Sources.tests(base, version, platform).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
         else if sources.isEmpty then vacant(plan, module.name, version, platform)
@@ -634,7 +648,7 @@ object GraphCompile:
                     apis,
                     permitted = assembled.permitted,
                     coverage = planned.map(_.identity),
-                    coverageTools = planned.fold(List.empty[histos.resolve.ToolInput])(_.tools),
+                    coverageTools = planned.fold(List.empty[ToolInput])(_.tools),
                   )
                   compiled <- compile(
                     work,

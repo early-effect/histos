@@ -3,11 +3,11 @@ package histos.watch
 import histos.workspace.Workspace
 import histos.{Module, Platform, Platforms, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{ZIO, duration2DurationOps}
+import zio.{ZIO, duration2DurationOps, durationInt}
 import zio.test.*
 
 object WatchLawSpec extends ZIOSpecDefault:
@@ -65,6 +65,26 @@ object WatchLawSpec extends ZIOSpecDefault:
               paths <- fiber.join
             yield assertTrue(paths == List(build.toAbsolutePath.normalize))
     ,
+    test("a same-size edit with the modified time put back still wakes the watch"):
+      ZIO.scoped:
+        Workspace
+          .work("histos-watch-same")
+          .flatMap: repo =>
+            val build = repo.resolve("histos.scala")
+            val roots = SourceWatch.roots(repo, List(module("core")))
+            for
+              _     <- Workspace.writeString(build, "one\n")
+              start <- SourceWatch.take(roots)
+              stamp <- ZIO.attemptBlocking(Files.getLastModifiedTime(build))
+              _     <- Workspace.writeString(build, "two\n")
+              _     <- ZIO.attemptBlocking(Files.setLastModifiedTime(build, stamp))
+              kept  <- ZIO.attemptBlocking(Files.getLastModifiedTime(build))
+              fiber <- SourceWatch.since(roots, start).fork
+              _     <- zio.test.TestClock.adjust(SourceWatch.Poll + SourceWatch.Settle)
+              paths <- fiber.join
+            yield assertTrue(kept == stamp, paths == List(build.toAbsolutePath.normalize))
+    // A watch that misses the edit polls forever. The timeout runs on the live clock and ends the law.
+    @@ TestAspect.timeout(30.seconds),
     test("a declared output inside a watched directory does not wake, and another file there does"):
       ZIO.scoped:
         Workspace

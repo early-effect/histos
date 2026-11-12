@@ -2,13 +2,10 @@ package histos.zinc
 
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.resolve.{ClasspathScope, DependencyLock, Repositories, Resolve}
-import histos.workspace.{IoFailure, IoFault}
 import histos.{Module, Platform, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, Ref, UIO, ULayer, ZIO, ZLayer}
 
@@ -28,17 +25,14 @@ end LockStamp
 /** A lock and the stamp that invalidates hashes and classpaths derived from it. */
 final case class StampedLock(lock: DependencyLock, stamp: LockStamp)
 
-/** Remembered compile inputs. A value is computed the first time something reads it.
+/** Remembered compile inputs that the lock's bytes key. A value is computed the first time something reads it.
   *
-  * Source paths are reused only while every cached path still exists and the directories that contain them are
-  * unchanged. A deleted source is not a hit. The source digest is not remembered: it is the bytes, read on every
-  * compile. `clean` and `cleanFull` call [[CompileMemo.forget]].
+  * Nothing the source tree decides is remembered: a compile lists the tree and hashes the bytes every time. `clean` and
+  * `cleanFull` call [[CompileMemo.forget]].
   */
 trait CompileMemo:
   def lock(repo: Path): IO[GraphCompileError, StampedLock]
   def note(lock: DependencyLock): UIO[StampedLock]
-  def sources(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
-  def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
   def hashes(
       lock: DependencyLock,
       modules: List[Module],
@@ -69,10 +63,9 @@ object CompileMemo:
     ZLayer.fromZIO {
       for
         locks      <- Ref.make(Map.empty[String, (LockStamp, DependencyLock)])
-        paths      <- Ref.make(Map.empty[PathKey, Listed])
         hashes     <- Ref.make(Map.empty[HashKey, Option[List[Sha256]]])
         classpaths <- Ref.make(Map.empty[ClassKey, ScalacClasspath])
-      yield Live(locks, paths, hashes, classpaths)
+      yield Live(locks, hashes, classpaths)
     }
 
   /** One memo for `effect`, closed over nothing else. The daemon holds one for its lifetime instead. */
@@ -81,9 +74,6 @@ object CompileMemo:
       live.build.flatMap(env => effect.provideSomeLayer(ZLayer.succeed(env.get[CompileMemo])))
     )
 
-  private final case class PathKey(root: String, version: String, platform: String, tests: Boolean)
-  private final case class DirMark(path: Path, modified: Long)
-  private final case class Listed(paths: List[Path], dirs: List[DirMark], missing: Boolean)
   private final case class HashKey(module: String, version: String, platform: String, scope: String, stamp: String)
   private final case class ClassKey(
       repo: String,
@@ -96,7 +86,6 @@ object CompileMemo:
 
   private final class Live(
       locks: Ref[Map[String, (LockStamp, DependencyLock)]],
-      paths: Ref[Map[PathKey, Listed]],
       hashes: Ref[Map[HashKey, Option[List[Sha256]]]],
       classpaths: Ref[Map[ClassKey, ScalacClasspath]],
   ) extends CompileMemo:
@@ -120,12 +109,6 @@ object CompileMemo:
 
     def note(lock: DependencyLock): UIO[StampedLock] =
       ZIO.succeed(StampedLock(lock, contentStamp(lock)))
-
-    def sources(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
-      listed(root, version, platform, tests = false)
-
-    def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
-      listed(root, version, platform, tests = true)
 
     def hashes(
         lock: DependencyLock,
@@ -173,50 +156,8 @@ object CompileMemo:
 
     def forget: UIO[Unit] =
       locks.set(Map.empty) *>
-        paths.set(Map.empty) *>
         hashes.set(Map.empty) *>
         classpaths.set(Map.empty)
-
-    private def listed(
-        root: Path,
-        version: ScalaVersion,
-        platform: Platform,
-        tests: Boolean,
-    ): IO[CompileError, List[Path]] =
-      val key = PathKey(root.toAbsolutePath.normalize.toString, version.value, platform.token, tests)
-      paths.get.flatMap: cached =>
-        cached.get(key) match
-          case Some(found) =>
-            current(root, found).flatMap:
-              case Some(kept) => ZIO.succeed(kept)
-              case None       => fill(key, root, version, platform, tests)
-          case None => fill(key, root, version, platform, tests)
-
-    private def current(root: Path, found: Listed): IO[CompileError, Option[List[Path]]] =
-      ZIO
-        .attemptBlocking:
-          if found.missing then if Files.exists(root) then None else Some(found.paths)
-          else if found.paths.forall(path => Files.isRegularFile(path)) && directoriesMatch(found.dirs) then
-            Some(found.paths)
-          else None
-        .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Read)))
-
-    private def fill(
-        key: PathKey,
-        root: Path,
-        version: ScalaVersion,
-        platform: Platform,
-        tests: Boolean,
-    ): IO[CompileError, List[Path]] =
-      val selected =
-        if tests then Sources.tests(root, version, platform) else Sources.select(root, version, platform)
-      for
-        found <- selected
-        shot  <- ZIO
-          .attemptBlocking(snapshot(root, found.filter(path => Files.isRegularFile(path))))
-          .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Read)))
-        _ <- paths.update(_.updated(key, shot))
-      yield shot.paths
 
     private def read(repo: Path): IO[GraphCompileError, DependencyLock] =
       Resolve
@@ -242,23 +183,4 @@ object CompileMemo:
         s"${cell.module.value} ${cell.scalaVersion.value} ${cell.platform.token} ${cell.scope.header} $artifacts"
       .mkString("\n")
     LockStamp.content(Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))))
-
-  private def directoriesMatch(dirs: List[DirMark]): Boolean =
-    dirs.forall: dir =>
-      Files.isDirectory(dir.path) && Files.getLastModifiedTime(dir.path).toMillis == dir.modified
-
-  private def snapshot(root: Path, present: List[Path]): Listed =
-    if !Files.isDirectory(root) then Listed(Nil, Nil, missing = true)
-    else
-      val walk = Files.walk(root)
-      val dirs =
-        try
-          walk.iterator.asScala
-            .filter(dir => Files.isDirectory(dir))
-            .map: dir =>
-              val normal = dir.toAbsolutePath.normalize
-              DirMark(normal, Files.getLastModifiedTime(normal).toMillis)
-            .toList
-        finally walk.close()
-      Listed(present.map(_.toAbsolutePath.normalize), dirs, missing = false)
 end CompileMemo

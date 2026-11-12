@@ -58,7 +58,6 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
           val program =
             for
               _         <- silence
-              _         <- dieSources
               collected <- GraphCompile.cellFeed(session, List(missing -> scala3), Platform.Jvm).runCollect.either
             yield collected match
               case Left(GraphCompileError.Target(SelectError.Unknown(found, _))) =>
@@ -77,7 +76,6 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
           val program =
             for
               _         <- silence
-              _         <- dieSources
               collected <- GraphCompile
                 .cellFeed(session, List(known.name -> scala3, known.name -> scala3), Platform.Jvm)
                 .runCollect
@@ -310,11 +308,6 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       )(ZIO.die(new IllegalStateException("compiled"))) *>
       stub[ResolutionService](_.current)(ZIO.die(new IllegalStateException("resolved")))
 
-  private def dieSources: ZIO[Stubbed[CompileMemo], Nothing, Unit] =
-    stub[CompileMemo](_.sources(any[Path], any[ScalaVersion], any[Platform]))(
-      ZIO.die(new IllegalStateException("sources"))
-    )
-
   private final case class Refused(feeds: List[CompileFeed], text: String, starts: Int)
 
   private def refused(
@@ -329,8 +322,6 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       root   = sourceRoot(repo, mod)
       source = root.resolve("A.scala")
       _ <- Workspace.writeString(source, "class A")
-      _ <- stub[CompileMemo](_.sources(any[Path], any[ScalaVersion], any[Platform]))(ZIO.succeed(List(source)))
-      _ <- stub[CompileMemo](_.tests(any[Path], any[ScalaVersion], any[Platform]))(ZIO.succeed(List.empty[Path]))
       _ <- stub[CompileMemo](
         _.hashes(
           any[DependencyLock],

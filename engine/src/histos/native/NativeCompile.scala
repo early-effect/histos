@@ -35,7 +35,7 @@ object NativeCompile:
               .filterNot(JvmCompile.isStandardLibrary),
             compilationTools = request.compilationTools :+ libs.input,
             compilerPlugins =
-              request.compilerPlugins :+ libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin)),
+              request.compilerPlugins :+ NativeClasspath.plugin(libs.input, toolchain, request.toolchain.version),
           ),
           List(libs.plugin),
           extra,

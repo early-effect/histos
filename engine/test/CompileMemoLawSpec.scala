@@ -5,7 +5,6 @@ import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCel
 import histos.workspace.Workspace
 import histos.{DepKind, Module, Platform, Platforms, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, ZIO}
@@ -51,39 +50,6 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
             noted.stamp.token.startsWith("c:"),
             reread.lock == next,
             reread.stamp != first.stamp,
-          )
-    ,
-    test("main and test sources stay apart, and a deleted file is not a hit"):
-      Workspace
-        .work("histos-memo-sources")
-        .flatMap: root =>
-          val main   = root.resolve("src/main/scala/demo/A.scala")
-          val packed = root.resolve("src/main/scala/js/Pkg.scala")
-          val java   = root.resolve("src/main/java/demo/J.java")
-          val js     = root.resolve("src/main/js/scala/Js.scala")
-          val test   = root.resolve("src/test/scala/demo/T.scala")
-          val body   = "object A".getBytes(StandardCharsets.UTF_8)
-          for
-            memo    <- CompileMemo.live.build.map(_.get[CompileMemo])
-            absent  <- memo.sources(root.resolve("missing"), version, Platform.Jvm)
-            _       <- write(main, body)
-            _       <- write(packed, body)
-            _       <- write(java, body)
-            _       <- write(js, body)
-            _       <- write(test, body)
-            jvm     <- memo.sources(root, version, Platform.Jvm)
-            jsMain  <- memo.sources(root, version, Platform.Js)
-            tests   <- memo.tests(root, version, Platform.Jvm)
-            again   <- memo.sources(root, version, Platform.Jvm)
-            _       <- ZIO.attemptBlocking(Files.deleteIfExists(main))
-            dropped <- memo.sources(root, version, Platform.Jvm)
-          yield assertTrue(
-            absent.isEmpty,
-            jvm.map(_.getFileName.toString).sorted == List("A.scala", "J.java", "Pkg.scala"),
-            jsMain.map(_.getFileName.toString).sorted == List("A.scala", "Js.scala", "Pkg.scala"),
-            tests.map(_.getFileName.toString) == List("T.scala"),
-            again == jvm,
-            !dropped.map(_.getFileName.toString).contains("A.scala"),
           )
     ,
     test("a hash is remembered for the stamp, a standard library jar is not a jvm hash, and forget drops it"):
@@ -155,9 +121,4 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
       val path = histos.resolve.Resolve.lockPath(repo)
       Files.createDirectories(repo)
       Files.writeString(path, DependencyLock.render(pin))
-
-  private def write(path: Path, body: Array[Byte]) =
-    ZIO.attemptBlocking:
-      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-      Files.write(path, body)
 end CompileMemoLawSpec

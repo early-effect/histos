@@ -30,6 +30,10 @@ final class Scenario private (
   def holds(sha: Sha256): IO[CacheError, Boolean] =
     env.get[ContentStore].list.map(_.exists(_.digest.value == sha.value))
 
+  /** Delete every blob in the scenario store. A compile that still needs one after this starts the compiler. */
+  def emptyStore: IO[CacheError | IoFailure, Unit] =
+    env.get[ContentStore].list.flatMap(entries => ZIO.foreachDiscard(entries)(entry => Workspace.delete(entry.path)))
+
   /** A work tree of `build`. The lock `build` reads pins every cell with no jars, plus this repository's tools. A
     * module that names dependencies drifts from that pin. The checkout keeps its compilers and its input memo for the
     * scope, the way that checkout's server keeps them between commands.
