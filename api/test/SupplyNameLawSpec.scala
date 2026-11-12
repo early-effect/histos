@@ -1,5 +1,7 @@
 package histos.supply
 
+import _root_.scala.compiletime.testing.typeCheckErrors
+
 import zio.test.*
 
 object SupplyNameLawSpec extends ZIOSpecDefault:
@@ -62,14 +64,36 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         AdvisoryId.from("GHSA-1234-abcd") == Left(AdvisoryError.Bad("GHSA-1234-abcd")),
       )
     ,
-    test("a reason, a date, a coordinate, a repository, and a purl each refuse their own shape"):
+    test("a date is yyyy-mm-dd on the calendar, and a leap day is one only in a leap year"):
+      val refused = List(
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-01-00",
+        "2023-02-29",
+        "1900-02-29",
+        "06-11-2026",
+        "2026-1-10",
+        "+12026-01-10",
+        "2026-01-10T00:00:00Z",
+        " 2026-01-10",
+        "٢٠٢٦-٠١-١٠",
+        "",
+      )
+      assertTrue(
+        Date.from("2026-11-06").map(_.value) == Right("2026-11-06"),
+        Date.from("2024-02-29").map(_.value) == Right("2024-02-29"),
+        Date.from("2000-02-29").map(_.value) == Right("2000-02-29"),
+        Date.from("2026-12-31") == Right(Date("2026-12-31")),
+        refused.map(Date.from) == refused.map(raw => Left(DateError.Bad(raw))),
+        typeCheckErrors("""Date("2023-02-29")""").map(_.message) == List("'2023-02-29' is not a date"),
+      )
+    ,
+    test("a reason, a coordinate, a repository, and a purl each refuse their own shape"):
       assertTrue(
         Reason.from("because").map(_.value) == Right("because"),
         Reason.from("") == Left(ReasonError.Bad),
         Reason.from("a\nb") == Left(ReasonError.Bad),
-        Date.from("2026-11-06").map(_.value) == Right("2026-11-06"),
-        Date.from("2026-13-01") == Left(DateError.Bad("2026-13-01")),
-        Date.from("06-11-2026") == Left(DateError.Bad("06-11-2026")),
         Coordinate.from("dev.zio:zio").map(_.value) == Right("dev.zio:zio"),
         Coordinate.from("dev.zio:zio:2") == Left(CoordinateError.Bad("dev.zio:zio:2")),
         Coordinate.from("dev.zio:") == Left(CoordinateError.Bad("dev.zio:")),

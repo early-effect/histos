@@ -38,7 +38,6 @@ object SignerLawSpec extends ZIOSpecDefault:
       Workspace.work("histos-gpg-missing").flatMap { root =>
         val bin = root.resolve("bin")
         for
-          want    <- ZIO.fromEither(Fingerprint.from("0123456789abcdef"))
           _       <- install(bin, failScript)
           absent  <- Signer.fromEnv(Map("HISTOS_SIGNER" -> "gpg", "PATH" -> "")).either
           signer  <- Signer.fromEnv(gpgEnv(bin, hex = None))
@@ -47,7 +46,7 @@ object SignerLawSpec extends ZIOSpecDefault:
         yield assertTrue(
           absent == Left(SignerError.GpgMissing),
           unnamed == Left(SignerError.NoFingerprint),
-          named == want,
+          named == Fingerprint("0123456789abcdef"),
         )
       }
     ,
@@ -145,9 +144,8 @@ object SignerLawSpec extends ZIOSpecDefault:
       loop: RefusingLoopback,
   ) =
     for
-      user        <- ZIO.fromEither(RepositoryUser.from("user"))
-      base        <- ZIO.fromEither(PortalBase.from(loop.url))
-      fingerprint <- ZIO.fromEither(Fingerprint.from("0123456789abcdef"))
+      user <- ZIO.fromEither(RepositoryUser.from("user"))
+      base <- ZIO.fromEither(PortalBase.from(loop.url))
       secret = RepositorySecret(user, Config.Secret(Chunk.fromArray("pw".toCharArray)))
       ready  = ReleaseStage(
         stage,
@@ -158,7 +156,7 @@ object SignerLawSpec extends ZIOSpecDefault:
         signer,
         base,
         secret,
-        fingerprint,
+        Fingerprint("0123456789abcdef"),
         Map.empty,
       )
       report <- ReleaseRun.upload(repo, ready, ReleaseMode.Hold, _ => ZIO.unit)

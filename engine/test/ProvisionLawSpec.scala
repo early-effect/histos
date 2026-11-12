@@ -1,9 +1,11 @@
 package histos.scaffold
 
+import histos.central.ReleaseFeed
 import histos.jdk.{Machine, Os}
 import histos.load.Loader
 import histos.native.NativeOrigin
 import histos.resolve.Resolve
+import histos.supply.GitRead
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -43,7 +45,7 @@ object ProvisionLawSpec extends ZIOSpecDefault:
                 made.out.startsWith(made.dir.toAbsolutePath.normalize.toString),
                 made.out.contains("histos test"),
               )
-            .provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve])
+            .provideSomeLayer[TestEnvironment & Scope](stock)
     ,
     test("sbt init keeps an unmapped plugin, and a missing build file is that import"):
       Workspace
@@ -72,7 +74,7 @@ object ProvisionLawSpec extends ZIOSpecDefault:
               text.contains(s"// unmapped: $marker"),
               missing == Left(ProvisionError.Import("no build.sbt")),
             )
-          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve])
+          program.provideSomeLayer[TestEnvironment & Scope](stock)
     ,
     test("zipx init reads a module directory, and a missing versions file is that import"):
       Workspace
@@ -112,8 +114,11 @@ object ProvisionLawSpec extends ZIOSpecDefault:
               bad == Left(ProvisionError.Files(SkeletonError.Name("not a name"))),
               gone == Left(ProvisionError.Import("no project/ZipxVersions.scala")),
             )
-          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve]),
+          program.provideSomeLayer[TestEnvironment & Scope](stock),
   )
+
+  /** Every service dies if read. A bare project loads nothing, resolves nothing, and runs no doctor. */
+  private val stock = stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ReleaseFeed] ++ stubbed[GitRead]
 
   private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
     ZIO

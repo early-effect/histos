@@ -1,6 +1,6 @@
 package histos
 
-import histos.central.ReleaseFeed
+import histos.central.{MavenModule, ReleaseFeed}
 import histos.doctor.{Fix, FixApply, GitHubCredential}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
@@ -11,12 +11,14 @@ import histos.workspace.Workspace
 
 import java.nio.file.Path
 
-import slayer.stubbed
+import slayer.{any, stub, stubbed}
 
 import zio.*
 import zio.test.*
 
-/** The survey runs in process. The net answers 404 and is never a socket. Preflight dies if it opens one. */
+/** The survey runs in process. The net answers 404 and is never a socket. Preflight dies if it opens one. The terminal
+  * doctor's law sets no Central credential and names no repository, so its live net sends nothing.
+  */
 object DoctorSurfaceLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
   private val token  = GitHubCredential.Token("token", "github.com")
@@ -165,6 +167,49 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     failed._2.contains("x error"),
                     failed._2.contains("supply.app-token"),
                     failed._2.contains("failure"),
+                  )
+        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer)
+    ,
+    test("the terminal doctor reads the feed it is given, and a preflight of a pinned ship never reads it"):
+      ZIO
+        .scoped:
+          Workspace
+            .work("histos-doctor-feed")
+            .flatMap: repo =>
+              val machine =
+                Machine(
+                  Map.empty,
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  None,
+                  NativeOrigin.Central,
+                )
+              val app = module("app", Jvm)(scala3)
+              Projects.organization(organization"example.com")(ships(Ship("demo").next(1, 2, 3)(app)), app) match
+                case Left(_)      => ZIO.dieMessage("the pinned graph did not build")
+                case Right(graph) =>
+                  def run(preflight: Option[String]) =
+                    DoctorSurface.run(
+                      repo,
+                      graph,
+                      DoctorSurface.Request(Some("release"), false, preflight, false, false, Nil, true),
+                      machine,
+                    )
+                  for
+                    _       <- TestSystem.putEnv("GH_TOKEN", "token")
+                    _       <- Workspace.writeString(repo.resolve("build.properties"), "histos.version=0.2.0\n")
+                    offline <- run(Some("nightly"))
+                    _       <- stub[ReleaseFeed](_.newest(any[MavenModule]))(ZIO.succeed(Some(ship"9.9.9")))
+                    asked   <- run(None)
+                  yield assertTrue(
+                    !offline._2.contains("ship.pin"),
+                    !offline._2.contains("ship.should-bump"),
+                    asked._2.contains("ship.pin"),
+                    asked._2.contains("ship.should-bump"),
+                    asked._2.contains("9.9.9"),
                   )
         .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout

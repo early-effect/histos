@@ -2,9 +2,7 @@ package histos.supply
 
 import _root_.scala.annotation.publicInBinary
 
-import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeParseException
 
 /** An IANA zone. The literal embeds the id, so native code never opens a tzdb. */
 opaque type TimeZone = String
@@ -169,19 +167,32 @@ enum ReasonError:
     case Bad => "a reason is one non-empty line"
 end ReasonError
 
-/** `YYYY-MM-DD`. */
+/** `YYYY-MM-DD`, a day on the Gregorian calendar. */
 opaque type Date = String
 
 object Date:
   given CanEqual[Date, Date] = CanEqual.derived
 
+  private val Day = """(\d{4})-(\d{2})-(\d{2})""".r
+
   inline def apply(inline raw: String): Date = ${ SupplyMacros.date('raw) }
 
   def from(raw: String): Either[DateError, Date] =
-    try
-      LocalDate.parse(raw)
-      Right(trusted(raw))
-    catch case _: DateTimeParseException => Left(DateError.Bad(raw))
+    val real = raw match
+      case Day(yearText, monthText, dayText) =>
+        for
+          year  <- yearText.toIntOption
+          month <- monthText.toIntOption
+          day   <- dayText.toIntOption
+        yield month >= 1 && month <= 12 && day >= 1 && day <= days(year, month)
+      case _ => None
+    if real.contains(true) then Right(trusted(raw)) else Left(DateError.Bad(raw))
+
+  private def days(year: Int, month: Int): Int =
+    month match
+      case 2              => if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) then 29 else 28
+      case 4 | 6 | 9 | 11 => 30
+      case _              => 31
 
   extension (date: Date) def value: String = date
 

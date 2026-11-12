@@ -230,9 +230,8 @@ object ReleaseRunLawSpec extends ZIOSpecDefault:
 
   private def ready(repo: Path, signer: Signer, portal: RefusingLoopback) =
     for
-      user        <- ZIO.fromEither(RepositoryUser.from("portal-user"))
-      base        <- ZIO.fromEither(PortalBase.from(portal.url))
-      fingerprint <- ZIO.fromEither(Fingerprint.from("0123456789abcdef"))
+      user <- ZIO.fromEither(RepositoryUser.from("portal-user"))
+      base <- ZIO.fromEither(PortalBase.from(portal.url))
     yield ReleaseStage(
       repo,
       List(published(Path.of("app.jar"))),
@@ -242,7 +241,7 @@ object ReleaseRunLawSpec extends ZIOSpecDefault:
       signer,
       base,
       RepositorySecret(user, Config.Secret(Chunk.fromArray("not-for-the-note".toCharArray))),
-      fingerprint,
+      Fingerprint("0123456789abcdef"),
       Map("HISTOS_PORTAL" -> portal.url),
     )
 

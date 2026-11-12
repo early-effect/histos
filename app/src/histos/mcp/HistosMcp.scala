@@ -338,6 +338,7 @@ object HistosMcp:
                     ),
                     machine,
                   )
+                  .provide(histos.central.ReleaseFeed.live, histos.supply.GitRead.live)
                   .map((_, text) => DoctorText(text))
         }
       )

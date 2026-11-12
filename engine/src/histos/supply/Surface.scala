@@ -18,12 +18,13 @@ import histos.doctor.{
 import histos.central.ReleaseFeed
 import histos.version.CommitSha
 import histos.workflow.PinScan
+import histos.workspace.{IoFailure, Workspace}
 import histos.ProjectGraph
 
 import java.nio.file.{Files, Path}
 import java.time.ZoneOffset
 
-import zio.{durationInt, Clock, UIO, URIO, ZIO}
+import zio.{durationInt, Clock, IO, UIO, URIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -40,7 +41,14 @@ object DoctorSurface:
       verbose: Boolean,
   )
 
-  def run(repo: Path, graph: ProjectGraph, request: Request, machine: histos.jdk.Machine): UIO[(Int, String)] =
+  /** The terminal's doctor. The registry feed and the git reader are the caller's, so the edge provides the live ones.
+    */
+  def run(
+      repo: Path,
+      graph: ProjectGraph,
+      request: Request,
+      machine: histos.jdk.Machine,
+  ): URIO[ReleaseFeed & GitRead, (Int, String)] =
     for
       env    <- zio.System.envs.orElseSucceed(Map.empty)
       tty    <- ZIO.succeed(Option(java.lang.System.console()).isDefined)
@@ -57,7 +65,7 @@ object DoctorSurface:
         prompt(tty),
         command(repo),
         applySetting(token.map(_.value)),
-      ).provideLayer(ReleaseFeed.live ++ GitRead.live)
+      )
     yield result
 
   def runWith(
@@ -354,47 +362,42 @@ end DoctorSurface
 object DepsSurface:
   final case class DepsResult(code: Int, text: String)
 
-  /** A cooldown counts days to today in UTC on the caller's clock. */
-  def check(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      known: Map[String, RepoId] = Map.empty,
-  ): UIO[DepsResult] =
-    propose(repo, policy, net, false, known)
+  /** Why a command ends before its own work: no lock, a file it could not read, or a supply fault. */
+  private enum Stop:
+    case NoLock
+    case Unread(failure: IoFailure)
+    case Fault(fault: SupplyFault)
 
-  def update(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      yes: Boolean,
-      security: Boolean,
-      known: Map[String, RepoId] = Map.empty,
-  ): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val graph = read(repo.resolve("histos.scala"))
-        today
-          .flatMap(Plan.propose(text, graph, Plan.catalog(policy.extraActions), policy, _, security, net, known))
-          .flatMap: proposal =>
-            if !yes then ZIO.succeed(DepsResult(0, proposal.text))
-            else
-              ZIO
-                .attempt:
-                  val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
-                  val wrote = Plan.write(repo, proposal, graph, files)
-                  proposal.text + wrote.map(name => s"wrote $name\n").mkString
-                .map(body => DepsResult(0, body))
-                .orElseSucceed(DepsResult(1, "could not write the plan\n"))
-          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+    def result: DepsResult = this match
+      case NoLock          => DepsResult(1, "dependencies.lock is missing\n")
+      case Unread(failure) => DepsResult(1, failure.message + "\n")
+      case Fault(fault)    => DepsResult(1, fault.message + "\n")
+  end Stop
+
+  /** A cooldown counts days to today in UTC on the caller's clock. */
+  def check(repo: Path, policy: SupplyChain, net: Net): UIO[DepsResult] =
+    propose(repo, policy, net, false).fold(_.result, (proposal, _) => DepsResult(0, proposal.text))
+
+  def update(repo: Path, policy: SupplyChain, net: Net, yes: Boolean, security: Boolean): UIO[DepsResult] =
+    propose(repo, policy, net, security).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      (proposal, graph) =>
+        if !yes then ZIO.succeed(DepsResult(0, proposal.text))
+        else
+          ZIO
+            .attempt:
+              val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
+              val wrote = Plan.write(repo, proposal, graph, files)
+              proposal.text + wrote.map(name => s"wrote $name\n").mkString
+            .map(body => DepsResult(0, body))
+            .orElseSucceed(DepsResult(1, "could not write the plan\n")),
+    )
 
   def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val packages = purls(text, directOnly = false)
-        query(net, packages)
+    lock(repo).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      text =>
+        query(net, purls(text, directOnly = false))
           .foldZIO(
             _ => ZIO.succeed(DepsResult(1, "osv is down\n")),
             body =>
@@ -402,7 +405,8 @@ object DepsSurface:
                 val ids  = Scan.strings(body, "id").filter(_.startsWith("GHSA-")).distinct
                 val head = if report then "deps audit --report" else "deps audit"
                 DepsResult(0, s"$head\n${ids.map(id => s"  $id").mkString("\n")}\n"),
-          )
+          ),
+    )
 
   /** The branch commits the files `git diff` lists. A dry run, `HISTOS_DRY_RUN`, prints the calls and sends none. */
   def pullRequest(
@@ -457,14 +461,20 @@ object DepsSurface:
         githubName(repo).flatMap:
           case None       => ZIO.succeed(unnamed)
           case Some(name) =>
-            val packages = lock(repo).fold(List.empty[String])(text => purls(text, directOnly = false))
-            query(net, packages)
-              .orElseSucceed("")
-              .flatMap: body =>
-                GhRun
-                  .alert(net, name, token.getOrElse(""), policy, findingsOf(body), dry)
-                  .map(text => DepsResult(0, text))
-                  .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+            lock(repo)
+              .map(text => purls(text, directOnly = false))
+              .catchSome { case Stop.NoLock => ZIO.succeed(Nil) }
+              .foldZIO(
+                stop => ZIO.succeed(stop.result),
+                packages =>
+                  query(net, packages)
+                    .orElseSucceed("")
+                    .flatMap: body =>
+                      GhRun
+                        .alert(net, name, token.getOrElse(""), policy, findingsOf(body), dry)
+                        .map(text => DepsResult(0, text))
+                        .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n"))),
+              )
 
   private def findingsOf(body: String): List[Finding] =
     Scan
@@ -484,9 +494,9 @@ object DepsSurface:
 
   /** The commit is `GITHUB_SHA`, else HEAD. The ref is `GITHUB_REF`, else `refs/heads/main`. */
   def snapshot(repo: Path, net: Net, submit: Boolean): URIO[GitRead, DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
+    lock(repo).foldZIO(
+      stop => ZIO.succeed(stop.result),
+      text =>
         for
           commit <- env("GITHUB_SHA").flatMap:
             case Some(named) => ZIO.succeed(named)
@@ -506,23 +516,19 @@ object DepsSurface:
                     .snapshot(net, name, token.getOrElse(""), body, dry)
                     .map(text => DepsResult(0, text + body + "\n"))
                     .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
-        yield result
+        yield result,
+    )
 
-  private def propose(
-      repo: Path,
-      policy: SupplyChain,
-      net: Net,
-      security: Boolean,
-      known: Map[String, RepoId],
-  ): UIO[DepsResult] =
-    lock(repo) match
-      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
-      case Some(text) =>
-        val graph = read(repo.resolve("histos.scala"))
-        today
-          .flatMap(Plan.propose(text, graph, Plan.catalog(policy.extraActions), policy, _, security, net, known))
-          .map(proposal => DepsResult(0, proposal.text))
-          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+  /** The plan the lock and the build file propose today, with the build file's text. */
+  private def propose(repo: Path, policy: SupplyChain, net: Net, security: Boolean): IO[Stop, (Proposal, String)] =
+    for
+      text     <- lock(repo)
+      graph    <- buildFile(repo)
+      day      <- today
+      proposal <- Plan
+        .propose(text, graph, Plan.catalog(policy.extraActions), policy, day, security, net, Map.empty)
+        .mapError(Stop.Fault(_))
+    yield (proposal, graph)
 
   private def opens(policy: SupplyChain, open: Boolean): Boolean =
     policy.updates.author match
@@ -552,12 +558,12 @@ object DepsSurface:
             if Files.isRegularFile(path) then Some(name -> Files.readString(path)) else None
         }.orDie
 
-  private def lock(repo: Path): Option[String] =
-    val path = repo.resolve("dependencies.lock")
-    if Files.isRegularFile(path) then Some(Files.readString(path)) else None
+  private def lock(repo: Path): IO[Stop, String] =
+    Workspace.readIfPresent(repo.resolve("dependencies.lock")).mapError(Stop.Unread(_)).someOrFail(Stop.NoLock)
 
-  private def read(path: Path): String =
-    if Files.isRegularFile(path) then Files.readString(path) else ""
+  /** `histos.scala`, or no text when the checkout has none. */
+  private def buildFile(repo: Path): IO[Stop, String] =
+    Workspace.readIfPresent(repo.resolve("histos.scala")).mapError(Stop.Unread(_)).map(_.getOrElse(""))
 
   private def purls(text: String, directOnly: Boolean): List[String] =
     val rows = text.split('\n').toList.map(_.trim).filter(_.nonEmpty)

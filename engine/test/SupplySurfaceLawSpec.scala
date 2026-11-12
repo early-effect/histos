@@ -17,6 +17,9 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
   private val sha = CommitSha.trusted("a" * 40)
   private val hex = "ab" * 32
 
+  /** Bytes that are not UTF-8, so `readString` refuses them. */
+  private val notText = Array[Byte](0xc3.toByte, 0x28)
+
   def spec = suite("supply surface laws")(
     test("fix off applies nothing, a secret command is not run, and --yes does not confirm a GitHub setting"):
       val program =
@@ -120,6 +123,40 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           down.code == 1 && down.text.contains("osv is down"),
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
+    ,
+    test("a lock or a build file that is not text is that read failure, and nothing is sent"):
+      val program =
+        for
+          repo <- Workspace.work("surface-unread")
+          path  = repo.resolve("dependencies.lock")
+          build = repo.resolve("histos.scala")
+          _ <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
+            (_: String, url: String, _: String, _: List[(String, String)]) => ZIO.dieMessage(s"sent $url")
+          )
+          net      <- ZIO.service[Net]
+          _        <- TestSystem.putEnv("GH_TOKEN", "token")
+          _        <- ZIO.attemptBlocking(Files.write(path, notText)).orDie
+          checked  <- DepsSurface.check(repo, SupplyChain(), net)
+          updated  <- DepsSurface.update(repo, SupplyChain(), net, true, false)
+          audited  <- DepsSurface.audit(repo, false, net)
+          alerted  <- DepsSurface.alert(repo, SupplyChain(), net)
+          snapshot <- DepsSurface.snapshot(repo, net, false)
+          _        <- Workspace.writeString(path, lock("1.0.0"))
+          _        <- ZIO.attemptBlocking(Files.write(build, notText)).orDie
+          planned  <- DepsSurface.check(repo, SupplyChain(), net)
+        yield
+          val unread = DepsSurface.DepsResult(1, s"could not read $path\n")
+          assertTrue(
+            checked == unread,
+            updated == unread,
+            audited == unread,
+            alerted == unread,
+            snapshot == unread,
+            planned == DepsSurface.DepsResult(1, s"could not read $build\n"),
+          )
+      program.provideSomeLayer[TestEnvironment & Scope](
+        stubbed[Net] ++ GitAnswers(remote = Some(RepoName.trusted("acme/demo"))).layer
+      )
     ,
     test("an empty token is not a pull request unless the run is dry, and Actions does not commit a workflow file"):
       val workflow = ".github/workflows/ci.yml"

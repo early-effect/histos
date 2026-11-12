@@ -309,10 +309,12 @@ object Cli:
                       case Some(project) => Provision.create(parent, project, version, apiJar, machine, request)
                       case None          => Provision.init(parent, version, apiJar, machine, request)
                   }
-                written.fold(
-                  error => Completed(CliExit.Usage, "", error.message, Playback.Held),
-                  report => Completed(CliExit.Success, report.out, "", Playback.Held),
-                )
+                written
+                  .provideSomeLayer[Loader & Resolve](ReleaseFeed.live ++ histos.supply.GitRead.live)
+                  .fold(
+                    error => Completed(CliExit.Usage, "", error.message, Playback.Held),
+                    report => Completed(CliExit.Success, report.out, "", Playback.Held),
+                  )
 
   private def kindOf(bare: Boolean, yes: Boolean): UIO[ScaffoldKind] =
     if bare || yes || java.lang.System.console() == null then
@@ -517,6 +519,7 @@ object Cli:
                   histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes, launch, verbose),
                   machine,
                 )
+                .provide(ReleaseFeed.live, histos.supply.GitRead.live)
                 .map: (code, text) =>
                   val exit = if code == 0 then CliExit.Success else CliExit.Failed
                   Completed(exit, text, "", Playback.Held)
