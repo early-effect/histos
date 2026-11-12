@@ -8,6 +8,8 @@ import histos.plugin.{
   ModuleNote,
   Need,
   PluginCoordinate,
+  CommandJob,
+  JobStep,
   PluginId,
   RegisteredPlugin,
   RepoPath,
@@ -145,6 +147,7 @@ final case class ProjectGraph private (
     coverageExcludes: CoverageExcludes = CoverageExcludes(),
     formatting: Formatting = Formatting.Off,
     coordinates: List[PluginCoordinate] = Nil,
+    jobs: List[CommandJob] = Nil,
 ):
   /** The wiring built these plugins. The rest of the graph is unchanged. */
   def withPlugins(registered: List[RegisteredPlugin]): ProjectGraph =
@@ -211,6 +214,7 @@ object ProjectGraph:
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
       coordinates: List[PluginCoordinate] = Nil,
+      jobs: List[CommandJob] = Nil,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -232,6 +236,7 @@ object ProjectGraph:
       coverageExcludes,
       formatting,
       coordinates,
+      jobs,
     )
 end ProjectGraph
 
@@ -296,6 +301,9 @@ object Projects:
     */
   def plugins(first: PluginRef | ShipPlugin, rest: (PluginRef | ShipPlugin)*): Organized =
     Organized.empty.plugins(first, rest*)
+
+  /** A command job. It is not a plugin. */
+  def job(value: CommandJob): Organized = Organized.empty.job(value)
 
   def scalafmt: Organized = Organized.empty.scalafmt
 
@@ -391,6 +399,7 @@ object Projects:
             settings.coverageExcludes,
             settings.formatting,
             coordinates,
+            settings.jobs,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -841,11 +850,19 @@ object Projects:
       plugin: RegisteredPlugin,
       tasks: List[TaskName],
   ): Option[BuildError] =
-    plugin.contribution.jobs.collectFirst:
-      case job if job.name.isReserved =>
-        BuildError.PluginGraph(PluginGraphFault.ReservedJob(job.name))
-      case job if !tasks.contains(job.task) =>
-        BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, job.task))
+    plugin.contribution.jobs.flatMap(jobFault(plugin, tasks, _)).headOption
+
+  private def jobFault(
+      plugin: RegisteredPlugin,
+      tasks: List[TaskName],
+      job: histos.plugin.CiJob,
+  ): List[BuildError] =
+    if job.name.isReserved then List(BuildError.PluginGraph(PluginGraphFault.ReservedJob(job.name)))
+    else
+      job.step match
+        case JobStep.Task(name) if !tasks.contains(name) =>
+          List(BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, name)))
+        case _ => Nil
 
   private def bindPlugins(
       registered: List[RegisteredPlugin],
@@ -927,6 +944,9 @@ final class Organized private (settings: Organized.Settings):
   /** Replaces the plugin coordinates. A module must also be passed to [[apply]]. */
   def plugins(first: PluginRef | ShipPlugin, rest: (PluginRef | ShipPlugin)*): Organized =
     Organized(settings.copy(pluginSources = (first :: rest.toList).map(PluginRef.normalize)))
+
+  def job(value: CommandJob): Organized =
+    Organized(settings.copy(jobs = settings.jobs :+ value))
 
   def organization(value: Organization): Organized = Organized(settings.copy(organization = Some(value)))
 
@@ -1066,6 +1086,7 @@ object Organized:
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
       pluginSources: List[PluginRef] = Nil,
+      jobs: List[CommandJob] = Nil,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())
