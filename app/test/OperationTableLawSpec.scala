@@ -39,7 +39,7 @@ object OperationTableLawSpec extends ZIOSpecDefault:
             Command.Workflow(WorkflowAction.Check)           -> Right(Call.Workflow(WorkflowAction.Check)),
             Command.Launcher(LauncherAction.Latest)          -> Right(Call.Launcher(LauncherAction.Latest)),
             Command.Reload                                   -> Right(Call.Reload),
-            Command.Reboot                                   -> Right(Call.Reboot),
+            Command.Reboot                                   -> Left(CliParseError.Rejected),
             Command.Cancel(id)                               -> Right(Call.Cancel(id)),
             Command.PreviewCompile(List(ProjectName("api"))) ->
               Right(Call.PreviewCompile(List(ProjectName("api")))),

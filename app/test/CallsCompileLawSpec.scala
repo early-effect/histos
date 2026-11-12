@@ -63,7 +63,7 @@ object CallsCompileLawSpec extends ZIOSpecDefault:
                 assertTrue(
                   missed == Right(()),
                   done(missedHeard) == Some(
-                    CallResult.Fault(BuildFault.Compile(GraphCompileError.Target(SelectError.Unknown(missing))))
+                    CallResult.Fault(BuildFault.Compile(GraphCompileError.Target(SelectError.Unknown(missing, Nil))))
                   ),
                   compiled == Right(()),
                   tallies.map(_.module).sorted == List(appName.value, coreName.value),

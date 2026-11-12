@@ -111,7 +111,7 @@ object Session:
     call match
       case Call.Version =>
         ApiClock.mcpLine(repo).map(line => note(result, line, front = false))
-      case Call.Reboot =>
+      case Call.Reboot(_) =>
         ApiClock.rebootLine(repo).map(line => note(result, line, front = true))
       case _ => ZIO.succeed(result)
 
@@ -320,9 +320,11 @@ object Session:
       Perform.Edges(
         watch = (inner, policy, edge) => watch(repo, apiJar, machine, desk, inner, policy, edge),
         reload = ZIO.fail(ServerError.NoServer),
-        reboot = Cli.bootCall(repo, histos.server.Daemon.spawn).flatMap { socket =>
-          say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
-        },
+        // No server is up, so this process starts one, and its child runs as this process does.
+        reboot = _ =>
+          Cli.bootCall(repo, histos.server.Daemon.spawn).flatMap { socket =>
+            say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
+          },
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
         compiled = ZIO.unit,
       )

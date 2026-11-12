@@ -73,7 +73,7 @@ object CallsProductLawSpec extends ZIOSpecDefault:
               theirsLeft            <- store.read(theirs)
             yield assertTrue(
               missed == Right(()),
-              done(missedHeard) == Some(CallResult.Fault(BuildFault.Select(SelectError.Unknown(missing)))),
+              done(missedHeard) == Some(CallResult.Fault(BuildFault.Select(SelectError.Unknown(missing, Nil)))),
               missedKept,
               missedShared,
               named == Right(()),

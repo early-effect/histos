@@ -8,6 +8,7 @@ import histos.doctor.{
   Fix,
   FixApply,
   FixMode,
+  GhAuth,
   GitHubCredential,
   JobEnv,
   Outcome,
@@ -42,8 +43,10 @@ object DoctorSurface:
       verbose: Boolean,
   )
 
-  /** What the terminal doctor reads besides the environment: the registry feed, git, and the terminal. */
-  type Needs = ReleaseFeed & GitRead & Terminal
+  /** What the terminal doctor reads besides the environment: the registry feed, git, the terminal, the network, the
+    * token `gh` holds, and the shell a fix command runs in.
+    */
+  type Needs = ReleaseFeed & GitRead & Terminal & Net & GhAuth & Shell
 
   /** The terminal's doctor. The environment comes from `zio.System`, and the edge provides the live `Needs`. Only a
     * `--fix` run asks the terminal, because only a fix can prompt.
@@ -57,19 +60,21 @@ object DoctorSurface:
     for
       env    <- zio.System.envs.orElseSucceed(Map.empty)
       tty    <- if request.fix then ZIO.serviceWithZIO[Terminal](_.attached) else ZIO.succeed(false)
-      token  <- GitHubCredential.resolve(env, GitHubCredential.gh)
+      token  <- ZIO.serviceWithZIO[GhAuth](gh => GitHubCredential.resolve(env, gh.token))
+      net    <- ZIO.service[Net]
+      shell  <- ZIO.service[Shell]
       result <- runWith(
         repo,
         graph,
         request,
         machine,
-        Net.live,
+        net,
         env,
         token,
         tty,
         prompt(tty),
-        command(repo),
-        applySetting(token.map(_.value)),
+        line => shell.run(repo, line),
+        applySetting(net, token.map(_.value)),
       )
     yield result
 
@@ -246,15 +251,13 @@ object DoctorSurface:
           case _                   => true
         (next, commands) = FixApply.applyAll(kept, mode, _ => FixApply.Answer.No, files)
         changed          = next.toList.filterNot((name, body) => files.get(name).contains(body))
-        wrote <- ZIO
-          .attempt {
-            changed.foreach((name, body) => Files.writeString(repo.resolve(name), body))
-            changed.map(_._1)
-          }
-          .orElseSucceed(Nil)
+        wrote <- ZIO.foreach(changed): (name, body) =>
+          Workspace
+            .writeString(repo.resolve(name), body)
+            .fold(failure => s"not applied: ${failure.message}", _ => s"wrote $name")
         ran   <- ZIO.foreach(commands)(line => runCommand(line, exec))
         asked <- ZIO.foreach(settings)(fix => confirmSetting(fix, request.yes, tty, ask, setting))
-      yield unread ++ wrote.map(name => s"wrote $name") ++ ran ++ asked
+      yield unread ++ wrote ++ ran ++ asked
 
   private def runCommand(line: String, exec: String => UIO[Unit]): UIO[String] =
     if line.toLowerCase.contains("secret") then ZIO.succeed(s"not applied (secret): $line")
@@ -311,22 +314,14 @@ object DoctorSurface:
           )
           .orElseSucceed(FixApply.Answer.NonTty)
 
-  private def command(repo: Path)(line: String): UIO[Unit] =
-    ZIO
-      .attemptBlockingInterrupt:
-        val process = new ProcessBuilder("sh", "-c", line).directory(repo.toFile).inheritIO().start()
-        process.waitFor()
-        ()
-      .ignore
-
-  private def applySetting(token: Option[String])(url: String): UIO[Unit] =
+  private def applySetting(net: Net, token: Option[String])(url: String): UIO[Unit] =
     apiFor(url) match
       case None                         => ZIO.unit
       case Some((method, target, body)) =>
         token match
           case None        => ZIO.unit
           case Some(value) =>
-            Net.live
+            net
               .send(
                 method,
                 target,

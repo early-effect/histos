@@ -23,6 +23,7 @@ import histos.server.{
   Say,
   ServerError,
   ServerIo,
+  Successor,
   WatchPolicy,
   Watching,
 }
@@ -313,7 +314,8 @@ object Cli:
                   }
                 written
                   .provideSomeLayer[Loader & Resolve](
-                    ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live
+                    ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live ++
+                      ZLayer.succeed(histos.supply.Net.live) ++ histos.doctor.GhAuth.live ++ histos.supply.Shell.live
                   )
                   .fold(
                     error => Completed(CliExit.Usage, "", error.message, Playback.Held),
@@ -476,8 +478,8 @@ object Cli:
 
   private def bumpExit(fault: histos.version.BumpFault): CliExit =
     fault match
-      case histos.version.BumpFault.MissingShip(_) => CliExit.Usage
-      case _                                       => CliExit.Failed
+      case histos.version.BumpFault.MissingShip(_)                                      => CliExit.Usage
+      case histos.version.BumpFault.Unanswered(_) | histos.version.BumpFault.Rewrite(_) => CliExit.Failed
 
   private def doctor(
       repo: Path,
@@ -509,7 +511,14 @@ object Cli:
                   histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes, launch, verbose),
                   machine,
                 )
-                .provide(ReleaseFeed.live, histos.supply.GitRead.live, histos.supply.Terminal.live)
+                .provide(
+                  ReleaseFeed.live,
+                  histos.supply.GitRead.live,
+                  histos.supply.Terminal.live,
+                  ZLayer.succeed(histos.supply.Net.live),
+                  histos.doctor.GhAuth.live,
+                  histos.supply.Shell.live,
+                )
                 .map: (code, text) =>
                   val exit = if code == 0 then CliExit.Success else CliExit.Failed
                   Completed(exit, text, "", Playback.Held)
@@ -746,7 +755,7 @@ object Cli:
       )
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs that call again after a source save.
-    * `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested watch are usage and do not start a transport.
+    * `mcp`, `bsp`, `server`, `portal`, `observe`, `reboot`, and a nested watch are usage and do not start a transport.
     */
   private def watch(
       repo: Path,
@@ -931,9 +940,11 @@ object Cli:
           ),
         ),
       reload = ZIO.fail(ServerError.NoServer),
-      reboot = bootCall(repo, Daemon.spawn).flatMap { socket =>
-        say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
-      },
+      // No server is up, so this process starts one, and its child runs as this process does.
+      reboot = _ =>
+        bootCall(repo, Daemon.spawn).flatMap { socket =>
+          say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
+        },
       bsp = Calls.finish(
         say,
         CallResult.Fault(BuildFault.Rejected(Rejection.Watch(CliParseError.Rejected.message))),
@@ -1157,9 +1168,9 @@ object Cli:
       socket: Path,
       miss: => URIO[R, Completed],
   ): URIO[R & Stdio, Completed] =
-    ApiClock.rebootLine(repo).flatMap { line =>
+    ApiClock.rebootLine(repo).zip(Successor.here).flatMap { (line, onto) =>
       sayError(line) *>
-        remote(repo, socket, Call.Reboot).foldZIO(
+        remote(repo, socket, Call.Reboot(onto)).foldZIO(
           {
             case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
             case error                                                     => ZIO.succeed(stopped(error))
@@ -1951,7 +1962,7 @@ object Cli:
                                       classpath,
                                       loader.reportBuild(repo, apiJar).provideEnvironment(env),
                                       machine,
-                                      Daemon.spawn,
+                                      Daemon.relaunch,
                                       mark,
                                     )
                                     .flatMap { running =>
@@ -1980,7 +1991,7 @@ object Cli:
     boot(repo, apiJar).map:
       case Boot.Up               => Completed(CliExit.Success, "", "", Playback.Held)
       case Boot.Load(error)      => held("", CallResult.Fault(BuildFault.Load(error)))
-      case Boot.Jdk(error)       => held("", Perform.jdkMissed(Call.Reboot, error))
+      case Boot.Jdk(error)       => held("", Perform.notCompiled(error))
       case Boot.Pin(error)       => launcherFailed(error)
       case Boot.Transport(error) =>
         Completed(CliExit.Failed, "", error.message, Playback.Held)

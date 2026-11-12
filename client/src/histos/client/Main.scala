@@ -4,7 +4,7 @@ import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{CliExit, CompileConsole, Show}
-import histos.server.{AssemblyMark, Call, Message, ServerError, ServerFile}
+import histos.server.{AssemblyMark, Call, Message, ServerError, ServerFile, Successor}
 import histos.report.CallResult
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -154,9 +154,9 @@ object Main extends ZIOAppDefault:
       case _ => exit.code
 
   private def replace(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
-    ApiClock.rebootLine(repo).flatMap { line =>
+    ApiClock.rebootLine(repo).zip(Successor.here).flatMap { (line, onto) =>
       ZIO.succeed(java.lang.System.err.println(line)) *>
-        exchange(repo, socket, Call.Reboot).ignore *>
+        exchange(repo, socket, Call.Reboot(onto)).ignore *>
         boot(repo).flatMap { fresh =>
           readRecord(repo).flatMap {
             case Some(record) =>

@@ -130,6 +130,35 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program
     ,
+    test("a local edit whose path is a directory is that write failure, and the writable edit lands"):
+      val program =
+        for
+          repo <- Workspace.work("surface-unwritten-fix")
+          kept = repo.resolve("histos.scala")
+          held = repo.resolve(".scalafmt.conf")
+          _     <- Workspace.writeString(kept, "before")
+          _     <- Workspace.createDirectories(held)
+          notes <- DoctorSurface.applyReported(
+            repo,
+            List(
+              Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("", "version = 3.11.5\n")),
+              Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")),
+            ),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
+            false,
+            _ => ZIO.succeed(FixApply.Answer.No),
+            _ => ZIO.succeed(()),
+            _ => ZIO.succeed(()),
+          )
+          text <- Workspace.readString(kept)
+          dir  <- ZIO.attemptBlocking(Files.isDirectory(held)).orDie
+        yield assertTrue(
+          notes == List(s"not applied: could not write $held", "wrote histos.scala"),
+          text == "after",
+          dir,
+        )
+      program
+    ,
     test("a missing lock is a failure, and an audit that cannot reach osv does not pretend the scan passed"):
       val program =
         for

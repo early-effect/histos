@@ -41,7 +41,7 @@ object PublishWatchLawSpec extends ZIOSpecDefault:
             },
             held.exists(found => found.roots.isEmpty && found.modules.isEmpty && found.refused.isEmpty),
             PublishSelect.pick(graph, List(PublishName.Aggregate(ProjectName("gone"))), writing) ==
-              Left(LocalPublishError.Target(SelectError.Unknown(ProjectName("gone")))),
+              Left(LocalPublishError.Target(SelectError.Unknown(ProjectName("gone"), Nil))),
           )
   )
 end PublishWatchLawSpec

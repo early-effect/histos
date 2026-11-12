@@ -1,10 +1,8 @@
 package histos.doctor
 
-import java.nio.charset.StandardCharsets
-
 import zio.{UIO, ZIO}
 
-/** A token in the order `gh` uses. The `gh` binary is optional. The API call uses the token. */
+/** A token in the order `gh` uses, with [[GhAuth]] last. The API call uses the token. */
 object GitHubCredential:
   final case class Token(value: String, host: String):
     def api: String =
@@ -31,17 +29,4 @@ object GitHubCredential:
 
   def githubHost(host: String): Boolean =
     host == "github.com" || host == "localhost" || host.endsWith(".ghe.com")
-
-  /** Runs `gh auth token` when the binary exists. A missing binary or a non-zero status is no token, not a crash. */
-  def gh: Option[String] => UIO[Option[String]] =
-    hostname => ZIO.attemptBlocking(readGh(hostname)).orElseSucceed(None)
-
-  private def readGh(hostname: Option[String]): Option[String] =
-    val command = hostname match
-      case Some(host) => List("gh", "auth", "token", "--hostname", host)
-      case None       => List("gh", "auth", "token")
-    val process = new ProcessBuilder(command*).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-    val text    = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
-    val code    = process.waitFor()
-    if code == 0 && text.nonEmpty then Some(text) else None
 end GitHubCredential

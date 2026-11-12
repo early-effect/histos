@@ -38,7 +38,7 @@ object PerformLawSpec extends ZIOSpecDefault:
   private val cells  = GraphCompileError.Cells(NonEmptyChunk.single(missed))
   private val ran    =
     GraphCompileError.Failed(api, ScalaVersion("3.3.4"), Platform.Jvm, CompileError.NoSources)
-  private val target = GraphCompileError.Target(SelectError.Unknown(api))
+  private val target = GraphCompileError.Target(SelectError.Unknown(api, Nil))
 
   def spec = suite("perform laws")(
     test("a call that reads the adopted graph is the only one that needs it"):
@@ -64,8 +64,8 @@ object PerformLawSpec extends ZIOSpecDefault:
           Some(BuildFault.Pattern(SuitePatternError.Empty)),
         Faults.testStopped(ModuleTestError.Lock(noLock)) == Some(BuildFault.Resolve(noLock)),
         Faults.testStopped(ModuleTestError.Compile(cells)) == None,
-        Faults.testStopped(ModuleTestError.Target(SelectError.Unknown(api))) ==
-          Some(BuildFault.Select(SelectError.Unknown(api))),
+        Faults.testStopped(ModuleTestError.Target(SelectError.Unknown(api, Nil))) ==
+          Some(BuildFault.Select(SelectError.Unknown(api, Nil))),
         Faults.testStopped(ModuleTestError.Absent(api)) == Some(BuildFault.Test(ModuleTestError.Absent(api))),
         Faults.programStopped(ProgramError.Absent("api")) == Some(BuildFault.Program(ProgramError.Absent("api"))),
         Faults.programStopped(ProgramError.Lock(noLock)) == Some(BuildFault.Resolve(noLock)),
@@ -108,14 +108,14 @@ object PerformLawSpec extends ZIOSpecDefault:
           watch = Perform.Edges[Any](
             (call, policy, say) => seen.set(Some(call -> policy)) *> say(Message.Event(BuildEvent.Out("watch"))),
             die("reload"),
-            die("reboot"),
+            _ => die("reboot"),
             die("bsp"),
             ZIO.unit,
           )
           watched <- drive(Right(None), Call.Watch(inner, WatchPolicy.After), watch)
           found   <- seen.get
           _       <- drive(Right(None), Call.Reload, edge(hit, "reload"))
-          _       <- drive(Right(None), Call.Reboot, edge(hit, "reboot"))
+          _       <- drive(Right(None), Call.Reboot(successor), edge(hit, "reboot"))
           _       <- drive(Right(None), Call.Bsp, edge(hit, "bsp"))
           order   <- hit.get
         yield assertTrue(
@@ -169,16 +169,18 @@ object PerformLawSpec extends ZIOSpecDefault:
     ZIO.die(new IllegalStateException(name))
 
   private def quietEdges: Perform.Edges[Any] =
-    Perform.Edges((_, _, _) => die("watch"), die("reload"), die("reboot"), die("bsp"), ZIO.unit)
+    Perform.Edges((_, _, _) => die("watch"), die("reload"), _ => die("reboot"), die("bsp"), ZIO.unit)
 
   private def edge(hit: Ref[List[String]], name: String): Perform.Edges[Any] =
     Perform.Edges(
       (_, _, _) => die("watch"),
       mark(hit, "reload", name),
-      mark(hit, "reboot", name),
+      onto => mark(hit, "reboot", name).when(onto == successor).unit,
       mark(hit, "bsp", name),
       ZIO.unit,
     )
+
+  private val successor = Successor(Some("histos 0.3.1"), None)
 
   private def mark(hit: Ref[List[String]], label: String, name: String): ZIO[Any, ServerError, Unit] =
     if label == name then hit.update(_ :+ name)
@@ -279,7 +281,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("resolve", Call.Resolve(ResolveAction.Verify), false),
     ("clean full", Call.CleanFull, false),
     ("reload", Call.Reload, false),
-    ("reboot", Call.Reboot, false),
+    ("reboot", Call.Reboot(successor), false),
     ("version", Call.Version, false),
     ("cache path", Call.CachePath, false),
     ("cache list", Call.CacheList, false),

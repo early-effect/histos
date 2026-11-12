@@ -25,7 +25,7 @@ The repository `./histos` is rendered by `workflow --update` from the ship numbe
 
 `./histos client` links the `client` module and writes `dist/histos-client`.
 
-A running server keeps the jar it started with. The next command compares the version line and the assembly checksum, and a mismatch reboots the server first.
+A running server keeps the jar it started with. The next command compares the version line and the assembly checksum, and a mismatch reboots the server first. The replacement starts with the command's `HISTOS_VERSION` and `HISTOS_ASSEMBLY`, or without one the command does not have, never with the old server's.
 
 When the local assembly's snapshot id is not what HEAD would publish, a command fails before it loads the build:
 

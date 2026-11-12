@@ -101,7 +101,7 @@ object CliLawSpec extends ZIOSpecDefault:
     ,
     test("every other fault is 1, a project selection in fmt is usage, and a rejection is usage unless a run failed"):
       val selected = histos.format.FormatError.Selected(
-        histos.select.SelectError.Unknown(histos.ProjectName.trusted("nope"))
+        histos.select.SelectError.Unknown(histos.ProjectName.trusted("nope"), Nil)
       )
       assertTrue(
         EnumLaw.covered(rejections.map(_._1)),

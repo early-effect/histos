@@ -184,7 +184,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
     Perform.Edges(
       (_, _, _) => ZIO.die(new IllegalStateException("watch")),
       ZIO.die(new IllegalStateException("reload")),
-      ZIO.die(new IllegalStateException("reboot")),
+      _ => ZIO.die(new IllegalStateException("reboot")),
       ZIO.die(new IllegalStateException("bsp")),
       ZIO.unit,
     )

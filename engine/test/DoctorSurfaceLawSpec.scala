@@ -1,11 +1,22 @@
 package histos
 
 import histos.central.{MavenModule, ReleaseFeed}
-import histos.doctor.{Fix, FixApply, GitHubCredential}
+import histos.doctor.{Fix, FixApply, GhAuth, GitHubCredential}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
-import histos.supply.{DoctorSurface, GitAnswers, GitRead, Net, PrAuthor, Reply, SupplyChain, Terminal, UpdatePolicy}
+import histos.supply.{
+  DoctorSurface,
+  GitAnswers,
+  GitRead,
+  Net,
+  PrAuthor,
+  Reply,
+  Shell,
+  SupplyChain,
+  Terminal,
+  UpdatePolicy,
+}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -17,7 +28,7 @@ import zio.*
 import zio.test.*
 
 /** The survey runs in process. The net answers 404 and is never a socket. Preflight dies if it opens one. The terminal
-  * doctor's law sets no Central credential and names no repository, so its live net sends nothing.
+  * doctor's laws are given a net, a gh, and a shell that die if a law does not expect them to be read.
   */
 object DoctorSurfaceLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
@@ -211,7 +222,55 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     asked._2.contains("ship.should-bump"),
                     asked._2.contains("9.9.9"),
                   )
-        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Terminal])
+        .provideSomeLayer[TestEnvironment](
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Terminal] ++ stubbed[Net] ++ stubbed[GhAuth] ++
+            stubbed[Shell]
+        )
+    ,
+    test("a fix command runs in the shell it is given, and a run with no token asks the gh it is given"):
+      ZIO
+        .scoped:
+          Workspace
+            .work("histos-doctor-shell")
+            .flatMap: repo =>
+              val machine =
+                Machine(
+                  Map.empty,
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  None,
+                  NativeOrigin.Central,
+                )
+              Projects(module("core", Jvm)(scala3)) match
+                case Left(_)      => ZIO.dieMessage("the shell graph did not build")
+                case Right(graph) =>
+                  for
+                    ran   <- Ref.make(List.empty[(Path, String)])
+                    hosts <- Ref.make(List.empty[Option[String]])
+                    _     <- stub[Shell](_.run(any[Path], any[String])): (at: Path, line: String) =>
+                      ran.update(_ :+ (at -> line))
+                    _ <- stub[GhAuth](_.token(any[Option[String]])): (host: Option[String]) =>
+                      hosts.update(_ :+ host).as(None)
+                    fixed <- DoctorSurface.run(
+                      repo,
+                      graph,
+                      DoctorSurface.Request(Some("supply-chain"), false, None, true, false, Nil, false),
+                      machine,
+                    )
+                    lines <- ran.get
+                    asked <- hosts.get
+                  yield assertTrue(
+                    lines == List(repo -> "./histos workflow --update"),
+                    asked == List(None),
+                    fixed._2.contains("ran: ./histos workflow --update"),
+                  )
+        .provideSomeLayer[TestEnvironment](
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(terminal(false)) ++ stubbed[Net] ++
+            stubbed[GhAuth] ++ stubbed[Shell]
+        )
     ,
     test("a fix asks the terminal it is given: none is not applied, and an answer of no or yes is that answer"):
       ZIO
@@ -246,7 +305,9 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                         DoctorSurface.Request(Some("supply-chain"), false, None, true, false, Nil, false),
                         machine,
                       )
-                      .provideSomeLayer[ReleaseFeed & GitRead](ZLayer.succeed(terminal(attached)))
+                      .provideSomeLayer[ReleaseFeed & GitRead & Net & GhAuth & Shell](
+                        ZLayer.succeed(terminal(attached))
+                      )
                   for
                     _ <- TestSystem.putEnv("GH_TOKEN", "token")
                     _ <- Workspace.writeString(
@@ -265,7 +326,9 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     yes._2.contains(s"applied: $url"),
                     prompt == Vector(s"Apply GitHub setting $url? [y/N] \n", s"Apply GitHub setting $url? [y/N] \n"),
                   )
-        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer),
+        .provideSomeLayer[TestEnvironment](
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[Shell]
+        ),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
 
   private def terminal(answer: Boolean): Terminal =

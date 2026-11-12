@@ -218,7 +218,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("resolve", Call.Resolve(ResolveAction.Verify), false),
     ("workflow", Call.Workflow(WorkflowAction.Check), false),
     ("reload", Call.Reload, false),
-    ("reboot", Call.Reboot, false),
+    ("reboot", Call.Reboot(Successor(None, None)), false),
     ("version", Call.Version, false),
     ("cache path", Call.CachePath, false),
     ("cache list", Call.CacheList, false),

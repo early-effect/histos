@@ -13,8 +13,9 @@ import java.nio.file.{Files, Path}
 import zio.*
 import zio.test.*
 
-/** A mismatched record is rebooted. The call runs on the replacement, not on the driver that was already up. The old
-  * driver records the replacement before it answers the reboot, so the wait for it never sleeps on the test clock.
+/** A mismatched record is rebooted onto the command's own version and jar. The call runs on the replacement, not on the
+  * driver that was already up. The old driver records the replacement before it answers the reboot, so the wait for it
+  * never sleeps on the test clock.
   */
 object DriverLawSpec extends ZIOSpecDefault:
   private val pin   = "histos.version=1.2.3\n"
@@ -56,7 +57,10 @@ object DriverLawSpec extends ZIOSpecDefault:
           heard,
           must(Record.write(repo, shown, fingerprint, nextSocket, mark)),
         ).forkScoped
-        _      <- answer(nextPeer, heard, ZIO.unit).forkScoped
+        _ <- answer(nextPeer, heard, ZIO.unit).forkScoped
+        jar = root.resolve("next.jar")
+        _      <- TestSystem.putEnv("HISTOS_VERSION", shown)
+        _      <- TestSystem.putEnv("HISTOS_ASSEMBLY", jar.toString)
         missed <- Ref.make(0)
         done   <- Cli
           .compileAt(
@@ -71,7 +75,7 @@ object DriverLawSpec extends ZIOSpecDefault:
         n == 0,
         done.exit == CliExit.Success,
         done.out != "miss",
-        calls == Chunk(Call.encode(Call.Reboot), Call.encode(Call.Compile(Nil))),
+        calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))), Call.encode(Call.Compile(Nil))),
       )
     }
 

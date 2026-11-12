@@ -117,9 +117,9 @@ object ApiClock:
 
   private def allows(call: Call): Boolean =
     call match
-      case Call.Assembly(_) | Call.Version | Call.Reboot => true
-      case Call.Watch(inner, _)                          => allows(inner)
-      case _                                             => false
+      case Call.Assembly(_) | Call.Version | Call.Reboot(_) => true
+      case Call.Watch(inner, _)                             => allows(inner)
+      case _                                                => false
 
   /** Some when a local assembly exists and its revision is not the one this checkout would publish. */
   private def drift(repo: Path, baked: String, current: Option[String]): UIO[Option[Drift]] =

@@ -5,7 +5,7 @@ import histos.ProjectName
 
 enum SelectError:
   case Duplicate(name: ProjectName)
-  case Unknown(name: ProjectName, near: List[String] = Nil)
+  case Unknown(name: ProjectName, near: List[String])
 
   def message: String = this match
     case Duplicate(name)  => s"'${name.value}' is listed twice"

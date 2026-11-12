@@ -15,7 +15,7 @@ import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.publish.IvyRoot
 import histos.resolve.Resolve
-import histos.server.{Call, LauncherAction, ResolveAction}
+import histos.server.{Call, LauncherAction, ResolveAction, Successor}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
@@ -272,7 +272,7 @@ object HistosMcp:
       rebooting <- reloading.tool[NoArgs](
         Names.reboot,
         "Replace a running server, or start one, and return when a server is listening.",
-      )(_ => ask(Call.Reboot))
+      )(_ => Successor.here.flatMap(onto => ask(Call.Reboot(onto))))
       cachePath <- rebooting.tool[NoArgs](
         Names.cachePath,
         "Print the content store path.",
@@ -340,7 +340,14 @@ object HistosMcp:
                     ),
                     machine,
                   )
-                  .provide(histos.central.ReleaseFeed.live, histos.supply.GitRead.live, histos.supply.Terminal.detached)
+                  .provide(
+                    histos.central.ReleaseFeed.live,
+                    histos.supply.GitRead.live,
+                    histos.supply.Terminal.detached,
+                    ZLayer.succeed(histos.supply.Net.live),
+                    histos.doctor.GhAuth.live,
+                    histos.supply.Shell.live,
+                  )
                   .map((_, text) => DoctorText(text))
         }
       )
