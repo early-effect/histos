@@ -8,8 +8,6 @@ enum SupplyFault:
   case UnpinnedUses(file: RepoPath, line: Int, ref: String)
   case PinWithoutTag(file: RepoPath, line: Int, action: ActionName)
   case PinMismatch(file: RepoPath, line: Int, action: ActionName, found: ActionPin, expected: ActionPin)
-  case TagNotReachable(action: ActionName, tag: String, sha: CommitSha)
-  case ActionRepoMoved(action: ActionName, was: RepoId, now: RepoId)
   case CrossVersionSplit(dep: Coordinate, cells: List[CellName])
   case Advisory(finding: Finding)
   case IgnoreExpired(id: AdvisoryId, until: Date)
@@ -28,10 +26,6 @@ enum SupplyFault:
       s"${file.value}:$line\n  ${action.value} is pinned without a tag comment"
     case PinMismatch(file, line, action, found, expected) =>
       s"${file.value}:$line\n  ${action.value}@${abbrev(found.sha)} # ${found.tag} does not match the catalog pin ${abbrev(expected.sha)} # ${expected.tag}"
-    case TagNotReachable(action, tag, sha) =>
-      s"${action.value}@$tag does not reach ${sha.value}"
-    case ActionRepoMoved(action, was, now) =>
-      s"${action.value} moved from ${was.value} to ${now.value}"
     case CrossVersionSplit(dep, cells) =>
       s"${dep.value} would split ${cells.map(_.value).mkString(", ")}"
     case Advisory(finding) =>

@@ -1,6 +1,6 @@
 package histos.supply
 
-import histos.plugin.{ActionName, SecretName}
+import histos.plugin.SecretName
 import histos.version.CommitSha
 import histos.{Developer, DeveloperId, PomText}
 
@@ -265,16 +265,6 @@ object SupplyDecisionLawSpec extends ZIOSpecDefault:
         forcedFlag(directFix).contains(false),
         forcedFlag(caught).contains(false),
         listedOnly(reported) == List("1.0.1"),
-      )
-    ,
-    test("a moved action repository and an unreachable tag are typed faults"):
-      val action = ActionName.trusted("example/checkout")
-      val was    = RepoId.trusted("1")
-      val now    = RepoId.trusted("2")
-      assertTrue(
-        Bump.verify(action, "v1", main, true, was, now) == Left(SupplyFault.ActionRepoMoved(action, was, now)),
-        Bump.verify(action, "v1", main, false, was, was) == Left(SupplyFault.TagNotReachable(action, "v1", main)),
-        Bump.verify(action, "v1", main, true, was, was) == Right(()),
       )
     ,
     test("a severity word wins over a vector, and an unread word is low"):

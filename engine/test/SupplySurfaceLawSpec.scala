@@ -101,6 +101,35 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program
     ,
+    test("a local edit whose file is not text is that read failure, leaves the bytes, and the readable edit lands"):
+      val program =
+        for
+          repo <- Workspace.work("surface-unread-fix")
+          kept = repo.resolve("histos.scala")
+          bad  = repo.resolve(".scalafmt.conf")
+          _     <- Workspace.writeString(kept, "before")
+          _     <- ZIO.attemptBlocking(Files.write(bad, notText)).orDie
+          notes <- DoctorSurface.applyReported(
+            repo,
+            List(
+              Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("before", "after")),
+              Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")),
+            ),
+            DoctorSurface.Request(None, false, None, true, false, Nil, false),
+            false,
+            _ => ZIO.succeed(FixApply.Answer.No),
+            _ => ZIO.succeed(()),
+            _ => ZIO.succeed(()),
+          )
+          text  <- Workspace.readString(kept)
+          bytes <- ZIO.attemptBlocking(Files.readAllBytes(bad).toList).orDie
+        yield assertTrue(
+          notes == List(s"not applied: could not read $bad", "wrote histos.scala"),
+          text == "after",
+          bytes == notText.toList,
+        )
+      program
+    ,
     test("a missing lock is a failure, and an audit that cannot reach osv does not pretend the scan passed"):
       val program =
         for
@@ -124,7 +153,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
-    test("a lock or a build file that is not text is that read failure, and nothing is sent"):
+    test("a lock, a build file, or a changed file that is not text is that read failure, and nothing is sent"):
       val program =
         for
           repo <- Workspace.work("surface-unread")
@@ -144,6 +173,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           _        <- Workspace.writeString(path, lock("1.0.0"))
           _        <- ZIO.attemptBlocking(Files.write(build, notText)).orDie
           planned  <- DepsSurface.check(repo, SupplyChain(), net)
+          pulled   <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
         yield
           val unread = DepsSurface.DepsResult(1, s"could not read $path\n")
           assertTrue(
@@ -153,9 +183,10 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             alerted == unread,
             snapshot == unread,
             planned == DepsSurface.DepsResult(1, s"could not read $build\n"),
+            pulled == DepsSurface.DepsResult(1, s"could not read $build\n"),
           )
       program.provideSomeLayer[TestEnvironment & Scope](
-        stubbed[Net] ++ GitAnswers(remote = Some(RepoName.trusted("acme/demo"))).layer
+        stubbed[Net] ++ GitAnswers(remote = Some(RepoName.trusted("acme/demo")), diff = List("histos.scala")).layer
       )
     ,
     test("an empty token is not a pull request unless the run is dry, and Actions does not commit a workflow file"):
@@ -290,6 +321,39 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           again.isEmpty,
         )
       program
+    ,
+    test("a pinned action moves to its newest cooled tag, and the plan reads only the tags and their commits"):
+      val older   = "a" * 40
+      val newer   = "b" * 40
+      val tags    = "https://api.github.com/repos/example/demo/tags?per_page=30"
+      val commits = "https://api.github.com/repos/example/demo/commits/"
+      val listed  = s"""[{"name":"v1.0.0","commit":{"sha":"$older"}},{"name":"v1.1.0","commit":{"sha":"$newer"}}]"""
+      val program =
+        for
+          sent <- Ref.make(List.empty[String])
+          _    <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
+            (_: String, url: String, _: String, _: List[(String, String)]) =>
+              sent.update(_ :+ url) *>
+                (if url == tags then ZIO.succeed(Reply(200, listed))
+                 else if url.startsWith(commits) then ZIO.succeed(Reply(200, """{"date":"2026-01-01T00:00:00Z"}"""))
+                 else ZIO.dieMessage(s"sent $url"))
+          )
+          net      <- ZIO.service[Net]
+          proposal <- Plan.propose(
+            "",
+            "",
+            Map("example/demo" -> (older, "v1.0.0")),
+            SupplyChain(),
+            Date("2026-01-10"),
+            false,
+            net,
+          )
+          urls <- sent.get
+        yield assertTrue(
+          proposal.actions == List(ActionChange("example/demo", "v1.0.0", "v1.1.0", older, newer, false)),
+          urls.sorted == List(s"$commits$older", s"$commits$newer", tags).sorted,
+        )
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
     test("a family member is not its own bump, and a lock child keeps its direct"):
       val graph =

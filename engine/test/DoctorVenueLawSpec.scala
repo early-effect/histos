@@ -9,6 +9,8 @@ import histos.supply.{DoctorSurface, GitAnswers, Net, PrAuthor, Reply, SupplyCha
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
+import java.nio.file.{Files, Path}
+
 import slayer.stubbed
 
 import zio.*
@@ -90,26 +92,41 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
           ok(text).contains("supply.app-installed"),
           ok(text).contains("supply.app-permissions"),
           ok(text).contains("supply.app-token"),
-        ),
+        )
+    ,
+    test("a dependabot file that is not text is that overlap warning, and the other supply checks still answer"):
+      ZIO.scoped:
+        for
+          repo <- Workspace.work("histos-doctor-dependabot")
+          file = repo.resolve(".github").resolve("dependabot.yml")
+          _ <- ZIO.attemptBlocking {
+            Files.createDirectories(repo.resolve(".github"))
+            Files.write(file, Array[Byte](0xc3.toByte, 0x28))
+          }.orDie
+          found <- surveyAt(repo, laptop, granted)
+        yield
+          val (exit, text) = found
+          assertTrue(
+            exit == 0,
+            errors(text).isEmpty,
+            warnings(text) == List("supply.dependabot-overlap"),
+            text.contains(".github/dependabot.yml is not readable text"),
+            ok(text).contains("supply.app-installed"),
+            !ok(text).contains("supply.dependabot-overlap"),
+          ),
   ).provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer) @@
     TestAspect.withLiveClock // probes run under a timeout
 
   private def survey(env: Map[String, String], installations: Reply) =
-    ZIO.scoped:
-      for
-        repo  <- Workspace.work("histos-doctor-venue")
-        built <- ZIO.fromEither(app)
-        machine = Machine(
-          Map.empty,
-          "/home/demo",
-          histos.jdk.Os.Mac,
-          Architecture.Aarch64,
-          repo,
-          repo,
-          None,
-          NativeOrigin.Central,
-        )
-        result <- DoctorSurface.runWith(
+    ZIO.scoped(Workspace.work("histos-doctor-venue").flatMap(surveyAt(_, env, installations)))
+
+  private def surveyAt(repo: Path, env: Map[String, String], installations: Reply) =
+    val machine =
+      Machine(Map.empty, "/home/demo", histos.jdk.Os.Mac, Architecture.Aarch64, repo, repo, None, NativeOrigin.Central)
+    ZIO
+      .fromEither(app)
+      .flatMap: built =>
+        DoctorSurface.runWith(
           repo,
           built,
           DoctorSurface.Request(Some("supply-chain"), false, None, false, false, Nil, true),
@@ -122,7 +139,6 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
           line => ZIO.dieMessage(s"doctor ran $line"),
           url => ZIO.dieMessage(s"doctor wrote $url"),
         )
-      yield result
 
   private def app =
     Projects
@@ -135,6 +151,9 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
 
   private def errors(text: String): List[String] =
     ids(text, "  x error")
+
+  private def warnings(text: String): List[String] =
+    ids(text, "  ! warning")
 
   private def ok(text: String): List[String] =
     ids(text, "  ok")

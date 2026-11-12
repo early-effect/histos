@@ -1,12 +1,11 @@
 package histos.scaffold
 
-import histos.central.ReleaseFeed
 import histos.jdk.Machine
 import histos.load.{LoadError, Loader}
 import histos.publish.{LauncherScript, UpgradeNotice}
 import histos.Sona
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
-import histos.supply.{DoctorSurface, GitRead}
+import histos.supply.DoctorSurface
 import histos.workflow.{CiBranch, CiError, Workflow}
 import histos.{BuildError, ProjectName, Publishing}
 
@@ -17,7 +16,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{IO, UIO, URIO, ZIO, ZLayer}
 
 /** `histos new` and `histos init`. Full writes the scaffold, then CI, a lock, and doctor outside CI. The doctor reads
-  * the registry feed and git from the caller's environment.
+  * the registry feed, git, and the terminal from the caller's environment.
   */
 object Provision:
   val DefaultBranch: String = "main"
@@ -39,7 +38,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve & ReleaseFeed & GitRead, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     Skeleton.create(parent, name, version, request.kind).mapError(ProvisionError.Files(_)).flatMap { dir =>
       finish(dir, apiJar, machine, request)
     }
@@ -50,7 +49,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve & ReleaseFeed & GitRead, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     draft(dir, request.source).flatMap { text =>
       Skeleton.init(dir, version, request.kind, text).mapError(ProvisionError.Files(_)).flatMap { written =>
         finish(written, apiJar, machine, request)
@@ -77,7 +76,7 @@ object Provision:
       apiJar: Path,
       machine: Machine,
       request: Request,
-  ): ZIO[Loader & Resolve & ReleaseFeed & GitRead, ProvisionError, Report] =
+  ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     val head = s"${dir.toAbsolutePath.normalize}\nhistos test"
     request.kind match
       case ScaffoldKind.Bare => ZIO.succeed(Report(dir, head))
@@ -133,7 +132,7 @@ object Provision:
       graph: histos.ProjectGraph,
       env: Map[String, String],
       machine: Machine,
-  ): URIO[ReleaseFeed & GitRead, String] =
+  ): URIO[DoctorSurface.Needs, String] =
     if UpgradeNotice.inCi(env) then ZIO.succeed("")
     else
       DoctorSurface

@@ -5,7 +5,7 @@ import histos.jdk.{Machine, Os}
 import histos.load.Loader
 import histos.native.NativeOrigin
 import histos.resolve.Resolve
-import histos.supply.GitRead
+import histos.supply.{GitRead, Terminal}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -118,7 +118,8 @@ object ProvisionLawSpec extends ZIOSpecDefault:
   )
 
   /** Every service dies if read. A bare project loads nothing, resolves nothing, and runs no doctor. */
-  private val stock = stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ReleaseFeed] ++ stubbed[GitRead]
+  private val stock =
+    stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ReleaseFeed] ++ stubbed[GitRead] ++ stubbed[Terminal]
 
   private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
     ZIO

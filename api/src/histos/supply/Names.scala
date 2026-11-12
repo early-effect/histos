@@ -4,7 +4,9 @@ import _root_.scala.annotation.publicInBinary
 
 import java.time.ZoneId
 
-/** An IANA zone. The literal embeds the id, so native code never opens a tzdb. */
+/** An IANA zone, spelled as the tz database spells it. An offset such as `+01:00` is not one. The literal embeds the
+  * id, so native code never opens a tzdb.
+  */
 opaque type TimeZone = String
 
 object TimeZone:
@@ -13,10 +15,7 @@ object TimeZone:
   inline def apply(inline raw: String): TimeZone = ${ SupplyMacros.timeZone('raw) }
 
   def from(raw: String): Either[TimeZoneError, TimeZone] =
-    try
-      ZoneId.of(raw)
-      Right(trusted(raw))
-    catch case _: java.time.DateTimeException | _: java.time.zone.ZoneRulesException => Left(TimeZoneError.Unknown(raw))
+    if ZoneId.getAvailableZoneIds.contains(raw) then Right(trusted(raw)) else Left(TimeZoneError.Unknown(raw))
 
   extension (zone: TimeZone) def value: String = zone
 
@@ -540,26 +539,6 @@ enum CellNameError:
   def message: String = this match
     case Bad(raw) => s"'$raw' is not a cell"
 end CellNameError
-
-opaque type RepoId = String
-
-object RepoId:
-  given CanEqual[RepoId, RepoId] = CanEqual.derived
-
-  def from(raw: String): Either[RepoIdError, RepoId] =
-    if raw.nonEmpty && !raw.exists(_.isWhitespace) then Right(trusted(raw)) else Left(RepoIdError.Bad(raw))
-
-  extension (id: RepoId) def value: String = id
-
-  @publicInBinary private[histos] def trusted(raw: String): RepoId = raw
-end RepoId
-
-enum RepoIdError:
-  case Bad(raw: String)
-
-  def message: String = this match
-    case Bad(raw) => s"'$raw' is not a repository id"
-end RepoIdError
 
 /** `cron` plus `timezone`, rendered together. */
 final case class Schedule(cron: histos.plugin.Cron, zone: TimeZone)

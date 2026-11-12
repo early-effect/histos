@@ -8,7 +8,7 @@ import histos.publish.{LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Report}
 import histos.resolve.Resolve
 import histos.server.{Call, Calls, Feed, Fingerprint, Record, ServerError}
-import histos.ProjectGraph
+import histos.{HistosBuild, ProjectGraph}
 import slayer.stubbed
 
 import java.nio.file.{Files, Path}
@@ -95,8 +95,11 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
   )
 
   private def hold(repo: Path, desk: Session.Desk, scope: Scope.Closeable): UIO[Unit] =
+    val empty = ProjectGraph.trusted(Nil)
     ready(Fingerprint.read(repo)).flatMap { fingerprint =>
-      desk.held.set(Some(Session.Held(fingerprint, LoadedBuild(ProjectGraph.trusted(Nil), Calls.quiet), scope)))
+      desk.held.set(
+        Some(Session.Held(fingerprint, LoadedBuild(empty, Calls.quiet, HistosBuild.fixed(empty)), scope))
+      )
     }
 
   /** A fixture that cannot be written is a defect. The law's error channel stays the call. */

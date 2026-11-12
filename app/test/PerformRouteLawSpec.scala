@@ -13,7 +13,17 @@ import histos.schedule.CacheError
 import histos.task.{RunId, TaskError}
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileMemo, Compilers}
-import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
+import histos.{
+  HistosBuild,
+  Module,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+}
 import slayer.{any, stub, stubbed}
 
 import java.nio.file.{Files, Path}
@@ -31,7 +41,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
 
   def spec = suite("perform route laws")(
     test("a tracked inspect with arguments names the run and then refuses"):
-      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet)))
+      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph))))
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
@@ -77,7 +87,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment](services)
     ,
     test("inspect prints project names, and arguments or an empty id are refused"):
-      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet)))
+      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet, HistosBuild.fixed(graph))))
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for

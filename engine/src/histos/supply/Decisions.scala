@@ -1,6 +1,5 @@
 package histos.supply
 
-import histos.plugin.{ActionName, RepoPath}
 import histos.version.CommitSha
 import histos.Developer
 
@@ -142,18 +141,6 @@ object Bump:
       .collectFirst:
         case (coordinate, rows) if rows.map(_.version).distinct.length > 1 =>
           SupplyFault.CrossVersionSplit(coordinate, rows.map(row => CellName.trusted(row.cell)).distinct)
-
-  def verify(
-      action: ActionName,
-      tag: String,
-      sha: CommitSha,
-      reachable: Boolean,
-      was: RepoId,
-      now: RepoId,
-  ): Either[SupplyFault, Unit] =
-    if was != now then Left(SupplyFault.ActionRepoMoved(action, was, now))
-    else if !reachable then Left(SupplyFault.TagNotReachable(action, tag, sha))
-    else Right(())
 
   private final case class Row(bump: ChosenBump, listed: Boolean)
 

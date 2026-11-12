@@ -16,7 +16,6 @@ import histos.supply.{
   OutageStrategy,
   Purl,
   Reason,
-  RepoId,
   RepoName,
   Severity,
   SourceName,
@@ -51,10 +50,6 @@ object SentenceLawSpec extends ZIOSpecDefault:
           "ci.yml:4\n  actions/checkout is pinned without a tag comment",
         SupplyFault.PinMismatch(file, 4, action, found, expected).message ==
           "ci.yml:4\n  actions/checkout@01234567... # v4 does not match the catalog pin abcdef01... # v5",
-        SupplyFault.TagNotReachable(action, "v4", sha).message ==
-          "actions/checkout@v4 does not reach 0123456789abcdef0123456789abcdef01234567",
-        SupplyFault.ActionRepoMoved(action, RepoId.trusted("old/repo"), RepoId.trusted("new/repo")).message ==
-          "actions/checkout moved from old/repo to new/repo",
         SupplyFault.CrossVersionSplit(dep, cells).message == "org.example:demo would split core, app",
         SupplyFault.Advisory(finding).message == "ghsa-1234-abcd-ef09 High demo",
         SupplyFault.Advisory(finding.copy(severity = Severity.Unknown)).message == "ghsa-1234-abcd-ef09 Unknown demo",

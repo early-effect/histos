@@ -5,7 +5,7 @@ import histos.doctor.{Fix, FixApply, GitHubCredential}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
-import histos.supply.{DoctorSurface, GitAnswers, Net, PrAuthor, Reply, SupplyChain, UpdatePolicy}
+import histos.supply.{DoctorSurface, GitAnswers, GitRead, Net, PrAuthor, Reply, SupplyChain, Terminal, UpdatePolicy}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -211,8 +211,66 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     asked._2.contains("ship.should-bump"),
                     asked._2.contains("9.9.9"),
                   )
+        .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Terminal])
+    ,
+    test("a fix asks the terminal it is given: none is not applied, and an answer of no or yes is that answer"):
+      ZIO
+        .scoped:
+          Workspace
+            .work("histos-doctor-terminal")
+            .flatMap: repo =>
+              val machine =
+                Machine(
+                  Map.empty,
+                  "/home/demo",
+                  histos.jdk.Os.Mac,
+                  Architecture.Aarch64,
+                  repo,
+                  repo,
+                  None,
+                  NativeOrigin.Central,
+                )
+              val url    = s"https://github.com/${repo.getFileName}/settings/actions"
+              val author = PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
+              // An App author has no workflow-files command, so no fix here runs a shell.
+              Projects
+                .organization(organization"example.com")
+                .supplyChain(SupplyChain(updates = UpdatePolicy(author = author)))(module("core", Jvm)(scala3)) match
+                case Left(_)      => ZIO.dieMessage("the terminal graph did not build")
+                case Right(graph) =>
+                  def fix(attached: Boolean) =
+                    DoctorSurface
+                      .run(
+                        repo,
+                        graph,
+                        DoctorSurface.Request(Some("supply-chain"), false, None, true, false, Nil, false),
+                        machine,
+                      )
+                      .provideSomeLayer[ReleaseFeed & GitRead](ZLayer.succeed(terminal(attached)))
+                  for
+                    _ <- TestSystem.putEnv("GH_TOKEN", "token")
+                    _ <- Workspace.writeString(
+                      repo.resolve(".github").resolve("workflows").resolve("ci.yml"),
+                      "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n",
+                    )
+                    none   <- fix(false)
+                    _      <- TestConsole.feedLines("n")
+                    no     <- fix(true)
+                    _      <- TestConsole.feedLines("y")
+                    yes    <- fix(true)
+                    prompt <- TestConsole.output
+                  yield assertTrue(
+                    none._2.contains(s"not applied (no terminal): $url"),
+                    no._2.contains(s"skipped: $url"),
+                    yes._2.contains(s"applied: $url"),
+                    prompt == Vector(s"Apply GitHub setting $url? [y/N] \n", s"Apply GitHub setting $url? [y/N] \n"),
+                  )
         .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed] ++ GitAnswers().layer),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
+
+  private def terminal(answer: Boolean): Terminal =
+    new Terminal:
+      def attached: UIO[Boolean] = ZIO.succeed(answer)
 end DoctorSurfaceLawSpec
 
 private object Dying extends Net:
