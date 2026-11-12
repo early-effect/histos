@@ -9,15 +9,23 @@ import io.grpc.{MethodDescriptor, Server, ServerCallHandler, ServerServiceDefini
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder
 import io.grpc.stub.{ServerCalls, StreamObserver}
 
-import zio.{Chunk, Scope, UIO, ZIO}
+import zio.{Chunk, Duration, Scope, UIO, ZIO, durationInt}
 
 /** A remote-execution cache on 127.0.0.1, bound for the scope that opened it, so no other process can take its port.
   * [[Answer.Store]] keeps action results and blobs in memory. [[Answer.Fixed]] answers every call with that code.
+  * [[Answer.Silent]] accepts every call and never answers it.
   */
 private[schedule] object GrpcLoopback:
   enum Answer:
     case Store
     case Fixed(code: Status.Code)
+    case Silent
+
+  /** The channel's idle window in a law that waits on [[Answer.Silent]]. A JDK timer on the channel's thread owns that
+    * wait, not the ZIO clock, so the law spends it in real time and `TestClock` cannot advance it. It is short to keep
+    * the law fast, and each suite's live-clock timeout still bounds a hang.
+    */
+  val Brief: Duration = 200.millis
 
   /** The port the server listens on. The scope stops it. A refused handshake is not logged while it runs. */
   def serve(answer: Answer): ZIO[Scope, Nothing, Int] =
@@ -66,11 +74,12 @@ private[schedule] object GrpcLoopback:
       .build()
       .start()
 
-  /** A fixed status replaces whatever the store would have said. */
+  /** A fixed status replaces whatever the store would have said. A silent server says nothing. */
   private def answered(answer: Answer, observer: StreamObserver[Chunk[Byte]])(stored: => Unit): Unit =
     answer match
       case Answer.Store       => stored
       case Answer.Fixed(code) => observer.onError(Status.fromCode(code).asRuntimeException())
+      case Answer.Silent      => ()
 
   private def complete(observer: StreamObserver[Chunk[Byte]], reply: Either[Status, Chunk[Byte]]): Unit =
     reply match

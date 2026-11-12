@@ -31,6 +31,7 @@ import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, Chi
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{
   ApiDigest,
+  CellPlatform,
   CompileError,
   CompileFacts,
   CompileProblem,
@@ -396,17 +397,12 @@ private[histos] object TestCompile:
       ): ZIO[Keep, CompileError, histos.zinc.CompileOutput] =
         effect.provideSomeLayer[Keep](histos.zinc.CompilerStarts.live)
       val compiled: ZIO[Keep, CompileError, histos.zinc.CompileOutput] =
-        request.toolchain.platform match
-          case Platform.Jvm =>
-            keep(JvmCompile.compilePooled(request, extra, hear))
-          case Platform.Js =>
-            keep(ScalaJs.compile(request, extra, hear, module.jsVersion))
-          case Platform.Native =>
-            val revision =
-              module.nativeVersion.getOrElse(tools.catalog.native.revision)
-            NativeCompile
-              .compile(request, revision, native, extra, hear)
-              .provideSomeLayer[Keep](histos.zinc.CompilerStarts.live)
+        ZIO
+          .fromEither(CellPlatform.of(module, request.toolchain.platform, tools.catalog, native))
+          .flatMap:
+            case CellPlatform.Jvm            => keep(JvmCompile.compilePooled(request, extra, hear))
+            case js: CellPlatform.Js         => keep(ScalaJs.compile(request, js, extra, hear))
+            case native: CellPlatform.Native => keep(NativeCompile.compile(request, native, extra, hear))
       compiled
         .mapBoth(
           error =>

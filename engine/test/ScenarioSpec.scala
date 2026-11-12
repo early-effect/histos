@@ -2,25 +2,29 @@ package histos
 
 import histos.jdk.Sha256
 import histos.program.ProgramFeed
+import histos.resolve.ToolRole
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
 
-import zio.{Chunk, IO, Scope, UIO, ZIO, durationInt}
+import zio.{Chunk, IO, Scope, UIO, URIO, ZIO, durationInt}
 import zio.test.*
 
 object ScenarioSpec extends ZIOSpecDefault:
-  private val scala3 = ScalaVersion("3.10.0")
+  /** The newest Scala 3 compiler this checkout's lock pins. */
+  private val locked: URIO[CompilerClosure, ScalaVersion] = ZIO.serviceWith[CompilerClosure](_.scalaVersion)
 
   def spec = suite("scenarios")(
     test("a second checkout of the same bytes compiles again, and the wiped checkout restores without a start"):
       ZIO.scoped:
         for
+          scala3   <- locked
           built    <- ZIO.fromEither(Projects.locked(module("core", Jvm)(scala3)))
           scenario <- Scenario.open
           left     <- scenario.checkout(built)
@@ -30,9 +34,9 @@ object ScenarioSpec extends ZIOSpecDefault:
           first    <- left.compile
           second   <- right.compile
           _        <- left.clean
-          wiped    <- exists(coreClass(left))
+          wiped    <- exists(coreClass(left, scala3))
           again    <- left.compile
-          back     <- exists(coreClass(left))
+          back     <- exists(coreClass(left, scala3))
           starts   <- scenario.starts
         yield assertTrue(
           failed(first ++ second ++ again).isEmpty,
@@ -47,9 +51,86 @@ object ScenarioSpec extends ZIOSpecDefault:
           matches(keyOf(first), keyOf(again)),
         )
     ,
+    test("a same-size edit with the modified time put back is a sources miss, and the compiler starts again"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(Projects.locked(module("core", Jvm)(scala3)))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          source = checkout.root.resolve("core/src/main/scala/Core.scala")
+          _      <- checkout.write("core/src/main/scala/Core.scala", core)
+          first  <- checkout.compile
+          stamp  <- modified(source)
+          _      <- checkout.write("core/src/main/scala/Core.scala", edited)
+          _      <- restore(source, stamp)
+          kept   <- modified(source)
+          second <- checkout.compile
+          starts <- scenario.starts
+        yield assertTrue(
+          core.length == edited.length,
+          kept == stamp,
+          failed(first ++ second).isEmpty,
+          compiled(first),
+          compiled(second),
+          differs(keyOf(first), keyOf(second)),
+          changes(second) == List(KeyMiss.Changed(List(CompileInput.Sources))),
+          starts == 2,
+        )
+    ,
+    test("a source added with the directory's modified time put back is a sources miss, and it compiles"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(Projects.locked(module("core", Jvm)(scala3)))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          dir = checkout.root.resolve("core/src/main/scala")
+          _      <- checkout.write("core/src/main/scala/Core.scala", core)
+          first  <- checkout.compile
+          stamp  <- modified(dir)
+          _      <- checkout.write("core/src/main/scala/Extra.scala", extra)
+          _      <- restore(dir, stamp)
+          kept   <- modified(dir)
+          second <- checkout.compile
+          added  <- exists(GraphCompile.classesDir(checkout.root, ProjectName("core"), scala3).resolve("Extra.class"))
+          starts <- scenario.starts
+        yield assertTrue(
+          kept == stamp,
+          failed(first ++ second).isEmpty,
+          compiled(second),
+          differs(keyOf(first), keyOf(second)),
+          changes(second) == List(KeyMiss.Changed(List(CompileInput.Sources))),
+          added,
+          starts == 2,
+        )
+    ,
+    test("an unchanged native cell is a hit that needs neither the store nor the compiler"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          _        <- ZIO.serviceWithZIO[CompilerClosure](_.held(ToolRole.NativeLibraries))
+          built    <- ZIO.fromEither(Projects.locked(module("core", Native)(scala3).clang(ClangMajor(21))))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          _        <- checkout.write("core/src/main/scala/Core.scala", core)
+          first    <- checkout.compile
+          _        <- scenario.emptyStore
+          second   <- checkout.compile
+          starts   <- scenario.starts
+        yield assertTrue(
+          failed(first ++ second).isEmpty,
+          compiled(first),
+          done(second).map(_.changed) == Chunk(false),
+          changes(second).isEmpty,
+          matches(keyOf(first), keyOf(second)),
+          starts == 1,
+        )
+    ,
     test("a quick hit stays in its checkout, and its record is a file there and not a blob"):
       ZIO.scoped:
         for
+          scala3   <- locked
           built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).test(TestMain("demo.Foo"))))
           scenario <- Scenario.open
           left     <- scenario.checkout(built)
@@ -57,11 +138,11 @@ object ScenarioSpec extends ZIOSpecDefault:
           _        <- writeApp(left)
           _        <- writeApp(right)
           first    <- left.test(TestMode.Quick)
-          kept     <- record(left)
+          kept     <- record(left, scala3)
           hit      <- left.test(TestMode.Quick)
-          before   <- record(right)
+          before   <- record(right, scala3)
           other    <- right.test(TestMode.Quick)
-          after    <- record(right)
+          after    <- record(right, scala3)
           shared   <- ZIO.exists(kept.toList)(scenario.holds)
         yield assertTrue(
           statuses(first) == List(TestStatus.Passed),
@@ -83,6 +164,7 @@ object ScenarioSpec extends ZIOSpecDefault:
     test("a compile error names its file and line, in main sources and in tests, and a warning is not the failure"):
       ZIO.scoped:
         for
+          scala3   <- locked
           built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).test(TestMain("demo.Foo"))))
           scenario <- Scenario.open
           checkout <- scenario.checkout(built)
@@ -117,6 +199,7 @@ object ScenarioSpec extends ZIOSpecDefault:
     test("a running program's output arrives while it runs"):
       ZIO.scoped:
         for
+          scala3   <- locked
           built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).main(MainClass("demo.Wait"))))
           scenario <- Scenario.open
           checkout <- scenario.checkout(built)
@@ -141,18 +224,27 @@ object ScenarioSpec extends ZIOSpecDefault:
     checkout.write("app/src/main/scala/demo/Lib.scala", lib) *>
       checkout.write("app/src/test/scala/demo/Foo.scala", foo)
 
-  private def coreClass(checkout: Checkout): Path =
-    GraphCompile.classesDir(checkout.root, ProjectName("core"), scala3).resolve("Core.class")
+  private def coreClass(checkout: Checkout, version: ScalaVersion): Path =
+    GraphCompile.classesDir(checkout.root, ProjectName("core"), version).resolve("Core.class")
 
   /** The fingerprint a passing quick run stored under this checkout. */
-  private def record(checkout: Checkout): IO[IoFailure, Option[Sha256]] =
-    val path = checkout.root.resolve(".histos/test-quick/app/3.10.0/jvm/demo/Foo")
+  private def record(checkout: Checkout, version: ScalaVersion): IO[IoFailure, Option[Sha256]] =
+    val path = checkout.root.resolve(s".histos/test-quick/app/${version.value}/jvm/demo/Foo")
     Workspace
       .readIfPresent(path)
       .map(_.flatMap(text => Sha256.from(text.trim.stripPrefix("success ")).toOption))
 
   private def exists(path: Path): IO[IoFailure, Boolean] =
     ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => IoFailure(path, IoFault.Stat))
+
+  private def modified(path: Path): IO[IoFailure, FileTime] =
+    ZIO.attemptBlocking(Files.getLastModifiedTime(path)).mapError(_ => IoFailure(path, IoFault.Stat))
+
+  private def restore(path: Path, time: FileTime): IO[IoFailure, Unit] =
+    ZIO.attemptBlocking(Files.setLastModifiedTime(path, time)).mapError(_ => IoFailure(path, IoFault.Write)).unit
+
+  private def changes(feeds: Chunk[CompileFeed]): List[KeyMiss] =
+    feeds.collect { case CompileFeed.Miss(_, _, _, change) => change }.toList
 
   private def compiled(feeds: Chunk[CompileFeed]): Boolean =
     done(feeds).exists(cell => cell.changed && cell.classesWritten.exists(_ >= 1))
@@ -229,6 +321,16 @@ object ScenarioSpec extends ZIOSpecDefault:
   private val core =
     """object Core:
       |  def n: Int = 1
+      |""".stripMargin
+
+  private val edited =
+    """object Core:
+      |  def n: Int = 2
+      |""".stripMargin
+
+  private val extra =
+    """object Extra:
+      |  def m: Int = Core.n
       |""".stripMargin
 
   private val lib =

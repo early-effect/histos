@@ -45,8 +45,8 @@ object CacheConfig:
         case None                                              => ZIO.succeed(RemoteCache.unconfigured)
         case Some(Selected(Target.Http(url), mode, namespace)) =>
           client.flatMap(http => HttpCache.make(url, mode, namespace).provideEnvironment(ZEnvironment(http)))
-        case Some(Selected(Target.Grpc(host, port, tls), mode, namespace)) =>
-          GrpcCache.open(host, port, tls, mode, namespace)
+        case Some(Selected(grpc: Target.Grpc, mode, namespace)) =>
+          GrpcCache.open(grpc, GrpcChannel.Idle, mode, namespace)
 
   /** Copy one HTTP index onto another. gRPC has no action-cache list, so promote names that limit and does not open a
     * second port. Unset stays off.

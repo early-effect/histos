@@ -3,8 +3,8 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
-import histos.js.{JsRequests, ScalaJs}
-import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
+import histos.js.ScalaJs
+import histos.native.{NativeCompile, NativeOrigin}
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -13,6 +13,7 @@ import histos.resolve.{
   ResolutionService,
   Resolve,
   ResolveError,
+  ToolInput,
 }
 import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
@@ -144,16 +145,13 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    ZStream.unwrapScoped:
-      ResolutionService
-        .open(repo, graph)
-        .mapError(GraphCompileError.Lock(_))
-        .map: report =>
-          consoleCounted(repo, graph, names, jdk, native, platform).provideSomeLayer(
-            CompilerStarts.live ++ ZLayer.succeed(report)
-          )
+    fresh[Resolve & ContentStore & CompilerStarts, CompileFeed](Parallelism.default.cpu)(
+      consoleCounted(repo, graph, names, jdk, native, platform)
+    ).provideSomeLayer(CompilerStarts.live)
 
-  /** The same console, with the caller holding the start counter. The compilers die with the stream. */
+  /** The same console, with the caller holding the start counter, the compilers, and the input memo, the way a
+    * checkout's server holds them across compiles.
+    */
   private[histos] def consoleCounted(
       repo: Path,
       graph: ProjectGraph,
@@ -161,16 +159,14 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
-  ): ZStream[Resolve & ContentStore & CompilerStarts, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo, GraphCompileError, CompileFeed] =
     ZStream.unwrapScoped:
       ResolutionService
         .open(repo, graph)
         .mapError(GraphCompileError.Lock(_))
         .map: report =>
-          fresh(Parallelism.default.cpu)(
-            watch(repo, graph, choose(graph, names), None, platform, jdk, native)
-              .provideSomeLayer(ZLayer.succeed(report))
-          )
+          watch(repo, graph, choose(graph, names), None, platform, jdk, native)
+            .provideSomeLayer(ZLayer.succeed(report))
 
   /** The daemon's compile. The caller keeps the compiler services. */
   private[histos] def resident(
@@ -536,8 +532,9 @@ object GraphCompile:
 
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
-  /** Lock checksums and source bytes. A hit does not fetch jars or open a compiler. A deleted source is not a hit: the
-    * path memo drops it, so the key no longer matches.
+  /** Lock checksums and source bytes. A hit does not fetch jars, read the store, or open a compiler. The caller listed
+    * the sources and this hashes their bytes, so an added, deleted, or edited source is a miss whatever the modified
+    * times say. The key is [[CellTools.recall]]'s, which the compile stores through the same function.
     */
   private def recall(
       work: CellWork,
@@ -554,35 +551,25 @@ object GraphCompile:
         .flatMap:
           case None         => ZIO.none
           case Some(hashes) =>
-            val compiler = plan.tools.pinned(CompilerRequests.compiler(version, plan.tools.repositories))
-            val tools    = platform match
-              case Platform.Js =>
-                val revision = module.jsVersion.getOrElse(plan.tools.catalog.js.revision)
-                plan.tools
-                  .pinned(JsRequests.libraries(version, revision, plan.tools.repositories, plan.tools.catalog))
-                  .map(List(_))
-              case _ => Some(Nil)
-            (compiler, tools) match
-              case (Some(compilerInput), Some(compilation)) =>
-                memo.digest(sources).flatMap { digest =>
-                  val request = CompileRequest(
-                    CompileToolchain(version, platform, plan.jdk, module.flags),
-                    sources,
-                    Nil,
-                    classes,
-                    recorded,
-                    hashes,
-                    apis,
-                    compilation,
-                    coverage = identity,
-                  )
-                  val key = CompileKey.withTools(
-                    CompileKey.of(request, digest),
-                    List(compilerInput.fingerprint),
-                  )
-                  CompileReplay.recall(request, key)
-                }
-              case _ => ZIO.none
+            CellPlatform.of(module, platform, plan.tools.catalog, plan.native) match
+              case Left(_)       => ZIO.none
+              case Right(placed) =>
+                val base = CompileRequest(
+                  CompileToolchain(version, platform, plan.jdk, module.flags),
+                  sources,
+                  Nil,
+                  classes,
+                  recorded,
+                  hashes,
+                  apis,
+                  coverage = identity,
+                )
+                JvmCompile
+                  .sourceDigest(sources)
+                  .flatMap(digest => CellTools.recall(plan.tools, placed, base, digest))
+                  .flatMap:
+                    case Some(keyed) => CompileReplay.recall(keyed.request, keyed.key)
+                    case None        => ZIO.none
 
   private def compileOf(
       work: CellWork,
@@ -592,11 +579,11 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      listed <- ZIO.serviceWithZIO[CompileMemo](_.sources(base, version, platform)).mapError(failed)
+      listed <- Sources.select(base, version, platform).mapError(failed)
       extraRoot = Sources.unmanagedRoot(plan.repo, module.name.value)
       extra <- Sources.select(extraRoot, version, platform).mapError(failed)
       sources = Sources.prefer(base, listed, extraRoot, extra)
-      tests    <- ZIO.serviceWithZIO[CompileMemo](_.tests(base, version, platform)).mapError(failed)
+      tests    <- Sources.tests(base, version, platform).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
         else if sources.isEmpty then vacant(plan, module.name, version, platform)
@@ -638,7 +625,7 @@ object GraphCompile:
                     apis,
                     permitted = assembled.permitted,
                     coverage = planned.map(_.identity),
-                    coverageTools = planned.fold(List.empty[histos.resolve.ToolInput])(_.tools),
+                    coverageTools = planned.fold(List.empty[ToolInput])(_.tools),
                   )
                   compiled <- compile(
                     work,
@@ -729,20 +716,13 @@ object GraphCompile:
       hear: CompileProblem => Unit,
       admitted: UIO[Unit],
   ): ZIO[ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    val compiled = request.toolchain.platform match
-      case Platform.Jvm =>
-        JvmCompile.compilePooled(request, extra, hear, admitted)
-      case Platform.Js =>
-        ScalaJs.compile(request, extra, hear, work.module.jsVersion)
-      case Platform.Native =>
-        NativeCompile.compile(
-          request,
-          work.module.nativeVersion
-            .getOrElse(work.plan.tools.catalog.native.revision),
-          work.plan.native,
-          extra,
-          hear,
-        )
+    val compiled =
+      ZIO
+        .fromEither(CellPlatform.of(work.module, request.toolchain.platform, work.plan.tools.catalog, work.plan.native))
+        .flatMap:
+          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, admitted)
+          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear)
+          case native: CellPlatform.Native => NativeCompile.compile(request, native, extra, hear)
     compiled.provideSome[ContentStore & CompilerStarts & Compilers](ZLayer.succeed(work.plan.tools))
 
   /** An exact cell is the classpath. A 2.13 patch uses the newest declared 2.13 cell. A Scala 3 cell uses the newest

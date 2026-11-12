@@ -1,22 +1,32 @@
 package histos.schedule
 
 import java.io.{ByteArrayInputStream, InputStream}
-import java.util.concurrent.{ExecutorService, Executors, RejectedExecutionException, TimeUnit}
+import java.util.concurrent.{
+  ExecutorService,
+  RejectedExecutionException,
+  ScheduledFuture,
+  ScheduledThreadPoolExecutor,
+  TimeUnit,
+}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 
 import io.grpc.{CallOptions, ClientCall, ManagedChannel, Metadata, MethodDescriptor, Status}
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder
 
-import zio.{Chunk, IO, Scope, UIO, ZIO}
+import zio.{Chunk, Duration, IO, Scope, UIO, ZIO, durationInt}
 
 /** One channel, one outbound thread. `ClientCall` is not safe to send from two threads, and a blocking stub would pin a
-  * ZIO worker for the whole round trip. `send`, `halfClose`, and `cancel` run on this channel's executor. The first
-  * `request` does too, before the request is on the wire. A server-streaming listener asks for the next frame itself,
-  * the way grpc-java does, so that ask is not queued behind the frame it is answering. The fiber waits in
-  * `ZIO.asyncInterrupt` and cancels the call when it is interrupted.
+  * ZIO worker for the whole round trip. `send`, `halfClose`, `cancel`, and the idle timer run on this channel's
+  * executor. The first `request` does too, before the request is on the wire. A server-streaming listener asks for the
+  * next frame itself, the way grpc-java does, so that ask is not queued behind the frame it is answering. A client
+  * stream sends a frame only while the call is ready, so a sent frame means the bytes before it moved. The fiber waits
+  * in `ZIO.asyncInterrupt` and cancels the call when it is interrupted.
   */
 private[schedule] object GrpcChannel:
   val MaxInbound: Int = 64 * 1024 * 1024
+
+  /** The longest a call waits with no frame moving. */
+  val Idle: Duration = 30.seconds
 
   val getAction: MethodDescriptor[Chunk[Byte], Chunk[Byte]] =
     method(Reapi.GetActionResult, MethodDescriptor.MethodType.UNARY)
@@ -33,17 +43,18 @@ private[schedule] object GrpcChannel:
   val write: MethodDescriptor[Chunk[Byte], Chunk[Byte]] =
     method(Reapi.Write, MethodDescriptor.MethodType.CLIENT_STREAMING)
 
-  def open(host: String, port: Int, tls: Boolean): ZIO[Scope, RemoteError, Session] =
+  def open(target: CacheConfig.Target.Grpc, idle: Duration): ZIO[Scope, RemoteError, Session] =
     for
-      exec    <- ZIO.acquireRelease(ZIO.succeed(Executors.newSingleThreadExecutor(threads)))(stop)
-      channel <- ZIO.acquireRelease(connect(host, port, tls))(stop)
-    yield Session(channel, exec, host, port)
+      exec    <- ZIO.acquireRelease(ZIO.succeed(timers))(stop)
+      channel <- ZIO.acquireRelease(connect(target))(stop)
+    yield Session(channel, exec, target.host, target.port, idle)
 
   final class Session(
       channel: ManagedChannel,
-      exec: ExecutorService,
+      exec: ScheduledThreadPoolExecutor,
       host: String,
       port: Int,
+      idle: Duration,
   ):
     /** `None` is `NOT_FOUND`. Any other status fails, and the description is dropped. */
     def unary(
@@ -85,20 +96,35 @@ private[schedule] object GrpcChannel:
         val index    = new AtomicInteger(0)
         val closed   = new AtomicBoolean(false)
         val started  = new AtomicBoolean(false)
+        val timer    = new AtomicReference(Option.empty[ScheduledFuture[?]])
         def finish(result: IO[RemoteError, Option[Chunk[Chunk[Byte]]]]): Unit =
-          if once.compareAndSet(false, true) then cb(result)
+          if once.compareAndSet(false, true) then
+            timer.get.foreach(_.cancel(false))
+            cb(result)
+        // A call ends as a read timeout once no frame has moved for `idle`. gRPC's own deadline is fixed for the whole
+        // call and would end a large blob that is still moving, so this timer re-arms on every frame sent or received:
+        // a unary call's one request frame makes `idle` its deadline, and a stream lives while its frames move.
+        def moved(): Unit =
+          if !once.get then later(stalled()).foreach(next => timer.getAndSet(Some(next)).foreach(_.cancel(false)))
+        def stalled(): Unit =
+          finish(ZIO.fail(RemoteError.Exchange(CacheExchange.ReadTimeout(host, port))))
+          call.cancel("no frame moved", null)
+        // grpc-java never calls `onReady` on a call whose client sends one message, so only a client stream waits for it.
+        val paced        = !method.getType.clientSendsOneMessage
         def send(): Unit =
           if !started.get || once.get || closed.get then ()
           else
             var sending = true
-            while sending && !once.get do
+            while sending && !once.get && (!paced || call.isReady) do
               val at = index.get
               if at < frames.length then
                 frames.drop(at).headOption match
                   case None        => sending = false
                   case Some(frame) =>
                     index.incrementAndGet()
-                    try call.sendMessage(frame)
+                    try
+                      call.sendMessage(frame)
+                      moved()
                     catch case _: IllegalStateException => sending = false
               else
                 closed.set(true)
@@ -108,6 +134,7 @@ private[schedule] object GrpcChannel:
         val listener = new ClientCall.Listener[Chunk[Byte]]:
           override def onMessage(message: Chunk[Byte]): Unit =
             received.updateAndGet(message :: _)
+            moved()
             // The next server-streaming frame has to be asked for before this callback returns.
             // Queueing it on the call executor lets a fast server finish the stream first, and
             // grpc then drops the frame that was never requested.
@@ -130,12 +157,17 @@ private[schedule] object GrpcChannel:
           try call.request(if more then 1 else 2)
           catch case _: IllegalStateException => ()
           started.set(true)
+          moved()
           send()
         Left(ZIO.succeed(on(exec)(call.cancel("interrupted", null))))
 
     private def on(exec: ExecutorService)(op: => Unit): Unit =
       try exec.execute(() => op)
       catch case _: RejectedExecutionException => ()
+
+    private def later(op: => Unit): Option[ScheduledFuture[?]] =
+      try Some(exec.schedule((() => op): Runnable, idle.toNanos, TimeUnit.NANOSECONDS))
+      catch case _: RejectedExecutionException => None
   end Session
 
   private def method(
@@ -163,13 +195,21 @@ private[schedule] object GrpcChannel:
       thread.setDaemon(true)
       thread
 
-  private def connect(host: String, port: Int, tls: Boolean): IO[RemoteError, ManagedChannel] =
+  /** One thread. A re-armed timer leaves the queue when it is cancelled, and shutdown drops the timers still waiting.
+    */
+  private def timers: ScheduledThreadPoolExecutor =
+    val exec = new ScheduledThreadPoolExecutor(1, threads)
+    exec.setRemoveOnCancelPolicy(true)
+    exec.setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
+    exec
+
+  private def connect(target: CacheConfig.Target.Grpc): IO[RemoteError, ManagedChannel] =
     ZIO
       .attempt:
-        val builder = NettyChannelBuilder.forAddress(host, port).maxInboundMessageSize(MaxInbound)
-        if tls then builder.useTransportSecurity() else builder.usePlaintext()
+        val builder = NettyChannelBuilder.forAddress(target.host, target.port).maxInboundMessageSize(MaxInbound)
+        if target.tls then builder.useTransportSecurity() else builder.usePlaintext()
         builder.build()
-      .mapError(_ => RemoteError.Exchange(CacheExchange.Connect(host, port)))
+      .mapError(_ => RemoteError.Exchange(CacheExchange.Connect(target.host, target.port)))
 
   private def stop(exec: ExecutorService): UIO[Unit] =
     ZIO.succeed(exec.shutdown()) *>

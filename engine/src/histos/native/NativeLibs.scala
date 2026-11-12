@@ -134,16 +134,13 @@ object NativeClasspath:
         .mapError(NativeFetch.Resolved(_))
         .flatMap: classpath =>
           def one(component: NativeComponent): IO[NativeFetch, Path] =
-            val name     = component.artifact(toolchain, version)
-            val revision = component.revision(toolchain, version)
-            classpath.artifacts
-              .filter(artifact =>
-                artifact.organization == "org.scala-native" && artifact.name == name && artifact.revision == revision && artifact.classifier.isEmpty
-              )
-              .map(_.path) match
+            classpath.artifacts.filter(names(component, toolchain, version)).map(_.path) match
               case path :: Nil => ZIO.succeed(path)
-              case Nil         => ZIO.fail(NativeFetch.Missing(name, revision))
-              case _           => ZIO.fail(NativeFetch.Duplicated(name))
+              case Nil         =>
+                ZIO.fail(
+                  NativeFetch.Missing(component.artifact(toolchain, version), component.revision(toolchain, version))
+                )
+              case _ => ZIO.fail(NativeFetch.Duplicated(component.artifact(toolchain, version)))
           for
             plugin    <- one(NativeComponent.Plugin)
             libraries <- ZIO.foreach(
@@ -154,6 +151,26 @@ object NativeClasspath:
             libraries,
             histos.resolve.ToolInput(request.id, classpath.artifacts),
           )
+
+  /** The plugin's row of a libraries input. A Native compile fingerprints it beside the compiler. It is chosen by
+    * coordinates, so the lock's pinned input and a fetched one name the same plugin.
+    */
+  def plugin(
+      input: histos.resolve.ToolInput,
+      toolchain: NativeToolchain,
+      version: ScalaVersion,
+  ): histos.resolve.ToolInput =
+    input.copy(artifacts = input.artifacts.filter(names(NativeComponent.Plugin, toolchain, version)))
+
+  private def names(
+      component: NativeComponent,
+      toolchain: NativeToolchain,
+      version: ScalaVersion,
+  )(artifact: histos.resolve.ResolvedArtifact): Boolean =
+    artifact.organization == "org.scala-native" &&
+      artifact.name == component.artifact(toolchain, version) &&
+      artifact.revision == component.revision(toolchain, version) &&
+      artifact.classifier.isEmpty
 end NativeClasspath
 
 object NativeRequests:

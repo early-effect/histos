@@ -1,6 +1,15 @@
 package histos.js
 
-import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
+import histos.zinc.{
+  CellPlatform,
+  CompileError,
+  CompileOutput,
+  CompileProblem,
+  CompileRequest,
+  JsLibraryMiss,
+  JvmCompile,
+  ScalaSeries,
+}
 import histos.{Dep, DepKind, JsEnv, JsVersion, Platform, ScalaVersion, ToolCatalog}
 import histos.resolve.{
   LockedTools,
@@ -30,11 +39,14 @@ object ScalaJs:
   ): ZIO[LockedTools, CompileError, List[Path]] =
     library(version, revision)
 
+  /** The libraries stand in for `scala-library`. The key's library input comes from [[histos.zinc.CellTools]], as
+    * recall's does. This fetch is for their paths.
+    */
   def compile(
       request: CompileRequest,
+      js: CellPlatform.Js,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-      revision: Option[JsVersion] = None,
   ): ZIO[
     LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.zinc.Compilers,
     CompileError,
@@ -45,14 +57,8 @@ object ScalaJs:
     else
       ScalaSeries.of(request.toolchain.version) match
         case Some(ScalaSeries.Scala3) =>
-          input(request.toolchain.version, revision).flatMap: selected =>
-            JvmCompile.compileWith(
-              request.copy(compilationTools = request.compilationTools :+ selected),
-              selected.artifacts.map(_.path),
-              Nil,
-              List("-scalajs") ++ extra,
-              hear,
-            )
+          library(request.toolchain.version, Some(js.revision)).flatMap: stdlib =>
+            JvmCompile.compileWith(request, js, stdlib, Nil, List("-scalajs") ++ extra, hear)
         case _ =>
           ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
 

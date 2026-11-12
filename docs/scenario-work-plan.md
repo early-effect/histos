@@ -16,7 +16,9 @@ A scenario is a ZIO test. It opens one content store, then one or more checkouts
 
 The store belongs to the scenario. It is not [CompileReplay.processStore](../engine/src/histos/zinc/CompileReplay.scala), which is one directory for the whole test JVM. Two scenarios do not share blobs. Two checkouts of one scenario do.
 
-`./histos clean` on a checkout deletes the products under that checkout's `.histos` and leaves the scenario store. The next compile of the same paths restores from the store.
+A checkout keeps its compilers and its input memo between compiles, the way that checkout's server does. A law that edits a file between two compiles sees the memo the daemon would hold.
+
+`./histos clean` on a checkout deletes the products under that checkout's `.histos`, drops the memo and the compilers, and leaves the scenario store. The next compile of the same paths restores from the store.
 
 A quick record is a file under that checkout's `.histos/test-quick`. It is not a blob. A hit in one checkout is not a hit in another.
 

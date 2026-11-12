@@ -38,8 +38,7 @@ private[schedule] object ScheduleAspects:
     remote.mode match
       case RemoteMode.Off                     => ZIO.none
       case RemoteMode.Read | RemoteMode.Write =>
-        remote
-          .find(digest)
+        unanswered(remote.find(digest))(None)
           .mapError(ScheduleError.Remote(_))
           .flatMap:
             case None        => ZIO.none
@@ -58,8 +57,16 @@ private[schedule] object ScheduleAspects:
     (remote.mode, verdict) match
       case (RemoteMode.Write, Verdict.Send) =>
         val bytes = Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8))
-        remote.store(digest, bytes).mapError(ScheduleError.Remote(_))
+        unanswered(remote.store(digest, bytes))(()).mapError(ScheduleError.Remote(_))
       case _ => ZIO.unit
+
+  /** A remote that timed out is a miss, and a store it did not take is skipped: the step goes on with its own work. Any
+    * other remote failure stops the step.
+    */
+  private def unanswered[A](call: IO[RemoteError, A])(missed: A): IO[RemoteError, A] =
+    call.catchSome:
+      case RemoteError.Exchange(CacheExchange.ConnectTimeout(_, _) | CacheExchange.ReadTimeout(_, _)) =>
+        ZIO.succeed(missed)
 
   private def decode(
       action: Digest,

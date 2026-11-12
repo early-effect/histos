@@ -1,19 +1,21 @@
 package histos.watch
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
 
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
 import histos.Module
+import histos.jdk.Sha256
 
 import zio.{durationInt, IO, ZIO}
 
-/** Source files a command recompiles. Output under `.histos` is not a source.
+/** Source files a command recompiles. Output under `.histos` is not a source. A file is its bytes, so an edit wakes the
+  * watch whatever its modified time and size say.
   */
 object SourceWatch:
-  final case class Entry(path: String, modified: Long, bytes: Long)
+  final case class Entry(path: String, digest: Sha256)
   final case class Snapshot(entries: List[Entry])
 
   val Poll: zio.Duration   = 200.millis
@@ -68,9 +70,8 @@ object SourceWatch:
     val next     = after.entries.map(entry => entry.path -> entry).toMap
     (previous.keySet ++ next.keySet).toList.sorted.flatMap { path =>
       (previous.get(path), next.get(path)) match
-        case (Some(left), Some(right)) if left.modified == right.modified && left.bytes == right.bytes =>
-          None
-        case _ => Some(Path.of(path))
+        case (Some(left), Some(right)) if left == right => None
+        case _                                          => Some(Path.of(path))
     }
 
   private def entries(root: Path): List[Entry] =
@@ -81,17 +82,16 @@ object SourceWatch:
       try walk.iterator.asScala.flatMap(entry).toList
       finally walk.close()
 
+  /** A file that vanishes or cannot be read between the walk and the read is absent from the snapshot. */
   private def entry(path: Path): Option[Entry] =
     if !Files.isRegularFile(path) then None
     else
       try
-        val attributes =
-          Files.readAttributes(path, classOf[BasicFileAttributes])
+        val bytes = Files.readAllBytes(path)
         Some(
           Entry(
             path.toAbsolutePath.normalize.toString,
-            attributes.lastModifiedTime.toMillis,
-            attributes.size,
+            Sha256.fromDigest(MessageDigest.getInstance("SHA-256").digest(bytes)),
           )
         )
       catch case NonFatal(_) => None

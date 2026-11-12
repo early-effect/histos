@@ -5,11 +5,11 @@ import histos.clean.Products
 import histos.jdk.{Machine, Sha256}
 import histos.program.{Program, ProgramError, ProgramFeed}
 import histos.resolve.{BuildResolvers, DependencyLock, LockedCell, ResolutionService, Resolve, ResolveError}
-import histos.schedule.CacheError
+import histos.schedule.{CacheError, Parallelism}
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestMode, TestRun}
 import histos.toolchain.Runtimes
 import histos.workspace.{IoFailure, Workspace}
-import histos.zinc.{CompileFeed, CompilerStarts, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompileMemo, CompilerStarts, Compilers, GraphCompile, GraphCompileError}
 
 import java.nio.file.Path
 
@@ -30,14 +30,20 @@ final class Scenario private (
   def holds(sha: Sha256): IO[CacheError, Boolean] =
     env.get[ContentStore].list.map(_.exists(_.digest.value == sha.value))
 
+  /** Delete every blob in the scenario store. A compile that still needs one after this starts the compiler. */
+  def emptyStore: IO[CacheError | IoFailure, Unit] =
+    env.get[ContentStore].list.flatMap(entries => ZIO.foreachDiscard(entries)(entry => Workspace.delete(entry.path)))
+
   /** A work tree of `build`. The lock `build` reads pins every cell with no jars, plus this repository's tools. A
-    * module that names dependencies drifts from that pin.
+    * module that names dependencies drifts from that pin. The checkout keeps its compilers and its input memo for the
+    * scope, the way that checkout's server keeps them between commands.
     */
   def checkout(build: ProjectGraph): ZIO[Scope, IoFailure, Checkout] =
     for
       root <- Workspace.work("histos-scenario")
       _    <- Workspace.writeString(ResolutionService.file(root, build.resolution), DependencyLock.render(pin(build)))
-    yield Checkout(root, build, env)
+      resident <- (Compilers.live(Parallelism.default.cpu) ++ CompileMemo.live).build
+    yield Checkout(root, build, env ++ resident)
 
   private def pin(build: ProjectGraph): DependencyLock =
     val cells = Resolve
@@ -63,14 +69,16 @@ object Scenario:
 final class Checkout private[histos] (
     val root: Path,
     build: ProjectGraph,
-    env: ZEnvironment[Resolve & ContentStore & CompilerStarts],
+    env: ZEnvironment[Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo],
 ):
   def write(relative: String, text: String): IO[IoFailure, Unit] =
     Workspace.writeString(root.resolve(relative), text)
 
-  /** `./histos clean`: this work tree's products go and the scenario store stays. */
+  /** `./histos clean`: this work tree's products go, the server drops its memo and compilers, and the scenario store
+    * stays.
+    */
   def clean: IO[IoFailure, Unit] =
-    Products.wipe(root)
+    Products.wipe(root) *> env.get[CompileMemo].forget *> env.get[Compilers].drop
 
   /** Every module of the build. Starts count toward [[Scenario.starts]]. */
   def compile: IO[GraphCompileError, Chunk[CompileFeed]] =
