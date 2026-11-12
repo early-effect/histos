@@ -51,11 +51,7 @@ object OpaqueLawSpec extends ZIOSpecDefault:
   private val dev = DevName("russ")
   private val pr  = PullRequestNumber("4")
 
-  /** 64 lowercase hex from four longs. Char-by-char `listOfN` generators overflowed the Scala Native stack here. */
-  private val hex64: Gen[Any, String] =
-    Gen
-      .listOfN(4)(Gen.long)
-      .map(_.map(word => java.lang.Long.toHexString(word).reverse.padTo(16, '0').reverse).mkString)
+  private val hex64: Gen[Any, String] = Gen.stringN(64)(Gen.hexCharLower)
 
   def spec = suite("opaque and token laws")(
     test("sha256 is 64 hex after a trim and a lowercase, and any other length or a non-hex char is refused"):

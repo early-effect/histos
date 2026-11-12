@@ -39,6 +39,13 @@ final case class NativeSuiteRequest(
 object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
+  /** Scala Native sizes a thread at max(1MB, the OS default): 8MB on Linux, 1MB on macOS. A debug link's ZIO run loop
+    * frame is about 5.5KB, and ZIO nests 300 of them before it trampolines, so 1MB overflows where 8MB holds. Every
+    * suite thread gets 8MB, so a law passes or fails the same on both. The adapter hands the runner's environment to
+    * the binary.
+    */
+  private val ThreadStack: (String, String) = "SCALANATIVE_THREAD_STACK_SIZE" -> "8m"
+
   def run(
       request: NativeSuiteRequest
   ): ZIO[LockedTools, NativeSuiteError, ChildRequest] =
@@ -101,6 +108,7 @@ object NativeSuite:
         "NATIVE_BINARY"    -> binary.toAbsolutePath.toString,
         "NATIVE_FRAMEWORK" -> framework,
         "NATIVE_SHAPES"    -> shapes.toAbsolutePath.toString,
+        ThreadStack,
       ),
     )
 
