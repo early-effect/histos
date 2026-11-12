@@ -29,9 +29,9 @@ end RunnerCall
 /** Long form for `histos --explain <check-id>`. The same text is [[ToolchainDiagnostic.explain]]. */
 object ToolchainExplain:
   val jdk: String =
-    """Histos runs on JDK 21 or newer. The home is the absolute path in .histos/toolchain.local when that file exists. Otherwise it is java.home, the JVM that launched this process. Histos does not fetch a JDK and does not fall through from a toolchain.local that is too old.
+    """Histos runs on JDK 25 or newer. Test, run, and link compile a java.lang.foreign bootstrap, which JDK 21 marks preview. The home is the absolute path in .histos/toolchain.local when that file exists. Otherwise it is java.home, the JVM that launched this process. Histos does not fetch a JDK and does not fall through from a toolchain.local that is too old.
       |
-      |Install a JDK 21 (or newer). Write its home, one absolute path, to .histos/toolchain.local. Remove that file to use java.home.""".stripMargin
+      |Install a JDK 25 (or newer). Write its home, one absolute path, to .histos/toolchain.local. Remove that file to use java.home.""".stripMargin
 
   val nodeFloor: String =
     """A module that launches on Node needs Node 25 or newer. Scala.js Wasm does not run on the Node 22 that many PATH entries still install. A JVM module and a Native module do not launch Node. An aggregate is its modules, and those children decide.
@@ -105,9 +105,9 @@ enum ToolchainDiagnostic(
         fixes(
           Fix.Steps(
             lines(
-              "Install a JDK 21 or newer.",
+              "Install a JDK 25 or newer.",
               "Write its home, one absolute path, to .histos/toolchain.local.",
-              "Or remove .histos/toolchain.local and run on a JDK 21 java.home.",
+              "Or remove .histos/toolchain.local and run on a JDK 25 java.home.",
             )
           )
         ),

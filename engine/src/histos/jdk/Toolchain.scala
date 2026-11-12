@@ -119,7 +119,8 @@ enum JdkRead:
 
 object Toolchain:
   /** Oldest JDK this process will accept. The Loom executor needs 21. */
-  val Floor: JdkVersion = JdkVersion.trusted("21", JdkMajor.trusted(21))
+  /** The child-process bootstrap compiles `java.lang.foreign`, which JDK 21 marks preview. */
+  val Floor: JdkVersion = JdkVersion.trusted("25", JdkMajor.trusted(25))
 
   /** JDK 25 refuses unnamed native access without this flag. The manifest attribute is the jar form.
     */

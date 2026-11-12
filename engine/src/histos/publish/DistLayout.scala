@@ -24,8 +24,6 @@ object DistLayout:
 
   def client(version: String, platform: DistPlatform): String = s"$version-client-${platform.token}"
 
-  def sources(version: String): String = s"$version-sources.tar"
-
   /** `dist/clients/client-<platform>/histos-client`, relative to the repository. */
   def builtClient(platform: DistPlatform): String =
     s"$BuiltClients/$ClientArtifact${platform.token}/${ClientBinary.fileName}"
@@ -34,22 +32,17 @@ object DistLayout:
       version: String,
       jarSha256: String,
       clients: List[(DistPlatform, String)],
-      sourcesSha256: Option[String],
   ): String =
     val rows = clients.sortBy(_._1.token).map { (platform, sha) =>
       s"""    "${platform.token}": "$sha""""
     }
-    val body    = rows.mkString(",\n")
-    val sources = sourcesSha256 match
-      case Some(sha) => s""",\n  "sourcesSha256": "$sha""""
-      case None      => ""
     s"""{
        |  "version": "$version",
        |  "jar": "${jar(version)}",
        |  "jarSha256": "$jarSha256",
        |  "clients": {
-       |$body
-       |  }$sources
+       |${rows.mkString(",\n")}
+       |  }
        |}
        |""".stripMargin
 

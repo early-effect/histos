@@ -14,13 +14,10 @@ script_file() {
   file=$1
   [ -n "$file" ] && [ -f "$file" ] && grep -q 'Histos user install' "$file"
 }
-java_guide='A JDK 21 or newer is required. Histos does not install it.
-macOS: brew install --cask temurin@21
-Linux: https://adoptium.net/temurin/releases?version=21'
+java_guide='A JDK 25 or newer is required. Histos does not install it.
+macOS: brew install --cask temurin@25
+Linux: https://adoptium.net/temurin/releases?version=25'
 wsl_guide='Histos runs on macOS and Linux. On Windows, use WSL. A native Windows build may come later.'
-clang_guide='clang is not on PATH. Histos does not install it.
-macOS: brew install llvm
-Linux: install clang from your distribution.'
 home=${HISTOS_HOME:-$HOME/.histos}
 # `update` sets these. The no-client message names the newest release.
 newest_release=
@@ -92,16 +89,18 @@ $java_guide"
 $java_guide"
   fi
   java_major=$(printf '%s\n' "$java_found" | awk -F. '{ if ($1 == "1" && NF >= 2) print $2 + 0; else print $1 + 0 }')
-  [ "$java_major" -ge 21 ] || fail "java $java_found is older than 21
+  [ "$java_major" -ge 25 ] || fail "java $java_found is older than 25
 $java_guide"
 }
 verify_sha() {
   file=$1
   expected=$2
   valid_sha "$expected" || fail "invalid checksum for $file"
-  expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')
   [ -f "$file" ] || fail "missing $file"
-  [ "$(hash_of "$file")" = "$expected" ] || fail "checksum mismatch for $file"
+  sha_matches "$file" "$expected" || fail "checksum mismatch for $file"
+}
+sha_matches() {
+  [ "$(hash_of "$1")" = "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" ]
 }
 mtime_of() {
   file=$1
@@ -370,52 +369,51 @@ assembly_ok() {
   expected=$(tr -d '[:space:]' < "$repo/.histos/assembly.sha256")
   verify_sha "$jar" "$expected"
 }
+# The client sha the manifest names for this platform. Fails when it names none.
+platform_client() {
+  [ -n "$platform" ] || return 1
+  named=$(json_string "$1" "$platform")
+  [ -n "$named" ] || return 1
+  printf '%s' "$named"
+}
+# A toolchain is ready when its jar and manifest are on disk and the client the manifest names for this platform is
+# executable. A ready toolchain runs without the network. A version's manifest never changes, so the copy is kept.
+toolchain_ready() {
+  dir=$home/toolchains/$1
+  [ -f "$dir/histos.jar" ] && [ -f "$dir/manifest.json" ] || return 1
+  if platform_client "$dir/manifest.json" >/dev/null; then [ -x "$dir/histos-client" ]; fi
+}
+# Fetch what the toolchain directory is missing, and check the jar and the client against the manifest.
 ensure_toolchain() {
   selected=$1
-  compile_client=$2
   dir=$home/toolchains/$selected
   mkdir -p "$dir"
   manifest=$dir/manifest.json
-  fetch "$dist/$selected-manifest.json" "$manifest"
+  if [ ! -f "$manifest" ] || [ "$(json_string "$manifest" version)" != "$selected" ]; then
+    fetch "$dist/$selected-manifest.json" "$manifest"
+  fi
   [ "$(json_string "$manifest" version)" = "$selected" ] || fail "manifest version is not $selected"
   jar_name=$(json_string "$manifest" jar)
   jar_sha=$(json_string "$manifest" jarSha256)
   [ -n "$jar_name" ] && [ -n "$jar_sha" ] || fail "manifest has no jar"
   jar=$dir/histos.jar
-  fetch "$dist/$jar_name" "$jar"
+  if [ -f "$jar" ] && ! sha_matches "$jar" "$jar_sha"; then rm -f "$jar"; fi
+  [ -f "$jar" ] || fetch "$dist/$jar_name" "$jar"
   verify_sha "$jar" "$jar_sha"
   client=$dir/histos-client
   origin=$dir/client.origin
-  if [ "$compile_client" = yes ]; then
-    command -v clang >/dev/null 2>&1 || fail "$clang_guide"
-    sources_sha=$(json_string "$manifest" sourcesSha256)
-    [ -n "$sources_sha" ] || fail "this version has no client sources"
-    archive=$dir/sources.tar
-    fetch "$dist/$selected-sources.tar" "$archive"
-    verify_sha "$archive" "$sources_sha"
-    work=$(mktemp -d)
-    tar -xf "$archive" -C "$work"
-    check_java
-    ( cd "$work" && "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" client ) || fail "client compile failed"
-    [ -f "$work/dist/histos-client" ] || fail "client compile did not write a binary"
-    cp "$work/dist/histos-client" "$client"
-    chmod +x "$client"
-    printf 'local\n' > "$origin"
-    rm -rf "$work"
-  elif [ -n "$platform" ] && client_sha=$(json_string "$manifest" "$platform") && [ -n "$client_sha" ]; then
-    fetched=$dir/histos-client.download
-    fetch "$dist/$selected-client-$platform" "$fetched"
-    verify_sha "$fetched" "$client_sha"
-    mv "$fetched" "$client"
-    chmod +x "$client"
-    printf 'prebuilt\n' > "$origin"
-  elif [ ! -x "$client" ]; then
-    rm -f "$client" "$origin"
-    if snapshot_line "$selected" >/dev/null; then
-      echo "histos $selected is a snapshot. Snapshots have no prebuilt client$(release_client). java -jar will run." >&2
-    else
-      echo "histos $selected has no prebuilt client for ${platform:-this platform}. java -jar will run. --compile-client links one when clang is available." >&2
+  if client_sha=$(platform_client "$manifest"); then
+    if [ ! -x "$client" ] || ! sha_matches "$client" "$client_sha"; then
+      fetched=$dir/histos-client.download
+      fetch "$dist/$selected-client-$platform" "$fetched"
+      verify_sha "$fetched" "$client_sha"
+      mv "$fetched" "$client"
+      chmod +x "$client"
+      printf 'prebuilt\n' > "$origin"
     fi
+  else
+    rm -f "$client" "$origin"
+    echo "histos $selected has no prebuilt client for ${platform:-this platform}$(release_client). java -jar will run." >&2
   fi
 }
 # "; <release> has one" when the newest release `update` saw names a client for this platform.
@@ -539,16 +537,11 @@ histos help self"
         ;;
       install)
         shift
-        selected=${1:-}
-        [ -n "$selected" ] || fail "usage: histos toolchain install <version>"
-        shift || true
-        compile=no
-        for flag in "$@"; do
-          [ "$flag" = --compile-client ] && compile=yes
-        done
+        [ "$#" -eq 1 ] && [ -n "$1" ] || fail "usage: histos toolchain install <version>"
+        selected=$1
         channel_refresh=every-call
         selected=$(resolve_channel "$selected")
-        ensure_toolchain "$selected" "$compile"
+        ensure_toolchain "$selected"
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
         exit 0
         ;;
@@ -561,12 +554,10 @@ histos help toolchain" ;;
   update)
     shift
     make_default=no
-    compile=no
     form=keep
     for flag in "$@"; do
       case $flag in
         --make-default) make_default=yes ;;
-        --compile-client) compile=yes ;;
         --stable) stable=yes ;;
         --freeze|--follow)
           [ "$form" = keep ] || [ "$form" = "${flag#--}" ] || fail "--freeze and --follow are opposites. Pass one."
@@ -590,7 +581,7 @@ histos help toolchain" ;;
       write_default "$next"
     fi
     selected=$(resolve_channel "$next")
-    ensure_toolchain "$selected" "$compile"
+    ensure_toolchain "$selected"
     exit 0
     ;;
 esac
@@ -611,6 +602,5 @@ else
   selected=$(resolve_channel "$current")
 fi
 version=$selected
-dir=$home/toolchains/$selected
-if [ ! -f "$dir/histos.jar" ]; then ensure_toolchain "$selected" no; fi
-exec_jar "$dir/histos.jar" "$repo" "$@"
+toolchain_ready "$selected" || ensure_toolchain "$selected"
+exec_jar "$home/toolchains/$selected/histos.jar" "$repo" "$@"
