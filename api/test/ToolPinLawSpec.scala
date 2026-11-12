@@ -32,10 +32,11 @@ object ToolPinLawSpec extends ZIOSpecDefault:
     test("a clang major and a node floor are positive, and a job timeout is 1 to 360"):
       check(counts): raw =>
         val positive = raw > 0
-        val minutes  = JobTimeout.admits(raw)
+        val minutes  = 1 <= raw && raw <= 360
         assertTrue(
           ClangMajor.from(raw).map(_.value) == (if positive then Right(raw) else Left(ClangError.NotPositive(raw))),
           NodeFloor.from(raw).map(_.value) == (if positive then Right(raw) else Left(NodeFloorError.NotPositive(raw))),
+          JobTimeout.admits(raw) == minutes,
           JobTimeout.from(raw) == (
             if minutes then Right(JobTimeout.Minutes(raw)) else Left(JobTimeoutError(raw))
           ),
@@ -58,8 +59,11 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         NodePath.from("/usr/bin/../bin/node").map(_.value) == Right("/usr/bin/node"),
         NodePath.from("") == Left(NodePathError.Empty),
         NodePath.from("   ") == Left(NodePathError.Empty),
+        NodePath.from("/node").map(_.value) == Right("/node"),
         NodePath.from("node") == Left(NodePathError.Relative("node")),
+        NodePath.from("./node") == Left(NodePathError.Relative("./node")),
         NodePath.from("/usr/bin/npm") == Left(NodePathError.NotBinary("/usr/bin/npm")),
+        NodePath.from("/usr/bin/Node") == Left(NodePathError.NotBinary("/usr/bin/Node")),
         NodePath.from("\u0000") == Left(NodePathError.Invalid("\u0000")),
       )
     ,
@@ -79,9 +83,6 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         Promote.from("copy") == Left(PromoteError.Unknown("copy")),
         envs.forall((env, token) => env.token == token),
         kinds.forall((kind, token) => kind.token == token),
-        DocCheck.values.toSet == Set(DocCheck.Off, DocCheck.On),
-        Resolution.values.toSet == Set(Resolution.Solve, Resolution.Lock),
-        TestStore.values.toSet == Set(TestStore.Off, TestStore.Local, TestStore.Remote),
       )
     ,
     test("scalac flags render their canonical name and their argv, in call order"):

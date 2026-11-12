@@ -144,15 +144,22 @@ object VersionDecisionLawSpec extends ZIOSpecDefault:
         single.get(api).isEmpty,
       )
     ,
-    test("ship numbers order by major, then minor, then patch"):
-      val part = Gen.int(0, 3)
-      val gen  = (part <*> part <*> part).map((major, minor, patch) => ShipNumber.trusted(major, minor, patch))
-      check(gen, gen): (left, right) =>
+    test("ship numbers order by major, then minor, then patch, as numbers and not as text"):
+      val part      = Gen.int(0, 120)
+      val gen       = (part <*> part <*> part).map((major, minor, patch) => ShipNumber.trusted(major, minor, patch))
+      val order     = Ordering[ShipNumber]
+      val generated = check(gen, gen): (left, right) =>
         val tuple = Ordering[(Int, Int, Int)].compare(
           (left.major, left.minor, left.patch),
           (right.major, right.minor, right.patch),
         )
-        assertTrue(Ordering[ShipNumber].compare(left, right).sign == tuple.sign)
+        assertTrue(order.compare(left, right).sign == tuple.sign)
+      generated.map:
+        _ && assertTrue(
+          order.lt(ShipNumber.trusted(1, 9, 0), ShipNumber.trusted(1, 10, 0)),
+          order.lt(ShipNumber.trusted(9, 0, 0), ShipNumber.trusted(10, 0, 0)),
+          order.lt(ShipNumber.trusted(1, 0, 9), ShipNumber.trusted(1, 0, 10)),
+        )
     ,
     test("a pin lag names the command that moves that kind of pin"):
       val release = PinLag.NewerRelease(one, two)

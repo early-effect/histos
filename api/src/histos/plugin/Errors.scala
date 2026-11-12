@@ -65,7 +65,7 @@ enum PluginRunError:
   case MissingArg(name: ParamName)
   case MissingNote(module: ProjectName, key: NoteKey)
   case Unknown(id: PluginTaskId)
-  case Cycle(path: List[PluginTaskId])
+  case Cycle(path: ::[PluginTaskId])
   case Defect(binary: String)
   case EngineLeak(binary: String)
   case Linkage(binary: String)

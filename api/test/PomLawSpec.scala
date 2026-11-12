@@ -35,13 +35,5 @@ object PomLawSpec extends ZIOSpecDefault:
         ScmConnection.from("scm:") == Left(ScmConnectionError.Bad("scm:")),
         ScmConnection.from("git:somewhere") == Left(ScmConnectionError.Bad("git:somewhere")),
         ScmConnection.from("scm:git:has space") == Left(ScmConnectionError.Bad("scm:git:has space")),
-      )
-    ,
-    test("a pom fact names the missing block"):
-      assertTrue(
-        PomFact.License.word == "a license",
-        PomFact.Developer.word == "a developer",
-        PomFact.Scm.word == "an scm",
-        OrganizationFacts.empty == OrganizationFacts(),
       ),
   )

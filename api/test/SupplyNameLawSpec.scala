@@ -82,20 +82,6 @@ object SupplyNameLawSpec extends ZIOSpecDefault:
         Purl.from("maven/dev.zio/zio@2") == Left(PurlError.Bad("maven/dev.zio/zio@2")),
       )
     ,
-    test("a CVSS 3.1 vector bands by its base score, and a prefix is still low"):
-      val critical = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-      val high     = "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-      val moderate = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-      val low      = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N"
-      assertTrue(
-        Cvss.from(critical).map(_.band) == Right(Severity.Critical),
-        Cvss.from(high).map(_.band) == Right(Severity.High),
-        Cvss.from(moderate).map(_.band) == Right(Severity.Moderate),
-        Cvss.from(low).map(_.band) == Right(Severity.Low),
-        Cvss.from("CVSS:3.1/").map(_.band) == Right(Severity.Low),
-        Cvss.from("CVSS:3.0/AV:N") == Left(CvssError.Bad("CVSS:3.0/AV:N")),
-      )
-    ,
     test("a severity word maps onto the rank, and at least follows that rank"):
       val order = List(Severity.Unknown, Severity.Low, Severity.Moderate, Severity.High, Severity.Critical)
       val words = List(

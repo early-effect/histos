@@ -39,12 +39,16 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
         PluginLoadError.ReservedPackage("java.lang.String") -> "'java.lang.String' is in a reserved package",
         PluginLoadError.EngineLeak(PluginCoordinate.Module(moduleName), "histos.Graph") ->
           s"plugin ${moduleName.value} links 'histos.Graph'",
+        PluginLoadError.EngineLeak(PluginCoordinate.Published(binary), "histos.schedule.Sendable") ->
+          s"plugin ${binary.render} links 'histos.schedule.Sendable'",
         PluginLoadError.BuildLeak("histos.Graph") ->
           "the build links 'histos.Graph', and no plugin class asked for it",
         PluginLoadError.IdMismatch(plugin, other) ->
           s"plugin ${plugin.value} loaded as ${other.value}",
         PluginLoadError.Defect(PluginCoordinate.Published(java), "java.lang.ExceptionInInitializerError") ->
           s"plugin ${java.render} failed while loading (java.lang.ExceptionInInitializerError)",
+        PluginLoadError.Defect(PluginCoordinate.Module(moduleName), "java.lang.ExceptionInInitializerError") ->
+          s"plugin ${moduleName.value} failed while loading (java.lang.ExceptionInInitializerError)",
         PluginLoadError.Io(PluginIo.Read(Path.of("read.bin")))       -> "plugin read failed at read.bin",
         PluginLoadError.Io(PluginIo.Resolve(Path.of("resolve.bin"))) -> "plugin resolve failed at resolve.bin",
         PluginLoadError.Io(PluginIo.Compile(Path.of("compile.bin"))) -> "plugin compile failed at compile.bin",
@@ -57,7 +61,7 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
         full.render == "dev.earlyeffect:::specular:0.2.0",
       )
     ,
-    test("a run error is that sentence, and a cycle joins the tasks it was given"):
+    test("a run error is that sentence, and a cycle joins its path from the task it closes on"):
       val detail = PluginDetail("runs the task")
       val rows   = List(
         PluginRunError.Failed(detail)                    -> "runs the task",
@@ -65,10 +69,10 @@ object PluginMessageLawSpec extends ZIOSpecDefault:
         PluginRunError.ExtraOutput("dist/extra.txt")     -> "plugin wrote 'dist/extra.txt', which was not declared",
         PluginRunError.MissingArg(ParamName("out"))      -> "plugin argument out is missing",
         PluginRunError.MissingNote(ProjectName("core"), NoteKey("role")) -> "module core has no note role",
-        PluginRunError.Unknown(echo)                        -> s"plugin task ${echo.render} is not in the graph",
-        PluginRunError.Cycle(Nil)                           -> "plugin task cycle ",
-        PluginRunError.Cycle(List(echo))                    -> "plugin task cycle test.echo/echo",
-        PluginRunError.Cycle(List(echo, site))              -> "plugin task cycle test.echo/echo -> test.echo/site",
+        PluginRunError.Unknown(echo)                     -> s"plugin task ${echo.render} is not in the graph",
+        PluginRunError.Cycle(::(echo, List(echo)))       -> "plugin task cycle test.echo/echo -> test.echo/echo",
+        PluginRunError.Cycle(::(echo, List(site, echo))) ->
+          "plugin task cycle test.echo/echo -> test.echo/site -> test.echo/echo",
         PluginRunError.Defect("java.lang.RuntimeException") -> "plugin task failed (java.lang.RuntimeException)",
         PluginRunError.EngineLeak("histos.Graph")           -> "plugin task links 'histos.Graph'",
         PluginRunError.Linkage("histos.Missing")            -> "plugin task is missing class histos.Missing",

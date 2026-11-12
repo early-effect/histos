@@ -30,12 +30,12 @@ object PluginStepsLawSpec extends ZIOSpecDefault:
       val child   = declared(childName, List(TaskDep.Same(packName)))
       val known   = Map(packId -> pack, midId -> mid, childId -> child)
       val cycle   = plan(packId, known.get, _ => Right(Nil), _ => Right(Nil))
-      val unknown = plan(packId, _ => None, _ => Left(PluginRunError.Cycle(List(childId))), _ => Right(Nil))
+      val unknown = plan(packId, _ => None, _ => Left(PluginRunError.Cycle(::(childId, Nil))), _ => Right(Nil))
       val cells   = plan(
         packId,
         _ => Some(declared(packName, Nil)),
         _ => Left(PluginRunError.Unknown(childId)),
-        _ => Left(PluginRunError.Cycle(List(packId))),
+        _ => Left(PluginRunError.Cycle(::(packId, Nil))),
       )
       val missed = plan(
         packId,
@@ -44,7 +44,7 @@ object PluginStepsLawSpec extends ZIOSpecDefault:
         _ => Right(Nil),
       )
       assertTrue(
-        cycle == Left(PluginFault.Task(PluginRunError.Cycle(List(packId, midId, childId, packId)))),
+        cycle == Left(PluginFault.Task(PluginRunError.Cycle(::(packId, List(midId, childId, packId))))),
         unknown == Left(PluginFault.Task(PluginRunError.Unknown(packId))),
         cells == Left(PluginFault.Task(PluginRunError.Unknown(childId))),
         missed == Left(PluginFault.Task(PluginRunError.Unknown(childId))),

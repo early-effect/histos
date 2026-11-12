@@ -34,44 +34,34 @@ object PinTextLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a timeout, a node floor, and a node path each say why they were refused"):
-      val tools = RunnerTools(
-        Some(NodeFloor.trusted(25)),
-        Some(ToolRevision.trusted("21.0.0")),
-        None,
-        None,
-      )
-      val withPath = tools.copy(nodePath = Some(NodePath.trusted("/usr/bin/node")))
       assertTrue(
         JobTimeoutError(0).message == "a job timeout is between 1 and 360 minutes, not 0",
         JobTimeoutError(361).message == "a job timeout is between 1 and 360 minutes, not 361",
-        JobTimeout.Unbounded != JobTimeout.default,
-        JobTimeout.Unbounded != JobTimeout.Minutes(30),
         NodeFloorError.NotPositive(0).message == "0 is not a Node major",
         NodeFloorError.NotPositive(-2).message == "-2 is not a Node major",
-        NodePath.from("/usr/bin/Node") == Left(NodePathError.NotBinary("/usr/bin/Node")),
-        NodePath.from("./node") == Left(NodePathError.Relative("./node")),
-        NodePath.from("/node").map(_.value) == Right("/node"),
         NodePathError.Empty.message == "is empty",
         NodePathError.Relative("./node").message == "is not absolute: ./node",
         NodePathError.NotBinary("/usr/bin/Node").message == "is not a node binary: /usr/bin/Node",
         NodePathError.Invalid("\u0000").message == "is not a path: \u0000",
-        RunnerTools.empty == RunnerTools(None, None, None, None),
-        withPath.node == tools.node,
-        withPath.llvm == tools.llvm,
-        withPath.playwright == None,
-        withPath.nodePath.map(_.value) == Some("/usr/bin/node"),
       )
     ,
-    test("a framework allows a dollar, and a provider library fails on the empty side or the whitespace"):
+    test("a framework is a java binary name, a provider library is a non-empty pair, and zio names that framework"):
       val framework = FrameworkClass.trusted("zio.test.ZTestFramework")
       assertTrue(
+        FrameworkClass.from("histos.Client").map(_.value) == Right("histos.Client"),
         FrameworkClass.from("_Foo").map(_.value) == Right("_Foo"),
         FrameworkClass.from("a.b$c").map(_.value) == Right("a.b$c"),
+        FrameworkClass.from("") == Left(FrameworkClassError.Empty),
+        FrameworkClass.from("a-b") == Left(FrameworkClassError.Bad("a-b")),
         FrameworkClass.from("a..b") == Left(FrameworkClassError.Bad("a..b")),
         FrameworkClass.from("a.$b") == Left(FrameworkClassError.Bad("a.$b")),
         FrameworkClassError.Empty.message == "a test framework is not empty",
         FrameworkClassError.Bad("a-b").message == "'a-b' is not a test framework",
+        ProviderLibrary.from("dev.zio", "zio-test-sbt").map(library => (library.organization, library.name)) ==
+          Right(("dev.zio", "zio-test-sbt")),
+        ProviderLibrary.from("", "zio") == Left(ProviderLibraryError.Empty),
         ProviderLibrary.from("dev.zio", "") == Left(ProviderLibraryError.Empty),
+        ProviderLibrary.from("dev zio", "zio") == Left(ProviderLibraryError.Bad("dev zio", "zio")),
         ProviderLibrary.from("dev.zio", "zio test") == Left(ProviderLibraryError.Bad("dev.zio", "zio test")),
         ProviderLibrary.from("  ", "zio") == Left(ProviderLibraryError.Bad("  ", "zio")),
         ProviderLibraryError.Empty.message == "a test provider library is not empty",
@@ -82,5 +72,9 @@ object PinTextLawSpec extends ZIOSpecDefault:
           (provider.framework.value, provider.library.organization, provider.library.name)
         ) == Right(("zio.test.ZTestFramework", "dev.zio", "zio-test")),
         TestProvider(framework, "dev.zio", "zio test") == Left(ProviderLibraryError.Bad("dev.zio", "zio test")),
+        TestProvider(framework, "", "zio") == Left(ProviderLibraryError.Empty),
+        TestProvider.Zio.framework.value == "zio.test.sbt.ZTestFramework",
+        TestProvider.Zio.library.organization == "dev.zio",
+        TestProvider.Zio.library.name == "zio-test-sbt",
       ),
   )

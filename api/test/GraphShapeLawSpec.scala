@@ -52,8 +52,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         here,
       )
       assertTrue(
-        Module.chain(module, Nil, Jvm).isEmpty,
-        Module.chain(module, Nil, Js).isEmpty,
+        Module.chain(module, List(module), Jvm).isEmpty,
+        Module.chain(module, List(module), Js).isEmpty,
         ProjectDep(missing, None).applies(Js),
         !ProjectDep(missing, Some(List(Jvm))).applies(Js),
       )
@@ -151,8 +151,8 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         Projects(script).map(jsOf("ui")) == Right(("firefox", "commonjs", Some("1.22.0"))),
         Projects(js("ui")).map(jsOf("ui")) == Right(("node", "nomodule", None)),
         Projects(jvm("core").in(path"modules/core")).map(baseOf("core")) == Right("modules/core"),
-        refused.nonEmpty,
-        clangOnJvm.nonEmpty,
+        refused.map(_.message) == List("jsEnv is a Js setting, and this module does not build Js"),
+        clangOnJvm.map(_.message) == List("clang is a Native setting, and this module does not build Native"),
       )
     ,
     test("organization settings accumulate, and ci replaces a timeout set before it"):
@@ -223,11 +223,7 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
       assertTrue(
         Projects().map(_.tools) == Right(ToolCatalog.default),
         Projects.tools(replaced)().map(_.tools) == Right(replaced),
-      )
-    ,
-    test("a fixed build is the graph it was given"):
-      val graph = ProjectGraph.trusted(Nil)
-      assertTrue(HistosBuild.fixed(graph).graph == Right(graph)),
+      ),
   )
 
   private def jvm(name: String) = module(name, Jvm)(scala3)

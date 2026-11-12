@@ -204,9 +204,7 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
           val swapped = s"${why.lead} on ${repo.value}."
           val token   = SupplyDiagnostic.DefaultTokenBlind(repo, why).summary
           val allow   = SupplyDiagnostic.AllowPullRequestsBlind(repo, why).summary
-          token.contains("workflow permissions") && token.contains(repo.value) && token != swapped && allow == token
-        ,
-        Sight.values.toSet == Set(Sight.Known, Sight.Unseen, Sight.Unreadable),
+          token.contains("workflow permissions") && token.contains(repo.value) && token != swapped && allow == token,
       ),
   )
 

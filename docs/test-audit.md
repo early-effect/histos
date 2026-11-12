@@ -64,38 +64,38 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## api
 
-- [ ] A1 `BuildNameLawSpec:52` MERGE. The same parsers as `PinTextLawSpec:65`. One ProviderLibrary, TestProvider, FrameworkClass law.
-- [ ] A2 `BuildNameLawSpec:65` WEAK. L73 compares `Resolver.Central` to itself, L74 tests enum `!=`. Delete L73-74.
-- [ ] A3 `BundleLawSpec:81, :85, :89` WEAK. `errors.nonEmpty` accepts any compile error. Assert the macro's message ("has no layer", "is not an object", "is not a HistosPlugin and has no layer").
-- [ ] A4 `CiArrangeLawSpec:78` REWRITE. Copies `Combine.on` and `Combine.cond`. Assert through `JobCheck.arrange` that a `Ci ++ Dispatch` job carries both event lists, or delete.
-- [ ] A5 `GraphOpenLawSpec:17` MERGE. The ship asserts and helpers repeat `GraphShapeLawSpec:206`. Drop them here.
-- [ ] A6 `GraphShapeLawSpec:43` WEAK. Passes `Nil` modules, so `chain` is empty for any implementation. Pass `List(module)`.
-- [ ] A7 `GraphShapeLawSpec:141` WEAK. `nonEmpty` on any snippet error. Assert the missing `<:< P` evidence text, with `@implicitNotFound` if needed.
-- [ ] A8 `GraphShapeLawSpec:228` DELETE. Restates `def graph = Right(found)`.
-- [ ] A9 `OrganizeLawSpec:28` (and the `:40` overloads) WEAK. `Uses(Nil)` and `Shape` never reads plugins. Use `use(Echo)` and add plugin ids to `Shape`.
-- [ ] A10 `PinTextLawSpec:36` WEAK. Enum inequality, `val empty`, and case-class `copy`. Keep the message rows only.
-- [ ] A11 `PluginGrammarLawSpec:58` MERGE. The same `Cron.from` cases as `PluginSpec:229`. One Cron table.
-- [ ] A12 `PluginMessageLawSpec:60` REWRITE. Pins `"plugin task cycle "` for `Cycle(Nil)`, which the engine never builds. `Cycle(path: ::[PluginTaskId])` and delete the row.
-- [ ] A13 `PluginSpec:119` REWRITE. Copies the `reserved` literals. Assert `JobCheck.generated(g) ⊆ JobName.reserved` here. app asserts every Grammar built-in word is in `CommandName.reserved`.
-- [ ] A14 `PluginSpec:247` DELETE. Asserts the test's own `linkName` helper. Add the `EngineLeak(Published)` and `Defect(Module)` rows to `PluginMessageLawSpec:22` if they are missing.
-- [ ] A15 `PluginSpec:296` DELETE. Reads back `PluginFixture` defaults and repeats `ArgsLawSpec:15`.
-- [ ] A16 `PluginSpec:535` WEAK. `schedule.nonEmpty` on any error, and a fixture named `cron` with no cron. Assert the error names `cron`, and rename the fixture.
-- [ ] A17 `PluginSpec:570` MERGE. The same `JobCheck` arms as `JobCheckLawSpec:46`. One law with the exact `CiFault` values.
-- [ ] A18 `PomLawSpec:40` DELETE. Copies the `word` match, proven in full at `LocalPublishLawSpec:80`.
-- [ ] A19 `PublishLawSpec:23` WEAK. Reads back stub arguments. Read `secretNames` and `followUp` from `Sona.layer(mode)`.
-- [ ] A20 `PublishLawSpec:50` DELETE. `fromEffect` returns its arguments.
-- [ ] A21 `SessionLawSpec:64` REWRITE. Nine fixed asserts rerun inside `check`. Keep the two generated round trips there and move the fixed rows out.
-- [ ] A22 `ShipDraftLawSpec:17` DELETE. Reads back `trusted` constructor arguments.
-- [ ] A23 `ShipDraftLawSpec:46` DELETE. Tests case-class `copy`.
-- [ ] A24 `SupplyDiagnosticLawSpec:172` WEAK. L209 repeats `Sight.values`. Delete L209.
-- [ ] A25 `SupplyNameLawSpec:85` MERGE. The same CVSS vectors as `CvssBandLawSpec`. Move the 3.0 refusal and the new vectors into that table.
-- [ ] A26 `SupplyPolicyLawSpec:60` DELETE. One-line forwarders.
-- [ ] A27 `SupplyPolicyLawSpec:97` MERGE. Add `ServiceDown(_, FailOpen)` to `SentenceLawSpec:39`.
-- [ ] A28 `SupplyPolicyLawSpec:110` MERGE. Add the two-sha `HumanCommitsOnBranch` row to `SentenceLawSpec:39`.
-- [ ] A29 `ToolPinLawSpec:32` WEAK. Uses `JobTimeout.admits` as its own oracle. The oracle is the literal `1 <= raw && raw <= 360`.
-- [ ] A30 `ToolPinLawSpec:66` WEAK. L82-84 repeat enum `values`. Delete them.
-- [ ] A31 `VersionDecisionLawSpec:147` WEAK. `Gen.int(0, 3)` cannot tell string order from number order. Widen, and add `1.9.0 < 1.10.0`.
-- [ ] A32 `VersionOpenLawSpec:99` REWRITE. Builds the expected text from `ShipAdvice`'s own parts. Assert literal sentences.
+- [x] A1 `BuildNameLawSpec:52` MERGE. The same parsers as `PinTextLawSpec:65`. One ProviderLibrary, TestProvider, FrameworkClass law.
+- [x] A2 `BuildNameLawSpec:65` WEAK. L73 compares `Resolver.Central` to itself, L74 tests enum `!=`. Delete L73-74.
+- [x] A3 `BundleLawSpec:81, :85, :89` WEAK. `errors.nonEmpty` accepts any compile error. Assert the macro's message ("has no layer", "is not an object", "is not a HistosPlugin and has no layer").
+- [x] A4 `CiArrangeLawSpec:78` REWRITE. Copies `Combine.on` and `Combine.cond`. Assert through `JobCheck.arrange` that a `Ci ++ Dispatch` job carries both event lists, or delete.
+- [x] A5 `GraphOpenLawSpec:17` MERGE. The ship asserts and helpers repeat `GraphShapeLawSpec:206`. Drop them here.
+- [x] A6 `GraphShapeLawSpec:43` WEAK. Passes `Nil` modules, so `chain` is empty for any implementation. Pass `List(module)`.
+- [x] A7 `GraphShapeLawSpec:141` WEAK. `nonEmpty` on any snippet error. Assert the missing `<:< P` evidence text, with `@implicitNotFound` if needed.
+- [x] A8 `GraphShapeLawSpec:228` DELETE. Restates `def graph = Right(found)`.
+- [x] A9 `OrganizeLawSpec:28` (and the `:40` overloads) WEAK. `Uses(Nil)` and `Shape` never reads plugins. Use `use(Echo)` and add plugin ids to `Shape`.
+- [x] A10 `PinTextLawSpec:36` WEAK. Enum inequality, `val empty`, and case-class `copy`. Keep the message rows only.
+- [x] A11 `PluginGrammarLawSpec:58` MERGE. The same `Cron.from` cases as `PluginSpec:229`. One Cron table.
+- [x] A12 `PluginMessageLawSpec:60` REWRITE. Pins `"plugin task cycle "` for `Cycle(Nil)`, which the engine never builds. `Cycle(path: ::[PluginTaskId])` and delete the row.
+- [x] A13 `PluginSpec:119` REWRITE. Copies the `reserved` literals. Assert `JobCheck.generated(g) ⊆ JobName.reserved` here. app asserts every Grammar built-in word is in `CommandName.reserved`.
+- [x] A14 `PluginSpec:247` DELETE. Asserts the test's own `linkName` helper. Add the `EngineLeak(Published)` and `Defect(Module)` rows to `PluginMessageLawSpec:22` if they are missing.
+- [x] A15 `PluginSpec:296` DELETE. Reads back `PluginFixture` defaults and repeats `ArgsLawSpec:15`.
+- [x] A16 `PluginSpec:535` WEAK. `schedule.nonEmpty` on any error, and a fixture named `cron` with no cron. Assert the error names `cron`, and rename the fixture.
+- [x] A17 `PluginSpec:570` MERGE. The same `JobCheck` arms as `JobCheckLawSpec:46`. One law with the exact `CiFault` values.
+- [x] A18 `PomLawSpec:40` DELETE. Copies the `word` match, proven in full at `LocalPublishLawSpec:80`.
+- [x] A19 `PublishLawSpec:23` WEAK. Reads back stub arguments. Read `secretNames` and `followUp` from `Sona.layer(mode)`.
+- [x] A20 `PublishLawSpec:50` DELETE. `fromEffect` returns its arguments.
+- [x] A21 `SessionLawSpec:64` REWRITE. Nine fixed asserts rerun inside `check`. Keep the two generated round trips there and move the fixed rows out.
+- [x] A22 `ShipDraftLawSpec:17` DELETE. Reads back `trusted` constructor arguments.
+- [x] A23 `ShipDraftLawSpec:46` DELETE. Tests case-class `copy`.
+- [x] A24 `SupplyDiagnosticLawSpec:172` WEAK. L209 repeats `Sight.values`. Delete L209.
+- [x] A25 `SupplyNameLawSpec:85` MERGE. The same CVSS vectors as `CvssBandLawSpec`. Move the 3.0 refusal and the new vectors into that table.
+- [x] A26 `SupplyPolicyLawSpec:60` DELETE. One-line forwarders.
+- [x] A27 `SupplyPolicyLawSpec:97` MERGE. Add `ServiceDown(_, FailOpen)` to `SentenceLawSpec:39`.
+- [x] A28 `SupplyPolicyLawSpec:110` MERGE. Add the two-sha `HumanCommitsOnBranch` row to `SentenceLawSpec:39`.
+- [x] A29 `ToolPinLawSpec:32` WEAK. Uses `JobTimeout.admits` as its own oracle. The oracle is the literal `1 <= raw && raw <= 360`.
+- [x] A30 `ToolPinLawSpec:66` WEAK. L82-84 repeat enum `values`. Delete them.
+- [x] A31 `VersionDecisionLawSpec:147` WEAK. `Gen.int(0, 3)` cannot tell string order from number order. Widen, and add `1.9.0 < 1.10.0`.
+- [x] A32 `VersionOpenLawSpec:99` REWRITE. Builds the expected text from `ShipAdvice`'s own parts. Assert literal sentences.
 - [ ] A33 `JobCheckLawSpec:108` Check `Not(Event(Schedule))` against B1.
 
 ## wire

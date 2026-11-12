@@ -64,10 +64,13 @@ object SentenceLawSpec extends ZIOSpecDefault:
         SupplyFault.IgnoresDisallowed(List(id, AdvisoryId.trusted("ghsa-aaaa-bbbb-cccc"))).message ==
           "ignores are not allowed: ghsa-1234-abcd-ef09, ghsa-aaaa-bbbb-cccc",
         SupplyFault.ServiceDown(source, OutageStrategy.FailClosed).message == "osv is down",
+        SupplyFault.ServiceDown(source, OutageStrategy.FailOpen).message == "osv is down",
         SupplyFault.IdentityMissing.message ==
           "Identity.FirstDeveloper needs one developer on the organization",
         SupplyFault.HumanCommitsOnBranch(branch, List(sha)).message ==
           "histos/security has human commits 0123456789ab",
+        SupplyFault.HumanCommitsOnBranch(branch, List(sha, other)).message ==
+          "histos/security has human commits 0123456789ab, abcdef012345",
         SupplyFault.HeadMoved(branch, sha).message ==
           "histos/security moved from 0123456789abcdef0123456789abcdef01234567",
       )

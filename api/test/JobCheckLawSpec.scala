@@ -43,22 +43,51 @@ object JobCheckLawSpec extends ZIOSpecDefault:
           "DuplicateSite",
       )
     ,
-    test("a need may name a generated job, and not itself, a missing job, or a repeated job"):
-      val nightly = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("test")))
-      val doubled = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("test"), JobName("test")))
-      val itself  = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("nightly")))
-      val doc     = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("scaladoc")))
-      val cover   = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("coverage")))
+    test("a need names a generated job, and not itself, an absent or ungenerated job, or a repeat"):
+      val nightly                                        = JobName("nightly")
+      val core                                           = List(coreModule)
+      val placed: Either[BuildError, List[WorkflowFile]] = Right(List(WorkflowFile.Ci))
+      def needing(needs: JobName*): CiJob                = TaskJob(nightly, TaskName("echo"), needs = needs.toList)
+      def unknown(need: JobName): Either[BuildError, List[Placed]] =
+        Left(BuildError.Ci(CiFault.UnknownNeed(nightly, need)))
       assertTrue(
-        fault(arrange(List(nightly))) == "UnknownNeed",
-        fault(arrange(List(nightly), projects = List(coreModule))) == "graph",
-        fault(arrange(List(doubled), projects = List(coreModule))) == "DuplicateNeed",
-        fault(arrange(List(itself), projects = List(coreModule))) == "UnknownNeed",
-        fault(arrange(List(doc), projects = List(coreModule))) == "UnknownNeed",
-        fault(arrange(List(doc), projects = List(coreModule), doc = DocCheck.On)) == "graph",
-        fault(arrange(List(cover), projects = List(coreModule))) == "UnknownNeed",
-        fault(arrange(List(cover), projects = List(coreModule), coverage = CoverageJob.Ask(CoverageFloors()))) ==
-          "graph",
+        arrange(List(needing(JobName("test")))) == unknown(JobName("test")),
+        fileOf(arrange(List(needing(JobName("test"))), projects = core)) == placed,
+        arrange(List(needing(JobName("test"), JobName("test"))), projects = core) ==
+          Left(BuildError.Ci(CiFault.DuplicateNeed(nightly, JobName("test")))),
+        arrange(List(needing(nightly)), projects = core) == unknown(nightly),
+        arrange(List(needing(JobName("absent"))), projects = core) == unknown(JobName("absent")),
+        arrange(List(needing(JobName("pages"))), projects = core) == unknown(JobName("pages")),
+        arrange(List(needing(JobName("scaladoc"))), projects = core) == unknown(JobName("scaladoc")),
+        fileOf(arrange(List(needing(JobName("scaladoc"))), projects = core, doc = DocCheck.On)) == placed,
+        arrange(List(needing(JobName("coverage"))), projects = core) == unknown(JobName("coverage")),
+        fileOf(
+          arrange(List(needing(JobName("coverage"))), projects = core, coverage = CoverageJob.Ask(CoverageFloors()))
+        ) == placed,
+      )
+    ,
+    test("a ci and dispatch trigger stays in ci.yml with both event lists, and either condition runs it"):
+      val both = TaskJob(JobName("both"), TaskName("echo"), trigger = Trigger.Ci ++ Trigger.Dispatch)
+      val cond = Cond.AnyOf(
+        List(
+          Cond.AnyOf(List(Cond.Event(EventKind.PullRequest), Cond.DefaultBranchPush)),
+          Cond.Event(EventKind.Dispatch),
+        )
+      )
+      val events = List(
+        On.PullRequest(List(PullType.Opened, PullType.Synchronize, PullType.Reopened), Nil),
+        On.Push(List(PushBranch.Default), Nil, Nil),
+        On.Dispatch(Nil),
+      )
+      assertTrue(
+        arrange(List(both)).map(_.map(placed => (placed.file, placed.render))) == Right(
+          List(
+            (
+              WorkflowFile.Ci,
+              JobRender.Task(TaskArrange(JobName("both"), TaskName("echo"), JobPermissions.read, Nil, cond, events)),
+            )
+          )
+        )
       )
     ,
     test("a runner, an action, a grant, and a secret have to be on the graph"):
