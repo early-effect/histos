@@ -17,8 +17,8 @@ object WorkflowFileLawSpec extends ZIOSpecDefault:
   given CiBranch = CiBranch("main")
 
   private val graph    = Projects(module("core", Jvm)(scala3))
-  private val finished = Sona.described(ReleaseMode.Automatic)
-  private val held     = Sona.described(ReleaseMode.Hold)
+  private val finished = SonaProbe(ReleaseMode.Automatic)
+  private val held     = SonaProbe(ReleaseMode.Hold)
   private val root     = Path.of("/repo")
 
   private val testStep =

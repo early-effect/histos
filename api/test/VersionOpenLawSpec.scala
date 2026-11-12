@@ -97,25 +97,37 @@ object VersionOpenLawSpec extends ZIOSpecDefault:
       )
     ,
     test("ship advice is the sentence doctor and publish share"):
-      val compile = CiVersion(one)
-      val missing = SessionError.MissingBranch
       assertTrue(
         ShipAdvice.versionsCommand == "histos run versions",
+        ShipAdvice.snapshotExport ==
+          "export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default",
         ShipAdvice.releasesFile ==
           "Create releases (an empty file is fine) or add a line: <ship> matches, <ship> moved, or <ship> unknown.",
         ShipAdvice.unchecked ==
-          s"the release registry was not checked, so nothing publishes. ${ShipAdvice.releasesFile}",
-        ShipAdvice.unreadable == s"could not read releases. ${ShipAdvice.releasesFile}",
-        ShipAdvice.development(histos, compile) ==
-          s"publishing ${histos.value} ${one.render} needs export HISTOS_SESSION=release. " +
-          s"Then run ${ShipAdvice.versionsCommand}.",
-        ShipAdvice.incomplete(missing) ==
-          s"${missing.message} ${ShipAdvice.snapshotExport}, or export HISTOS_SESSION=release. " +
-          s"Then run ${ShipAdvice.versionsCommand}.",
+          "the release registry was not checked, so nothing publishes. Create releases (an empty file is fine) " +
+          "or add a line: <ship> matches, <ship> moved, or <ship> unknown.",
+        ShipAdvice.unreadable ==
+          "could not read releases. Create releases (an empty file is fine) or add a line: <ship> matches, " +
+          "<ship> moved, or <ship> unknown.",
+        ShipAdvice.development(histos, CiVersion(one)) ==
+          "publishing histos 1.4.2 needs export HISTOS_SESSION=release. Then run histos run versions.",
+        ShipAdvice.incomplete(SessionError.MissingBranch) ==
+          "a snapshot session needs HISTOS_BRANCH, default or other. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "or export HISTOS_SESSION=release. Then run histos run versions.",
+        ShipAdvice.incomplete(SessionError.Unknown("nope")) ==
+          "'nope' is not a session. Sessions are development, snapshot, pr, and release. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "or export HISTOS_SESSION=release. Then run histos run versions.",
+        ShipAdvice.incomplete(SessionError.BadBranch(BranchError.Unknown("main"))) ==
+          "'main' is not a branch. A branch is default or other. " +
+          "Run export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default, " +
+          "or export HISTOS_SESSION=release. Then run histos run versions.",
         ShipAdvice.shouldBump(histos, one, BumpReason.Shadowed) ==
-          s"${histos.value} ${one.render} is released and has changes since its tag. Run histos bump.",
-        ShipAdvice.shouldBump(histos, one, BumpReason.Tagged) ==
-          s"${histos.value} ${one.render} is already released. Run histos bump.",
+          "histos 1.4.2 is released and has changes since its tag. Run histos bump.",
+        ShipAdvice.shouldBump(histos, one, BumpReason.Tagged) == "histos 1.4.2 is already released. Run histos bump.",
+        ShipAdvice.shouldBump(histos, one, BumpReason.Published(two)) ==
+          "histos 1.4.3 is published and the catalog still names 1.4.2. Run histos bump.",
       ),
   )
 

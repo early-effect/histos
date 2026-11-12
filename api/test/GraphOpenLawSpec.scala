@@ -14,10 +14,9 @@ object GraphOpenLawSpec extends ZIOSpecDefault:
   )
 
   def spec = suite("graph open laws")(
-    test("splits, a catalog, facts, and runner tools survive one organized build, and lookup is that project"):
+    test("splits, facts, and runner tools survive one organized build, and lookup is that project"):
       val core   = jvm("core")
       val root   = aggregate("root", core)
-      val row    = Ship("histos").next(1, 4, 2)(core).description(pom"ship").url(site)
       val first  = Scm(old, connection"scm:git:git@github.com:early-effect/old.git")
       val second = Scm(site, connection"scm:git:git@github.com:early-effect/histos.git")
       val built  = Projects
@@ -29,7 +28,7 @@ object GraphOpenLawSpec extends ZIOSpecDefault:
         .url(site)
         .scm(second)
         .runnerTools(tools)
-        .jobTimeout(JobTimeout.Unbounded)(Splits.of(Axis.Module), ships(row), root, core)
+        .jobTimeout(JobTimeout.Unbounded)(Splits.of(Axis.Module), root, core)
       assertTrue(
         built.map(_.splits.axes) == Right(Set(Axis.Module)),
         built.map(_.organization.map(_.value)) == Right(Some("rocks.earlyeffect")),
@@ -44,8 +43,6 @@ object GraphOpenLawSpec extends ZIOSpecDefault:
             url = Some(site),
           )
         ),
-        built.map(shipNumber) == Right(Some("1.4.2")),
-        built.map(shipText) == Right(Some(("ship", site.value))),
         built.map(kindOf(_, "core")) == Right(Right(Some("module"))),
         built.map(kindOf(_, "root")) == Right(Right(Some("aggregate"))),
         built.map(kindOf(_, "missing")) == Right(Right(None)),
@@ -67,18 +64,6 @@ object GraphOpenLawSpec extends ZIOSpecDefault:
           case Some(_: Module)    => Some("module")
           case Some(_: Aggregate) => Some("aggregate")
           case None               => None
-
-  private def shipNumber(graph: ProjectGraph): Option[String] =
-    graph.catalog.ships.collectFirst { case line: version.Ship.Line => line.number.render }
-
-  private def shipText(graph: ProjectGraph): Option[(String, String)] =
-    graph.catalog.ships
-      .collectFirst { case line: version.Ship.Line =>
-        (line.description.map(_.value), line.url.map(_.value))
-      }
-      .flatMap:
-        case (Some(text), Some(found)) => Some((text, found))
-        case _                         => None
 
   private def assemblyOf(graph: ProjectGraph): Option[(Publication, Option[plugin.RepoPath])] =
     graph.projects.collectFirst:

@@ -17,11 +17,11 @@ object JobCondLawSpec extends ZIOSpecDefault:
       On.Dispatch(List(DispatchInput(InputKey("mode"), InputKind.Text, Some("fast")))),
       On.Release,
     )
+    // A label is on a pull request and an input is on a dispatch, so no one run has both.
     def cond: Cond = Cond.All(
       List(
         Cond.True,
-        Cond.HasLabel("ready"),
-        Cond.InputIs(InputKey("mode"), "fast"),
+        Cond.AnyOf(List(Cond.HasLabel("ready"), Cond.InputIs(InputKey("mode"), "fast"))),
         Cond.Affected(ProjectName("core")),
         Cond.AffectedAll,
         Cond.Not(Cond.Event(EventKind.Push)),

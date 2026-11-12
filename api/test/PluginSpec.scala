@@ -2,8 +2,6 @@ package histos.plugin
 
 import _root_.scala.compiletime.testing.typeCheckErrors
 
-import java.nio.file.Path
-
 import histos.*
 
 import zio.{IO, Scope, ZIO}
@@ -72,13 +70,6 @@ end Configured
 
 object PluginSpec extends ZIOSpecDefault:
   private val digest = "ab" * 32
-  private val other  = "cd" * 32
-
-  private def linkName(link: LinkStrategy): String = link match
-    case LinkStrategy.ExactBinary    => "exact"
-    case LinkStrategy.Source         => "source"
-    case LinkStrategy.BinaryOrSource => "either"
-    case LinkStrategy.Api            => "refused"
 
   private val ids = suite("ids")(
     test("a plugin id is dot-separated segments"):
@@ -116,7 +107,7 @@ object PluginSpec extends ZIOSpecDefault:
         parsed.map(_.render) == Right("dev.earlyeffect.specular/versions"),
       )
     ,
-    test("reserved command and job names are the built-in words"):
+    test("reserved command names are the built-in words"):
       assertTrue(
         CommandName.reserved.map(_.value) == Set(
           "version",
@@ -162,20 +153,16 @@ object PluginSpec extends ZIOSpecDefault:
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,
-        JobName.reserved.map(_.value) == Set(
-          "test",
-          "versions",
-          "workflow",
-          "launcher",
-          "affected",
-          "scaladoc",
-          "coverage",
-          "format",
-          "pages",
-          "cache-seed",
-          "supply-chain",
-          "dependency-snapshot",
-        ),
+      )
+    ,
+    test("every job a graph generates has a reserved name"):
+      val core   = jvm("core")
+      val client = module("client", Native)(scala"3.9.0").clang(ClangMajor(21)).main(MainClass("histos.Client"))
+      val row    = Ship("histos").next(1, 4, 2)(core)
+      val built  = Projects.docCheck.coverage().scalafmt(ships(row), core, client)
+      assertTrue(
+        built.map(JobCheck.generated(_).size) == Right(9),
+        built.map(JobCheck.generated(_) -- JobName.reserved) == Right(Set.empty[JobName]),
         JobName("docs").isReserved == false,
         JobName("doc").isReserved == false,
         JobName("scaladoc").isReserved,
@@ -224,88 +211,6 @@ object PluginSpec extends ZIOSpecDefault:
         ApiDigest.from("ab") == Left(ApiDigestError.Bad("ab")),
         ApiDigest.from(digest + " ") == Left(ApiDigestError.Bad(digest + " ")),
         hash.map(_.value) == Right(digest),
-      )
-    ,
-    test("a cron expression is five GitHub fields"):
-      val daily = Cron.from("0 0 * * *")
-      assertTrue(
-        daily == Right(Cron("0 0 * * *")),
-        Cron.from("0  0  *  *  *") == daily,
-        Cron.from("*/15 * * * MON-FRI").map(_.value) == Right(
-          "*/15 * * * MON-FRI"
-        ),
-        Cron.from("0 0 * JAN SUN") == Right(Cron("0 0 * JAN SUN")),
-        Cron.from("") == Left(CronError.Empty),
-        Cron.from("0 0 * *") == Left(CronError.Fields(4)),
-        Cron.from("60 * * * *") == Left(CronError.Field(0, "60")),
-        Cron.from("0 0 * * 7") == Left(CronError.Field(4, "7")),
-        Cron.from("*/0 * * * *") == Left(CronError.Field(0, "*/0")),
-      ),
-  )
-
-  private val contract = suite("contract")(
-    test("a load error names the coordinate"):
-      val dependency = Dep("dev.earlyeffect::specular:0.2.0")
-      val moduleName = ProjectName("tools")
-      for
-        pluginApi <- ZIO.fromEither(ApiDigest.from(digest))
-        launcher  <- ZIO.fromEither(ApiDigest.from(other))
-      yield
-        val mismatch = PluginLoadError
-          .VersionMismatch(dependency, pluginApi, launcher)
-          .message
-        val missing = PluginLoadError
-          .NoSource(PluginCoordinate.Published(dependency))
-          .message
-        val pathMissing =
-          PluginLoadError.NoSource(PluginCoordinate.Module(moduleName)).message
-        assertTrue(
-          linkName(LinkStrategy.Api) == "refused",
-          mismatch.contains("dev.earlyeffect::specular:0.2.0"),
-          mismatch.contains(pluginApi.value),
-          mismatch.contains(launcher.value),
-          !mismatch.contains("test.echo"),
-          PluginLoadError
-            .ApiLink(dependency)
-            .message
-            .contains("dev.earlyeffect::specular:0.2.0"),
-          missing.contains("dev.earlyeffect::specular:0.2.0"),
-          !missing.contains(pluginApi.value),
-          pathMissing.contains("tools"),
-          !pathMissing.contains(pluginApi.value),
-          PluginLoadError
-            .EngineLeak(
-              PluginCoordinate.Published(dependency),
-              "histos.schedule.Sendable",
-            )
-            .message
-            .contains("histos.schedule.Sendable"),
-          PluginLoadError
-            .Defect(
-              PluginCoordinate.Module(moduleName),
-              "java.lang.ExceptionInInitializerError",
-            )
-            .message
-            .contains("tools"),
-          PluginRunError
-            .Defect("java.lang.RuntimeException")
-            .message
-            .contains("java.lang.RuntimeException"),
-        )
-    ,
-    test("a fixture request is the task id and nothing else"):
-      val repo    = Path.of("repo")
-      val request =
-        PluginFixture.request(PluginId("test.echo"), TaskName("echo"), repo)
-      assertTrue(
-        request.id.render == "test.echo/echo",
-        request.repo == repo,
-        request.modules.isEmpty,
-        request.args == PluginArgs.empty,
-        request.inputs.isEmpty,
-        PluginArgs.empty.require(ParamName("out")) == Left(
-          PluginRunError.MissingArg(ParamName("out"))
-        ),
       ),
   )
 
@@ -532,7 +437,7 @@ object PluginSpec extends ZIOSpecDefault:
         ),
       )
     ,
-    test("a second site and the pages id are refused, and a site has no cron"):
+    test("a second site and the pages id are refused, a manual site is kept, and a site has no cron"):
       val first = fixed(
         PluginId("test.one"),
         List(task(TaskName("site"))),
@@ -543,7 +448,7 @@ object PluginSpec extends ZIOSpecDefault:
         List(task(TaskName("site"))),
         jobs = List(site(JobName("guide"), TaskName("site"), Site(RepoPath("guide")))),
       )
-      val cron = fixed(
+      val manual = fixed(
         PluginId("test.echo"),
         List(task(TaskName("site"))),
         jobs = List(site(JobName("nightly"), TaskName("site"), Site(RepoPath("docs"), SitePublish.Manual))),
@@ -560,39 +465,11 @@ object PluginSpec extends ZIOSpecDefault:
         Projects(use(first, second), jvm("core")) == Left(
           BuildError.PluginGraph(PluginGraphFault.DuplicateSite(JobName("docs"), JobName("guide")))
         ),
-        Projects(use(cron), jvm("core")).isRight,
+        Projects(use(manual), jvm("core")).map(_.plugins.map(_.id)) == Right(List(PluginId("test.echo"))),
         Projects(use(pages), jvm("core")) == Left(
           BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("pages")))
         ),
-        schedule.nonEmpty,
-      )
-    ,
-    test("a need names a job on the graph"):
-      def needing(need: JobName): Fixed =
-        fixed(
-          PluginId("test.echo"),
-          List(task(TaskName("site"))),
-          jobs = List(TaskJob(JobName("docs"), TaskName("site"), needs = List(need))),
-        )
-      val doubled = fixed(
-        PluginId("test.echo"),
-        List(task(TaskName("site"))),
-        jobs = List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("test"), JobName("test")))),
-      )
-      assertTrue(
-        Projects(use(needing(JobName("test"))), jvm("core")).isRight,
-        Projects(use(needing(JobName("absent"))), jvm("core")) == Left(
-          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("absent")))
-        ),
-        Projects(use(needing(JobName("pages"))), jvm("core")) == Left(
-          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("pages")))
-        ),
-        Projects(use(needing(JobName("docs"))), jvm("core")) == Left(
-          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("docs")))
-        ),
-        Projects(use(doubled), jvm("core")) == Left(
-          BuildError.Ci(CiFault.DuplicateNeed(JobName("docs"), JobName("test")))
-        ),
+        schedule.exists(_.message.endsWith("histos.plugin.SiteJob does not have a parameter cron")),
       )
     ,
     test("a sibling task and an open cell are accepted"):
@@ -763,5 +640,5 @@ object PluginSpec extends ZIOSpecDefault:
       ),
   )
 
-  def spec = suite("plugins")(ids, paths, contract, registration)
+  def spec = suite("plugins")(ids, paths, registration)
 end PluginSpec

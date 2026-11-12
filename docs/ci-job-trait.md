@@ -30,6 +30,8 @@ A job `if` names the default branch as one expression: `github.ref == format('re
 
 Events that would wake or cancel `ci.yml` are written to `histos-<job>.yml` automatically: a label, a path filter, a cron, and `workflow_run`. `push`, the default pull-request types, `workflow_dispatch`, tags, `merge_group`, and `release` stay in `ci.yml`. A job in `ci.yml` is skipped on an event it did not ask for.
 
+A job's condition has to be one GitHub can make true on some start of its file, or the build fails with `UnreachableCond`. A start is the event name it sets and the refs that run can be on. `workflow_dispatch` runs from any ref, so a tag or default-branch condition is reachable in a file with dispatch. An event condition is the event name, so a dispatch never makes a push condition true. A label condition is reachable in a file with any `pull_request` trigger, because a pull request can open with labels on it. Where a start allows a tag glob, a label, an input, the affected list, or an upstream result, the check treats it as possibly true, because only the run knows its value.
+
 **Defaults.** A `SiteJob` runs on a push to the default branch. It does not run on a pull request or a tag. Upload and the internal `pages` deploy stay on that same push, so a custom trigger that also matches a pull request still does not deploy from the pull request. A job that has `needs` uses `NeedsPolicy.NoneFailed`: it runs after a skipped upstream when nothing failed. The internal `pages` job is not a `CiJob`. It keeps GitHub's default, every need succeeded, so a skipped site build does not deploy.
 
 ## Audit

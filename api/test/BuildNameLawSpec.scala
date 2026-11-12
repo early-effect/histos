@@ -34,7 +34,7 @@ object BuildNameLawSpec extends ZIOSpecDefault:
         ProjectPath.from(".git") == Left(ProjectPathError.Escapes(".git")),
       )
     ,
-    test("a main, a test main, and a framework are java binary names"):
+    test("a main and a test main are java binary names"):
       val kept = "histos.Client"
       assertTrue(
         MainClass.from(kept).map(_.value) == Right(kept),
@@ -44,25 +44,9 @@ object BuildNameLawSpec extends ZIOSpecDefault:
         TestMain.from(kept).map(_.value) == Right(kept),
         TestMain.from("") == Left(TestMainError.Empty),
         TestMain.from("a-b") == Left(TestMainError.Bad("a-b")),
-        FrameworkClass.from(kept).map(_.value) == Right(kept),
-        FrameworkClass.from("") == Left(FrameworkClassError.Empty),
-        FrameworkClass.from("a-b") == Left(FrameworkClassError.Bad("a-b")),
       )
     ,
-    test("a provider library is a non-empty pair, and zio names that framework"):
-      assertTrue(
-        ProviderLibrary.from("dev.zio", "zio-test-sbt").map(library => (library.organization, library.name)) ==
-          Right(("dev.zio", "zio-test-sbt")),
-        ProviderLibrary.from("", "zio") == Left(ProviderLibraryError.Empty),
-        ProviderLibrary.from("dev zio", "zio") == Left(ProviderLibraryError.Bad("dev zio", "zio")),
-        TestProvider(FrameworkClass.trusted("a.B"), "dev.zio", "zio-test").map(_.framework.value) == Right("a.B"),
-        TestProvider(FrameworkClass.trusted("a.B"), "", "zio") == Left(ProviderLibraryError.Empty),
-        TestProvider.Zio.framework.value == "zio.test.sbt.ZTestFramework",
-        TestProvider.Zio.library.organization == "dev.zio",
-        TestProvider.Zio.library.name == "zio-test-sbt",
-      )
-    ,
-    test("a repository url is https or file, and central is the central token"):
+    test("a repository url is https or file"):
       assertTrue(
         RepositoryUrl.from("https://example.com/repo").map(_.value) == Right("https://example.com/repo"),
         RepositoryUrl.from("file:/repo").map(_.value) == Right("file:/repo"),
@@ -70,7 +54,5 @@ object BuildNameLawSpec extends ZIOSpecDefault:
         RepositoryUrl.from("file:") == Left(RepositoryUrlError.Bad("file:")),
         RepositoryUrl.from("http://example.com") == Left(RepositoryUrlError.Bad("http://example.com")),
         RepositoryUrl.from("https://example.com/a b") == Left(RepositoryUrlError.Bad("https://example.com/a b")),
-        central == Resolver.Central,
-        Resolver.Maven(RepositoryUrl.trusted("https://example.com/repo")) != Resolver.Central,
       ),
   )

@@ -46,7 +46,7 @@ private[load] object PluginSteps:
           if stack.contains(id) then
             Left(
               PluginFault.Task(
-                PluginRunError.Cycle((id :: stack).reverse.dropWhile(_ != id))
+                PluginRunError.Cycle(::(id, (id :: stack.takeWhile(_ != id)).reverse))
               )
             )
           else

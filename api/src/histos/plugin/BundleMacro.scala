@@ -72,7 +72,7 @@ private[histos] object BundleMacro:
         case None if value <:< TypeRepr.of[HistosPlugin] => succeed(selected, value)
         case None                                        =>
           abort(
-            s"val ${field.name} has type ${value.show}, which is not a HistosPlugin and has no layer.",
+            s"val ${field.name} has type ${value.widen.show}, which is not a HistosPlugin and has no layer.",
             field,
           )
 

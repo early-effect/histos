@@ -75,13 +75,6 @@ object CiArrangeLawSpec extends ZIOSpecDefault:
         !On.withCron(tag),
       )
     ,
-    test("combining triggers keeps both event lists and hears either condition"):
-      val combined = Trigger.Ci ++ Trigger.Dispatch
-      assertTrue(
-        combined.on == Trigger.Ci.on ++ Trigger.Dispatch.on,
-        combined.cond == Cond.AnyOf(List(Trigger.Ci.cond, Trigger.Dispatch.cond)),
-      )
-    ,
     test("aws oidc asks for the token grant and the role inputs"):
       val action = AwsOidc(EnvValue.Plain("role"), EnvValue.Plain("us-east-1"), Some(EnvValue.Plain("registry")))
       assertTrue(

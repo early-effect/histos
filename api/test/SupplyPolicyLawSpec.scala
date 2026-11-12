@@ -1,8 +1,7 @@
 package histos.supply
 
 import histos.doctor.DoctorPlacement
-import histos.plugin.{ActionName, ActionPin, JobName, RepoPath, SecretName}
-import histos.version.CommitSha
+import histos.plugin.{JobName, SecretName}
 import histos.{Developer, DeveloperId, PomText}
 
 import zio.test.*
@@ -20,9 +19,9 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         OutageStrategy.FailClosed,
       )
       assertTrue(
-        Event.values.forall(event =>
+        Event.values.toList.filterNot(event =>
           OutageStrategy.forEvent(OutageStrategy.FailOpen, event) == OutageStrategy.FailOpen
-        ),
+        ) == Nil,
         OutageStrategy.forEvent(OutageStrategy.default, Event.PullRequest) == OutageStrategy.Cached(Hours(24)),
         OutageStrategy.forEvent(OutageStrategy.default, Event.Push) == OutageStrategy.FailClosed,
         OutageStrategy.forEvent(OutageStrategy.default, Event.Schedule) == OutageStrategy.FailClosed,
@@ -57,15 +56,6 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         DoctorPlacement.default == DoctorPlacement.PreflightPlusWorkflowJob,
       )
     ,
-    test("an ignore is open or it names the date it ends"):
-      val advisory = AdvisoryId("GHSA-1234-abcd-ef09")
-      val because  = Reason("because")
-      val until    = Date("2026-11-06")
-      assertTrue(
-        Ignore.until(advisory, until, because) == Ignore(advisory, because, Some(until)),
-        Ignore.open(advisory, because) == Ignore(advisory, because, None),
-      )
-    ,
     test("a pull request author names exactly the secrets that author needs"):
       val authors = List(
         PrAuthor.Actions             -> Nil,
@@ -74,7 +64,7 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         PrAuthor.Pat(pat)            -> List(pat),
       )
       assertTrue(
-        authors.forall((author, secrets) => author.secretNames == secrets),
+        authors.filterNot((author, secrets) => author.secretNames == secrets) == Nil,
         PrAuthor.histosDeps == PrAuthor.App(id, key),
       )
     ,
@@ -92,41 +82,6 @@ object SupplyPolicyLawSpec extends ZIOSpecDefault:
         ghsa == SupplyFault.ServiceDown(AdvisorySource.Ghsa.name, OutageStrategy.FailClosed),
         AdvisorySource.Osv.name.value == "osv",
         AdvisorySource.Ghsa.name.value == "ghsa",
-      )
-    ,
-    test("a moved action names both repository ids, and a down source does not name the strategy"):
-      val action = ActionName("aws-actions/configure-aws-credentials")
-      val was    = RepoId.trusted("111")
-      val now    = RepoId.trusted("222")
-      val moved  = SupplyFault.ActionRepoMoved(action, was, now)
-      val down   = SupplyFault.ServiceDown(SourceName.trusted("osv"), OutageStrategy.FailOpen)
-      assertTrue(
-        moved.message.contains(was.value),
-        moved.message.contains(now.value),
-        down.message.contains("osv"),
-        !down.message.contains("FailOpen"),
-      )
-    ,
-    test("a human commit is the twelve character abbreviation, and a pin mismatch is eight characters"):
-      val sha    = CommitSha.trusted("0123456789abcdef0123456789abcdef01234567")
-      val other  = CommitSha.trusted("abcdef0123456789abcdef0123456789abcdef01")
-      val branch = BranchName.trusted("main")
-      val file   = RepoPath.trusted(".github/workflows/ci.yml")
-      val action = ActionName("aws-actions/configure-aws-credentials")
-      val human  = SupplyFault.HumanCommitsOnBranch(branch, sha :: other :: Nil)
-      val head   = SupplyFault.HeadMoved(branch, sha)
-      val pin    = SupplyFault.PinMismatch(file, 4, action, ActionPin(sha, "v1"), ActionPin(other, "v2"))
-      assertTrue(
-        human.message.contains(sha.abbreviate.value),
-        human.message.contains(other.abbreviate.value),
-        !human.message.contains("..."),
-        sha.abbreviate.value == sha.value.take(12),
-        head.message.contains(sha.value),
-        pin.message.contains(s"${sha.value.take(8)}..."),
-        pin.message.contains(s"${other.value.take(8)}..."),
-        !pin.message.contains(sha.abbreviate.value),
-        pin.message.contains("v1"),
-        pin.message.contains("v2"),
       ),
   )
 

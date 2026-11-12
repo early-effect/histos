@@ -145,7 +145,7 @@ object CodecSamples:
     PluginRunError.MissingArg(param),
     PluginRunError.MissingNote(core, note),
     PluginRunError.Unknown(taskId),
-    PluginRunError.Cycle(List(taskId)),
+    PluginRunError.Cycle(::(taskId, Nil)),
     PluginRunError.Defect("boom"),
     PluginRunError.EngineLeak("histos.engine.X"),
     PluginRunError.Linkage("missing.Class"),

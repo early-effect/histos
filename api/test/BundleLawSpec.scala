@@ -80,15 +80,22 @@ object BundleLawSpec extends ZIOSpecDefault:
     ,
     test("a trait with no layer is not a wire"):
       val errors = typeCheckErrors("histos.plugin.wire[histos.plugin.NoLayer]")
-      assertTrue(errors.nonEmpty)
+      assertTrue(
+        errors.map(_.message) == List(
+          "histos.plugin.NoLayer has no layer. Define def layer on the companion, or wire the object."
+        )
+      )
     ,
     test("a class is not a bundle"):
       val errors = typeCheckErrors("import histos.plugin.*\nclass Box derives Bundle\n")
-      assertTrue(errors.nonEmpty)
+      assertTrue(errors.map(_.message) == List("Box is not an object. `derives Bundle` applies to one object."))
     ,
     test("a bundle val that is not a plugin is refused"):
       val errors = typeCheckErrors(
         "import histos.plugin.*\nobject Box derives Bundle:\n  val n = 1\nval layer = Box.layer\n"
       )
-      assertTrue(errors.nonEmpty),
+      assertTrue(
+        errors.map(_.message.endsWith("val n has type scala.Int, which is not a HistosPlugin and has no layer.")) ==
+          List(true)
+      ),
   )

@@ -14,8 +14,16 @@ object ShipAdvice:
   def development(ship: ShipName, compile: CiVersion): String =
     s"publishing ${ship.value} ${compile.ship.render} needs export HISTOS_SESSION=release. Then run $versionsCommand."
 
+  /** The session error, the exports that complete a session, and the command to run after them, each its own sentence.
+    */
   def incomplete(error: SessionError): String =
-    s"${error.message} $snapshotExport, or export HISTOS_SESSION=release. Then run $versionsCommand."
+    List(error.message, s"Run $snapshotExport, or export HISTOS_SESSION=release", s"Then run $versionsCommand")
+      .map(sentence)
+      .mkString(" ")
+
+  /** A session error may already end its last sentence. One period ends it either way. */
+  private def sentence(text: String): String =
+    if text.endsWith(".") then text else s"$text."
 
   def unchecked: String =
     s"the release registry was not checked, so nothing publishes. $releasesFile"
