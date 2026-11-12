@@ -590,7 +590,8 @@ object Daemon:
                   case _                      => false)
 
               def edges(
-                  out: Say
+                  out: Say,
+                  compiled: UIO[Unit],
               ): Perform.Edges[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
                   histos.zinc.CompileMemo & histos.resolve.ResolutionService
@@ -613,6 +614,7 @@ object Daemon:
                     input,
                     output,
                   ),
+                  compiled = compiled,
                 )
 
               def execute(
@@ -620,6 +622,7 @@ object Daemon:
                   out: Say,
                   loaded: Either[BuildFault, Option[LoadedBuild]],
                   chosen: histos.jdk.Machine,
+                  compiled: UIO[Unit],
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
                   histos.zinc.CompileMemo & histos.resolve.ResolutionService,
@@ -637,7 +640,7 @@ object Daemon:
                     version,
                     target,
                     out,
-                    edges(out),
+                    edges(out, compiled),
                   )
                   .provideSomeEnvironment[
                     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
@@ -666,7 +669,7 @@ object Daemon:
                           case _ =>
                             ZIO.succeed(machine)
                       chosen.flatMap { fresh =>
-                        occupy(permit, target)(execute(target, out, Right(None), fresh))
+                        occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit))
                       }
                 }
 
@@ -713,15 +716,14 @@ object Daemon:
                 ServerError,
                 Boolean,
               ] =
-                val compile = call match
-                  case Call.Run(id, _) =>
-                    ProjectName.from(id) match
-                      case Right(name) => Call.Compile(List(name))
-                      case Left(_)     => Call.Compile(Nil)
-                  case _ => Call.Compile(Nil)
-                run(compile, out.dropExit) *>
-                  watchRoots(call)
-                    .map(watched => changed.exists(path => watched.paths.exists(root => Watching.covers(root, path))))
+                val compile = Watching.compileFor(call)
+                Ref
+                  .make(Option.empty[CallResult])
+                  .flatMap: finished =>
+                    run(compile, out.dropExitInto(finished)) *>
+                      finished.get
+                        .zip(watchRoots(call))
+                        .map((result, watched) => Watching.restarts(compile, result, changed, watched))
 
               def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
@@ -758,23 +760,23 @@ object Daemon:
                   case Left(error) =>
                     Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
                   case Right(held) =>
-                    val have = Right(Some(LoadedBuild(held.graph, held.plugins, held.build)))
-                    val ran  =
+                    val have                     = Right(Some(LoadedBuild(held.graph, held.plugins, held.build)))
+                    def ran(compiled: UIO[Unit]) =
                       target match
                         case Call.Bsp | Call.Reload =>
-                          execute(target, out, have, machine)
+                          execute(target, out, have, machine, compiled)
                         case _ =>
                           histos.jdk.Machine
                             .load(repo)
                             .foldZIO(
                               error => Calls.finish(out, CallResult.Fault(BuildFault.Toolchain(error))),
-                              fresh => execute(target, out, have, fresh),
+                              fresh => execute(target, out, have, fresh, compiled),
                             )
-                    val leased =
+                    def leased(compiled: UIO[Unit]) =
                       target match
-                        case Call.Bsp => release(held) *> ran
-                        case _        => ran.ensuring(release(held))
-                    occupy(permit, target)(leased)
+                        case Call.Bsp => release(held) *> ran(compiled)
+                        case _        => ran(compiled).ensuring(release(held))
+                    lease(permit, target)(leased)
 
               write(output, wire(Message.Ready), bound) *> run(asked, say)
   end handle
@@ -907,6 +909,25 @@ object Daemon:
       body: ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     if writesOutputs(call) then permit.withPermit(body) else body
+
+  /** A program run holds the class-directory lock only until `body` signals its compile is done, so a restart can
+    * compile while the program runs. A JavaScript or Native link that starts after the signal reads class directories a
+    * restart may be rewriting, and only the program about to be replaced sees that. Every other call is [[occupy]]. The
+    * lock is free once `body` ends, however it ends.
+    */
+  private[server] def lease[R, E](permit: Semaphore, call: Call)(
+      body: UIO[Unit] => ZIO[R, E, Unit]
+  ): ZIO[R, E, Unit] =
+    call match
+      case Call.Run(_, _) =>
+        for
+          held     <- Promise.make[Nothing, Unit]
+          compiled <- Promise.make[Nothing, Unit]
+          holder   <- permit.withPermit(held.succeed(()) *> compiled.await).fork
+          _        <- held.await
+          _        <- body(compiled.succeed(()).unit).ensuring(compiled.succeed(()) *> holder.join)
+        yield ()
+      case _ => occupy(permit, call)(body(ZIO.unit))
 
   private def reboot(
       repo: Path,

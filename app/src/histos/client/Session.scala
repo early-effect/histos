@@ -323,6 +323,7 @@ object Session:
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
         },
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
+        compiled = ZIO.unit,
       )
 
   private def watch(
@@ -356,14 +357,12 @@ object Session:
               answer(repo, apiJar, machine, desk, call, say),
               watched,
               changed =>
-                val compile = call match
-                  case Call.Run(id, _) =>
-                    histos.ProjectName.from(id) match
-                      case Right(name) => Call.Compile(List(name))
-                      case Left(_)     => Call.Compile(Nil)
-                  case _ => Call.Compile(Nil)
-                answer(repo, apiJar, machine, desk, compile, say.dropExit) *>
-                  watched.map(found => changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))),
+                val compile = Watching.compileFor(call)
+                Ref
+                  .make(Option.empty[CallResult])
+                  .flatMap: finished =>
+                    answer(repo, apiJar, machine, desk, compile, say.dropExitInto(finished)) *>
+                      finished.get.zip(watched).map((found, roots) => Watching.restarts(compile, found, changed, roots)),
             )
           case histos.server.WatchPolicy.After =>
             Watching.session(

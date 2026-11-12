@@ -799,14 +799,12 @@ object Cli:
             operate(repo, apiJar, inner, printing),
             roots,
             changed =>
-              val compile = inner match
-                case Call.Run(id, _) =>
-                  ProjectName.from(id) match
-                    case Right(name) => Call.Compile(List(name))
-                    case Left(_)     => Call.Compile(Nil)
-                case _ => Call.Compile(Nil)
-              operate(repo, apiJar, compile, printing.dropExit) *>
-                roots.map(found => changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))),
+              val compile = Watching.compileFor(inner)
+              Ref
+                .make(Option.empty[CallResult])
+                .flatMap: finished =>
+                  operate(repo, apiJar, compile, printing.dropExitInto(finished)) *>
+                    finished.get.zip(roots).map((found, watched) => Watching.restarts(compile, found, changed, watched)),
           )
         case WatchPolicy.After =>
           Watching.session(repo, printing, operate(repo, apiJar, inner, printing.dropExit), roots)
@@ -941,6 +939,7 @@ object Cli:
         say,
         CallResult.Fault(BuildFault.Rejected(Rejection.Watch(CliParseError.Rejected.message))),
       ),
+      compiled = ZIO.unit,
     )
 
   private def heard(repo: Path, beat: Beat): UIO[Unit] =

@@ -139,7 +139,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Watch
 
-`histos ~ compile` runs a command again after a source save, on the server when one is up. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program and restarts it on a change (see [Known gaps](#known-gaps)).
+`histos ~ compile` runs a command again after a source save, on the server when one is up. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program, compiles after each change, and restarts the program when that compile succeeds and the change is one of its sources. A failed compile prints its errors and leaves the program running. On a server, the program holds the compile lock only until it has compiled, so the next compile does not wait for the program to exit.
 
 ### Preview
 
@@ -278,7 +278,9 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 These are true today and tracked:
 
 - Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
-- `~ --restart run` cannot restart on a server, because the running program holds the compile lock. A failed compile still restarts the program.
+- `histos run <name>` prints the program's output when the program exits, not as it runs.
+- A test compile error prints without its file and line.
+- On macOS, a checkout whose path is long enough that `.histos/server.sock` passes 104 bytes cannot start a server.
 - No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)
 
 ## Building Histos
