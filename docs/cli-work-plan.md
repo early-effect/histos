@@ -194,6 +194,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 46 | Flaky scope law | `PluginScopeLawSpec` failed in #161's CI: a closed invocation socket still answered. `ServerSocket.close` defers the close to a thread blocked in `accept`, and Linux keeps accepting until it wakes. The fixture's release now joins that thread | Shim |
 | 47 | Native crash | #161's first CI run crashed the `wire` Native test binary with `Unhandled signal 11` at a guard-page address, and the rerun passed. A crash is a bug, not a flake | Container (it brings the Linux reproduction) |
 | 48 | Ambient cache | `GraphTastyLawSpec` read the locked Scala 3.9 compiler from the Coursier cache, and nothing fetched it before the suite on a cold cache, so the law passed or failed with run order. The setup action now runs `histos resolve` when the repository has a lock | Restart watch |
+| 50 | Silent test warnings | A suite's test compile passes no problem listener, so test-source warnings print nowhere. The CLI shows them only when the compile fails | Program output (both are feed changes) |
 | 49 | Test value | Laws written in bulk: each needs to assert a property users depend on, fail when that property breaks, and stay deterministic and hermetic | Test audit |
 | 45 | Three restart copies | The daemon, the CLI, and the MCP session each chose the restart compile and ignored its result | Restart watch |
 
@@ -247,7 +248,11 @@ Each item audits the files it touches against the Totality list and adds what it
   - `SocketPathLawSpec`, on JVM and Native: a 200-byte checkout's socket is under 104 bytes, the name is stable and per checkout, both platforms produce the JDK-computed `1cd4fc81c8742440` for `/work/repo`, and the home is `HISTOS_HOME` or `.histos` under the user home.
   - `DaemonOpenLawSpec`: a real server in a checkout more than 240 bytes deep binds, answers `version`, and removes its socket.
   - `./histos test wire app central`: wire 251 on JVM and Native, app 201, central 81. The native client compiles.
-- [ ] **Error positions.** A test compile error prints `file:line:col` like a main compile error. Proof: a law on the rendered failure of a broken test source.
+- [x] **Error positions.** A test compile error prints `file:line:col` like a main compile error. Proof: a law on the rendered failure of a broken test source. Done:
+  - The reporter kept only each problem's message. Now each failure diagnostic is `path:line:column: error: message`, through the same `Lines` rendering the console streams, and a warning is not part of the failure.
+  - A suite's test compile still does not stream its problems, so warnings in test sources print nowhere. That is a feed change for a later item.
+  - Proof: a new `ScenarioSpec` law compiles a broken main source and a broken test source with the real compiler. Both failure texts name the file and line, carry `: error: `, and carry no warning. It was red against the old reporter for both.
+  - `./histos test wire engine app`: wire 251 on JVM and Native, engine 693, app 201.
 - [ ] **Program output.** `histos run` streams the program's output as it runs. Proof: a law with a real child that prints a line, then waits on a gate: the line arrives before the gate opens.
 - [ ] **Link cache.** A native or JavaScript link whose key (`NativeKey`, `JsKey` on product digests) is in the store restores the linked output and does not start the linker. Read [cache-work-plan.md](cache-work-plan.md) first. Proof: a scenario counts linker starts: a trailing comment keeps the link, a method body relinks, and a wiped checkout restores without a link.
 - [ ] **Remote cache.** Module compile, package, and link read and write the remote cache through the same namespace walk plugin tasks use. The push job writes `main` per the build's `promote` setting, and `purge` is either reachable or deleted. Read [cache-work-plan.md](cache-work-plan.md) first. Proof: a scenario against the loopback store shows a second checkout's compile is a remote hit with no compiler start, a pull-request namespace never writes `main`, and `copy-index` against `rebuild` behaves as the setting says.
