@@ -3,8 +3,8 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
-import histos.js.{JsRequests, ScalaJs}
-import histos.native.{NativeClasspath, NativeCompile, NativeOrigin, NativeRequests, NativeToolchain}
+import histos.js.ScalaJs
+import histos.native.{NativeCompile, NativeOrigin}
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -532,12 +532,9 @@ object GraphCompile:
 
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
-  /** The tools a platform's compile adds to the key, and the plugins it adds to the compiler row. */
-  private final case class PlatformTools(compilation: List[ToolInput], plugins: List[ToolInput])
-
   /** Lock checksums and source bytes. A hit does not fetch jars, read the store, or open a compiler. The caller listed
     * the sources and this hashes their bytes, so an added, deleted, or edited source is a miss whatever the modified
-    * times say. The key is the one that platform's compile stores, so a Native cell hits here as a Jvm cell does.
+    * times say. The key is [[CellTools.recall]]'s, which the compile stores through the same function.
     */
   private def recall(
       work: CellWork,
@@ -554,45 +551,25 @@ object GraphCompile:
         .flatMap:
           case None         => ZIO.none
           case Some(hashes) =>
-            val compiler = plan.tools.pinned(CompilerRequests.compiler(version, plan.tools.repositories))
-            val tools    = platform match
-              case Platform.Jvm => Some(PlatformTools(Nil, Nil))
-              case Platform.Js  =>
-                val revision = module.jsVersion.getOrElse(plan.tools.catalog.js.revision)
-                plan.tools
-                  .pinned(JsRequests.libraries(version, revision, plan.tools.repositories, plan.tools.catalog))
-                  .map(libraries => PlatformTools(List(libraries), Nil))
-              case Platform.Native =>
-                NativeToolchain
-                  .of(module.nativeVersion.getOrElse(plan.tools.catalog.native.revision), plan.native)
-                  .toOption
-                  .flatMap: toolchain =>
-                    plan.tools
-                      .pinned(NativeRequests.libraries(version, toolchain, plan.tools.repositories))
-                      .map(libraries =>
-                        PlatformTools(List(libraries), List(NativeClasspath.plugin(libraries, toolchain, version)))
-                      )
-            (compiler, tools) match
-              case (Some(compilerInput), Some(PlatformTools(compilation, plugins))) =>
-                JvmCompile.sourceDigest(sources).flatMap { digest =>
-                  val request = CompileRequest(
-                    CompileToolchain(version, platform, plan.jdk, module.flags),
-                    sources,
-                    Nil,
-                    classes,
-                    recorded,
-                    hashes,
-                    apis,
-                    compilation,
-                    coverage = identity,
-                  )
-                  val key = CompileKey.withTools(
-                    CompileKey.of(request, digest),
-                    (compilerInput :: plugins).map(_.fingerprint),
-                  )
-                  CompileReplay.recall(request, key)
-                }
-              case _ => ZIO.none
+            CellPlatform.of(module, platform, plan.tools.catalog, plan.native) match
+              case Left(_)       => ZIO.none
+              case Right(placed) =>
+                val base = CompileRequest(
+                  CompileToolchain(version, platform, plan.jdk, module.flags),
+                  sources,
+                  Nil,
+                  classes,
+                  recorded,
+                  hashes,
+                  apis,
+                  coverage = identity,
+                )
+                JvmCompile
+                  .sourceDigest(sources)
+                  .flatMap(digest => CellTools.recall(plan.tools, placed, base, digest))
+                  .flatMap:
+                    case Some(keyed) => CompileReplay.recall(keyed.request, keyed.key)
+                    case None        => ZIO.none
 
   private def compileOf(
       work: CellWork,
@@ -739,20 +716,13 @@ object GraphCompile:
       hear: CompileProblem => Unit,
       admitted: UIO[Unit],
   ): ZIO[ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    val compiled = request.toolchain.platform match
-      case Platform.Jvm =>
-        JvmCompile.compilePooled(request, extra, hear, admitted)
-      case Platform.Js =>
-        ScalaJs.compile(request, extra, hear, work.module.jsVersion)
-      case Platform.Native =>
-        NativeCompile.compile(
-          request,
-          work.module.nativeVersion
-            .getOrElse(work.plan.tools.catalog.native.revision),
-          work.plan.native,
-          extra,
-          hear,
-        )
+    val compiled =
+      ZIO
+        .fromEither(CellPlatform.of(work.module, request.toolchain.platform, work.plan.tools.catalog, work.plan.native))
+        .flatMap:
+          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, admitted)
+          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear)
+          case native: CellPlatform.Native => NativeCompile.compile(request, native, extra, hear)
     compiled.provideSome[ContentStore & CompilerStarts & Compilers](ZLayer.succeed(work.plan.tools))
 
   /** An exact cell is the classpath. A 2.13 patch uses the newest declared 2.13 cell. A Scala 3 cell uses the newest

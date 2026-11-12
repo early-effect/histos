@@ -17,6 +17,7 @@ import zio.test.*
 
 object JvmCompileLawSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion.trusted("3.10.0")
+  private val js     = CellPlatform.Js(ToolCatalog.default.js.revision)
   private val jdk    = JdkRuntime(
     Path.of("/jdk"),
     JdkVersion.trusted("21", JdkMajor.trusted(21)),
@@ -33,7 +34,9 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
           val program =
             for
               _     <- Workspace.writeString(marker, "entry")
-              found <- counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), Nil, List(plugin), Nil))
+              found <- counted(
+                JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), js, Nil, List(plugin), Nil)
+              )
             yield assertTrue(
               found.result == Left(CompileError.NoSources),
               found.idle,
@@ -42,7 +45,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
     ,
     test("javascript with scala 3 and no sources is NoSources"):
       val program =
-        counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), Nil, Nil, Nil)).map: found =>
+        counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), js, Nil, Nil, Nil)).map: found =>
           assertTrue(found.result == Left(CompileError.NoSources), found.idle)
       program.provideSomeLayer[TestEnvironment](gate)
     ,

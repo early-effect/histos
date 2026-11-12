@@ -171,7 +171,7 @@ object JvmCompile:
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else CompileReplay.isolated(compilePrepared(request, Nil, extra, hear))
+    else CompileReplay.isolated(compilePrepared(request, CellPlatform.Jvm, Nil, extra, hear))
 
   /** Uses the compiler service and the content store in the environment. The service keeps the pool. */
   private[histos] def compilePooled(
@@ -186,46 +186,30 @@ object JvmCompile:
     else if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
     else
       ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
-        hashSources(request.sources).flatMap: digest =>
-          invoke(
-            request,
-            extra,
-            hear,
-            None,
-            CompileInputs.declared(request, digest),
-            CompileKey.of(request, digest),
-            admitted,
-          )
+        invoke(request, CellPlatform.Jvm, extra, hear, None, admitted)
 
   /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the
     * compiler thread for each diagnostic.
     */
   private[histos] def compilePrepared(
       request: CompileRequest,
+      platform: CellPlatform,
       plugins: List[Path],
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
   ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
-    ZIO.scoped(prepared(request, plugins, extra, hear).provideSomeLayer(Compilers.live(1)))
+    ZIO.scoped(prepared(request, platform, plugins, extra, hear).provideSomeLayer(Compilers.live(1)))
 
   private def prepared(
       request: CompileRequest,
+      platform: CellPlatform,
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else
-         hashSources(request.sources).flatMap: digest =>
-           val key = CompileKey.of(request, digest)
-           invoke(
-             request,
-             plugins.map(pluginArg) ++ extra,
-             hear,
-             rows = CompileInputs.declared(request, digest),
-             key = key,
-           ))
+       else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, None))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -331,122 +315,84 @@ object JvmCompile:
     */
   private[histos] def compileWith(
       request: CompileRequest,
+      platform: CellPlatform,
       stdlib: List[Path],
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => (),
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    compileWithService(request, stdlib, plugins, extra, hear)
-
-  private def compileWithService(
-      request: CompileRequest,
-      stdlib: List[Path],
-      plugins: List[Path],
-      extra: List[String],
-      hear: CompileProblem => Unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned(request)) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-         else
-           hashSources(request.sources).flatMap: digest =>
-             val key = CompileKey.of(request, digest)
-             invoke(
-               request,
-               plugins.map(pluginArg) ++ extra,
-               hear,
-               Some(stdlib),
-               CompileInputs.declared(request, digest),
-               key,
-             ))
+         else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, Some(stdlib)))
 
+  /** The key is [[CellTools.compile]]'s, the one recall checks. The request the compiler sees is that key's request. */
   private def invoke(
       request: CompileRequest,
-      extra: List[String],
-      hear: CompileProblem => Unit,
-      stdlib: Option[List[Path]] = None,
-      rows: List[CompileRow],
-      key: Sha256,
-      admitted: UIO[Unit] = ZIO.unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    drive(request, extra, hear, stdlib, rows, key, admitted)
-
-  private def drive(
-      request: CompileRequest,
+      platform: CellPlatform,
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
-      rows: List[CompileRow],
-      key: Sha256,
+      admitted: UIO[Unit] = ZIO.unit,
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+    hashSources(request.sources)
+      .flatMap(digest => CellTools.compile(platform, request, digest))
+      .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted))
+
+  private def drive(
+      cell: CellTools,
+      keyed: KeyedRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+      stdlib: Option[List[Path]],
       admitted: UIO[Unit],
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+    val request = keyed.request
     val version = request.toolchain.version
-    ZIO.serviceWithZIO[LockedTools]: tools =>
-      for
-        compiler <- tools
-          .selected(
-            histos.zinc.CompilerRequests.compiler(version, tools.repositories)
+    cell.series match
+      case SeriesTools.Scala3 =>
+        Scala3
+          .jars(version)
+          .flatMap: toolchain =>
+            cached(
+              request,
+              CompilerArtifacts(
+                stdlib.getOrElse(toolchain.runtime),
+                toolchain.compilerClasspath,
+                toolchain.bridgeJar,
+                cell.compiler :: request.compilerPlugins ++ request.compilationTools,
+                toolchain.loaderJars,
+                toolchain.boundary,
+              ),
+              extra,
+              hear,
+              keyed.rows,
+              keyed.key,
+              admitted,
+            )
+      case SeriesTools.Scala213(semanticdb) =>
+        for
+          jars     <- Scala213.jars(version)
+          plugin   <- SemanticDb.plugin(version)
+          compiled <- cached(
+            request,
+            CompilerArtifacts(
+              jars.runtime,
+              jars.compilerClasspath,
+              jars.bridgeJar,
+              List(cell.compiler, semanticdb) ++ request.compilerPlugins ++ request.compilationTools ++
+                request.coverageTools,
+              jars.loaderJars,
+              jars.boundary,
+            ),
+            s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra,
+            hear,
+            keyed.rows,
+            keyed.key,
+            admitted,
           )
-          .mapError(CompileError.Resolved(_))
-        output <- ScalaSeries.of(version) match
-          case Some(ScalaSeries.Scala3) =>
-            Scala3
-              .jars(version)
-              .flatMap: toolchain =>
-                val inputs =
-                  compiler :: request.compilerPlugins ++ request.compilationTools
-                val prints = (compiler :: request.compilerPlugins).map(_.fingerprint)
-                cached(
-                  request,
-                  CompilerArtifacts(
-                    stdlib.getOrElse(toolchain.runtime),
-                    toolchain.compilerClasspath,
-                    toolchain.bridgeJar,
-                    inputs,
-                    toolchain.loaderJars,
-                    toolchain.boundary,
-                  ),
-                  extra,
-                  hear,
-                  CompileInputs.withCompiler(rows, prints),
-                  CompileKey.withTools(key, prints),
-                  admitted,
-                )
-          case Some(ScalaSeries.Scala2(13)) =>
-            for
-              jars     <- Scala213.jars(version)
-              semantic <- tools
-                .selected(
-                  histos.zinc.CompilerRequests
-                    .semanticdb(version, tools.catalog, tools.repositories)
-                )
-                .mapError(CompileError.Resolved(_))
-              plugin <- SemanticDb.plugin(version)
-              inputs = List(
-                compiler,
-                semantic,
-              ) ++ request.compilerPlugins ++ request.compilationTools ++ request.coverageTools
-              prints = (List(compiler, semantic) ++ request.compilerPlugins).map(_.fingerprint)
-              compiled <- cached(
-                request,
-                CompilerArtifacts(
-                  jars.runtime,
-                  jars.compilerClasspath,
-                  jars.bridgeJar,
-                  inputs,
-                  jars.loaderJars,
-                  jars.boundary,
-                ),
-                s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra,
-                hear,
-                CompileInputs.withCompiler(rows, prints),
-                CompileKey.withTools(key, prints),
-                admitted,
-              )
-            yield compiled
-          case _ => ZIO.fail(CompileError.UnsupportedScala(version))
-      yield output
+        yield compiled
 
   /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores. */
   private def cached(

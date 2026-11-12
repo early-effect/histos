@@ -56,7 +56,7 @@ object JsLawSpec extends ZIOSpecDefault:
 
   private def failed(request: CompileRequest): ZIO[Any, Nothing, Exit[CompileError, CompileOutput]] =
     ScalaJs
-      .compile(request)
+      .compile(request, CellPlatform.Js(ToolCatalog.default.js.revision))
       .exit
       .provide(
         ZLayer.succeed(LockedTools(DependencyLock(Nil), ToolCatalog.default, Repositories.central, dyingResolve)),
