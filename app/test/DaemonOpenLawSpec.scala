@@ -115,7 +115,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           for
             hold    <- Promise.make[Nothing, Unit]
             _       <- ZIO.addFinalizer(hold.succeed(()).unit)
-            running <- stand(_ => hold.await)
+            running <- stand(_ => hold.await, identity)
             heard   <- Client.talk(running.record.socket, Call.Reboot).runCollect.timeout(Duration.fromSeconds(5))
             waiting <- hold.poll
             _       <- hold.succeed(())
@@ -130,20 +130,47 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           case Some(result) => ZIO.succeed(result)
           case None         => ZIO.dieMessage("reboot did not answer before the successor")
         }
+        .provideSomeLayer[Scope](opened)
+    ,
+    test("a checkout deeper than a Unix socket path holds still binds, answers, and removes its socket"):
+      ZIO
+        .scoped {
+          for
+            running <- stand(_ => ZIO.unit, _.resolve(("d" * 60 + "/") * 4 + "repo"))
+            socket = running.record.socket
+            heard   <- Client.talk(socket, Call.Version).runCollect
+            _       <- Client.talk(socket, Call.Reboot).runCollect
+            stopped <- running.done.either
+            closed  <- ZIO.attempt(Files.exists(socket)).orDie
+          yield assertTrue(
+            socket.toString.length < 104,
+            outs(heard).startsWith(version),
+            stopped == Right(()),
+            !closed,
+          )
+        }
+        .timeout(Duration.fromSeconds(30))
+        .flatMap {
+          case Some(result) => ZIO.succeed(result)
+          case None         => ZIO.dieMessage("the deep checkout's server did not answer")
+        }
         .provideSomeLayer[Scope](opened),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect.sequential
 
   private def stand(
-      relaunch: Path => IO[ServerError, Unit]
+      relaunch: Path => IO[ServerError, Unit],
+      checkout: Path => Path,
   ): ZIO[
     Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
     Daemon.Running,
   ] =
     for
-      repo <- ZIO.acquireRelease(
+      temp <- ZIO.acquireRelease(
         ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hd")).orDie
       )(path => Workspace.delete(path).catchAll(error => ZIO.dieMessage(error.message)))
+      repo = checkout(temp)
+      _ <- ZIO.attemptBlocking(Files.createDirectories(repo)).orDie
       _ <- ZIO
         .attemptBlocking(
           Files.copy(

@@ -102,9 +102,6 @@ object Record:
   def file(repo: Path): Path =
     repo.resolve(".histos").resolve("server.json")
 
-  def socket(repo: Path): Path =
-    repo.resolve(".histos").resolve("server.sock")
-
   def write(
       repo: Path,
       version: String,
@@ -176,7 +173,7 @@ object Attach:
     def poll(left: Int): IO[ServerError, Path] =
       decide(repo, version).flatMap {
         case Decision.Open(socket) => ZIO.succeed(socket)
-        case _ if left <= 0        => ZIO.fail(ServerError.Unreachable(Record.socket(repo)))
+        case _ if left <= 0        => SocketPath.at(repo).flatMap(socket => ZIO.fail(ServerError.Unreachable(socket)))
         case _                     => ZIO.sleep(50.millis) *> poll(left - 1)
       }
     poll(1200)
@@ -388,8 +385,7 @@ object Daemon:
     ServerError,
     Unit,
   ] =
-    val socket = Record.socket(repo)
-    bind(socket).flatMap: channel =>
+    bindAt(repo).flatMap: (socket, channel) =>
       ZIO.scoped {
         for
           _     <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
@@ -447,6 +443,10 @@ object Daemon:
           )
         yield ()
       }
+
+  /** This checkout's socket path, bound. */
+  private def bindAt(repo: Path): IO[ServerError, (Path, ServerSocketChannel)] =
+    SocketPath.at(repo).flatMap(socket => bind(socket).map(channel => (socket, channel)))
 
   private def bind(socket: Path): IO[ServerError, ServerSocketChannel] =
     for
