@@ -36,7 +36,7 @@ object CliLocalLawSpec extends ZIOSpecDefault:
             preview.exit == CliExit.Success && preview.out == roots.mkString("\n") && preview.err == "",
             full.exit == CliExit.Success &&
               full.out == (roots :+ "content-store entries for this repo would be forgotten").mkString("\n"),
-            missing.exit == CliExit.TaskFailed && missing.err.contains(s"no observation at $tally"),
+            missing.exit == CliExit.Failed && missing.err.contains(s"no observation at $tally"),
             missing.err.contains("fix  histos compile"),
           )
     ,
@@ -62,10 +62,10 @@ object CliLocalLawSpec extends ZIOSpecDefault:
             bad.exit == CliExit.Usage && bad.err.contains("affected is a JSON list of module names"),
             watched.exit == CliExit.Usage && watched.err.contains("usage: histos help"),
             bare.exit == CliExit.Usage && bare.err.contains("watch needs a command"),
-            absent.exit == CliExit.ResolveFailed && absent.err.contains("launcher pin is absent"),
+            absent.exit == CliExit.Failed && absent.err.contains("launcher pin is absent"),
             moved.exit == CliExit.Success && moved.out == "histos.version=0.1.0-SNAPSHOT" && moved.err == "",
             wrote == "histos.version=0.1.0-SNAPSHOT\n",
-            held.exit == CliExit.ResolveFailed && held.err.contains("1.2.3 is a release pin. Run 'histos update'."),
+            held.exit == CliExit.Failed && held.err.contains("1.2.3 is a release pin. Run 'histos update'."),
             stayed == "histos.version=1.2.3\n",
           ),
   ) @@ TestAspect.withLiveSystem

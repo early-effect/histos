@@ -12,7 +12,7 @@ import histos.{Platform, WireSamples}
 
 import zio.NonEmptyChunk
 
-/** Every `Call` constructor, plus the variants whose fields change an exit or a document. */
+/** Every `Call` constructor, plus the variants whose fields change a document. */
 object CallSamples:
   import WireSamples.*
 
@@ -20,57 +20,47 @@ object CallSamples:
   private val pr  = histos.version.PullRequestNumber("4")
 
   def oneEach: List[Call] =
-    SuitePattern
-      .from("App*")
-      .toOption
-      .toList
-      .flatMap: pattern =>
-        RunId
-          .from("run-1")
-          .toOption
-          .toList
-          .flatMap: id =>
-            val names = List(core)
-            val args  = PluginArgs(List(NamedText(param, "x")), Set(flag))
-            List(
-              Call.Compile(names),
-              Call.Test(names, List(pattern), TestMode.Run),
-              Call.PublishLocal(List(ship.value)),
-              Call.PublishSnapshots(Nil),
-              Call.PublishRelease(List(ship.value), true),
-              Call.PublishPromote("id"),
-              Call.PublishDrop("id"),
-              Call.PublishAssets(List("app")),
-              Call.Graph,
-              Call.Run(core.value, Some(Platform.Js)),
-              Call.Client,
-              Call.Task(taskId.render, args),
-              Call.Cancel(id),
-              Call.Toolchain,
-              Call.Resolve(ResolveAction.Verify),
-              Call.Workflow(WorkflowAction.Check),
-              Call.Format(FormatTargets.Build, FormatMode.Check),
-              Call.Assembly(Some("dist/app.jar")),
-              Call.Clean(names),
-              Call.CleanFull,
-              Call.Reload,
-              Call.Reboot,
-              Call.Version,
-              Call.CachePath,
-              Call.CacheList,
-              Call.CacheClean(CacheCleanMode.Remove),
-              Call.CachePromote(CacheNamespace.Main, CacheNamespace.Dev(dev)),
-              Call.Launcher(LauncherAction.Update),
-              Call.Watch(Call.Compile(names), WatchPolicy.After),
-              Call.Bsp,
-              Call.PreviewCompile(names),
-              Call.PreviewTest(names),
-              Call.PreviewPublishLocal(Nil),
-              Call.PreviewPublishSnapshots(List(ship.value)),
-              Call.PreviewClean(names),
-              Call.PreviewCleanFull,
-              Call.PreviewRun(core.value, None),
-            )
+    val names = List(core)
+    val args  = PluginArgs(List(NamedText(param, "x")), Set(flag))
+    List(
+      Call.Compile(names),
+      Call.Test(names, List(SuitePattern("App*")), TestMode.Run),
+      Call.PublishLocal(List(ship.value)),
+      Call.PublishSnapshots(Nil),
+      Call.PublishRelease(List(ship.value), true),
+      Call.PublishPromote("id"),
+      Call.PublishDrop("id"),
+      Call.PublishAssets(List("app")),
+      Call.Graph,
+      Call.Run(core.value, Some(Platform.Js)),
+      Call.Client,
+      Call.Task(taskId.render, args),
+      Call.Cancel(RunId("run-1")),
+      Call.Toolchain,
+      Call.Resolve(ResolveAction.Verify),
+      Call.Workflow(WorkflowAction.Check),
+      Call.Format(FormatTargets.Build, FormatMode.Check),
+      Call.Assembly(Some("dist/app.jar")),
+      Call.Clean(names),
+      Call.CleanFull,
+      Call.Reload,
+      Call.Reboot,
+      Call.Version,
+      Call.CachePath,
+      Call.CacheList,
+      Call.CacheClean(CacheCleanMode.Remove),
+      Call.CachePromote(CacheNamespace.Main, CacheNamespace.Dev(dev)),
+      Call.Launcher(LauncherAction.Update),
+      Call.Watch(Call.Compile(names), WatchPolicy.After),
+      Call.Bsp,
+      Call.PreviewCompile(names),
+      Call.PreviewTest(names),
+      Call.PreviewPublishLocal(Nil),
+      Call.PreviewPublishSnapshots(List(ship.value)),
+      Call.PreviewClean(names),
+      Call.PreviewCleanFull,
+      Call.PreviewRun(core.value, None),
+    )
 
   def every: List[Call] =
     oneEach.flatMap: call =>

@@ -11,7 +11,6 @@ import histos.report.{BuildFault, CallResult, Diagnostic, Rejection, Report, Sev
 import histos.resolve.ResolveError
 import histos.schedule.{CacheError, RemoteError}
 import histos.select.SelectError
-import histos.server.Call
 import histos.task.TaskError
 import histos.testrun.{ModuleTestError, SuitePatternError, TestStatus, TestedCell}
 import histos.toolchain.SurveyError
@@ -42,40 +41,33 @@ object CliExitLawSpec extends ZIOSpecDefault:
     test("a process status is 0, 1, or 2"):
       assertTrue(
         CliExit.Success.code == 0,
+        CliExit.Failed.code == 1,
         CliExit.Usage.code == 2,
-        CliExit.Program(0).code == 0,
-        CliExit.Program(2).code == 2,
-        CliExit.Program(7).code == 1,
-        CliExit.Interrupted.code == 1,
         CliExit.fromCode(0) == CliExit.Success,
         CliExit.fromCode(2) == CliExit.Usage,
-        CliExit.fromCode(7) == CliExit.TaskFailed,
+        CliExit.fromCode(7) == CliExit.Failed,
       )
     ,
     test("a nonzero program status wins over a failed test"):
       val failed = CallResult.reported(tests = Chunk(cell), program = Some(2))
       assertTrue(
-        CliExit.from(Call.Compile(Nil), failed) == CliExit.Usage,
-        CliExit.from(Call.Version, CallResult.reported(program = Some(7))) == CliExit.TaskFailed,
-        CliExit.from(Call.Version, CallResult.reported(program = Some(0))) == CliExit.Success,
-        CliExit.from(Call.Compile(Nil), CallResult.reported(tests = Chunk(cell))) == CliExit.TestFailed,
-        CliExit.from(Call.Compile(Nil), CallResult.reported(tests = Chunk(quiet))) == CliExit.Success,
-        CliExit.from(Call.Compile(Nil), CallResult.reported()) == CliExit.Success,
+        CliExit.from(failed) == CliExit.Usage,
+        CliExit.from(CallResult.reported(program = Some(7))) == CliExit.Failed,
+        CliExit.from(CallResult.reported(program = Some(0))) == CliExit.Success,
+        CliExit.from(CallResult.reported(tests = Chunk(cell))) == CliExit.Failed,
+        CliExit.from(CallResult.reported(tests = Chunk(quiet))) == CliExit.Success,
+        CliExit.from(CallResult.reported()) == CliExit.Success,
       )
     ,
-    test("an error line or an error diagnostic follows the call"):
-      val warn = noted(Severity.Warn, "careful")
-      val boom = noted(Severity.Error, "boom")
+    test("an error line or an error diagnostic fails, and a warning does not"):
       val rows = List(
-        (Call.Test(Nil, Nil, histos.testrun.TestMode.Run), CallResult.reported(summary = "boom"), CliExit.TestFailed),
-        (Call.PublishLocal(Nil), CallResult.reported(summary = "boom"), CliExit.PublishFailed),
-        (Call.Compile(Nil), CallResult.reported(summary = "boom"), CliExit.CompileFailed),
-        (Call.Compile(Nil), warn, CliExit.Success),
-        (Call.Compile(Nil), boom, CliExit.CompileFailed),
+        (CallResult.reported(summary = "boom"), CliExit.Failed),
+        (noted(Severity.Warn, "careful"), CliExit.Success),
+        (noted(Severity.Error, "boom"), CliExit.Failed),
       )
       assertTrue(missed(rows) == Nil)
     ,
-    test("a fault names the call that failed"):
+    test("a fault fails, and a bad pattern or a refused request is usage"):
       assertTrue(missed(faults) == Nil),
   )
 
@@ -84,91 +76,59 @@ object CliExitLawSpec extends ZIOSpecDefault:
       Report.empty.copy(diagnostics = Chunk(Diagnostic(None, None, None, None, None, severity, message)))
     )
 
-  private def missed(rows: List[(Call, CallResult, CliExit)]): List[(Call, CliExit, CliExit)] =
-    rows.flatMap: (call, result, expected) =>
-      val got = CliExit.from(call, result)
-      if got == expected then Nil else List((call, expected, got))
+  private def missed(rows: List[(CallResult, CliExit)]): List[(CallResult, CliExit, CliExit)] =
+    rows.flatMap: (result, expected) =>
+      val got = CliExit.from(result)
+      if got == expected then Nil else List((result, expected, got))
 
-  private def faults: List[(Call, CallResult, CliExit)] =
-    val compile                            = Call.Compile(Nil)
-    val test                               = Call.Test(Nil, Nil, histos.testrun.TestMode.Run)
-    val publish                            = Call.PublishLocal(Nil)
-    val version                            = Call.Version
-    val run                                = Call.Run("api", None)
+  private def faults: List[(CallResult, CliExit)] =
     def fault(why: BuildFault): CallResult = CallResult.Fault(why)
     List(
-      (version, fault(BuildFault.Load(histos.load.LoadError.MissingFile(missing))), CliExit.LoadFailed),
-      (compile, fault(BuildFault.Resolve(lock)), CliExit.CompileFailed),
-      (version, fault(BuildFault.Resolve(lock)), CliExit.ResolveFailed),
-      (publish, fault(BuildFault.Resolve(lock)), CliExit.PublishFailed),
-      (version, fault(BuildFault.Toolchain(ToolchainError.NoArchitecture)), CliExit.ToolchainFailed),
-      (version, fault(BuildFault.Survey(SurveyError.Incomplete("report", "detail"))), CliExit.ToolchainFailed),
-      (test, fault(BuildFault.Select(SelectError.Unknown(ProjectName("api")))), CliExit.TestFailed),
-      (compile, fault(BuildFault.Select(SelectError.Unknown(ProjectName("api")))), CliExit.CompileFailed),
-      (version, fault(BuildFault.Select(SelectError.Unknown(ProjectName("api")))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Pattern(SuitePatternError.Empty)), CliExit.Usage),
-      (test, fault(BuildFault.Compile(locked)), CliExit.ResolveFailed),
-      (test, fault(BuildFault.Compile(noRoot)), CliExit.TestFailed),
-      (compile, fault(BuildFault.Compile(noRoot)), CliExit.CompileFailed),
-      (publish, fault(BuildFault.Compile(noRoot)), CliExit.PublishFailed),
+      (fault(BuildFault.Load(histos.load.LoadError.MissingFile(missing))), CliExit.Failed),
+      (fault(BuildFault.Resolve(lock)), CliExit.Failed),
+      (fault(BuildFault.Toolchain(ToolchainError.NoArchitecture)), CliExit.Failed),
+      (fault(BuildFault.Survey(SurveyError.Incomplete("report", "detail"))), CliExit.Failed),
+      (fault(BuildFault.Select(SelectError.Unknown(ProjectName("api")))), CliExit.Failed),
+      (fault(BuildFault.Pattern(SuitePatternError.Empty)), CliExit.Usage),
+      (fault(BuildFault.Compile(locked)), CliExit.Failed),
+      (fault(BuildFault.Compile(noRoot)), CliExit.Failed),
+      (fault(BuildFault.Compile(GraphCompileError.Cells(NonEmptyChunk.single(noRoot)))), CliExit.Failed),
+      (fault(BuildFault.Test(ModuleTestError.Pattern(SuitePatternError.Empty))), CliExit.Usage),
+      (fault(BuildFault.Test(ModuleTestError.NoneMatched(Nil))), CliExit.Failed),
+      (fault(BuildFault.Test(ModuleTestError.Lock(lock))), CliExit.Failed),
+      (fault(BuildFault.Test(ModuleTestError.Compile(locked))), CliExit.Failed),
       (
-        compile,
-        fault(BuildFault.Compile(GraphCompileError.Cells(NonEmptyChunk.single(noRoot)))),
-        CliExit.CompileFailed,
-      ),
-      (test, fault(BuildFault.Test(ModuleTestError.Pattern(SuitePatternError.Empty))), CliExit.Usage),
-      (test, fault(BuildFault.Test(ModuleTestError.NoneMatched(Nil))), CliExit.TestFailed),
-      (test, fault(BuildFault.Test(ModuleTestError.Lock(lock))), CliExit.ResolveFailed),
-      (test, fault(BuildFault.Test(ModuleTestError.Compile(locked))), CliExit.ResolveFailed),
-      (
-        publish,
         fault(
           BuildFault.Publish(
             histos.publish.LocalPublishError.NoSources(ProjectName("api"), ScalaVersion("3.3.4"), Platform.Jvm)
           )
         ),
-        CliExit.PublishFailed,
+        CliExit.Failed,
       ),
-      (version, fault(BuildFault.Release("held")), CliExit.PublishFailed),
-      (version, fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Workflow(WorkflowFault.Files(CiError.BadName("1")))), CliExit.WorkflowFailed),
-      (version, fault(BuildFault.Program(ProgramError.Absent("api"))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Program(ProgramError.Lock(lock))), CliExit.ResolveFailed),
-      (version, fault(BuildFault.Program(ProgramError.Compile(noRoot))), CliExit.CompileFailed),
-      (version, fault(BuildFault.Platform(PlatformError.Unknown("bogus"))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Task(TaskError.EmptyId)), CliExit.TaskFailed),
-      (version, fault(BuildFault.Plugin(PluginFault.Compiled(noRoot))), CliExit.TaskFailed),
-      (version, fault(BuildFault.PluginTask(PluginTaskError.Shape("nope"))), CliExit.TaskFailed),
-      (
-        Call.PreviewCompile(Nil),
-        fault(BuildFault.Preview(PreviewError.Cycle(ProjectName("api")))),
-        CliExit.CompileFailed,
-      ),
-      (Call.PreviewTest(Nil), fault(BuildFault.Preview(PreviewError.Cycle(ProjectName("api")))), CliExit.TestFailed),
-      (version, fault(BuildFault.Preview(PreviewError.Cycle(ProjectName("api")))), CliExit.TaskFailed),
-      (
-        Call.PreviewPublishLocal(Nil),
-        fault(BuildFault.Preview(PreviewError.Cycle(ProjectName("api")))),
-        CliExit.PublishFailed,
-      ),
-      (version, fault(BuildFault.Assemble(AssembleError.NoModule("api"))), CliExit.CompileFailed),
-      (version, fault(BuildFault.Launcher(LauncherError.Absent(missing))), CliExit.ResolveFailed),
-      (version, fault(BuildFault.Cache(CacheError.Io(io))), CliExit.LoadFailed),
-      (version, fault(BuildFault.Remote(RemoteError.Off)), CliExit.LoadFailed),
-      (version, fault(BuildFault.Store(io)), CliExit.LoadFailed),
-      (test, fault(BuildFault.Io(io)), CliExit.ResolveFailed),
-      (run, fault(BuildFault.Io(io)), CliExit.ResolveFailed),
-      (compile, fault(BuildFault.Io(io)), CliExit.CompileFailed),
-      (publish, fault(BuildFault.Io(io)), CliExit.PublishFailed),
-      (Call.CachePath, fault(BuildFault.Io(io)), CliExit.LoadFailed),
-      (version, fault(BuildFault.Io(io)), CliExit.TaskFailed),
-      (version, fault(BuildFault.Version(VersionError.Unreadable)), CliExit.TaskFailed),
-      (version, fault(BuildFault.Watch(WatchError.Read(missing))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Interrupted), CliExit.Interrupted),
-      (version, fault(BuildFault.Rejected(Rejection.AssemblyDestination(".."))), CliExit.CompileFailed),
-      (version, fault(BuildFault.Rejected(Rejection.TaskArguments("api"))), CliExit.TaskFailed),
-      (version, fault(BuildFault.Rejected(Rejection.RunFailed)), CliExit.TaskFailed),
-      (version, fault(BuildFault.Rejected(Rejection.WatchStopped)), CliExit.TaskFailed),
-      (version, fault(BuildFault.Rejected(Rejection.PreviewProjects)), CliExit.Usage),
+      (fault(BuildFault.Release("held")), CliExit.Failed),
+      (fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch))), CliExit.Failed),
+      (fault(BuildFault.Workflow(WorkflowFault.Files(CiError.BadName("1")))), CliExit.Failed),
+      (fault(BuildFault.Program(ProgramError.Absent("api"))), CliExit.Failed),
+      (fault(BuildFault.Program(ProgramError.Lock(lock))), CliExit.Failed),
+      (fault(BuildFault.Program(ProgramError.Compile(noRoot))), CliExit.Failed),
+      (fault(BuildFault.Platform(PlatformError.Unknown("bogus"))), CliExit.Failed),
+      (fault(BuildFault.Task(TaskError.EmptyId)), CliExit.Failed),
+      (fault(BuildFault.Plugin(PluginFault.Compiled(noRoot))), CliExit.Failed),
+      (fault(BuildFault.PluginTask(PluginTaskError.Shape("nope"))), CliExit.Failed),
+      (fault(BuildFault.Preview(PreviewError.Cycle(ProjectName("api")))), CliExit.Failed),
+      (fault(BuildFault.Assemble(AssembleError.NoModule("api"))), CliExit.Failed),
+      (fault(BuildFault.Launcher(LauncherError.Absent(missing))), CliExit.Failed),
+      (fault(BuildFault.Cache(CacheError.Io(io))), CliExit.Failed),
+      (fault(BuildFault.Remote(RemoteError.Off)), CliExit.Failed),
+      (fault(BuildFault.Store(io)), CliExit.Failed),
+      (fault(BuildFault.Io(io)), CliExit.Failed),
+      (fault(BuildFault.Version(VersionError.Unreadable)), CliExit.Failed),
+      (fault(BuildFault.Watch(WatchError.Read(missing))), CliExit.Failed),
+      (fault(BuildFault.Interrupted), CliExit.Failed),
+      (fault(BuildFault.Rejected(Rejection.AssemblyDestination(".."))), CliExit.Failed),
+      (fault(BuildFault.Rejected(Rejection.TaskArguments("api"))), CliExit.Failed),
+      (fault(BuildFault.Rejected(Rejection.RunFailed)), CliExit.Failed),
+      (fault(BuildFault.Rejected(Rejection.WatchStopped)), CliExit.Failed),
+      (fault(BuildFault.Rejected(Rejection.PreviewProjects)), CliExit.Usage),
     )
 end CliExitLawSpec

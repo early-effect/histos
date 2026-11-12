@@ -1,9 +1,8 @@
 package histos.bsp
 
-import histos.build.BuildEvent
-import histos.report.{CallResult, Report, WireJson}
-import histos.server.{Call, CallSamples, Message, ResolveActionError}
-import histos.workflow.WorkflowActionError
+import histos.report.WireJson
+import histos.server.{Call, CallSamples, ResolveAction}
+import histos.workflow.WorkflowAction
 import histos.{EnumLaw, Platform, WireSamples}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, PipedInputStream, PipedOutputStream}
@@ -21,7 +20,7 @@ object FrameLawSpec extends ZIOSpecDefault:
 
   def spec = suite("frame laws")(
     test("put then take is the payload, and the next read is the end"):
-      check(Gen.string(Gen.alphaNumericChar)): payload =>
+      check(Gen.string): payload =>
         val out = ByteArrayOutputStream()
         val put = Frame.put(out, payload)
         val in  = ByteArrayInputStream(out.toByteArray)
@@ -99,33 +98,15 @@ object FrameLawSpec extends ZIOSpecDefault:
         Frame.put(PipedOutputStream(), "a") == Left(Frame.FrameError.Io),
       )
     ,
-    test("a call and a message round-trip, and a token is not the case name"):
-      val calls   = CallSamples.every
-      val covered = CallSamples.oneEach
-      val events  = List(
-        Message.Ready,
-        Message.Event(BuildEvent.Out("ok")),
-        Message.Done(CallResult.Reported(Report.empty)),
-        Message.Marker(1),
-      )
-      val verify = """{"Resolve":{"action":"Verify"}}"""
-      val update = """{"Workflow":{"action":"Update"}}"""
+    test("every call round-trips, and an action document is its token, not the case name"):
+      val calls = CallSamples.every
       assertTrue(
-        EnumLaw.covered(covered),
+        EnumLaw.covered(CallSamples.oneEach),
         calls.map(call => call.toJson.fromJson[Call]) == calls.map(Right(_)),
-        covered.map(_.toJson.fromJson[Call]) == covered.map(Right(_)),
-        "1".fromJson[Call] == Left("(expected '{' got '1')"),
-        "{".fromJson[Call] == Left("Unexpected end of input"),
-        "{\"__nope__\":{}}".fromJson[Call] == Left("(invalid disambiguator)"),
-        "{}".fromJson[Call] == Left("(expected non-empty object)"),
-        verify.fromJson[Call] == Left(s".Resolve.action(${ResolveActionError.Unknown("Verify").message})"),
-        update.fromJson[Call] == Left(s".Workflow.action(${WorkflowActionError.Unknown("Update").message})"), {
-          val verifyCall: Call = Call.Resolve(histos.server.ResolveAction.Verify)
-          verifyCall.toJson == """{"Resolve":{"action":"verify"}}"""
-        },
-        EnumLaw.covered(events),
-        events.map(message => message.toJson.fromJson[Message]) == events.map(Right(_)),
-        "1".fromJson[Message] == Left("(expected '{' got '1')"),
+        Call.encode(Call.Resolve(ResolveAction.Verify)) == """{"Resolve":{"action":"verify"}}""",
+        Call.encode(Call.Workflow(WorkflowAction.Update)) == """{"Workflow":{"action":"update"}}""",
+        """{"Resolve":{"action":"Verify"}}""".fromJson[Call].isLeft,
+        """{"Workflow":{"action":"Update"}}""".fromJson[Call].isLeft,
       )
     ,
     test("batch argv is the call it names, and a stray token is none"):

@@ -11,14 +11,30 @@ import zio.{UIO, ZIO}
   * use this string. A checkout with no `app` ship, or no commit, has none.
   */
 object SnapshotId:
-  def current(repo: Path): UIO[Option[String]] =
+  /** `head` reads the checkout's commit, and runs only when `histos.scala` names an `app` ship. Production passes
+    * [[SnapshotId.head]].
+    */
+  def current(repo: Path, head: Path => UIO[Option[CommitSha]]): UIO[Option[String]] =
     ZIO
       .attemptBlocking {
         val file = repo.resolve("histos.scala")
         if !Files.isRegularFile(file) then None
-        else
-          val text = Files.readString(file, StandardCharsets.UTF_8)
-          publishing(text).flatMap(number => commit(repo).map(sha => render(number, sha)))
+        else publishing(Files.readString(file, StandardCharsets.UTF_8))
+      }
+      .orElseSucceed(None)
+      .flatMap:
+        case None         => ZIO.none
+        case Some(number) => head(repo).map(_.map(render(number, _)))
+
+  /** `git rev-parse HEAD` in `repo`. None when git fails or the checkout has no commit. */
+  def head(repo: Path): UIO[Option[CommitSha]] =
+    ZIO
+      .attemptBlocking {
+        val process = new ProcessBuilder("git", "-C", repo.toString, "rev-parse", "HEAD")
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start()
+        val text = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
+        if process.waitFor() == 0 then CommitSha.from(text).toOption else None
       }
       .orElseSucceed(None)
 
@@ -87,11 +103,4 @@ object SnapshotId:
 
   private def skip(text: String, at: Int): Int =
     if at < text.length && text.charAt(at).isWhitespace then skip(text, at + 1) else at
-
-  private def commit(repo: Path): Option[CommitSha] =
-    val process = new ProcessBuilder("git", "-C", repo.toString, "rev-parse", "HEAD")
-      .redirectError(ProcessBuilder.Redirect.DISCARD)
-      .start()
-    val text = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
-    if process.waitFor() == 0 then CommitSha.from(text).toOption else None
 end SnapshotId

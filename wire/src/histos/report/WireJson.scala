@@ -201,7 +201,7 @@ import histos.{
 import java.nio.file.{InvalidPathException, Path}
 
 import zio.json.*
-import zio.{Cause, Chunk, Config, FiberId, NonEmptyChunk}
+import zio.{Cause, Chunk, Config, FiberId}
 
 /** Socket codecs. The document schema stays in the JVM app. A derived given is one type, so a parent summons it instead
   * of inlining the tree.
@@ -260,12 +260,6 @@ private object WireLeaves extends WireSupport:
         case PomFact.Developer => "Developer"
         case PomFact.Scm       => "Scm"
       },
-    )
-
-  given [A: JsonCodec]: JsonCodec[NonEmptyChunk[A]] =
-    JsonCodec[Chunk[A]].transformOrFail(
-      chunk => NonEmptyChunk.fromChunk(chunk).toRight("empty chunk"),
-      _.toChunk,
     )
 
   given [A: JsonCodec]: JsonCodec[::[A]] =

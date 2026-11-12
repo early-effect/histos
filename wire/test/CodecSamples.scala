@@ -559,7 +559,7 @@ object CodecSamples:
     PlatformToolError.NativeOrigin(NativeToolchainError.Empty),
   )
 
-  def moduleTests(pattern: SuitePattern): List[ModuleTestError] = List(
+  val moduleTests: List[ModuleTestError] = List(
     ModuleTestError.Tool(core, scala3, PlatformToolError.JsRun(JsRunError.Unavailable)),
     ModuleTestError.Target(SelectError.Duplicate(core)),
     ModuleTestError.Compile(noRoot),
@@ -570,7 +570,7 @@ object CodecSamples:
     ModuleTestError.MissingProvider(core, provider),
     ModuleTestError.ProviderDependency(core, provider),
     ModuleTestError.NoneDiscovered(core, provider),
-    ModuleTestError.NoneMatched(List(pattern)),
+    ModuleTestError.NoneMatched(List(SuitePattern("App*"))),
     ModuleTestError.Mixed(core),
     ModuleTestError.Process(core, scala3, ChildError.NoProgram),
     ModuleTestError.Main(PackMainError.Empty),
@@ -780,7 +780,7 @@ object CodecSamples:
   val taskErrors: List[TaskError] = List(
     TaskError.EmptyId,
     TaskError.NoRunner(TaskId.Inspect),
-    TaskError.UnknownRun(RunId.trusted("run-1")),
+    TaskError.UnknownRun(RunId("run-1")),
     TaskError.Version(histos.version.VersionError.Unreadable),
     TaskError.Plugin(PluginRunError.Failed(detail)),
     TaskError.Doc(NonEmptyChunk("scaladoc")),

@@ -42,16 +42,16 @@ object Main extends ZIOAppDefault:
     val repo = Path.of("").toAbsolutePath.normalize
     ApiClock.admit(repo, call).flatMap {
       case ApiClock.Admit.Stop(fault) =>
-        ZIO.succeed(leave(CliExit.from(call, CallResult.Fault(fault)).code, Some(fault.message)))
+        ZIO.succeed(leave(CliExit.from(CallResult.Fault(fault)).code, Some(fault.message)))
       case ApiClock.Admit.Warn(line) =>
         ZIO.succeed(java.lang.System.err.println(line)) *>
           talk(repo, call).foldZIO(
-            error => ZIO.succeed(leave(CliExit.LoadFailed.code, Some(error.message))),
+            error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
             code => ZIO.succeed(leave(code, None)),
           )
       case ApiClock.Admit.Go =>
         talk(repo, call).foldZIO(
-          error => ZIO.succeed(leave(CliExit.LoadFailed.code, Some(error.message))),
+          error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
           code => ZIO.succeed(leave(code, None)),
         )
     }
@@ -105,7 +105,7 @@ object Main extends ZIOAppDefault:
           case Right(head) =>
             ready(head) match
               case Left(error) => Left(error)
-              case Right(_)    => frames(repo, socket, session.input, call)
+              case Right(_)    => frames(repo, socket, session.input)
 
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match
@@ -117,7 +117,6 @@ object Main extends ZIOAppDefault:
       repo: Path,
       socket: Path,
       input: java.io.InputStream,
-      call: Call,
   ): Either[ServerError, Int] =
     Frame.take(input) match
       case Left(_)              => Left(ServerError.Io(histos.server.ServerIo.Read(socket)))
@@ -126,8 +125,8 @@ object Main extends ZIOAppDefault:
         payload.fromJson[Message] match
           case Right(Message.Event(event)) =>
             show(repo, event)
-            frames(repo, socket, input, call)
-          case Right(Message.Done(result)) => Right(finish(call, result))
+            frames(repo, socket, input)
+          case Right(Message.Done(result)) => Right(finish(result))
           case _                           => Left(ServerError.Protocol)
 
   private def show(repo: Path, event: BuildEvent): Unit =
@@ -135,8 +134,8 @@ object Main extends ZIOAppDefault:
       case CompileConsole.Line.Out(text) => System.out.println(text)
       case CompileConsole.Line.Err(text) => System.err.println(text)
 
-  private def finish(call: Call, result: CallResult): Int =
-    val exit = CliExit.from(call, result)
+  private def finish(result: CallResult): Int =
+    val exit = CliExit.from(result)
     result match
       case CallResult.Fault(fault) =>
         val text = histos.doctor.FaultText.show(fault.diagnose)
