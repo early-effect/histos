@@ -44,8 +44,8 @@ object CatalogSpec:
     new CatalogSpec(first :: rest.toList)
 end CatalogSpec
 
-/** Resolves each ship's name and members against the graph. [[Catalog.from]] checks the rows with the place each was
-  * written.
+/** Resolves each ship's name and members against the graph. [[histos.version.Catalog.from]] checks the rows with the
+  * place each was written.
   */
 object ShipLink:
   def catalog(spec: CatalogSpec, projects: List[Project]): Either[BuildError, Catalog] =
