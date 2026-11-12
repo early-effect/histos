@@ -151,7 +151,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Dependencies
 
-`histos resolve` fetches what `dependencies.lock` records and checks each sha256. `resolve --update` solves and writes the lock, and `resolve --check` fails when a fresh solve differs. `histos deps check`, `deps update [--yes] [--security]`, `deps audit [--report]`, `deps pr [--security] [--open]`, `deps alert`, and `deps snapshot [--submit]` check, update, audit, and report dependencies. `deps pr`, `deps alert`, and `deps snapshot --submit` write to the repository `GITHUB_REPOSITORY` names, or else the one a github.com `origin` names, and refuse when neither names one. `HISTOS_DRY_RUN=1` prints their calls and sends none. `histos setup supply-chain [--from zipx] [--fix] [--yes]` writes the supply-chain files.
+`histos resolve` fetches what `dependencies.lock` records and checks each sha256. `resolve --update` solves and writes the lock, and `resolve --check` fails when a fresh solve differs. `histos deps check`, `deps update [--yes] [--security]`, `deps audit [--report]`, `deps pr [--security] [--open]`, `deps alert`, and `deps snapshot [--submit]` check, update, audit, and report dependencies. `deps pr`, `deps alert`, and `deps snapshot --submit` write to the repository `GITHUB_REPOSITORY` names, or else the one a github.com `origin` names, and refuse when neither names one. They send `GH_TOKEN`, else `GITHUB_TOKEN`, and an empty one is unset. `HISTOS_DRY_RUN=1` prints their calls and sends none. `histos setup supply-chain [--from zipx] [--fix] [--yes]` writes the supply-chain files.
 
 ### Doctor
 
@@ -262,7 +262,7 @@ CI restores the content store, the Coursier cache, and the toolchains with exact
 Histos uses the JDK, Node, and clang already installed.
 
 - JDK: `.histos/toolchain.local` names a JDK home. Otherwise the running JVM (`java.home`).
-- Node: `HISTOS_NODE`, then the `nodePath` on `RunnerTools`, then `.histos/node.local` (a Node home), then `node` on `PATH`. A source that is missing, not executable, or older than the floor fails, and the next source is not tried.
+- Node: `HISTOS_NODE`, then the `nodePath` on `RunnerTools`, then `.histos/node.local` (a Node home), then `node` on `PATH`. A source that is missing, not executable, or older than the floor fails, and the next source is not tried. A pre-release sorts below its release, so `v25.0.0-rc.1` is older than a floor of 25.
 - clang: on `PATH`.
 
 A file that points at a missing or too-old home fails, and Histos does not pick another.

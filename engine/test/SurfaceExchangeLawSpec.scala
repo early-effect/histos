@@ -8,7 +8,9 @@ import slayer.{any, stub, stubbed}
 import zio.*
 import zio.test.*
 
-/** Every law runs on TestSystem, so `GITHUB_REPOSITORY`, `GITHUB_SHA`, and `HISTOS_DRY_RUN` are what the law puts. */
+/** Every law runs on TestSystem and TestClock, so the token, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `HISTOS_DRY_RUN`, and
+  * today are what the law puts.
+  */
 object SurfaceExchangeLawSpec extends ZIOSpecDefault:
   private val ghsa   = "GHSA-1234-abcd-ef09"
   private val oid    = "c" * 40
@@ -24,7 +26,7 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
   private val advisory = s"""{"id":"$ghsa","fixed":"9.9.9"}"""
 
   def spec = suite("surface exchange laws")(
-    test("a maven 200 names the library the plan applies"):
+    test("a maven 200 names the library the plan applies once the cooldown has passed on the caller's clock"):
       val program =
         for
           repo <- Workspace.work("surface-exchange-check")
@@ -34,8 +36,14 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.succeed(Reply(200, maven))
           )
           net    <- ZIO.service[Net]
-          result <- DepsSurface.check(repo, SupplyChain(), net, Date.trusted("2026-01-10"))
-        yield assertTrue(result.code == 0, result.text == planned)
+          _      <- TestClock.setTime(java.time.Instant.parse("2023-11-16T23:00:00Z"))
+          early  <- DepsSurface.check(repo, SupplyChain(), net)
+          _      <- TestClock.setTime(java.time.Instant.parse("2023-11-17T00:00:00Z"))
+          cooled <- DepsSurface.check(repo, SupplyChain(), net)
+        yield assertTrue(
+          early == DepsSurface.DepsResult(0, "deps plan\nnote org.example:demo demo\n"),
+          cooled == DepsSurface.DepsResult(0, planned),
+        )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net])
     ,
     test("a confirmed update writes the version that maven 200 named, and an unconfirmed one does not"):
@@ -49,9 +57,10 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.succeed(Reply(200, maven))
           )
           net    <- ZIO.service[Net]
-          shown  <- DepsSurface.update(repo, SupplyChain(), net, Date.trusted("2026-01-10"), false, false)
+          _      <- TestClock.setTime(java.time.Instant.parse("2026-01-10T00:00:00Z"))
+          shown  <- DepsSurface.update(repo, SupplyChain(), net, false, false)
           before <- Workspace.readString(path)
-          wrote  <- DepsSurface.update(repo, SupplyChain(), net, Date.trusted("2026-01-10"), true, false)
+          wrote  <- DepsSurface.update(repo, SupplyChain(), net, true, false)
           after  <- Workspace.readString(path)
         yield assertTrue(
           shown.code == 0 && shown.text == planned,
@@ -107,25 +116,27 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
               else ZIO.succeed(Reply(200, "{}"))
           )
           net    <- ZIO.service[Net]
-          opened <- DepsSurface.pullRequest(repo, SupplyChain(), net, Some("token"), false, true)
+          _      <- TestSystem.putEnv("GH_TOKEN", "token")
+          opened <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
           _      <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, url: String, _: String, _: List[(String, String)]) =>
               if url == GhRun.graphql then ZIO.succeed(Reply(200, committed))
               else if url.contains("/pulls?") then ZIO.succeed(Reply(200, """{"number":12}"""))
               else ZIO.succeed(Reply(200, "{}"))
           )
-          updated <- DepsSurface.pullRequest(repo, SupplyChain(), net, Some("token"), false, true)
+          updated <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
           _       <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, url: String, _: String, _: List[(String, String)]) =>
               if url == GhRun.graphql then ZIO.succeed(Reply(409, "conflict"))
               else ZIO.succeed(Reply(200, "{}"))
           )
-          conflict <- DepsSurface.pullRequest(repo, SupplyChain(), net, Some("token"), false, true)
+          conflict <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
           _        <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
             (_: String, url: String, _: String, _: List[(String, String)]) => ZIO.dieMessage(s"sent $url")
           )
+          _   <- TestSystem.clearEnv("GH_TOKEN")
           _   <- TestSystem.putEnv("HISTOS_DRY_RUN", "1")
-          dry <- DepsSurface.pullRequest(repo, SupplyChain(), net, None, false, true)
+          dry <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
         yield assertTrue(
           opened == DepsSurface.DepsResult(0, openedLive),
           updated == DepsSurface.DepsResult(0, updatedLive),
@@ -152,7 +163,8 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
                  else ZIO.succeed(Reply(200, "{}")))
           )
           net    <- ZIO.service[Net]
-          result <- DepsSurface.alert(repo, SupplyChain(), net, Some("token"))
+          _      <- TestSystem.putEnv("GH_TOKEN", "token")
+          result <- DepsSurface.alert(repo, SupplyChain(), net)
           github <- sent.get.map(_.filterNot(_ == osv))
         yield assertTrue(
           result == DepsSurface.DepsResult(0, live),
@@ -177,12 +189,39 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
               else ZIO.dieMessage(s"sent $url")
           )
           net    <- ZIO.service[Net]
-          result <- DepsSurface.snapshot(repo, net, Some("token"), true)
+          _      <- TestSystem.putEnv("GITHUB_TOKEN", "token")
+          result <- DepsSurface.snapshot(repo, net, true)
         yield assertTrue(
           result.code == 0,
           result.text.startsWith(s"submitted $declared\n"),
           result.text.contains(s""""sha":"$commit""""),
           result.text.contains("pkg:maven/org.example/demo@1.0.0"),
+        )
+      program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(remote = Some(origin)).layer)
+    ,
+    test("the bearer GitHub sees is GH_TOKEN, else GITHUB_TOKEN, and an empty one is not set"):
+      val program =
+        for
+          repo    <- Workspace.work("surface-exchange-token")
+          _       <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
+          bearers <- Ref.make(List.empty[String])
+          _       <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
+            (_: String, _: String, _: String, headers: List[(String, String)]) =>
+              bearers.update(_ ++ headers.collect { case ("Authorization", value) => value }).as(Reply(200, "accepted"))
+          )
+          net     <- ZIO.service[Net]
+          _       <- TestSystem.putEnv("GH_TOKEN", "")
+          unset   <- DepsSurface.snapshot(repo, net, true)
+          _       <- TestSystem.putEnv("GITHUB_TOKEN", "actions")
+          actions <- DepsSurface.snapshot(repo, net, true)
+          _       <- TestSystem.putEnv("GH_TOKEN", "person")
+          person  <- DepsSurface.snapshot(repo, net, true)
+          sent    <- bearers.get
+        yield assertTrue(
+          unset == DepsSurface.DepsResult(1, "GITHUB_TOKEN is not set\n"),
+          actions.text.startsWith(s"submitted ${origin.value}\n"),
+          person.text.startsWith(s"submitted ${origin.value}\n"),
+          sent == List("Bearer actions", "Bearer person"),
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Net] ++ GitAnswers(remote = Some(origin)).layer)
     ,
@@ -197,8 +236,9 @@ object SurfaceExchangeLawSpec extends ZIOSpecDefault:
             (_: String, url: String, _: String, _: List[(String, String)]) => sent.update(_ :+ url).as(Reply(200, "[]"))
           )
           net      <- ZIO.service[Net]
-          snapshot <- DepsSurface.snapshot(repo, net, Some("token"), true)
-          pull     <- DepsSurface.pullRequest(repo, SupplyChain(), net, Some("token"), false, true)
+          _        <- TestSystem.putEnv("GH_TOKEN", "token")
+          snapshot <- DepsSurface.snapshot(repo, net, true)
+          pull     <- DepsSurface.pullRequest(repo, SupplyChain(), net, false, true)
           urls     <- sent.get
         yield assertTrue(
           snapshot == unnamed,

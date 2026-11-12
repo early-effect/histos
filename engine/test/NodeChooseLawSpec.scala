@@ -103,6 +103,41 @@ object NodeChooseLawSpec extends ZIOSpecDefault:
                 seen.map(_.binary) == List(sightNode),
                 seen.map(_.version) == List(NodeVersion.trusted("26.0.0", NodeMajor.trusted(26))),
               )
+    ,
+    test("a release candidate is read, a candidate of the floor is too old, and PATH prefers the release"):
+      ZIO.scoped:
+        Workspace
+          .work("histos-node-candidate")
+          .flatMap: repo =>
+            val old       = repo.resolve("old").resolve("bin")
+            val candidate = repo.resolve("candidate").resolve("bin")
+            val early     = repo.resolve("early").resolve("bin")
+            val release   = repo.resolve("release").resolve("bin")
+            for
+              _      <- script(old.resolve("node"), "v20.0.0")
+              _      <- script(candidate.resolve("node"), "v26.0.0-rc.1")
+              _      <- script(early.resolve("node"), "v25.0.0-rc.1")
+              _      <- script(release.resolve("node"), "v26.0.0")
+              chosen <- NodeToolchain
+                .choose(machine(repo, Map("HISTOS_NODE" -> candidate.resolve("node").toString)), None)
+              floor <- NodeToolchain
+                .choose(machine(repo, Map("HISTOS_NODE" -> early.resolve("node").toString)), None)
+                .exit
+              home   <- ZIO.attempt(repo.resolve("early").toRealPath().normalize).orDie
+              seen   <- NodeToolchain.sights(machine(repo, Map("PATH" -> s"$old:$candidate:$release")))
+              newest <- ZIO.attempt(release.resolve("node").toRealPath().normalize).orDie
+            yield assertTrue(
+              chosen.runtime.version == NodeVersion.trusted("26.0.0-rc.1", NodeMajor.trusted(26)),
+              floor == Exit.fail(
+                NodeMiss.TooOld(
+                  NodeToolchain.Floor,
+                  NodeVersion.trusted("25.0.0-rc.1", NodeMajor.trusted(25)),
+                  home,
+                  NodeSource.Environment,
+                )
+              ),
+              NodeToolchain.shadow(seen).map(_.newer.binary) == Some(newest),
+            ),
   )
     // The `node --version` child is launched with the running JVM's java.home, and a PATH sight bounds it with a
     // timeout. Every PATH the law reads is one it wrote.

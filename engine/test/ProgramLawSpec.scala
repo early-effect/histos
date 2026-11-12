@@ -36,7 +36,9 @@ object ProgramLawSpec extends ZIOSpecDefault:
         ClientBinary.destination(repo) == repo.resolve("dist").resolve("histos-client"),
       )
     ,
-    test("a public static main is found once by its object name, and a synthetic, private, or broken class is not"):
+    test(
+      "a public static main is found once by its object name, and a synthetic, private, instance, or broken one is not"
+    ):
       ZIO.scoped:
         Workspace
           .work("histos-mains")
@@ -54,6 +56,7 @@ object ProgramLawSpec extends ZIOSpecDefault:
               _       <- emit(classes, "demo/Main$", Some(main))
               _       <- emit(classes, "demo/Foo$$anon", Some(main))
               _       <- emit(classes, "demo/Hidden", Some(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC))
+              _       <- emit(classes, "demo/Instance", Some(Opcodes.ACC_PUBLIC))
               _       <- emit(classes, "demo/Plain", None)
               _       <- Workspace.writeString(classes.resolve("Nope.class"), "not a class")
               found   <- EntryPoints.mains(classes)

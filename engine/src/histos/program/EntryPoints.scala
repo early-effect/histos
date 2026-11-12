@@ -3,9 +3,10 @@ package histos.program
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
-import scala.util.control.NonFatal
+import scala.util.Try
 
-import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes}
+import org.objectweb.asm.{ClassReader, Opcodes}
+import org.objectweb.asm.tree.{ClassNode, MethodNode}
 
 import histos.workspace.{IoFailure, IoFault}
 
@@ -35,26 +36,17 @@ object EntryPoints:
   private def shown(name: String): String =
     if name.endsWith("$") && !name.endsWith("$$") then name.dropRight(1) else name
 
+  /** A class file ASM cannot read declares no main. */
   private def hasMain(path: Path): Boolean =
-    try
-      val reader = new ClassReader(Files.readAllBytes(path))
-      var found  = false
-      reader.accept(
-        new ClassVisitor(Opcodes.ASM9):
-          override def visitMethod(
-              access: Int,
-              name: String,
-              descriptor: String,
-              signature: String,
-              exceptions: Array[String],
-          ): MethodVisitor =
-            if name == "main" && descriptor == "([Ljava/lang/String;)V" && publicStatic(access) then found = true
-            null
-        ,
-        ClassReader.SKIP_DEBUG | ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES,
-      )
-      found
-    catch case NonFatal(_) => false
+    Try(methods(Files.readAllBytes(path)))
+      .getOrElse(Nil)
+      .exists: method =>
+        method.name == "main" && method.desc == "([Ljava/lang/String;)V" && publicStatic(method.access)
+
+  private def methods(bytes: Array[Byte]): List[MethodNode] =
+    val node = ClassNode()
+    ClassReader(bytes).accept(node, ClassReader.SKIP_DEBUG | ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES)
+    node.methods.asScala.toList
 
   private def publicStatic(access: Int): Boolean =
     (access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0

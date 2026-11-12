@@ -12,7 +12,7 @@ import java.nio.file.{Files, Path}
 
 import slayer.{any, stub, stubbed}
 
-import zio.{Chunk, Promise, Ref, Schedule, Scope, ZIO, ZLayer}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 import Histos.given
@@ -677,33 +677,31 @@ object ScheduleLawSpec extends ZIOSpecDefault:
   private def runnerLayer(limits: Parallelism): ZLayer[Any, Nothing, Histos] =
     ZLayer.succeed(limits) >>> Histos.live
 
+  /** Two steps with these needs. The first to enter waits up to a second for the other, and the law adjusts the clock a
+    * second. The adjust returns only once every fiber the law started is suspended or done, so a step that a permit
+    * wrongly admits has met the first before the wait can end. True when the steps never met and both finished.
+    */
   private def exclude(needs: Set[StepNeed], limits: Parallelism): ZIO[TestEnvironment & Scope, Nothing, Boolean] =
     val program =
       for
-        inside  <- Ref.make(0)
-        peak    <- Ref.make(0)
-        held    <- Promise.make[Nothing, Unit]
-        release <- Promise.make[Nothing, Unit]
-        enter =
-          inside.updateAndGet(_ + 1).flatMap { n =>
-            peak.update(high => if n > high then n else high) *>
-              held.succeed(()).unit *>
-              release.await *>
-              inside.update(_ - 1).unit
-          }
+        entries <- Ref.make(0)
+        partner <- Promise.make[Nothing, Unit]
+        met     <- Promise.make[Nothing, Boolean]
+        enter = entries.updateAndGet(_ + 1).flatMap {
+          case 1 => partner.await.timeout(1.second).flatMap(found => met.succeed(found.isDefined)).unit
+          case _ => partner.succeed(()).unit
+        }
         first  = Step.local[Unit](StepInfo(StepId.Work("a"), Chunk.empty, needs))(enter)
         second = Step.local[Unit](StepInfo(StepId.Work("b"), Chunk.empty, needs))(enter)
-        high <- ZIO.serviceWithZIO[Histos]: histos =>
+        excluded <- ZIO.serviceWithZIO[Histos]: histos =>
           ZIO.scoped:
             for
               running <- histos.start(first.zip(second).map(_ => ()))
-              _       <- held.await
-              _       <- ZIO.yieldNow.repeat(Schedule.recurs(32))
-              found   <- peak.get
-              _       <- release.succeed(())
+              _       <- TestClock.adjust(1.second)
               outcome <- running.outcome
-            yield found == 1 && outcome == Outcome.Done(())
-      yield high
+              overlap <- met.await
+            yield !overlap && outcome == Outcome.Done(())
+      yield excluded
     program.provideSomeLayer[TestEnvironment & Scope](runnerLayer(limits))
 
   private def overlap(need: StepNeed, limits: Parallelism): ZIO[TestEnvironment & Scope, Nothing, TestResult] =

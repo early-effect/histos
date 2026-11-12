@@ -535,21 +535,19 @@ object Cli:
         case Right(loaded) =>
           val policy = loaded.graph.supply
           val net    = histos.supply.Net.live
-          val today  = histos.supply.Date.trusted(java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString)
-          val token  = sys.env.get("GH_TOKEN").filter(_.nonEmpty).orElse(sys.env.get("GITHUB_TOKEN").filter(_.nonEmpty))
           val effect = action match
             case DepsAction.Check =>
-              histos.supply.DepsSurface.check(repo, policy, net, today)
+              histos.supply.DepsSurface.check(repo, policy, net)
             case DepsAction.Update(yes, security) =>
-              histos.supply.DepsSurface.update(repo, policy, net, today, yes, security)
+              histos.supply.DepsSurface.update(repo, policy, net, yes, security)
             case DepsAction.Audit(report) =>
               histos.supply.DepsSurface.audit(repo, report, net)
             case DepsAction.Pr(security, open) =>
-              histos.supply.DepsSurface.pullRequest(repo, policy, net, token, security, open)
+              histos.supply.DepsSurface.pullRequest(repo, policy, net, security, open)
             case DepsAction.Alert =>
-              histos.supply.DepsSurface.alert(repo, policy, net, token)
+              histos.supply.DepsSurface.alert(repo, policy, net)
             case DepsAction.Snapshot(submit) =>
-              histos.supply.DepsSurface.snapshot(repo, net, token, submit)
+              histos.supply.DepsSurface.snapshot(repo, net, submit)
           effect
             .provide(histos.supply.GitRead.live)
             .map: result =>

@@ -21,8 +21,9 @@ import histos.workflow.PinScan
 import histos.ProjectGraph
 
 import java.nio.file.{Files, Path}
+import java.time.ZoneOffset
 
-import zio.{durationInt, UIO, URIO, ZIO}
+import zio.{durationInt, Clock, UIO, URIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -353,20 +354,19 @@ end DoctorSurface
 object DepsSurface:
   final case class DepsResult(code: Int, text: String)
 
+  /** A cooldown counts days to today in UTC on the caller's clock. */
   def check(
       repo: Path,
       policy: SupplyChain,
       net: Net,
-      today: Date,
       known: Map[String, RepoId] = Map.empty,
   ): UIO[DepsResult] =
-    propose(repo, policy, net, today, false, known)
+    propose(repo, policy, net, false, known)
 
   def update(
       repo: Path,
       policy: SupplyChain,
       net: Net,
-      today: Date,
       yes: Boolean,
       security: Boolean,
       known: Map[String, RepoId] = Map.empty,
@@ -375,8 +375,8 @@ object DepsSurface:
       case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
       case Some(text) =>
         val graph = read(repo.resolve("histos.scala"))
-        Plan
-          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+        today
+          .flatMap(Plan.propose(text, graph, Plan.catalog(policy.extraActions), policy, _, security, net, known))
           .flatMap: proposal =>
             if !yes then ZIO.succeed(DepsResult(0, proposal.text))
             else
@@ -409,12 +409,11 @@ object DepsSurface:
       repo: Path,
       policy: SupplyChain,
       net: Net,
-      token: Option[String],
       security: Boolean,
       open: Boolean,
   ): URIO[GitRead, DepsResult] =
-    dryRun.flatMap: dry =>
-      if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
+    (dryRun <*> githubToken).flatMap: (dry, token) =>
+      if token.isEmpty && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
       else
         changed(repo).flatMap: files =>
           val present = PrFlow.keep(policy.updates.author, files)
@@ -451,9 +450,9 @@ object DepsSurface:
                         .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
                 yield sent
 
-  def alert(repo: Path, policy: SupplyChain, net: Net, token: Option[String]): URIO[GitRead, DepsResult] =
-    dryRun.flatMap: dry =>
-      if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
+  def alert(repo: Path, policy: SupplyChain, net: Net): URIO[GitRead, DepsResult] =
+    (dryRun <*> githubToken).flatMap: (dry, token) =>
+      if token.isEmpty && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
       else
         githubName(repo).flatMap:
           case None       => ZIO.succeed(unnamed)
@@ -484,7 +483,7 @@ object DepsSurface:
         )
 
   /** The commit is `GITHUB_SHA`, else HEAD. The ref is `GITHUB_REF`, else `refs/heads/main`. */
-  def snapshot(repo: Path, net: Net, token: Option[String], submit: Boolean): URIO[GitRead, DepsResult] =
+  def snapshot(repo: Path, net: Net, submit: Boolean): URIO[GitRead, DepsResult] =
     lock(repo) match
       case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
       case Some(text) =>
@@ -492,12 +491,13 @@ object DepsSurface:
           commit <- env("GITHUB_SHA").flatMap:
             case Some(named) => ZIO.succeed(named)
             case None        => ZIO.serviceWithZIO[GitRead](_.head(repo)).map(_.fold("")(_.value))
-          ref <- env("GITHUB_REF").map(_.getOrElse("refs/heads/main"))
-          dry <- dryRun
+          ref   <- env("GITHUB_REF").map(_.getOrElse("refs/heads/main"))
+          dry   <- dryRun
+          token <- githubToken
           body = SnapshotSubmit.json(SnapshotSubmit.fromLock(text), commit, ref)
           result <-
             if !submit then ZIO.succeed(DepsResult(0, body + "\n"))
-            else if token.forall(_.isEmpty) then ZIO.succeed(DepsResult(1, "GITHUB_TOKEN is not set\n"))
+            else if token.isEmpty then ZIO.succeed(DepsResult(1, "GITHUB_TOKEN is not set\n"))
             else
               githubName(repo).flatMap:
                 case None       => ZIO.succeed(unnamed)
@@ -512,7 +512,6 @@ object DepsSurface:
       repo: Path,
       policy: SupplyChain,
       net: Net,
-      today: Date,
       security: Boolean,
       known: Map[String, RepoId],
   ): UIO[DepsResult] =
@@ -520,8 +519,8 @@ object DepsSurface:
       case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
       case Some(text) =>
         val graph = read(repo.resolve("histos.scala"))
-        Plan
-          .propose(text, graph, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+        today
+          .flatMap(Plan.propose(text, graph, Plan.catalog(policy.extraActions), policy, _, security, net, known))
           .map(proposal => DepsResult(0, proposal.text))
           .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
@@ -607,6 +606,13 @@ object DepsSurface:
 
   private def dryRun: UIO[Boolean] =
     env("HISTOS_DRY_RUN").map(_.exists(value => value == "true" || value == "1"))
+
+  private def today: UIO[Date] =
+    Clock.instant.map(now => Date.trusted(now.atOffset(ZoneOffset.UTC).toLocalDate.toString))
+
+  /** The github.com token `gh` reads: `GH_TOKEN`, then `GITHUB_TOKEN`. An empty one is unset. */
+  private def githubToken: UIO[Option[String]] =
+    zio.System.envs.orElseSucceed(Map.empty).map(GitHubCredential.fromEnv(_, "github.com"))
 
   private def githubName(repo: Path): URIO[GitRead, Option[RepoName]] =
     env("GITHUB_REPOSITORY").flatMap(GitRead.github(repo, _))

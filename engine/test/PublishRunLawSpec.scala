@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.{DeploymentId, DeploymentState}
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest, VersionError}
 import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
@@ -30,7 +30,7 @@ import java.nio.file.{Files, Path}
 
 import slayer.stubbed
 
-import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer}
 import zio.test.*
 
 object PublishRunLawSpec extends ZIOSpecDefault:
@@ -243,11 +243,11 @@ object PublishRunLawSpec extends ZIOSpecDefault:
       override def sona: ZLayer[SonaPublish, Nothing, Publishing] =
         ZLayer.succeed(publishing)
 
-  private def load(built: Either[BuildError, ProjectGraph]): ZIO[Any, Nothing, ProjectGraph] =
-    ZIO.fromEither(built).orDieWith(blow)
+  private def load(built: Either[BuildError, ProjectGraph]): IO[BuildError, ProjectGraph] =
+    ZIO.fromEither(built)
 
-  private def jdk: ZIO[Any, Nothing, JdkRuntime] =
-    ZIO.fromEither(JdkVersion.from("21")).orDieWith(blow).map { version =>
+  private def jdk: IO[VersionError, JdkRuntime] =
+    ZIO.fromEither(JdkVersion.from("21")).map { version =>
       JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
     }
 
@@ -256,7 +256,4 @@ object PublishRunLawSpec extends ZIOSpecDefault:
 
   private def touched(repo: Path): ZIO[Any, Nothing, Boolean] =
     ZIO.attemptBlocking(Files.exists(repo.resolve(".histos"))).orDie
-
-  private def blow(error: Any): IllegalStateException =
-    new IllegalStateException(error.toString)
 end PublishRunLawSpec

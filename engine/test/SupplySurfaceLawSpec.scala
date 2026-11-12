@@ -106,7 +106,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net     <- ZIO.service[Net]
-          missing <- DepsSurface.check(repo, SupplyChain(), net, Date.trusted("2026-01-10"))
+          missing <- DepsSurface.check(repo, SupplyChain(), net)
           audit   <- DepsSurface.audit(repo, false, net)
           _       <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
           _       <- stub[Net](_.send(any[String], any[String], any[String], any[List[(String, String)]]))(
@@ -133,10 +133,13 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           )
           net <- ZIO.service[Net]
           policy = SupplyChain(updates = UpdatePolicy(author = PrAuthor.Actions))
-          empty <- DepsSurface.pullRequest(repo, policy, net, None, false, true)
-          kept  <- DepsSurface.pullRequest(repo, policy, net, Some("token"), false, true)
+          _     <- TestSystem.putEnv("GH_TOKEN", "")
+          empty <- DepsSurface.pullRequest(repo, policy, net, false, true)
           _     <- TestSystem.putEnv("HISTOS_DRY_RUN", "true")
-          dry   <- DepsSurface.pullRequest(repo, policy, net, None, false, true)
+          dry   <- DepsSurface.pullRequest(repo, policy, net, false, true)
+          _     <- TestSystem.clearEnv("HISTOS_DRY_RUN")
+          _     <- TestSystem.putEnv("GH_TOKEN", "token")
+          kept  <- DepsSurface.pullRequest(repo, policy, net, false, true)
         yield assertTrue(
           empty == DepsSurface.DepsResult(1, "GH_TOKEN is not set\n"),
           kept == nothing,
@@ -162,7 +165,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
             (_: String, _: String, _: String, _: List[(String, String)]) => ZIO.die(new IllegalStateException("sent"))
           )
           net    <- ZIO.service[Net]
-          result <- DepsSurface.snapshot(repo, net, None, false)
+          result <- DepsSurface.snapshot(repo, net, false)
         yield assertTrue(
           result.code == 0,
           result.text.contains(s""""sha":"${sha.value}","ref":"refs/heads/main""""),
