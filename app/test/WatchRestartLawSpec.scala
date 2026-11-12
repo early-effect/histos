@@ -34,12 +34,12 @@ object WatchRestartLawSpec extends ZIOSpecDefault:
     ,
     test("only a successful compile of a change under a root replaces the program"):
       assertTrue(
-        Watching.restarts(compile, Some(CallResult.reported()), inside, watched),
-        !Watching.restarts(compile, Some(CallResult.reported()), outside, watched),
-        !Watching.restarts(compile, Some(broken), inside, watched),
-        !Watching.restarts(compile, Some(CallResult.reported("app failed to compile")), inside, watched),
-        !Watching.restarts(compile, Some(CallResult.Fault(BuildFault.Interrupted)), inside, watched),
-        !Watching.restarts(compile, None, inside, watched),
+        Watching.restarts(Some(CallResult.reported()), inside, watched),
+        !Watching.restarts(Some(CallResult.reported()), outside, watched),
+        !Watching.restarts(Some(broken), inside, watched),
+        !Watching.restarts(Some(CallResult.reported("app failed to compile")), inside, watched),
+        !Watching.restarts(Some(CallResult.Fault(BuildFault.Interrupted)), inside, watched),
+        !Watching.restarts(None, inside, watched),
       )
     ,
     test("the inner result lands in the ref, its text still prints, and the session does not end"):

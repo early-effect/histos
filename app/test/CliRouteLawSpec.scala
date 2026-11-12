@@ -18,12 +18,12 @@ object CliRouteLawSpec extends ZIOSpecDefault:
   def spec = suite("cli route laws")(
     test("a reported call keeps the exit and a missing frame says the call did not finish"):
       for
-        done <- Cli.recorded(repo, Call.Version, say => say(Message.Done(CallResult.reported())))
-        open <- Cli.recorded(repo, Call.Version, _ => ZIO.unit)
+        done <- Cli.recorded(repo, say => say(Message.Done(CallResult.reported())))
+        open <- Cli.recorded(repo, _ => ZIO.unit)
         err  <- TestConsole.outputErr
       yield assertTrue(
         done == Completed(CliExit.Success, "", "", Playback.Heard),
-        open.exit == CliExit.TaskFailed,
+        open.exit == CliExit.Failed,
         open.err == "the call did not finish",
         open.playback == Playback.Heard,
         err.exists(_.contains("the call did not finish")),
@@ -31,30 +31,26 @@ object CliRouteLawSpec extends ZIOSpecDefault:
     ,
     test("an interrupt is heard and a server failure is a held load failure"):
       for
-        stopped <- Cli.recorded(repo, Call.Version, _ => ZIO.interrupt)
-        missing <- Cli.recorded(repo, Call.Version, _ => ZIO.fail(ServerError.NoServer))
+        stopped <- Cli.recorded(repo, _ => ZIO.interrupt)
+        missing <- Cli.recorded(repo, _ => ZIO.fail(ServerError.NoServer))
       yield assertTrue(
-        stopped == Completed(CliExit.Interrupted, "", "", Playback.Heard),
-        missing == Completed(CliExit.LoadFailed, "", ServerError.NoServer.message, Playback.Held),
+        stopped == Completed(CliExit.Failed, "", "", Playback.Heard),
+        missing == Completed(CliExit.Failed, "", ServerError.NoServer.message, Playback.Held),
       )
     ,
     test("a fault frame is heard with the fault text"):
       val why  = BuildFault.Interrupted
       val text = FaultText.show(why.diagnose)
-      for done <- Cli.recorded(repo, Call.Version, say => say(Message.Done(CallResult.Fault(why))))
+      for done <- Cli.recorded(repo, say => say(Message.Done(CallResult.Fault(why))))
       yield assertTrue(
-        done.exit == CliExit.Interrupted,
+        done.exit == CliExit.Failed,
         done.err == text,
         done.out.isEmpty,
         done.playback == Playback.Heard,
       )
     ,
-    test("a program status of 2 is usage even when the call is version"):
-      for done <- Cli.recorded(
-          repo,
-          Call.Version,
-          say => say(Message.Done(CallResult.reported(program = Some(2)))),
-        )
+    test("a program status of 2 is usage"):
+      for done <- Cli.recorded(repo, say => say(Message.Done(CallResult.reported(program = Some(2)))))
       yield assertTrue(done.exit == CliExit.Usage, done.playback == Playback.Heard)
     ,
     test("an empty watch does not load the build"):

@@ -133,6 +133,12 @@ A law that touches the machine because the product does needs a seam in the prod
 - [x] W12 `FrameLawSpec:23` REWRITE. `alphaNumericChar` makes chars equal bytes. Generate with `Gen.string`.
 - [x] W13 `OpaqueLawSpec:54-70` REWRITE. "Rejects anything else" rests on three fixed strings rerun 100 times. Generate wrong lengths and non-hex, move fixed rows out of `check`.
 - [x] W14 `JsonLaw.textLaw` is never called. Delete. `wire/test/.bsp/scala-cli.json` is tracked. Delete.
+- [x] W15 `CliExit` has twelve cases and the call-dependent helpers `resolveExit`, `selectExit`, `compileExit`, `previewExit`, `ioExit`, and `failedCall`, but only `.code` leaves the process (`histos.cli.Main`, the native client) and `Watching.restarts` reads only `== Success`. Collapse it to `Success`, `Failed`, and `Usage`, and drop the call from `CliExit.from`.
+  - The call that only fed `CliExit.from` is gone from `Watching.restarts`, `Cli.held`, `Cli.completed`, `Cli.recorded`, `Cli.pinned`, `Cli.launcherFailed`, the preview plan helpers, and the client's `frames` and `finish`.
+- [x] W16 `WireJson`'s `given JsonCodec[NonEmptyChunk[A]]` is never used. A derived codec summons a `JsonDecoder` and a `JsonEncoder` per field, and zio-json's own `nonEmptyChunk` instances win. Delete it.
+  - A scala-cli miniature with the given imported decoded `{"Cells":{"errors":[]}}` through a derived codec as zio-json's `Chunk was empty`. Only a direct summon in `WireSchemaLawSpec` reached it. The `BuildFault` golden now pins a `Cells` document on JVM and Native.
+- [x] W17 `RunId` and `ClangTarget` have no literal, so wire laws build them with `trusted` or a `from` fallback. Add the literal.
+- [x] W18 `MessageLawSpec.fixText` has `None` branches for a `::`. Delete them.
 
 ## central
 

@@ -174,8 +174,8 @@ object Watching:
   /** A change replaces the program when the compile it ran succeeded and the change is one of the program's roots. A
     * failed compile, or no result at all, leaves the program running.
     */
-  def restarts(compile: Call, result: Option[CallResult], changed: List[Path], watched: Watched): Boolean =
-    result.exists(found => CliExit.from(compile, found) == CliExit.Success) &&
+  def restarts(result: Option[CallResult], changed: List[Path], watched: Watched): Boolean =
+    result.exists(found => CliExit.from(found) == CliExit.Success) &&
       changed.exists(path => watched.paths.exists(root => covers(root, path)))
 
   /** `path` is the root or a file the root walk would see. */

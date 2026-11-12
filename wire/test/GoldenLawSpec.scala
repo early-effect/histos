@@ -43,7 +43,7 @@ import histos.zinc.{
 }
 import histos.{JsonLaw, Platform, PlatformError, ProjectNameError, WireSamples}
 
-import zio.Chunk
+import zio.{Chunk, NonEmptyChunk}
 import zio.test.*
 
 import WireJson.given
@@ -155,9 +155,10 @@ object GoldenLawSpec extends ZIOSpecDefault:
     BuildFault.Toolchain(histos.jdk.ToolchainError.Denied)        -> """{"Toolchain":{"error":{"Denied":{}}}}""",
     BuildFault.Survey(SurveyError.Incomplete("report", "detail")) ->
       """{"Survey":{"error":{"Incomplete":{"report":"report","detail":"detail"}}}}""",
-    BuildFault.Select(SelectError.Duplicate(core))         -> """{"Select":{"error":{"Duplicate":{"name":"core"}}}}""",
-    BuildFault.Pattern(SuitePatternError.Empty)            -> """{"Pattern":{"error":{"Empty":{}}}}""",
-    BuildFault.Compile(noRoot)                             -> """{"Compile":{"error":{"NoRoot":{"module":"core"}}}}""",
+    BuildFault.Select(SelectError.Duplicate(core)) -> """{"Select":{"error":{"Duplicate":{"name":"core"}}}}""",
+    BuildFault.Pattern(SuitePatternError.Empty)    -> """{"Pattern":{"error":{"Empty":{}}}}""",
+    BuildFault.Compile(GraphCompileError.Cells(NonEmptyChunk(noRoot))) ->
+      """{"Compile":{"error":{"Cells":{"errors":[{"NoRoot":{"module":"core"}}]}}}}""",
     BuildFault.Test(ModuleTestError.Absent(core))          -> """{"Test":{"error":{"Absent":{"module":"core"}}}}""",
     BuildFault.Publish(LocalPublishError.NothingToPublish) -> """{"Publish":{"error":{"NothingToPublish":{}}}}""",
     BuildFault.Release("no release")                       -> """{"Release":{"detail":"no release"}}""",

@@ -362,7 +362,7 @@ object Session:
                   .make(Option.empty[CallResult])
                   .flatMap: finished =>
                     answer(repo, apiJar, machine, desk, compile, say.dropExitInto(finished)) *>
-                      finished.get.zip(watched).map((found, roots) => Watching.restarts(compile, found, changed, roots)),
+                      finished.get.zip(watched).map((found, roots) => Watching.restarts(found, changed, roots)),
             )
           case histos.server.WatchPolicy.After =>
             Watching.session(

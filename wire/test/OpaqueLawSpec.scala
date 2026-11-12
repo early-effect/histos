@@ -262,7 +262,8 @@ object OpaqueLawSpec extends ZIOSpecDefault:
       JsonLaw.parsed(JarClassifier("tests"), "has space", JarClassifier.from) &&
       JsonLaw.parsed(ScheduleSamples.compile, "", ActionId.from) &&
       JsonLaw.parsed(ScheduleSamples.sources, "", InputName.from) &&
-      JsonLaw.parsed(RunId.trusted("run-1"), "", RunId.from) &&
+      JsonLaw.parsed(RunId("run-1"), "", RunId.from) &&
+      JsonLaw.parsed(ClangTarget("arm64-apple-darwin"), "has space", ClangTarget.from) &&
       JsonLaw.parsed(NativeSamples.version, "nope", histos.native.ClangVersion.from) &&
       assertTrue(
         List(dep, binaryDep, fullDep).map(_.toJson) ==
@@ -271,7 +272,7 @@ object OpaqueLawSpec extends ZIOSpecDefault:
         Dep.from("dev.zio:::zio:2.1.27") == Right(fullDep),
       )
     ,
-    test("a suite pattern literal is checked at compile time, and its parser keeps the typed error"):
+    test("a pattern, run id, and clang target literal is checked when it compiles, and each parser keeps its error"):
       assertTrue(
         SuitePattern("App*").value == "App*",
         SuitePattern.from("App*") == Right(SuitePattern("App*")),
@@ -281,10 +282,19 @@ object OpaqueLawSpec extends ZIOSpecDefault:
           List(SuitePatternError.Blank("a b").message),
         typeCheckErrors("""histos.testrun.SuitePattern("")""").map(_.message) ==
           List(SuitePatternError.Empty.message),
+        RunId("run-1").value == "run-1",
+        RunId.from("run-1") == Right(RunId("run-1")),
+        RunId.from("") == Left(TaskError.EmptyId),
+        typeCheckErrors("""histos.task.RunId("")""").map(_.message) == List(TaskError.EmptyId.message),
+        ClangTarget("arm64-apple-darwin").value == "arm64-apple-darwin",
+        ClangTarget.from("arm64-apple-darwin") == Right(ClangTarget("arm64-apple-darwin")),
+        ClangTarget.from("") == Left(ClangText.NoTarget),
+        ClangTarget.from("has space") == Left(ClangText.NoTarget),
+        typeCheckErrors("""histos.native.ClangTarget("has space")""").map(_.message) ==
+          List(ClangText.NoTarget.message),
       )
     ,
     test("a total text codec keeps any text, and the other small codecs keep their value"):
-      val clangTarget = ClangTarget.from("arm64-apple-darwin")
       assertTrue(
         SuiteName.from("") == Left(SuiteNameError.Empty),
         JarClassifier.from("tests") == Right(JarClassifier("tests")),
@@ -298,17 +308,11 @@ object OpaqueLawSpec extends ZIOSpecDefault:
         BinaryName.trusted("a.B").toJson.fromJson[BinaryName].map(_.value) == Right("a.B"),
         CompileDiagnostic.fromCompiler("warn").toJson.fromJson[CompileDiagnostic].map(_.text) == Right("warn"),
         ProcessOutput.from("out").toJson.fromJson[ProcessOutput].map(_.text) == Right("out"),
-        clangTarget.map(_.value) == Right("arm64-apple-darwin"),
-        clangTarget.map(target => target.toJson.fromJson[ClangTarget]) == clangTarget.map(Right(_)),
-        ClangTarget.from("") == Left(ClangText.NoTarget),
-        ClangTarget.from("has space") == Left(ClangText.NoTarget),
         CiVersion(number).toJson == number.toJson,
         CiVersion(number).toJson.fromJson[CiVersion] == Right(CiVersion(number)),
         ShipNumber.from("01.2.3") == Left(ShipNumberError.NotAShip("01.2.3")),
         ActionId.from("") == Left(histos.schedule.ActionIdError.Empty),
         InputName.from("") == Left(histos.schedule.InputNameError.Empty),
-        RunId.from("run-1").map(_.value) == Right("run-1"),
-        RunId.from("") == Left(TaskError.EmptyId),
         path.toJson.fromJson[java.nio.file.Path] == Right(path),
         "a\u0000b".toJson.fromJson[java.nio.file.Path].isLeft,
         library.toJson.fromJson[ProviderLibrary] == Right(library),

@@ -57,11 +57,7 @@ object FmtGrammarSpec extends ZIOSpecDefault:
         nothing == Left(CliParseError.Fmt(FmtUsage.NoFiles)),
         absolute == Left(CliParseError.Fmt(FmtUsage.Absolute("/tmp/A.scala"))),
         badName.isLeft,
-        CliExit.from(
-          Call.Format(FormatTargets.Build, FormatMode.Check),
-          histos.report.CallResult.reported("unformatted"),
-        ) ==
-          CliExit.TaskFailed,
+        CliExit.from(histos.report.CallResult.reported("unformatted")) == CliExit.Failed,
       )
     ,
     test("the native client batches the build and project forms, and leaves --file to the JVM client"):

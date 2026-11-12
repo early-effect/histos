@@ -780,7 +780,7 @@ object CodecSamples:
   val taskErrors: List[TaskError] = List(
     TaskError.EmptyId,
     TaskError.NoRunner(TaskId.Inspect),
-    TaskError.UnknownRun(RunId.trusted("run-1")),
+    TaskError.UnknownRun(RunId("run-1")),
     TaskError.Version(histos.version.VersionError.Unreadable),
     TaskError.Plugin(PluginRunError.Failed(detail)),
     TaskError.Doc(NonEmptyChunk("scaladoc")),

@@ -1462,18 +1462,15 @@ object MessageLawSpec extends ZIOSpecDefault:
         ),
       )
 
-  /** Check id, then the text of the first fix. An empty fix is not a sentence these lists expect. */
+  /** Check id, then the text of the first fix. */
   private def noted(diagnostic: Diagnostic): (String, String) =
     (diagnostic.check.value, fixText(diagnostic.fixes))
 
+  /** A `::` always has a head, so the first fix and the first step are fields, not lookups. */
   private def fixText(fixes: ::[Fix]): String =
-    fixes.headOption match
-      case Some(Fix.Command(line))        => line.value
-      case Some(Fix.Settings(url, click)) => s"${url.value}  $click"
-      case Some(Fix.Config(file, _))      => file.value
-      case Some(Fix.Steps(items))         =>
-        items.headOption match
-          case Some(step) => step
-          case None       => ""
-      case None => ""
+    fixes.head match
+      case Fix.Command(line)        => line.value
+      case Fix.Settings(url, click) => s"${url.value}  $click"
+      case Fix.Config(file, _)      => file.value
+      case Fix.Steps(items)         => items.head
 end MessageLawSpec

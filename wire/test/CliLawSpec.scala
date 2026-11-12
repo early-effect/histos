@@ -2,7 +2,6 @@ package histos.cli
 
 import histos.{EnumLaw, Platform, WireSamples}
 import histos.report.{BuildFault, CallResult, Diagnostic, Rejection, Report, Severity, WorkflowFault}
-import histos.server.{Call, CallSamples}
 import histos.testrun.{ModuleTestError, TestStatus, TestedCell}
 import histos.workflow.CiError
 import histos.zinc.{CompileProblem, CompileSeverity, GraphCompileError, PositionBase, SourceCount}
@@ -15,42 +14,25 @@ import java.nio.file.Path
 import zio.{Chunk, Ref, ZIO}
 import zio.test.*
 
-/** Only `CliExit.code` leaves the process, so the exit laws pin the status. Every call is asked about every result. */
+/** The exit laws pin the process status each result gives. */
 object CliLawSpec extends ZIOSpecDefault:
   import CallResult.fault
   import WireSamples.*
 
   def spec = suite("cli laws")(
-    test("a child or program status is 0 at 0, 2 at 2, and 1 at every other code, and each exit has its status"):
-      val named = List[CliExit](
-        CliExit.Success,
-        CliExit.TaskFailed,
-        CliExit.Usage,
-        CliExit.LoadFailed,
-        CliExit.ToolchainFailed,
-        CliExit.ResolveFailed,
-        CliExit.WorkflowFailed,
-        CliExit.TestFailed,
-        CliExit.CompileFailed,
-        CliExit.PublishFailed,
-        CliExit.Program(7),
-        CliExit.Interrupted,
-      )
+    test("a child status is 0 at 0, 2 at 2, and 1 at every other code, and each exit has its status"):
+      val named = List(CliExit.Success, CliExit.Failed, CliExit.Usage)
       for other <- check(Gen.int.filter(status => status != 0 && status != 2)): status =>
-          assertTrue(CliExit.fromCode(status).code == 1, CliExit.Program(status).code == 1)
+          assertTrue(CliExit.fromCode(status) == CliExit.Failed)
       yield other && assertTrue(
-        CliExit.fromCode(0).code == 0,
-        CliExit.fromCode(2).code == 2,
-        CliExit.Program(0).code == 0,
-        CliExit.Program(2).code == 2,
+        CliExit.fromCode(0) == CliExit.Success,
+        CliExit.fromCode(2) == CliExit.Usage,
         EnumLaw.covered(named),
-        named.map(_.code) == List(0, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+        named.map(_.code) == List(0, 1, 2),
       )
     ,
     test("a clean report is 0, a non-zero program status wins, and a failed test, error line, or error is 1"):
       assertTrue(
-        CallSamples.every.nonEmpty,
-        EnumLaw.covered(CallSamples.oneEach),
         misses(
           List(
             CallResult.Reported(Report.empty)                        -> 0,
@@ -67,10 +49,10 @@ object CliLawSpec extends ZIOSpecDefault:
             reported(severity = Severity.Warn)                       -> 0,
             reported(severity = Severity.Info)                       -> 0,
           )
-        ) == Nil,
+        ) == Nil
       )
     ,
-    test("load, toolchain, and resolve faults are 1 for every call"):
+    test("load, toolchain, and resolve faults are 1"):
       assertTrue(
         misses(
           List(
@@ -296,14 +278,9 @@ object CliLawSpec extends ZIOSpecDefault:
         ),
   )
 
-  /** Each `(result, call, status)` whose status is not the row's. */
-  private def misses(rows: List[(CallResult, Int)]): List[(CallResult, Call, Int)] =
-    for
-      (result, code) <- rows
-      call           <- CallSamples.every
-      status = CliExit.from(call, result).code
-      if status != code
-    yield (result, call, status)
+  /** The rows whose result does not give the row's status. */
+  private def misses(rows: List[(CallResult, Int)]): List[(CallResult, Int)] =
+    rows.filterNot((result, code) => CliExit.from(result).code == code)
 
   private def reported(
       status: TestStatus = TestStatus.Passed,

@@ -68,8 +68,8 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       batch(
         "absent",
         List(
-          Law(List("reload"), CliExit.LoadFailed, "", "no histos server is running", Playback.Held),
-          Law(List("reboot"), CliExit.LoadFailed, "", "no histos server is running", Playback.Held),
+          Law(List("reload"), CliExit.Failed, "", "no histos server is running", Playback.Held),
+          Law(List("reboot"), CliExit.Failed, "", "no histos server is running", Playback.Held),
         ),
       )
     ,
@@ -79,7 +79,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
         List(
           Law(
             List("cancel", "run-1"),
-            CliExit.TaskFailed,
+            CliExit.Failed,
             "",
             "no run 'run-1'\nNo live run is named run-1.\nfix  histos help cancel",
             Playback.Heard,
@@ -115,7 +115,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       val missing =
         Law(
           List("version"),
-          CliExit.ResolveFailed,
+          CliExit.Failed,
           "",
           s"launcher pin is absent: $absent\nfix  histos help",
           Playback.Held,
@@ -131,7 +131,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
         latest  <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
         update  <- Cli.execute(List("launcher", "--update"), repo, apiJar)
         latestLaw = Law(List("launcher", "--latest"), CliExit.Success, "histos.version=9.9.9", "", Playback.Held)
-        updateLaw = Law(List("launcher", "--update"), CliExit.ResolveFailed, "", fix(release), Playback.Held)
+        updateLaw = Law(List("launcher", "--update"), CliExit.Failed, "", fix(release), Playback.Held)
       yield matches(missing, before) &&
         matches(Law(List("version"), CliExit.Success, shown, "", Playback.Held), version) &&
         matches(latestLaw, latest) &&
@@ -155,7 +155,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
         Law(List("preview", "clean"), CliExit.Success, previewRoots, "", Playback.Held),
         Law(List("preview", "cleanFull"), CliExit.Success, s"$previewRoots\n$forgotten", "", Playback.Held),
         Law(List("setup", "supply-chain"), CliExit.Usage, "histos.scala is missing\n", "", Playback.Held),
-        Law(List("observe"), CliExit.TaskFailed, "", observe, Playback.Heard),
+        Law(List("observe"), CliExit.Failed, "", observe, Playback.Heard),
       )
       run(repo, laws)
     }
@@ -249,7 +249,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     List(
       Law(
         List("portal"),
-        CliExit.PublishFailed,
+        CliExit.Failed,
         "",
         required + "\nNeither variable is set. This is not a rejected login.\n" +
           "fix  Export SONATYPE_USERNAME and SONATYPE_PASSWORD.",
@@ -257,7 +257,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
       ),
       Law(
         List("publish", "promote", "deploy"),
-        CliExit.PublishFailed,
+        CliExit.Failed,
         s"promoting deploy\n$required",
         s"$required\nfix  histos help publish",
         Playback.Heard,
@@ -305,18 +305,18 @@ object ExecuteLawSpec extends ZIOSpecDefault:
   )
 
   private val rawTaskLaws: List[Law] = List(
-    Law(List("doctor"), CliExit.TaskFailed, "", homeText, Playback.Held),
-    Law(List("deps", "check"), CliExit.TaskFailed, "", homeText, Playback.Held),
+    Law(List("doctor"), CliExit.Failed, "", homeText, Playback.Held),
+    Law(List("deps", "check"), CliExit.Failed, "", homeText, Playback.Held),
   )
 
   private def heard(args: String*): Law =
-    Law(args.toList, CliExit.LoadFailed, "", homeFix, Playback.Heard)
+    Law(args.toList, CliExit.Failed, "", homeFix, Playback.Heard)
 
   private def held(args: String*): Law =
-    Law(args.toList, CliExit.LoadFailed, "", homeFix, Playback.Held)
+    Law(args.toList, CliExit.Failed, "", homeFix, Playback.Held)
 
   private def raw(args: String*): Law =
-    Law(args.toList, CliExit.LoadFailed, "", homeText, Playback.Held)
+    Law(args.toList, CliExit.Failed, "", homeText, Playback.Held)
 
   private def usage(args: List[String], err: String): Law =
     Law(args, CliExit.Usage, "", err, Playback.Held)
@@ -348,20 +348,9 @@ object ExecuteLawSpec extends ZIOSpecDefault:
 
   private def status(exit: CliExit): Int =
     exit match
-      case CliExit.Success         => 0
-      case CliExit.Usage           => 2
-      case CliExit.Program(0)      => 0
-      case CliExit.Program(2)      => 2
-      case CliExit.Program(_)      => 1
-      case CliExit.TaskFailed      => 1
-      case CliExit.Interrupted     => 1
-      case CliExit.LoadFailed      => 1
-      case CliExit.ToolchainFailed => 1
-      case CliExit.ResolveFailed   => 1
-      case CliExit.WorkflowFailed  => 1
-      case CliExit.TestFailed      => 1
-      case CliExit.CompileFailed   => 1
-      case CliExit.PublishFailed   => 1
+      case CliExit.Success => 0
+      case CliExit.Failed  => 1
+      case CliExit.Usage   => 2
 
   private def shown(args: List[String], done: Completed): String =
     args.mkString(" ") + "\n" + done.exit.toString + " " + done.exit.code.toString + " " + done.playback.toString +

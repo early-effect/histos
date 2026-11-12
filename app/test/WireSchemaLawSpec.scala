@@ -1918,7 +1918,6 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     )
     docs &&
     accepted[NonEmptyChunk[String]]("""["a"]""", NonEmptyChunk("a")) &&
-    rejected[NonEmptyChunk[String]]("[]", "(empty chunk)") &&
     rejected[NonEmptyChunk[String]]("1", arrayNumber) &&
     accepted[::[String]]("""["a"]""", ::("a", Nil)) &&
     rejected[::[String]]("[]", "(empty list)") &&
@@ -1927,7 +1926,6 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
       """[{"NoRoot":{"module":"core"}}]""",
       NonEmptyChunk(histos.zinc.GraphCompileError.NoRoot(core)),
     ) &&
-    rejected[NonEmptyChunk[histos.zinc.GraphCompileError]]("[]", "(empty chunk)") &&
     rejected[NonEmptyChunk[histos.zinc.GraphCompileError]]("1", arrayNumber)
 
   private def configLaw: TestResult =

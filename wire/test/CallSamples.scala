@@ -12,7 +12,7 @@ import histos.{Platform, WireSamples}
 
 import zio.NonEmptyChunk
 
-/** Every `Call` constructor, plus the variants whose fields change an exit or a document. */
+/** Every `Call` constructor, plus the variants whose fields change a document. */
 object CallSamples:
   import WireSamples.*
 
@@ -35,7 +35,7 @@ object CallSamples:
       Call.Run(core.value, Some(Platform.Js)),
       Call.Client,
       Call.Task(taskId.render, args),
-      Call.Cancel(RunId.trusted("run-1")),
+      Call.Cancel(RunId("run-1")),
       Call.Toolchain,
       Call.Resolve(ResolveAction.Verify),
       Call.Workflow(WorkflowAction.Check),

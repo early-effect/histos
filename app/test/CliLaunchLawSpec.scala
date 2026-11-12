@@ -35,7 +35,7 @@ object CliLaunchLawSpec extends ZIOSpecDefault:
             help.exit == CliExit.Success && help.out.contains("histos help <command>"),
             unknown.exit == CliExit.Usage && unknown.err.contains("unknown command 'no-such-command'"),
             absent.exit == CliExit.Usage && absent.out == "histos.scala is missing\n",
-            missing.exit == CliExit.ResolveFailed && missing.err.contains("launcher pin is absent"),
+            missing.exit == CliExit.Failed && missing.err.contains("launcher pin is absent"),
             version.exit == CliExit.Success && version.out == "histos 1.2.3",
             dry.exit == CliExit.Success && dry.out.contains("would write .supplyChain(SupplyChain())"),
             kept == source,
