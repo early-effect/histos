@@ -357,6 +357,14 @@ enum Severity derives CanEqual:
     case Moderate => 2
     case High     => 3
     case Critical => 4
+
+  /** The word a finding prints. [[Severity.fromWord]] reads it back. */
+  def word: String = this match
+    case Unknown  => "Unknown"
+    case Low      => "Low"
+    case Moderate => "Moderate"
+    case High     => "High"
+    case Critical => "Critical"
 end Severity
 
 object Severity:

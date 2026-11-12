@@ -14,7 +14,7 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
 
   given CiBranch = CiBranch("main")
 
-  private val finished = Sona.described(ReleaseMode.Automatic)
+  private val finished = SonaProbe(ReleaseMode.Automatic)
 
   private val linux = "b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b"
 

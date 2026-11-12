@@ -23,7 +23,7 @@ import histos.supply.{
   SupplyFault,
   TimeZone,
 }
-import histos.version.{AbbrevSha, Catalog, CatalogError, CommitSha, Ship, ShipName, ShipNumber}
+import histos.version.{AbbrevSha, Catalog, CommitSha, Ship, ShipName, ShipNumber}
 
 import zio.test.*
 
@@ -57,6 +57,7 @@ object SentenceLawSpec extends ZIOSpecDefault:
           "actions/checkout moved from old/repo to new/repo",
         SupplyFault.CrossVersionSplit(dep, cells).message == "org.example:demo would split core, app",
         SupplyFault.Advisory(finding).message == "ghsa-1234-abcd-ef09 High demo",
+        SupplyFault.Advisory(finding.copy(severity = Severity.Unknown)).message == "ghsa-1234-abcd-ef09 Unknown demo",
         SupplyFault.IgnoreExpired(id, day).message == "ignore ghsa-1234-abcd-ef09 expired on 2020-01-02",
         SupplyFault.IgnoreNeedsExpiry(id).message == "ignore ghsa-1234-abcd-ef09 needs an expiry",
         SupplyFault.IgnoreTooLong(id, Days.trusted(14)).message ==
@@ -64,10 +65,13 @@ object SentenceLawSpec extends ZIOSpecDefault:
         SupplyFault.IgnoresDisallowed(List(id, AdvisoryId.trusted("ghsa-aaaa-bbbb-cccc"))).message ==
           "ignores are not allowed: ghsa-1234-abcd-ef09, ghsa-aaaa-bbbb-cccc",
         SupplyFault.ServiceDown(source, OutageStrategy.FailClosed).message == "osv is down",
+        SupplyFault.ServiceDown(source, OutageStrategy.FailOpen).message == "osv is down",
         SupplyFault.IdentityMissing.message ==
           "Identity.FirstDeveloper needs one developer on the organization",
         SupplyFault.HumanCommitsOnBranch(branch, List(sha)).message ==
           "histos/security has human commits 0123456789ab",
+        SupplyFault.HumanCommitsOnBranch(branch, List(sha, other)).message ==
+          "histos/security has human commits 0123456789ab, abcdef012345",
         SupplyFault.HeadMoved(branch, sha).message ==
           "histos/security moved from 0123456789abcdef0123456789abcdef01234567",
       )
@@ -133,17 +137,20 @@ object SentenceLawSpec extends ZIOSpecDefault:
         PublishFault.Client.message == "the portal rejected the upload",
       )
     ,
-    test("a catalog clash names the ship and the module"):
+    test("a catalog clash names the ship, the module, and the place the second row was written"):
+      val here  = SourcePos("histos.scala", 3, 5)
+      val there = SourcePos("histos.scala", 9, 5)
       val api   = line("core", "api")
       val again = line("core", "app")
       val left  = line("left", "api")
       val right = line("right", "api")
       val twice = line("core", "api", "api")
       assertTrue(
-        Catalog.from(List(api, again)).left.map(_.message) == Left("ship 'core' is declared twice"),
-        Catalog.from(List(twice)).left.map(_.message) == Left("ship 'core' lists 'api' twice"),
-        Catalog.from(List(left, right)).left.map(_.message) == Left("'api' is in ship 'left' and ship 'right'"),
-        CatalogError.DuplicateName(api.name).message == "ship 'core' is declared twice",
+        Catalog.from(List(api -> here, again -> there)).left.map(_.message) ==
+          Left("ship 'core' is declared twice (9:5)"),
+        Catalog.from(List(twice -> there)).left.map(_.message) == Left("ship 'core' lists 'api' twice (9:5)"),
+        Catalog.from(List(left -> here, right -> there)).left.map(_.message) ==
+          Left("'api' is in ship 'left' and ship 'right' (9:5)"),
       )
     ,
     test("a plugin that names a cell the module does not build says which cell"):

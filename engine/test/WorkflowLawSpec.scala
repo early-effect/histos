@@ -16,7 +16,7 @@ object WorkflowLawSpec extends ZIOSpecDefault:
 
   given CiBranch = CiBranch("main")
 
-  private val finished = Sona.described(ReleaseMode.Automatic)
+  private val finished = SonaProbe(ReleaseMode.Automatic)
 
   private val deployment =
     Publishing.fromEffect(

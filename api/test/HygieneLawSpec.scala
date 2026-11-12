@@ -12,7 +12,7 @@ object HygieneLawSpec extends ZIOSpecDefault:
       val hex         = ReleaseDiagnostic.KeyHex()
       val missing     = ReleaseDiagnostic.KeyMissing("abcd")
       assertTrue(
-        List(credentials, rejected, hex, missing).forall(_.level == Level.Warning),
+        List(credentials, rejected, hex, missing).filterNot(_.level == Level.Warning) == Nil,
         credentials.check.value == "central.credentials",
         rejected.check.value == "central.credentials",
         hex.check.value == "pgp.key",
@@ -49,7 +49,7 @@ object HygieneLawSpec extends ZIOSpecDefault:
       val levels = findings.map(item => item.check.value -> item.level).toMap
       assertTrue(
         ids == ToolchainExplain.known.split(", ").toSet,
-        ids.forall(id => ToolchainExplain.text(id).isDefined),
+        ids.filterNot(id => ToolchainExplain.text(id).isDefined) == Set.empty,
         ToolchainExplain.text("not.a.check").isEmpty,
         levels == Map(
           "jdk.source"         -> Level.Error,

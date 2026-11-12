@@ -32,10 +32,11 @@ object ToolPinLawSpec extends ZIOSpecDefault:
     test("a clang major and a node floor are positive, and a job timeout is 1 to 360"):
       check(counts): raw =>
         val positive = raw > 0
-        val minutes  = JobTimeout.admits(raw)
+        val minutes  = 1 <= raw && raw <= 360
         assertTrue(
           ClangMajor.from(raw).map(_.value) == (if positive then Right(raw) else Left(ClangError.NotPositive(raw))),
           NodeFloor.from(raw).map(_.value) == (if positive then Right(raw) else Left(NodeFloorError.NotPositive(raw))),
+          JobTimeout.admits(raw) == minutes,
           JobTimeout.from(raw) == (
             if minutes then Right(JobTimeout.Minutes(raw)) else Left(JobTimeoutError(raw))
           ),
@@ -58,8 +59,11 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         NodePath.from("/usr/bin/../bin/node").map(_.value) == Right("/usr/bin/node"),
         NodePath.from("") == Left(NodePathError.Empty),
         NodePath.from("   ") == Left(NodePathError.Empty),
+        NodePath.from("/node").map(_.value) == Right("/node"),
         NodePath.from("node") == Left(NodePathError.Relative("node")),
+        NodePath.from("./node") == Left(NodePathError.Relative("./node")),
         NodePath.from("/usr/bin/npm") == Left(NodePathError.NotBinary("/usr/bin/npm")),
+        NodePath.from("/usr/bin/Node") == Left(NodePathError.NotBinary("/usr/bin/Node")),
         NodePath.from("\u0000") == Left(NodePathError.Invalid("\u0000")),
       )
     ,
@@ -73,15 +77,13 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         JsModuleKind.CommonJS -> "commonjs",
       )
       assertTrue(
-        platforms.forall((platform, token) => platform.token == token && Platform.from(token) == Right(platform)),
+        platforms.filterNot((platform, token) => platform.token == token && Platform.from(token) == Right(platform)) ==
+          Nil,
         Platform.from("scala") == Left(PlatformError.Unknown("scala")),
-        promotes.forall((promote, token) => promote.token == token && Promote.from(token) == Right(promote)),
+        promotes.filterNot((promote, token) => promote.token == token && Promote.from(token) == Right(promote)) == Nil,
         Promote.from("copy") == Left(PromoteError.Unknown("copy")),
-        envs.forall((env, token) => env.token == token),
-        kinds.forall((kind, token) => kind.token == token),
-        DocCheck.values.toSet == Set(DocCheck.Off, DocCheck.On),
-        Resolution.values.toSet == Set(Resolution.Solve, Resolution.Lock),
-        TestStore.values.toSet == Set(TestStore.Off, TestStore.Local, TestStore.Remote),
+        envs.filterNot((env, token) => env.token == token) == Nil,
+        kinds.filterNot((kind, token) => kind.token == token) == Nil,
       )
     ,
     test("scalac flags render their canonical name and their argv, in call order"):
@@ -94,11 +96,10 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         ScalacFlag.ImplicitConversions -> ("implicit-conversions", List("-language:implicitConversions")),
       )
       val combined = ScalacFlags.of(ScalacFlag.Feature, ScalacFlag.Deprecation)
+      val misses   = flags.filterNot: (flag, expected) =>
+        (ScalacFlags.of(flag).canonical, ScalacFlags.of(flag).argv) == expected
       assertTrue(
-        flags.forall: (flag, expected) =>
-          val (canonical, argv) = expected
-          ScalacFlags.of(flag).canonical == canonical && ScalacFlags.of(flag).argv == argv
-        ,
+        misses == Nil,
         combined.canonical == "feature,deprecation",
         combined.argv == List("-feature", "-deprecation"),
         ScalacFlags.empty.canonical == "",
@@ -122,7 +123,7 @@ object ToolPinLawSpec extends ZIOSpecDefault:
         floors.map(_.argv) == Right(List("--min-stmt", "0", "--min-branch", "100", "--min-branch-file", "1")),
         high == Left(CoverageFloorError.OutOfRange(FloorName.Statements, BigInt(101))),
         low == Left(CoverageFloorError.OutOfRange(FloorName.Branches, BigInt(-1))),
-        FloorName.values.map(_.token).forall(FloorName.known),
+        FloorName.values.toList.map(_.token).filterNot(FloorName.known) == Nil,
         !FloorName.known("--min-line"),
         CoverageFloors.parse(FloorInput()).map(_.argv) == Right(Nil),
       ),

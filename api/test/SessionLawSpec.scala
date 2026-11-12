@@ -61,21 +61,27 @@ object SessionLawSpec extends ZIOSpecDefault:
         Session.from(empty) == Right(Session.Development),
       )
     ,
-    test("a branch is default or other, and a pull request number is a positive integer without a leading zero"):
+    test("a positive pull request number round-trips through from and its decimal text"):
       check(Gen.int(1, 10000)): number =>
         assertTrue(
-          Branch.from("default") == Right(Branch.Default),
-          Branch.from("other") == Right(Branch.Other),
-          Branch.from("main") == Left(BranchError.Unknown("main")),
           PullRequestNumber.from(number).map(_.value) == Right(number),
-          PullRequestNumber.from(0) == Left(PullRequestError.NotPositive(0)),
-          PullRequestNumber.from(-1) == Left(PullRequestError.NotPositive(-1)),
           PullRequestNumber.parse(number.toString).map(_.value) == Right(number),
-          PullRequestNumber.parse("0") == Left(PullRequestError.NotPositive(0)),
-          PullRequestNumber.parse("01") == Left(PullRequestError.NotANumber("01")),
-          PullRequestNumber.parse("") == Left(PullRequestError.NotANumber("")),
-          PullRequestNumber.parse("4a") == Left(PullRequestError.NotANumber("4a")),
         )
+    ,
+    test(
+      "a branch is default or other, and a pull request number refuses zero, a negative, a leading zero, and non-digits"
+    ):
+      assertTrue(
+        Branch.from("default") == Right(Branch.Default),
+        Branch.from("other") == Right(Branch.Other),
+        Branch.from("main") == Left(BranchError.Unknown("main")),
+        PullRequestNumber.from(0) == Left(PullRequestError.NotPositive(0)),
+        PullRequestNumber.from(-1) == Left(PullRequestError.NotPositive(-1)),
+        PullRequestNumber.parse("0") == Left(PullRequestError.NotPositive(0)),
+        PullRequestNumber.parse("01") == Left(PullRequestError.NotANumber("01")),
+        PullRequestNumber.parse("") == Left(PullRequestError.NotANumber("")),
+        PullRequestNumber.parse("4a") == Left(PullRequestError.NotANumber("4a")),
+      )
     ,
     test("a commit is 40 hex stored lowercase, and an abbreviation is 12 lowercase hex"):
       val upper = sha.toUpperCase

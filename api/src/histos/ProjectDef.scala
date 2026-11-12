@@ -1,6 +1,6 @@
 package histos
 
-import _root_.scala.annotation.publicInBinary
+import _root_.scala.annotation.{implicitNotFound, publicInBinary}
 
 import histos.plugin.{ModuleNote, Need, NoteKey, NoteText, PluginId, RepoPath}
 
@@ -28,10 +28,43 @@ final case class ProjectEdge(
 
 /** A module as written. `P` is the platforms `module(...)` named, as a union of the case singleton types.
   *
-  * Js settings exist only when [[Platform.Js]] is in `P`. Native settings exist only when [[Platform.Native]] is in
-  * `P`. There is no `copy`: a caller cannot put a Js field on a JVM module by copying.
+  * A Js setting compiles only when [[Platform.Js]] is in `P`, and a Native setting only when [[Platform.Native]] is in
+  * `P`. The refusal names the platform. There is no `copy`: a caller cannot put a Js field on a JVM module by copying.
   */
 sealed trait ModuleDef[P] extends ProjectDef:
+  def jsVersion(version: JsVersion)(using
+      @implicitNotFound("jsVersion is a Js setting, and this module does not build Js") js: Platform.Js.type <:< P
+  ): ModuleDef[P] =
+    rewriteJsVersion(version)
+
+  /** Node, jsdom, or Firefox. */
+  def jsEnv(env: JsEnv)(using
+      @implicitNotFound("jsEnv is a Js setting, and this module does not build Js") js: Platform.Js.type <:< P
+  ): ModuleDef[P] =
+    rewriteJsEnv(env)
+
+  /** `NoModule` is the linker default. Ascent's ES modules name [[JsModuleKind.ESModule]]. */
+  def jsModule(kind: JsModuleKind)(using
+      @implicitNotFound("jsModule is a Js setting, and this module does not build Js") js: Platform.Js.type <:< P
+  ): ModuleDef[P] =
+    rewriteJsModule(kind)
+
+  /** The clang major this Native module must find on `PATH`. */
+  def clang(major: ClangMajor)(using
+      @implicitNotFound(
+        "clang is a Native setting, and this module does not build Native"
+      ) native: Platform.Native.type <:< P
+  ): ModuleDef[P] =
+    rewriteClang(major)
+
+  /** The Scala Native toolchain this module links with. Unset means the engine default. */
+  def nativeVersion(version: NativeVersion)(using
+      @implicitNotFound(
+        "nativeVersion is a Native setting, and this module does not build Native"
+      ) native: Platform.Native.type <:< P
+  ): ModuleDef[P] =
+    rewriteNativeVersion(version)
+
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef[P]
 
@@ -140,32 +173,7 @@ object ModuleDef:
       Set.empty,
     )
 
-  /** Node, jsdom, or Firefox. */
-  extension [P](module: ModuleDef[P])(using Platform.Js.type <:< P)
-    def jsVersion(version: JsVersion): ModuleDef[P] =
-      module.rewriteJsVersion(version)
-
-    def jsEnv(env: JsEnv): ModuleDef[P] =
-      module.rewriteJsEnv(env)
-
-    /** `NoModule` is the linker default. Ascent's ES modules name [[JsModuleKind.ESModule]]. */
-    def jsModule(kind: JsModuleKind): ModuleDef[P] =
-      module.rewriteJsModule(kind)
-  end extension
-
-  extension [P](module: ModuleDef[P])(using Platform.Native.type <:< P)
-    /** The clang major this Native module must find on `PATH`. */
-    def clang(major: ClangMajor): ModuleDef[P] =
-      module.rewriteClang(major)
-
-    /** The Scala Native toolchain this module links with. Unset means the engine default. */
-    def nativeVersion(version: NativeVersion): ModuleDef[P] =
-      module.rewriteNativeVersion(version)
-  end extension
-end ModuleDef
-
-/** The stored module. Graph reads these fields. Callers see [[ModuleDef]], whose platform methods are the extensions.
-  */
+/** The stored module. Graph reads these fields. Callers see [[ModuleDef]]. */
 private[histos] final class ModuleBody[P](
     override val name: String,
     val platforms: Platforms,

@@ -35,7 +35,7 @@ enum SupplyFault:
     case CrossVersionSplit(dep, cells) =>
       s"${dep.value} would split ${cells.map(_.value).mkString(", ")}"
     case Advisory(finding) =>
-      s"${finding.id.value} ${finding.severity} ${finding.summary}"
+      s"${finding.id.value} ${finding.severity.word} ${finding.summary}"
     case IgnoreExpired(id, until) =>
       s"ignore ${id.value} expired on ${until.value}"
     case IgnoreNeedsExpiry(id) =>

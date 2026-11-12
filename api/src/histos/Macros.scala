@@ -360,7 +360,7 @@ private object BuilderMacro:
     val union = unite(distinct(read(platform) :: readAll(platforms)))
     union.asType match
       case '[p] =>
-        // Expr is invariant. The cast is the wrapper, so the tree keeps `p`.
+        // Expr is invariant. asExprOf checks the wider type and keeps the tree, so the call site still sees `p`.
         '{
           ModuleDef.make[p](
             $name,
@@ -368,7 +368,7 @@ private object BuilderMacro:
             ScalaVersions($version, $versions.toList),
             $at,
           )
-        }.asInstanceOf[Expr[ModuleDef[?]]]
+        }.asTerm.asExprOf[ModuleDef[?]]
 
   /** First-seen order. A repeated case stays in the runtime list and is still [[BuildError.DuplicatePlatform]]. */
   private def distinct(using Quotes)(parts: List[quotes.reflect.TypeRepr]): List[quotes.reflect.TypeRepr] =

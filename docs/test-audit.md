@@ -41,6 +41,8 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] B7 The MCP `run` tool accepts an empty id (`runCall("", None, empty) == Right(Call.Run("", None))`), while CLI `run ""` is `BadTaskId` and MCP preview is `MissingRunName`. Parity: reject it. Owner: app (`SessionLawSpec:22`).
 - [ ] B8 `NO_COLOR=""` turns colour off. no-color.org disables colour only for a present, non-empty value. `Paint` also reads `System.getenv` outside ZIO. Owner: app (`PaintLawSpec:14`).
 - [ ] B9 `Perform.jdkMissed` has a `Test` branch that is the same as every other call, and its scaladoc claims a distinction that does not exist. Delete it. Owner: app (`PerformLawSpec:46`).
+- [x] B10 `JobCheck` reads `Not(c)` as reachable exactly when `c` is. `Not(Event(Schedule))` in `ci.yml`, which has no schedule and so is always true, is refused as `UnreachableCond`, and `Not(True)`, which never runs, is accepted. `Not(c)` is reachable when `c` can be false for the file's events, and refused when `c` is always true. The same model found `DefaultBranch` refused on a schedule, which always runs on the default branch. Rendering is B1. Owner: api (`JobCheckLawSpec`).
+- [x] B12 `ShipLink` checked the catalog rules with positions, then `Catalog.from` checked them again with none, and `asBuild` turned that second refusal into a made-up error: `SourcePos("<catalog>", 1, 1)`, a `DuplicateShip` with one position twice, or a `BadShipName` for a duplicate. `Catalog.from` takes each row with the place it was written and is the one check, so every refusal carries a real position and the fallback cannot be written. Owner: api (`CatalogLawSpec`).
 
 ## Decisions for Russ
 
@@ -48,6 +50,8 @@ Each bug gets a law that fails on today's code, then the fix.
 - [ ] D2 `~ publishLocal <x>` watches every module, and `preview publishLocal <x>` watches only the build file, because `PublishLocal` and `PublishSnapshots` fall through `case _ => Every` in `Watching`. The recommendation is to route both through `publish(graph, tokens)`. Owner: app (`DaemonWatchLawSpec:41`).
 - [ ] D3 The rehearsal portal reports no finding for an empty bundle, so it marks an empty upload `VALIDATED`. The recommendation is that an empty bundle is a layout finding. Owner: central (`PortalReportLawSpec:42`).
 - [ ] D4 The rehearsal portal accepts a `.sha256` file with a wrong digest. The recommendation is that a checksum file that is present is checked. Owner: central (`PortalReportLawSpec:89`).
+- [x] D5 `JobCheck` read tag and label conditions from the triggers alone. A `workflow_dispatch` run from a tag never made `Event(Tag)` or `TagMatches` reachable, and `HasLabel` needed a labeled pull-request type, so `ci.yml` refused both. Owner: api (`JobCheckLawSpec`).
+  - Russ: reachable means GitHub can make it true. A dispatch runs from any ref, so a ref condition (`TagMatches`, `Event(Tag)`, which renders as a ref test, and `DefaultBranch`) is reachable in a file with dispatch. An event condition is the event name the start sets, so dispatch never makes a push condition true. A label condition reads `github.event.pull_request`, so it is reachable in a file with any `pull_request` trigger.
 
 ## Shared seams
 
@@ -64,39 +68,52 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## api
 
-- [ ] A1 `BuildNameLawSpec:52` MERGE. The same parsers as `PinTextLawSpec:65`. One ProviderLibrary, TestProvider, FrameworkClass law.
-- [ ] A2 `BuildNameLawSpec:65` WEAK. L73 compares `Resolver.Central` to itself, L74 tests enum `!=`. Delete L73-74.
-- [ ] A3 `BundleLawSpec:81, :85, :89` WEAK. `errors.nonEmpty` accepts any compile error. Assert the macro's message ("has no layer", "is not an object", "is not a HistosPlugin and has no layer").
-- [ ] A4 `CiArrangeLawSpec:78` REWRITE. Copies `Combine.on` and `Combine.cond`. Assert through `JobCheck.arrange` that a `Ci ++ Dispatch` job carries both event lists, or delete.
-- [ ] A5 `GraphOpenLawSpec:17` MERGE. The ship asserts and helpers repeat `GraphShapeLawSpec:206`. Drop them here.
-- [ ] A6 `GraphShapeLawSpec:43` WEAK. Passes `Nil` modules, so `chain` is empty for any implementation. Pass `List(module)`.
-- [ ] A7 `GraphShapeLawSpec:141` WEAK. `nonEmpty` on any snippet error. Assert the missing `<:< P` evidence text, with `@implicitNotFound` if needed.
-- [ ] A8 `GraphShapeLawSpec:228` DELETE. Restates `def graph = Right(found)`.
-- [ ] A9 `OrganizeLawSpec:28` (and the `:40` overloads) WEAK. `Uses(Nil)` and `Shape` never reads plugins. Use `use(Echo)` and add plugin ids to `Shape`.
-- [ ] A10 `PinTextLawSpec:36` WEAK. Enum inequality, `val empty`, and case-class `copy`. Keep the message rows only.
-- [ ] A11 `PluginGrammarLawSpec:58` MERGE. The same `Cron.from` cases as `PluginSpec:229`. One Cron table.
-- [ ] A12 `PluginMessageLawSpec:60` REWRITE. Pins `"plugin task cycle "` for `Cycle(Nil)`, which the engine never builds. `Cycle(path: ::[PluginTaskId])` and delete the row.
-- [ ] A13 `PluginSpec:119` REWRITE. Copies the `reserved` literals. Assert `JobCheck.generated(g) ⊆ JobName.reserved` here. app asserts every Grammar built-in word is in `CommandName.reserved`.
-- [ ] A14 `PluginSpec:247` DELETE. Asserts the test's own `linkName` helper. Add the `EngineLeak(Published)` and `Defect(Module)` rows to `PluginMessageLawSpec:22` if they are missing.
-- [ ] A15 `PluginSpec:296` DELETE. Reads back `PluginFixture` defaults and repeats `ArgsLawSpec:15`.
-- [ ] A16 `PluginSpec:535` WEAK. `schedule.nonEmpty` on any error, and a fixture named `cron` with no cron. Assert the error names `cron`, and rename the fixture.
-- [ ] A17 `PluginSpec:570` MERGE. The same `JobCheck` arms as `JobCheckLawSpec:46`. One law with the exact `CiFault` values.
-- [ ] A18 `PomLawSpec:40` DELETE. Copies the `word` match, proven in full at `LocalPublishLawSpec:80`.
-- [ ] A19 `PublishLawSpec:23` WEAK. Reads back stub arguments. Read `secretNames` and `followUp` from `Sona.layer(mode)`.
-- [ ] A20 `PublishLawSpec:50` DELETE. `fromEffect` returns its arguments.
-- [ ] A21 `SessionLawSpec:64` REWRITE. Nine fixed asserts rerun inside `check`. Keep the two generated round trips there and move the fixed rows out.
-- [ ] A22 `ShipDraftLawSpec:17` DELETE. Reads back `trusted` constructor arguments.
-- [ ] A23 `ShipDraftLawSpec:46` DELETE. Tests case-class `copy`.
-- [ ] A24 `SupplyDiagnosticLawSpec:172` WEAK. L209 repeats `Sight.values`. Delete L209.
-- [ ] A25 `SupplyNameLawSpec:85` MERGE. The same CVSS vectors as `CvssBandLawSpec`. Move the 3.0 refusal and the new vectors into that table.
-- [ ] A26 `SupplyPolicyLawSpec:60` DELETE. One-line forwarders.
-- [ ] A27 `SupplyPolicyLawSpec:97` MERGE. Add `ServiceDown(_, FailOpen)` to `SentenceLawSpec:39`.
-- [ ] A28 `SupplyPolicyLawSpec:110` MERGE. Add the two-sha `HumanCommitsOnBranch` row to `SentenceLawSpec:39`.
-- [ ] A29 `ToolPinLawSpec:32` WEAK. Uses `JobTimeout.admits` as its own oracle. The oracle is the literal `1 <= raw && raw <= 360`.
-- [ ] A30 `ToolPinLawSpec:66` WEAK. L82-84 repeat enum `values`. Delete them.
-- [ ] A31 `VersionDecisionLawSpec:147` WEAK. `Gen.int(0, 3)` cannot tell string order from number order. Widen, and add `1.9.0 < 1.10.0`.
-- [ ] A32 `VersionOpenLawSpec:99` REWRITE. Builds the expected text from `ShipAdvice`'s own parts. Assert literal sentences.
-- [ ] A33 `JobCheckLawSpec:108` Check `Not(Event(Schedule))` against B1.
+- [x] A1 `BuildNameLawSpec:52` MERGE. The same parsers as `PinTextLawSpec:65`. One ProviderLibrary, TestProvider, FrameworkClass law.
+- [x] A2 `BuildNameLawSpec:65` WEAK. L73 compares `Resolver.Central` to itself, L74 tests enum `!=`. Delete L73-74.
+- [x] A3 `BundleLawSpec:81, :85, :89` WEAK. `errors.nonEmpty` accepts any compile error. Assert the macro's message ("has no layer", "is not an object", "is not a HistosPlugin and has no layer").
+- [x] A4 `CiArrangeLawSpec:78` REWRITE. Copies `Combine.on` and `Combine.cond`. Assert through `JobCheck.arrange` that a `Ci ++ Dispatch` job carries both event lists, or delete.
+- [x] A5 `GraphOpenLawSpec:17` MERGE. The ship asserts and helpers repeat `GraphShapeLawSpec:206`. Drop them here.
+- [x] A6 `GraphShapeLawSpec:43` WEAK. Passes `Nil` modules, so `chain` is empty for any implementation. Pass `List(module)`.
+- [x] A7 `GraphShapeLawSpec:141` WEAK. `nonEmpty` on any snippet error. Assert the missing `<:< P` evidence text, with `@implicitNotFound` if needed.
+- [x] A8 `GraphShapeLawSpec:228` DELETE. Restates `def graph = Right(found)`.
+- [x] A9 `OrganizeLawSpec:28` (and the `:40` overloads) WEAK. `Uses(Nil)` and `Shape` never reads plugins. Use `use(Echo)` and add plugin ids to `Shape`.
+- [x] A10 `PinTextLawSpec:36` WEAK. Enum inequality, `val empty`, and case-class `copy`. Keep the message rows only.
+- [x] A11 `PluginGrammarLawSpec:58` MERGE. The same `Cron.from` cases as `PluginSpec:229`. One Cron table.
+- [x] A12 `PluginMessageLawSpec:60` REWRITE. Pins `"plugin task cycle "` for `Cycle(Nil)`, which the engine never builds. `Cycle(path: ::[PluginTaskId])` and delete the row.
+- [x] A13 `PluginSpec:119` REWRITE. Copies the `reserved` literals. Assert `JobCheck.generated(g) ⊆ JobName.reserved` here. app asserts every Grammar built-in word is in `CommandName.reserved`.
+- [x] A14 `PluginSpec:247` DELETE. Asserts the test's own `linkName` helper. Add the `EngineLeak(Published)` and `Defect(Module)` rows to `PluginMessageLawSpec:22` if they are missing.
+- [x] A15 `PluginSpec:296` DELETE. Reads back `PluginFixture` defaults and repeats `ArgsLawSpec:15`.
+- [x] A16 `PluginSpec:535` WEAK. `schedule.nonEmpty` on any error, and a fixture named `cron` with no cron. Assert the error names `cron`, and rename the fixture.
+- [x] A17 `PluginSpec:570` MERGE. The same `JobCheck` arms as `JobCheckLawSpec:46`. One law with the exact `CiFault` values.
+- [x] A18 `PomLawSpec:40` DELETE. Copies the `word` match, proven in full at `LocalPublishLawSpec:80`.
+- [x] A19 `PublishLawSpec:23` WEAK. Reads back stub arguments. Read `secretNames` and `followUp` from `Sona.layer(mode)`.
+- [x] A20 `PublishLawSpec:50` DELETE. `fromEffect` returns its arguments.
+- [x] A21 `SessionLawSpec:64` REWRITE. Nine fixed asserts rerun inside `check`. Keep the two generated round trips there and move the fixed rows out.
+- [x] A22 `ShipDraftLawSpec:17` DELETE. Reads back `trusted` constructor arguments.
+- [x] A23 `ShipDraftLawSpec:46` DELETE. Tests case-class `copy`.
+- [x] A24 `SupplyDiagnosticLawSpec:172` WEAK. L209 repeats `Sight.values`. Delete L209.
+- [x] A25 `SupplyNameLawSpec:85` MERGE. The same CVSS vectors as `CvssBandLawSpec`. Move the 3.0 refusal and the new vectors into that table.
+- [x] A26 `SupplyPolicyLawSpec:60` DELETE. One-line forwarders.
+- [x] A27 `SupplyPolicyLawSpec:97` MERGE. Add `ServiceDown(_, FailOpen)` to `SentenceLawSpec:39`.
+- [x] A28 `SupplyPolicyLawSpec:110` MERGE. Add the two-sha `HumanCommitsOnBranch` row to `SentenceLawSpec:39`.
+- [x] A29 `ToolPinLawSpec:32` WEAK. Uses `JobTimeout.admits` as its own oracle. The oracle is the literal `1 <= raw && raw <= 360`.
+- [x] A30 `ToolPinLawSpec:66` WEAK. L82-84 repeat enum `values`. Delete them.
+- [x] A31 `VersionDecisionLawSpec:147` WEAK. `Gen.int(0, 3)` cannot tell string order from number order. Widen, and add `1.9.0 < 1.10.0`.
+- [x] A32 `VersionOpenLawSpec:99` REWRITE. Builds the expected text from `ShipAdvice`'s own parts. Assert literal sentences.
+- [x] A33 `JobCheckLawSpec:108` Check `Not(Event(Schedule))` against B1. Closed by B10: the row asserted the reachability rule, not the rendering, and that rule was wrong.
+- [x] A34 B10.
+- [x] A35 `ShipAdvice.incomplete` runs its parts together ("default or other export HISTOS_SESSION=…"). Each part is its own sentence, and exactly one period ends each, even when a `SessionError` message already ends with one. Pin the literal text.
+- [x] A36 WEAK. Table laws assert `forall` and never name the failing row: `PluginMessageLawSpec`, `PluginGrammarLawSpec`, `ToolPinLawSpec`, `PublishLawSpec`, `SupplyPolicyLawSpec`, `SupplyNameLawSpec`, `SupplyDiagnosticLawSpec`, and also `DoctorModelLawSpec`, `GraphLawSpec`, `HygieneLawSpec`, `StepLawSpec`, `VersionLawSpec`. Collect the misses and assert `misses == Nil`.
+- [x] A37 WEAK. `JobCheckLawSpec` compares `productPrefix` strings through its `fault` helper. Assert exact error values.
+- [x] A38 WEAK. `GraphShapeLawSpec` helpers fall back to `getOrElse("")` and `TestStore.Off`, so a missing module can pass. A missing module fails the law.
+- [x] A39 DELETE. `ShipDraftLawSpec` `asked.description == row.description` reads back `copy`.
+- [x] A40 `Sona.described` has no production caller. Move it into the engine test sources that use it, and delete it from production.
+- [x] A41 `SupplyFault.Advisory` prints a severity through enum `toString`. Render it with an explicit, total match, and pin the text.
+- [x] A42 `JobCheck` uses `isInstanceOf` for its event tests. Use a pattern match or an exhaustive function.
+- [x] A43 `BuilderMacro.module` widens its `Expr` with `asInstanceOf`. `asExprOf` checks the type and keeps the tree, so `module(...)` still carries its platforms.
+- [x] A44 WEAK. `GraphShapeLawSpec`'s `fault` helper and `GraphLawSpec`'s `kind` helper compare error names as `productPrefix` strings, so the wrong project, platform, or position passes. Assert exact error values, as A37 did.
+- [x] A45 B12.
+- [x] A46 D5. `JobCheck` evaluates the rendered expression on each start GitHub can give the file (its event name and the refs that run can be on), and a condition is reachable when it is not false on every start. One run has one event, so `All` of two event names, or of a label and a dispatch input, is refused.
 
 ## wire
 

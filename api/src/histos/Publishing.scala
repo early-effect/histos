@@ -188,12 +188,4 @@ object Sona:
         ZIO.fail(PublishFault.Version(request.revision))
       def secretNames: List[String] = secrets
       def followUp: FollowUp        = FollowUp.Finished
-
-  /** Workflow and tests read this when they have no build. `publish` fails `Version`. */
-  def described(mode: ReleaseMode): Publishing =
-    Publishing.fromEffect(
-      request => ZIO.fail(PublishFault.Version(request.revision)),
-      secrets,
-      followUp(mode),
-    )
 end Sona
