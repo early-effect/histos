@@ -91,7 +91,7 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
           ok(text).contains("supply.app-permissions"),
           ok(text).contains("supply.app-token"),
         ),
-  ).provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed])
+  ).provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]) @@ TestAspect.withLiveClock // probes run under a timeout
 
   private def survey(env: Map[String, String], installations: Reply) =
     ZIO.scoped:

@@ -193,6 +193,8 @@ Each item audits the files it touches against the Totality list and adds what it
 | 44 | Stale proofs | `cache-work-plan.md` checks "TestStore" and "testQuick stamp" with proofs (`ModuleTestQuickSpec`, `QuickSpec`) the #132 rewrite deleted | Read-through |
 | 46 | Flaky scope law | `PluginScopeLawSpec` failed in #161's CI: a closed invocation socket still answered. `ServerSocket.close` defers the close to a thread blocked in `accept`, and Linux keeps accepting until it wakes. The fixture's release now joins that thread | Shim |
 | 47 | Native crash | #161's first CI run crashed the `wire` Native test binary with `Unhandled signal 11` at a guard-page address, and the rerun passed. A crash is a bug, not a flake | Container (it brings the Linux reproduction) |
+| 48 | Ambient cache | `GraphTastyLawSpec` read the locked Scala 3.9 compiler from the Coursier cache, and nothing fetched it before the suite on a cold cache, so the law passed or failed with run order. The setup action now runs `histos resolve` when the repository has a lock | Restart watch |
+| 49 | Test value | Laws written in bulk: each needs to assert a property users depend on, fail when that property breaks, and stay deterministic and hermetic | Test audit |
 | 45 | Three restart copies | The daemon, the CLI, and the MCP session each chose the restart compile and ignored its result | Restart watch |
 
 ## Left out
@@ -236,6 +238,7 @@ Each item audits the files it touches against the Totality list and adds what it
   - `CallsRunLawSpec` proves a real run signals once and a refused run never does.
   - The doctor's real-probe laws now take `withLiveClock` (row 43).
 - [ ] **Socket path.** The server socket lives at a short path under `~/.histos` keyed by the checkout, so any checkout depth binds. Proof: a law that a 200-byte checkout path yields a socket path under the platform limit, and a server bound there in a deep temp checkout.
+- [ ] **Test audit.** Read-only reviewers go module by module over every spec. Each law must assert a property a user or this repository depends on, must fail when that property breaks (shown against a broken implementation where it is cheap), and must be deterministic and hermetic: no wall-clock races, no ambient cache, no network, no shared mutable state across laws. A law that tests ZIO, the JDK, or a library is deleted. A duplicate is merged. Findings land in this ledger with the item that fixes them, and each module's fixes ship as their own pull request.
 - [ ] **Error positions.** A test compile error prints `file:line:col` like a main compile error. Proof: a law on the rendered failure of a broken test source.
 - [ ] **Program output.** `histos run` streams the program's output as it runs. Proof: a law with a real child that prints a line, then waits on a gate: the line arrives before the gate opens.
 - [ ] **Link cache.** A native or JavaScript link whose key (`NativeKey`, `JsKey` on product digests) is in the store restores the linked output and does not start the linker. Read [cache-work-plan.md](cache-work-plan.md) first. Proof: a scenario counts linker starts: a trailing comment keeps the link, a method body relinks, and a wiped checkout restores without a link.
