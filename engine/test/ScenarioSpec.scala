@@ -2,7 +2,7 @@ package histos
 
 import histos.jdk.Sha256
 import histos.program.ProgramFeed
-import histos.resolve.ToolRole
+import histos.resolve.{ResolveError, ToolRole}
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
@@ -186,6 +186,7 @@ object ScenarioSpec extends ZIOSpecDefault:
           val testText = tested match
             case Left(error: histos.testrun.ModuleTestError) => error.message
             case Left(error: GraphCompileError)              => error.message
+            case Left(error: ResolveError)                   => error.message
             case Right(_)                                    => ""
           assertTrue(
             mainText.contains(s"$lib:4:"),
@@ -195,6 +196,28 @@ object ScenarioSpec extends ZIOSpecDefault:
             testText.contains("nope"),
             !testText.contains(": warning: "),
           )
+    ,
+    test("a restored upstream enum re-expands an unchanged test that inlines its mirror size, and clean keeps it"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(Projects.locked(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          _        <- writeMirror(checkout, threeCases, samples("A", "B", "C"))
+          first    <- checkout.test(TestMode.Run)
+          _        <- writeMirror(checkout, twoCases, samples("A", "B"))
+          removed  <- checkout.test(TestMode.Run)
+          _        <- writeMirror(checkout, threeCases, samples("A", "B", "C") + "// again\n")
+          back     <- checkout.test(TestMode.Run)
+          _        <- checkout.clean
+          stored   <- checkout.test(TestMode.Run)
+        yield assertTrue(
+          out(first) == "cases 3 covered true",
+          out(removed) == "cases 2 covered true",
+          out(back) == "cases 3 covered true",
+          out(stored) == "cases 3 covered true",
+        )
     ,
     test("a running program's output arrives while it runs"):
       ZIO.scoped:
@@ -223,6 +246,14 @@ object ScenarioSpec extends ZIOSpecDefault:
   private def writeApp(checkout: Checkout): IO[IoFailure, Unit] =
     checkout.write("app/src/main/scala/demo/Lib.scala", lib) *>
       checkout.write("app/src/test/scala/demo/Foo.scala", foo)
+
+  /** `E` in main sources, its samples in tests, and `Check`, which inlines the mirror's size through two files. */
+  private def writeMirror(checkout: Checkout, cases: String, values: String): IO[IoFailure, Unit] =
+    checkout.write("core/src/main/scala/demo/E.scala", cases) *>
+      checkout.write("core/src/test/scala/demo/Count.scala", count) *>
+      checkout.write("core/src/test/scala/demo/Law.scala", law) *>
+      checkout.write("core/src/test/scala/demo/Samples.scala", values) *>
+      checkout.write("core/src/test/scala/demo/Check.scala", check)
 
   private def coreClass(checkout: Checkout, version: ScalaVersion): Path =
     GraphCompile.classesDir(checkout.root, ProjectName("core"), version).resolve("Core.class")
@@ -331,6 +362,59 @@ object ScenarioSpec extends ZIOSpecDefault:
   private val extra =
     """object Extra:
       |  def m: Int = Core.n
+      |""".stripMargin
+
+  private val threeCases =
+    """package demo
+      |
+      |enum E:
+      |  case A, B, C
+      |""".stripMargin
+
+  private val twoCases =
+    """package demo
+      |
+      |enum E:
+      |  case A, B
+      |""".stripMargin
+
+  private val count =
+    """package demo
+      |
+      |import scala.compiletime.constValue
+      |import scala.deriving.Mirror
+      |
+      |object Count:
+      |  inline def cases[A](using m: Mirror.SumOf[A]): Int =
+      |    constValue[Tuple.Size[m.MirroredElemTypes]]
+      |
+      |  inline def covered[A <: scala.reflect.Enum](values: List[A])(using m: Mirror.SumOf[A]): Boolean =
+      |    values.map(_.ordinal) == (0 until constValue[Tuple.Size[m.MirroredElemTypes]]).toList
+      |""".stripMargin
+
+  private val law =
+    """package demo
+      |
+      |import scala.deriving.Mirror
+      |
+      |object Law:
+      |  inline def line[A <: scala.reflect.Enum](values: List[A])(using Mirror.SumOf[A]): String =
+      |    s"cases ${Count.cases[A]} covered ${Count.covered(values)}"
+      |""".stripMargin
+
+  private def samples(names: String*): String =
+    s"""package demo
+       |
+       |object Samples:
+       |  val es: List[E] = List(${names.map(name => s"E.$name").mkString(", ")})
+       |""".stripMargin
+
+  private val check =
+    """package demo
+      |
+      |object Check:
+      |  def main(args: Array[String]): Unit =
+      |    println(Law.line(Samples.es))
       |""".stripMargin
 
   private val lib =
