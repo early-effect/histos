@@ -132,6 +132,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           read,
           "plugin x is not in the lock",
           "resolve failed while fetch",
+          "could not download:\nhttps://repo1.maven.org/x.jar: download error: read timed out",
           "/work/repo has no top-level version line",
         ),
         resolveErrors.map(error => noted(error.diagnose)) == List(
@@ -151,6 +152,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("resolve.failed", "histos resolve --update"),
           ("resolve.failed", "histos resolve --update"),
           ("resolve.failed", "histos resolve --update"),
+          ("resolve.download", "histos resolve"),
           ("format.config", "histos resolve --update"),
         ),
       )

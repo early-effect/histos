@@ -82,8 +82,10 @@ import histos.process.{ChildError, GroupOp, ProcessOutput}
 import histos.program.ProgramError
 import histos.publish.{LauncherError, LocalPublishError, ScriptError}
 import histos.resolve.{
+  ArtifactMiss,
   ClasspathScope,
   ClassifierError,
+  DownloadFault,
   JarClassifier,
   LockError,
   LockField,
@@ -469,6 +471,8 @@ private object WireBuild extends WireSupport:
   given JsonCodec[NativeToolchainError]                  = JsonCodec.derived
   given JsonCodec[LockError]                             = JsonCodec.derived
   given JsonCodec[RepositoryIo]                          = JsonCodec.derived
+  given JsonCodec[DownloadFault]                         = JsonCodec.derived
+  given JsonCodec[ArtifactMiss]                          = JsonCodec.derived
   given JsonCodec[PluginLoadError]                       = JsonCodec.derived
   given JsonCodec[histos.format.ScalafmtConfError]       = JsonCodec.derived
   private val resolveErrorCodec: JsonCodec[ResolveError] = JsonCodec.derived
