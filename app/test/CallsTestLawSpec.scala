@@ -75,7 +75,7 @@ object CallsTestLawSpec extends ZIOSpecDefault:
                 logged <- ZIO.attempt(if Files.isRegularFile(log) then Files.readString(log) else "").orDie
               yield assertTrue(
                 missed == Right(()),
-                done(missedHeard) == Some(CallResult.Fault(BuildFault.Select(SelectError.Unknown(missing)))),
+                done(missedHeard) == Some(CallResult.Fault(BuildFault.Select(SelectError.Unknown(missing, Nil)))),
                 ran == Right(()),
                 testsOf(done(heard)) == List(TestedCell(lawName, scala3, Platform.Jvm, TestStatus.Passed)),
                 outs(heard).contains("tests passed: 1 failed: 0 cached: 0 modules: 1"),

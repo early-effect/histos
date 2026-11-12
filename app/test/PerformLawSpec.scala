@@ -38,7 +38,7 @@ object PerformLawSpec extends ZIOSpecDefault:
   private val cells  = GraphCompileError.Cells(NonEmptyChunk.single(missed))
   private val ran    =
     GraphCompileError.Failed(api, ScalaVersion("3.3.4"), Platform.Jvm, CompileError.NoSources)
-  private val target = GraphCompileError.Target(SelectError.Unknown(api))
+  private val target = GraphCompileError.Target(SelectError.Unknown(api, Nil))
 
   def spec = suite("perform laws")(
     test("a call that reads the adopted graph is the only one that needs it"):
@@ -64,8 +64,8 @@ object PerformLawSpec extends ZIOSpecDefault:
           Some(BuildFault.Pattern(SuitePatternError.Empty)),
         Faults.testStopped(ModuleTestError.Lock(noLock)) == Some(BuildFault.Resolve(noLock)),
         Faults.testStopped(ModuleTestError.Compile(cells)) == None,
-        Faults.testStopped(ModuleTestError.Target(SelectError.Unknown(api))) ==
-          Some(BuildFault.Select(SelectError.Unknown(api))),
+        Faults.testStopped(ModuleTestError.Target(SelectError.Unknown(api, Nil))) ==
+          Some(BuildFault.Select(SelectError.Unknown(api, Nil))),
         Faults.testStopped(ModuleTestError.Absent(api)) == Some(BuildFault.Test(ModuleTestError.Absent(api))),
         Faults.programStopped(ProgramError.Absent("api")) == Some(BuildFault.Program(ProgramError.Absent("api"))),
         Faults.programStopped(ProgramError.Lock(noLock)) == Some(BuildFault.Resolve(noLock)),

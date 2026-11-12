@@ -67,11 +67,9 @@ enum BumpFault:
   case Unanswered(coordinate: String)
   case Rewrite(error: ShipBump.Rewrite)
   case MissingShip(name: ShipName)
-  case Io(path: String)
 
   def message: String = this match
     case Unanswered(coordinate) => s"$coordinate did not answer"
     case Rewrite(error)         => error.message
     case MissingShip(name)      => s"${name.value} is not a ship in this catalog"
-    case Io(path)               => s"could not write $path"
 end BumpFault

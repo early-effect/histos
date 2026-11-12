@@ -476,8 +476,8 @@ object Cli:
 
   private def bumpExit(fault: histos.version.BumpFault): CliExit =
     fault match
-      case histos.version.BumpFault.MissingShip(_) => CliExit.Usage
-      case _                                       => CliExit.Failed
+      case histos.version.BumpFault.MissingShip(_)                                      => CliExit.Usage
+      case histos.version.BumpFault.Unanswered(_) | histos.version.BumpFault.Rewrite(_) => CliExit.Failed
 
   private def doctor(
       repo: Path,

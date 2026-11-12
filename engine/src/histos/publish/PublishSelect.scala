@@ -150,8 +150,8 @@ object PublishSelect:
                       case Some(ship) if writable.contains(ship) => Right(have.add(module.name))
                       case Some(_)                               => Right(have)
                       case None                                  => Right(have.skip(module.name))
-                  case _ => Left(LocalPublishError.Target(SelectError.Unknown(child)))
-          case _ => Left(LocalPublishError.Target(SelectError.Unknown(project)))
+                  case _ => Left(LocalPublishError.Target(SelectError.Unknown(child, Nil)))
+          case _ => Left(LocalPublishError.Target(SelectError.Unknown(project, Nil)))
       case PublishName.Module(project) =>
         owned.get(project) match
           case Some(ship) if writable.contains(ship) => Right(roots.add(project))
@@ -159,7 +159,7 @@ object PublishSelect:
           case None                                  =>
             graph.get(project) match
               case Some(_: Module) => Left(LocalPublishError.NotPublished(project))
-              case _               => Left(LocalPublishError.Target(SelectError.Unknown(project)))
+              case _               => Left(LocalPublishError.Target(SelectError.Unknown(project, Nil)))
 
   private def ownership(graph: ProjectGraph): Map[ProjectName, ShipName] =
     graph.catalog.ships.flatMap(ship => ship.members.toList.map(member => member -> ship.name)).toMap
