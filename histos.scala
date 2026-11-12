@@ -141,7 +141,7 @@ object build extends HistosBuild:
       .scalafmt
       .job(CommandJob(JobName("link-client"), HistosCommand.Client).unless(PinClient.Present))
       .docCheck(
-        ships(Ship("histos").next(0, 2, 10)(api, app).clients(ClientBuilds.ReleasesAndSnapshots)),
+        ships(Ship("histos").next(0, 3, 0)(api, app).clients(ClientBuilds.ReleasesAndSnapshots)),
         api,
         wire,
         client,
