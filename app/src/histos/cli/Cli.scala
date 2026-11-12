@@ -313,10 +313,8 @@ object Cli:
                       case None          => Provision.init(parent, version, apiJar, machine, request)
                   }
                 written
-                  .provideSomeLayer[Loader & Resolve](
-                    ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live ++
-                      ZLayer.succeed(histos.supply.Net.live) ++ histos.doctor.GhAuth.live ++
-                      histos.supply.CommandRunner.attached
+                  .provideSomeLayer[Loader & Resolve & Stdio](
+                    histos.supply.DoctorSurface.reads ++ histos.supply.CommandRunner.attached
                   )
                   .fold(
                     error => Completed(CliExit.Usage, "", error.message, Playback.Held),
@@ -493,7 +491,7 @@ object Cli:
       verbose: Boolean,
       projects: List[ProjectName],
       machine: histos.jdk.Machine,
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Resolve & Stdio, Completed] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
       .either
@@ -512,14 +510,7 @@ object Cli:
                   histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes, launch, verbose),
                   machine,
                 )
-                .provide(
-                  ReleaseFeed.live,
-                  histos.supply.GitRead.live,
-                  histos.supply.Terminal.live,
-                  ZLayer.succeed(histos.supply.Net.live),
-                  histos.doctor.GhAuth.live,
-                  histos.supply.CommandRunner.attached,
-                )
+                .provideSomeLayer[Stdio](histos.supply.DoctorSurface.reads ++ histos.supply.CommandRunner.attached)
                 .map: (code, text) =>
                   val exit = if code == 0 then CliExit.Success else CliExit.Failed
                   Completed(exit, text, "", Playback.Held)

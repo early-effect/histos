@@ -1,11 +1,11 @@
 package histos.doctor
 
-import histos.central.{Fingerprint, Preflight, PreflightError}
+import histos.central.{Fingerprint, KeyServer, PreflightError}
 import histos.publish.Signer
 
-import zio.{UIO, ZIO}
+import zio.{URIO, ZIO}
 
-/** The signing fingerprint, then the keyserver read [[Preflight]] already performs before an upload. */
+/** The signing fingerprint, then the keyserver read [[histos.central.Preflight]] performs before an upload. */
 object PgpProbe:
   enum Hit:
     case Unset
@@ -14,7 +14,7 @@ object PgpProbe:
     case Missing(fingerprint: String)
     case Unreachable(fingerprint: String)
 
-  def read(env: Map[String, String]): UIO[Hit] =
+  def read(env: Map[String, String]): URIO[KeyServer, Hit] =
     named(env) match
       case Some(raw) =>
         Fingerprint.from(raw) match
@@ -29,9 +29,9 @@ object PgpProbe:
             case Right(fp) => lookup(fp)
             case Left(_)   => ZIO.succeed(Hit.Unset)
 
-  private def lookup(fingerprint: Fingerprint): UIO[Hit] =
-    Preflight
-      .key(fingerprint)
+  private def lookup(fingerprint: Fingerprint): URIO[KeyServer, Hit] =
+    ZIO
+      .serviceWithZIO[KeyServer](_.key(fingerprint))
       .either
       .map:
         case Right(_)                           => Hit.Present(fingerprint.value)

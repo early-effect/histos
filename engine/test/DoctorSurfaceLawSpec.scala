@@ -1,7 +1,8 @@
 package histos
 
-import histos.central.{MavenModule, ReleaseFeed}
-import histos.doctor.{Fix, FixApply, GhAuth, GitHubCredential, GitHubPut, HistosCommand}
+import histos.central.{KeyServer, MavenModule, ReleaseFeed}
+import histos.cli.{Attached, Stdio}
+import histos.doctor.{GhAuth, HistosCommand}
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
@@ -14,7 +15,6 @@ import histos.supply.{
   PrAuthor,
   Reply,
   SupplyChain,
-  Terminal,
   UpdatePolicy,
 }
 import histos.toolchain.Architecture
@@ -27,12 +27,12 @@ import slayer.{any, stub, stubbed}
 import zio.*
 import zio.test.*
 
-/** The survey runs in process. The net answers 404 and is never a socket. Preflight dies if it opens one. The terminal
-  * doctor's laws are given a net, a gh, and a shell that die if a law does not expect them to be read.
+/** The survey runs in process. The net answers 404 and is never a socket. Preflight dies if it opens one. Every law is
+  * given its net, its gh, its terminal, its key server, and its command runner, and a service a law does not expect to
+  * be read dies if it is.
   */
 object DoctorSurfaceLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
-  private val token  = GitHubCredential.Token("token", "github.com")
 
   private val emptyJson = """{"exit":0,"timedOut":[],"findings":[]}"""
 
@@ -62,23 +62,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     Projects(module("core", Jvm)(scala3)) match
                       case Left(_)      => ZIO.succeed(assertTrue(Projects(module("core", Jvm)(scala3)).isRight))
                       case Right(graph) =>
-                        def ask(fix: Fix): UIO[FixApply.Answer]           = ZIO.dieMessage("doctor surface asked")
-                        def exec(command: HistosCommand): UIO[Unit] = ZIO.dieMessage(s"doctor surface ran ${command.line}")
-                        def setting(put: GitHubPut): UIO[Unit]      = ZIO.dieMessage(s"doctor surface sent ${put.url.value}")
                         def run(request: DoctorSurface.Request, net: Net) =
-                          DoctorSurface.runWith(
-                            repo,
-                            graph,
-                            request,
-                            machine,
-                            net,
-                            Map.empty,
-                            None,
-                            false,
-                            ask,
-                            exec,
-                            setting,
-                          )
+                          DoctorSurface.run(repo, graph, request, machine).provideSomeLayer[ReleaseFeed & GitRead](host(net))
                         for
                           preflight <- run(
                             DoctorSurface.Request(None, false, Some("nightly"), false, false, Nil, false),
@@ -143,29 +128,23 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                 ) match
                 case Left(_)      => ZIO.dieMessage("the preflight graph did not build")
                 case Right(graph) =>
-                  val actions = Map(
-                    "GITHUB_ACTIONS"    -> "true",
-                    "GITHUB_REPOSITORY" -> "example/demo",
-                    "GITHUB_TOKEN"      -> "token",
-                  )
-                  def run(env: Map[String, String], verbose: Boolean) =
-                    DoctorSurface.runWith(
-                      repo,
-                      graph,
-                      DoctorSurface.Request(Some("supply-chain"), false, Some("nightly"), false, false, Nil, verbose),
-                      machine,
-                      Dying,
-                      env,
-                      Some(token),
-                      false,
-                      _ => ZIO.dieMessage("doctor surface asked"),
-                      line => ZIO.dieMessage(s"doctor surface ran $line"),
-                      url => ZIO.dieMessage(s"doctor surface wrote $url"),
-                    )
+                  def run(verbose: Boolean) =
+                    DoctorSurface
+                      .run(
+                        repo,
+                        graph,
+                        DoctorSurface.Request(Some("supply-chain"), false, Some("nightly"), false, false, Nil, verbose),
+                        machine,
+                      )
+                      .provideSomeLayer[ReleaseFeed & GitRead](host(Dying))
                   for
-                    quiet  <- run(actions, false)
-                    spoken <- run(actions, true)
-                    failed <- run(actions + ("HISTOS_STEP_APP" -> "failure"), false)
+                    _      <- TestSystem.putEnv("GITHUB_ACTIONS", "true")
+                    _      <- TestSystem.putEnv("GITHUB_REPOSITORY", "example/demo")
+                    _      <- TestSystem.putEnv("GITHUB_TOKEN", "token")
+                    quiet  <- run(false)
+                    spoken <- run(true)
+                    _      <- TestSystem.putEnv("HISTOS_STEP_APP", "failure")
+                    failed <- run(false)
                   yield assertTrue(
                     quiet._1 == 0,
                     quiet._2.contains("0 errors, 0 warnings"),
@@ -223,8 +202,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     asked._2.contains("9.9.9"),
                   )
         .provideSomeLayer[TestEnvironment](
-          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Terminal] ++ stubbed[Net] ++ stubbed[GhAuth] ++
-            stubbed[CommandRunner]
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(Stdio.redirected) ++ stubbed[Net] ++
+            stubbed[GhAuth] ++ stubbed[KeyServer] ++ stubbed[CommandRunner]
         )
     ,
     test("a fix's histos command runs in the runner it is given, and a run with no token asks the gh it is given"):
@@ -268,8 +247,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     fixed._2.contains("ran: ./histos workflow --update"),
                   )
         .provideSomeLayer[TestEnvironment](
-          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(terminal(false)) ++ stubbed[Net] ++
-            stubbed[GhAuth] ++ stubbed[CommandRunner]
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(Stdio.redirected) ++ stubbed[Net] ++
+            stubbed[GhAuth] ++ stubbed[KeyServer] ++ stubbed[CommandRunner]
         )
     ,
     test("a settings page with no call is never asked about or sent, on a terminal or off one"):
@@ -291,13 +270,13 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                 )
               val url    = s"https://github.com/${repo.getFileName}/settings/actions"
               val author = PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
-              // An App author has no workflow-files command, so no fix here runs a shell.
+              // An App author has no workflow-files command, so no fix here runs a command.
               Projects
                 .organization(organization"example.com")
                 .supplyChain(SupplyChain(updates = UpdatePolicy(author = author)))(module("core", Jvm)(scala3)) match
                 case Left(_)      => ZIO.dieMessage("the terminal graph did not build")
                 case Right(graph) =>
-                  def fix(attached: Boolean) =
+                  def fix(stdio: Stdio) =
                     DoctorSurface
                       .run(
                         repo,
@@ -305,8 +284,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                         DoctorSurface.Request(Some("supply-chain"), false, None, true, false, Nil, false),
                         machine,
                       )
-                      .provideSomeLayer[ReleaseFeed & GitRead & Net & GhAuth & CommandRunner](
-                        ZLayer.succeed(terminal(attached))
+                      .provideSomeLayer[ReleaseFeed & GitRead & Net & GhAuth & KeyServer & CommandRunner](
+                        ZLayer.succeed(stdio)
                       )
                   for
                     _ <- TestSystem.putEnv("GH_TOKEN", "token")
@@ -314,9 +293,9 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                       repo.resolve(".github").resolve("workflows").resolve("ci.yml"),
                       "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n",
                     )
-                    none   <- fix(false)
+                    none   <- fix(Stdio.redirected)
                     _      <- TestConsole.feedLines("y")
-                    yes    <- fix(true)
+                    yes    <- fix(Stdio(Attached.Terminal, Attached.Terminal))
                     prompt <- TestConsole.output
                   yield assertTrue(
                     none._2.contains(s"not applied (open it in a browser): $url"),
@@ -324,13 +303,15 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     prompt.isEmpty,
                   )
         .provideSomeLayer[TestEnvironment](
-          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[CommandRunner]
+          stubbed[ReleaseFeed] ++ GitAnswers().layer ++ stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[KeyServer] ++
+            stubbed[CommandRunner]
         ),
   ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
 
-  private def terminal(answer: Boolean): Terminal =
-    new Terminal:
-      def attached: UIO[Boolean] = ZIO.succeed(answer)
+  /** `net`, a gh that holds no token, no person at the terminal, and a key server and a runner that die if read. */
+  private def host(net: Net): ULayer[Net & GhAuth & Stdio & KeyServer & CommandRunner] =
+    ZLayer.succeed(net) ++ ZLayer.succeed(NoGh) ++ ZLayer.succeed(Stdio.redirected) ++ stubbed[KeyServer] ++
+      stubbed[CommandRunner]
 end DoctorSurfaceLawSpec
 
 private object Dying extends Net:
@@ -350,3 +331,7 @@ private object Closed extends Net:
       headers: List[(String, String)],
   ): zio.IO[histos.supply.SupplyFault, Reply] =
     ZIO.succeed(Reply(404, ""))
+
+/** `gh` with no stored token. */
+private object NoGh extends GhAuth:
+  def token(hostname: Option[String]): UIO[Option[String]] = ZIO.none

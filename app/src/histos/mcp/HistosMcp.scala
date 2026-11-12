@@ -341,11 +341,8 @@ object HistosMcp:
                     machine,
                   )
                   .provide(
-                    histos.central.ReleaseFeed.live,
-                    histos.supply.GitRead.live,
-                    histos.supply.Terminal.detached,
-                    ZLayer.succeed(histos.supply.Net.live),
-                    histos.doctor.GhAuth.live,
+                    histos.supply.DoctorSurface.reads,
+                    ZLayer.succeed(histos.cli.Stdio.redirected),
                     histos.supply.CommandRunner.attached,
                   )
                   .map((_, text) => DoctorText(text))

@@ -1,12 +1,13 @@
 package histos.supply
 
-import histos.doctor.{Edit, Fix, FixApply, GitHubPut, HistosCommand}
+import histos.cli.{Attached, Stdio}
+import histos.doctor.{Edit, Fix, GitHubCredential, GitHubPut, HistosCommand}
 import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.HttpUrl
 import histos.workspace.Workspace
 
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 
 import slayer.{any, stub, stubbed}
 
@@ -41,21 +42,12 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
       )
       val program =
         for
-          repo  <- Workspace.work("surface-prose")
-          ran   <- Ref.make(List.empty[String])
-          notes <- DoctorSurface.applyReported(
-            repo,
-            found.flatMap(_.fixes.toList),
-            DoctorSurface.Request(None, false, None, true, true, Nil, false),
-            false,
-            _ => ZIO.die(new IllegalStateException("asked")),
-            command => ran.update(_ :+ command.line),
-            _ => ZIO.die(new IllegalStateException("set")),
-          )
-          lines <- ran.get
+          repo <- Workspace.work("surface-prose")
+          done <- fixed(repo, found.flatMap(_.fixes.toList), fixYes, Stdio.redirected)
         yield assertTrue(
-          lines == List("./histos setup supply-chain --fix", "./histos workflow --update"),
-          notes == List(
+          done.ran == List("./histos setup supply-chain --fix", "./histos workflow --update"),
+          done.sent.isEmpty,
+          done.notes == List(
             "ran: ./histos setup supply-chain --fix",
             "ran: ./histos workflow --update",
             "not applied (no terminal): https://github.com/early-effect/histos/settings/security_analysis",
@@ -67,80 +59,56 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
     test("fix off applies nothing, --yes does not confirm a GitHub setting, and a page with no call is a person's"):
       val program =
         for
-          repo <- Workspace.work("surface-fix")
-          off  <- DoctorSurface.applyReported(
-            repo,
-            List(command("workflow", "--update")),
-            DoctorSurface.Request(None, false, None, false, false, Nil, false),
-            true,
-            _ => ZIO.die(new IllegalStateException("asked")),
-            _ => ZIO.die(new IllegalStateException("ran")),
-            _ => ZIO.die(new IllegalStateException("set")),
-          )
-          yes <- DoctorSurface.applyReported(
-            repo,
-            List(setting("https://example.test/settings")),
-            DoctorSurface.Request(None, false, None, true, true, Nil, false),
-            true,
-            _ => ZIO.die(new IllegalStateException("asked")),
-            _ => ZIO.succeed(()),
-            _ => ZIO.die(new IllegalStateException("set")),
-          )
-          open <- DoctorSurface.applyReported(
-            repo,
-            List(page("https://example.test/secrets")),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            true,
-            _ => ZIO.die(new IllegalStateException("asked")),
-            _ => ZIO.succeed(()),
-            _ => ZIO.die(new IllegalStateException("set")),
-          )
+          repo   <- Workspace.work("surface-fix")
+          off    <- fixed(repo, List(command("workflow", "--update")), fixOff, person)
+          yes    <- fixed(repo, List(setting("https://example.test/settings")), fixYes, person)
+          open   <- fixed(repo, List(page("https://example.test/secrets")), fixOn, person)
+          prompt <- TestConsole.output
         yield assertTrue(
-          off.isEmpty,
-          yes == List("not applied (--yes does not confirm GitHub settings): https://example.test/settings"),
-          open == List("not applied (open it in a browser): https://example.test/secrets"),
+          off == Applied(Nil, Nil, Nil),
+          yes == Applied(
+            List("not applied (--yes does not confirm GitHub settings): https://example.test/settings"),
+            Nil,
+            Nil,
+          ),
+          open == Applied(List("not applied (open it in a browser): https://example.test/secrets"), Nil, Nil),
+          prompt.isEmpty,
         )
       program
     ,
-    test("a terminal no skips a setting, a terminal yes applies it, and a local edit replaces the text"):
+    test("a person's no skips a setting, a yes sends its call, no terminal sends nothing, and an edit lands"):
       val program =
         for
           repo <- Workspace.work("surface-yes")
           path = repo.resolve("histos.scala")
           _       <- Workspace.writeString(path, "before")
-          skipped <- DoctorSurface.applyReported(
-            repo,
-            List(setting("https://example.test/settings")),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            true,
-            _ => ZIO.succeed(FixApply.Answer.No),
-            _ => ZIO.succeed(()),
-            _ => ZIO.die(new IllegalStateException("set")),
-          )
-          applied <- DoctorSurface.applyReported(
-            repo,
-            List(setting("https://example.test/rules")),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            true,
-            _ => ZIO.succeed(FixApply.Answer.Yes),
-            _ => ZIO.succeed(()),
-            _ => ZIO.succeed(()),
-          )
-          wrote <- DoctorSurface.applyReported(
+          _       <- TestConsole.feedLines("n")
+          skipped <- fixed(repo, List(setting("https://example.test/settings")), fixOn, person)
+          _       <- TestConsole.feedLines("y")
+          applied <- fixed(repo, List(setting("https://example.test/rules")), fixOn, person)
+          absent  <- fixed(repo, List(setting("https://example.test/rules")), fixOn, Stdio.redirected)
+          wrote   <- fixed(
             repo,
             List(Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after"))),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            false,
-            _ => ZIO.succeed(FixApply.Answer.No),
-            _ => ZIO.succeed(()),
-            _ => ZIO.succeed(()),
+            fixOn,
+            Stdio.redirected,
           )
-          text <- Workspace.readString(path)
+          text   <- Workspace.readString(path)
+          prompt <- TestConsole.output
         yield assertTrue(
-          skipped.exists(_.startsWith("skipped:")),
-          applied.exists(_.startsWith("applied:")),
-          wrote.exists(_.contains("histos.scala")),
+          skipped == Applied(List("skipped: https://example.test/settings"), Nil, Nil),
+          applied == Applied(
+            List("applied: https://example.test/rules"),
+            Nil,
+            List("PUT https://example.test/rules/api {} Bearer token"),
+          ),
+          absent == Applied(List("not applied (no terminal): https://example.test/rules"), Nil, Nil),
+          wrote == Applied(List("wrote histos.scala"), Nil, Nil),
           text == "after",
+          prompt == Vector(
+            "Apply GitHub setting https://example.test/settings? [y/N] \n",
+            "Apply GitHub setting https://example.test/rules? [y/N] \n",
+          ),
         )
       program
     ,
@@ -152,22 +120,19 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           bad  = repo.resolve(".scalafmt.conf")
           _     <- Workspace.writeString(kept, "before")
           _     <- ZIO.attemptBlocking(Files.write(bad, notText)).orDie
-          notes <- DoctorSurface.applyReported(
+          done  <- fixed(
             repo,
             List(
               Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("before", "after")),
               Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")),
             ),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            false,
-            _ => ZIO.succeed(FixApply.Answer.No),
-            _ => ZIO.succeed(()),
-            _ => ZIO.succeed(()),
+            fixOn,
+            Stdio.redirected,
           )
           text  <- Workspace.readString(kept)
           bytes <- ZIO.attemptBlocking(Files.readAllBytes(bad).toList).orDie
         yield assertTrue(
-          notes == List(s"not applied: could not read $bad", "wrote histos.scala"),
+          done.notes == List(s"not applied: could not read $bad", "wrote histos.scala"),
           text == "after",
           bytes == notText.toList,
         )
@@ -181,22 +146,19 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           held = repo.resolve(".scalafmt.conf")
           _     <- Workspace.writeString(kept, "before")
           _     <- Workspace.createDirectories(held)
-          notes <- DoctorSurface.applyReported(
+          done <- fixed(
             repo,
             List(
               Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("", "version = 3.11.5\n")),
               Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")),
             ),
-            DoctorSurface.Request(None, false, None, true, false, Nil, false),
-            false,
-            _ => ZIO.succeed(FixApply.Answer.No),
-            _ => ZIO.succeed(()),
-            _ => ZIO.succeed(()),
+            fixOn,
+            Stdio.redirected,
           )
           text <- Workspace.readString(kept)
           dir  <- ZIO.attemptBlocking(Files.isDirectory(held)).orDie
         yield assertTrue(
-          notes == List(s"not applied: could not write $held", "wrote histos.scala"),
+          done.notes == List(s"not applied: could not write $held", "wrote histos.scala"),
           text == "after",
           dir,
         )
@@ -531,6 +493,32 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
         Scan.strings("""{"v":"unterminated}""", "v").isEmpty,
       ),
   )
+
+  private val fixOff = DoctorSurface.Request(None, false, None, false, false, Nil, false)
+  private val fixOn  = DoctorSurface.Request(None, false, None, true, false, Nil, false)
+  private val fixYes = DoctorSurface.Request(None, false, None, true, true, Nil, false)
+  private val person = Stdio(Attached.Terminal, Attached.Terminal)
+
+  /** What applying fixes did: the notes, the histos commands the runner was given, and the calls the net sent. */
+  private final case class Applied(notes: List[String], ran: List[String], sent: List[String])
+
+  /** `fixes` applied on `stdio` with a token, a runner and a net that record what they are given, and TestConsole. */
+  private def fixed(repo: Path, fixes: List[Fix], request: DoctorSurface.Request, stdio: Stdio): UIO[Applied] =
+    for
+      ran  <- Ref.make(List.empty[String])
+      sent <- Ref.make(List.empty[String])
+      runner = new CommandRunner:
+        def run(at: Path, command: HistosCommand): UIO[Unit] = ran.update(_ :+ command.line)
+      net = new Net:
+        def send(method: String, url: String, body: String, headers: List[(String, String)]) =
+          val bearer = headers.collectFirst { case ("Authorization", value) => value }.getOrElse("")
+          sent.update(_ :+ s"$method $url $body $bearer").as(Reply(204, ""))
+      notes <- DoctorSurface
+        .applyReported(repo, fixes, request, Some(GitHubCredential.Token("token", "github.com")))
+        .provide(ZLayer.succeed(stdio), ZLayer.succeed(runner), ZLayer.succeed(net))
+      commands <- ran.get
+      calls    <- sent.get
+    yield Applied(notes, commands, calls)
 
   private def command(head: String, tail: String*): Fix =
     Fix.Histos(HistosCommand.of(head, tail*))
