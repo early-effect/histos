@@ -1,15 +1,15 @@
 package histos.format
 
-import histos.resolve.{LockedTools, Repositories, Resolve}
+import histos.resolve.{LockedTool, LockedTools, Repositories, Resolve, ToolRole}
 import histos.workspace.Workspace
-import histos.{ScalafmtConf, ToolCatalog}
+import histos.{CompilerClosure, ToolCatalog}
 
 import java.nio.file.{Files, Path}
 
 import zio.{Scope, ZIO}
 import zio.test.*
 
-/** The scalafmt jars this checkout locks. A cached jar is reused. A missing one is fetched. */
+/** The scalafmt jars this checkout locks, read offline. The configuration is the law's own. */
 object FormatterLawSpec extends ZIOSpecDefault:
   private val messy = "object   A {  def f( x:Int)=x }\n"
   private val tidy  = "object A { def f(x: Int) = x }\n"
@@ -89,7 +89,7 @@ object FormatterLawSpec extends ZIOSpecDefault:
           _      <- run(repo, jars, FormatMode.Write)
           second <- ZIO.serviceWithZIO[Formatters](_.openings)
         yield assertTrue(first >= 1, second == first),
-  ).provideSomeLayerShared[TestEnvironment & Scope](Resolve.retained(cache) ++ Formatters.live) @@ TestAspect.sequential
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer ++ Formatters.live) @@ TestAspect.sequential
 
   private def run(repo: Path, jars: FormatterJars, mode: FormatMode) =
     listed(repo).flatMap(files =>
@@ -104,14 +104,19 @@ object FormatterLawSpec extends ZIOSpecDefault:
       .map(found => scala.jdk.CollectionConverters.ListHasAsScala(found).asScala.toList.sortBy(_.toString))
       .orDie
 
-  /** A temporary repository whose configuration names the scalafmt this checkout locks, with the jars that lock holds.
+  /** A temporary repository whose configuration names the scalafmt core this checkout locks, with the jars that lock
+    * holds, read offline.
     */
-  private def within[E](settings: String)(body: (Path, FormatterJars) => ZIO[Formatters & Resolve, E, TestResult]) =
+  private def within[E](
+      settings: String
+  )(body: (Path, FormatterJars) => ZIO[Formatters & Resolve, E, TestResult]) =
     val format = ToolCatalog.default.format
     for
-      version <- ScalafmtVersion.of(root, ScalafmtConf.Root)
-      lock    <- Resolve.readLock(root)
-      tools   <- ZIO.serviceWith[Resolve](LockedTools(lock, ToolCatalog.default, Repositories.central, _, None))
+      closure <- ZIO.service[CompilerClosure]
+      _       <- closure.held(ToolRole.ScalafmtDynamic)
+      cores   <- closure.held(ToolRole.ScalafmtCore)
+      version <- ZIO.fromEither(lockedCore(cores))
+      tools   <- ZIO.serviceWith[Resolve](LockedTools(closure.lock, ToolCatalog.default, Repositories.central, _, None))
       dynamic <- tools.selected(ScalafmtTools.dynamic(format, Repositories.central))
       core    <- tools.selected(ScalafmtTools.core(version, format, Repositories.central))
       jars = FormatterJars(dynamic, core, ScalafmtTools.coreRoots(version, format).map(ScalafmtPackage.of))
@@ -129,16 +134,10 @@ object FormatterLawSpec extends ZIOSpecDefault:
   private def read(repo: Path, file: String) =
     ZIO.attemptBlocking(Files.readString(repo.resolve(file))).orDie
 
-  private def cache: Path = _root_.coursier.cache.CacheDefaults.location.toPath
-
-  /** The checkout that holds `dependencies.lock` and `histos.scala`, from the test's working directory up. */
-  private def root: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else Option(path.getParent).flatMap(walk(_, left - 1))
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
+  /** The `scalafmt-core` revision the lock's core row roots. */
+  private def lockedCore(cores: List[LockedTool]): Either[ScalafmtConfError, ScalafmtVersion] =
+    val lock = Path.of("dependencies.lock")
+    cores.flatMap(_.roots).find(_.name.startsWith("scalafmt-core")) match
+      case Some(root) => ScalafmtVersion.from(lock, root.revision)
+      case None       => Left(ScalafmtConfError.NoVersion(lock))
 end FormatterLawSpec

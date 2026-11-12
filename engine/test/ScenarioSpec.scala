@@ -131,7 +131,7 @@ object ScenarioSpec extends ZIOSpecDefault:
           seen.exists(_.exists { case ProgramFeed.Exited(_, _, _, code) => code == 0; case _ => false }),
         )
     @@ TestAspect.withLiveClock,
-  ).provideSomeLayerShared[TestEnvironment & Scope](Scenario.tools) @@ TestAspect.withLiveSystem @@
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem @@
     TestAspect.timeout(3.minutes)
 
   private def writeApp(checkout: Checkout): IO[IoFailure, Unit] =

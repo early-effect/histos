@@ -3,12 +3,13 @@ package histos.testrun
 import histos.cache.ContentStore
 import histos.coverage.{CoverageCompile, Excludes, Flags, Gather}
 import histos.jdk.Machine
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{DependencyLock, ResolutionService, Resolve}
 import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, CompileMemo, Compilers, GraphCompile}
 import histos.{
+  CompilerClosure,
   Module,
   Platform,
   Platforms,
@@ -33,7 +34,6 @@ import zio.test.*
   * restores measurement files. That restore must see the hits the upstream tests already wrote.
   */
 object CoverageOrderLawSpec extends ZIOSpecDefault:
-  private val scala3   = ScalaVersion("3.10.0")
   private val coreName = ProjectName.trusted("core")
   private val appName  = ProjectName.trusted("app")
 
@@ -44,10 +44,11 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
         .flatMap: dir =>
           val marker = dir.resolve("core-tested")
           for
-            saw      <- Ref.make(false)
-            machine  <- Machine.load(dir)
-            jdk      <- GraphCompile.jdk(machine)
-            lock     <- ZIO.service[DependencyLock]
+            saw     <- Ref.make(false)
+            machine <- Machine.load(dir)
+            jdk     <- GraphCompile.jdk(machine)
+            closure <- ZIO.service[CompilerClosure]
+            scala3 = closure.scalaVersion
             runtimes <- Runtimes.read(machine, None)
             _        <- write(dir, "core", "main", "Core.scala", "object Core:\n  def ready: Int = 1\n")
             _        <- write(
@@ -67,7 +68,7 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
               .sessionOn(
                 TestRun(
                   dir,
-                  graph,
+                  graph(scala3),
                   List(coreName, appName),
                   jdk,
                   runtimes,
@@ -77,7 +78,9 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
                 note(saw, marker),
               )
               .runCollect
-              .provideSomeLayer[TestEnvironment & Scope & Resolve](graphEnv(lock, dir.resolve("store")))
+              .provideSomeLayer[TestEnvironment & Scope & Resolve](
+                graphEnv(closure.pinning(coreName, appName), dir.resolve("store"))
+              )
             found    <- saw.get
             measured <- Gather.read(Flags.classesDir(dir, coreName, scala3, Platform.Jvm))
             rows     = measured._1
@@ -104,7 +107,7 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
             noise == "",
           )
     @@ TestAspect.withLiveSystem
-  ).provideSomeLayerShared[TestEnvironment & Scope](opened)
+  ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
 
   private def note(saw: Ref[Boolean], marker: Path)(name: ProjectName): UIO[Unit] =
     if name != appName then ZIO.unit
@@ -113,7 +116,7 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
   private def write(dir: Path, module: String, kind: String, name: String, text: String) =
     Workspace.writeString(dir.resolve(module).resolve("src").resolve(kind).resolve("scala").resolve(name), text)
 
-  private def graph: ProjectGraph =
+  private def graph(scala3: ScalaVersion): ProjectGraph =
     val core = Module(
       coreName,
       Platforms(Platform.Jvm, Nil),
@@ -141,31 +144,9 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
       resolution = Resolution.Lock,
     )
 
-  private def pinned(lock: DependencyLock): DependencyLock =
-    val cells = List(coreName, appName).map: name =>
-      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
-    lock.copy(cells = cells ++ lock.cells)
-
   private def graphEnv(lock: DependencyLock, store: Path) =
-    ResolutionService.pinned(pinned(lock)) ++
+    ResolutionService.pinned(lock) ++
       CompileMemo.live ++
       Compilers.live(1) ++
       ZLayer.succeed(ContentStore.in(store))
-
-  private def opened =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(Resolve.readLock(repository))
-
-  private def repository: Path =
-    def walk(path: Path, left: Int): Option[Path] =
-      if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
-          path.resolve("histos.scala")
-        )
-      then Some(path)
-      else
-        Option(path.getParent) match
-          case Some(parent) => walk(parent, left - 1)
-          case None         => None
-    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
 end CoverageOrderLawSpec

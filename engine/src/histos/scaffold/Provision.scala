@@ -7,7 +7,7 @@ import histos.Sona
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.supply.DoctorSurface
 import histos.workflow.{CiBranch, CiError, Workflow}
-import histos.{ProjectName, Publishing}
+import histos.{BuildError, ProjectName, Publishing}
 
 import java.nio.file.{Files, Path}
 
@@ -85,7 +85,9 @@ object Provision:
             val branch = CiBranch(name)
             Workflow
               .update(dir, graph, sona)(using branch)
-              .mapError(error => ProvisionError.Workflow(error.message))
+              .mapError:
+                case error: CiError    => ProvisionError.Workflow(error.message)
+                case error: BuildError => ProvisionError.Load(LoadError.BrokenGraph(error))
               .flatMap: file =>
                 LauncherScript.update(dir, graph).mapError(error => ProvisionError.Workflow(error.message)) *>
                   Resolve

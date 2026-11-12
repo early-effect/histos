@@ -8,10 +8,10 @@ import histos.resolve.{BuildResolvers, DependencyLock, LockedCell, ResolutionSer
 import histos.schedule.CacheError
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestMode, TestRun}
 import histos.toolchain.Runtimes
-import histos.workspace.{IoFailure, IoFault, Workspace}
+import histos.workspace.{IoFailure, Workspace}
 import histos.zinc.{CompileFeed, CompilerStarts, GraphCompile, GraphCompileError}
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import zio.{Chunk, IO, Ref, Scope, UIO, ZEnvironment, ZIO, ZLayer}
 import zio.stream.ZStream
@@ -47,35 +47,17 @@ final class Scenario private (
 end Scenario
 
 object Scenario:
-  /** The store dies with the scope. The lock in the environment names the compiler tools every checkout pins. */
-  def open: ZIO[Scope & Resolve & DependencyLock, IoFailure, Scenario] =
+  /** The store dies with the scope. Every checkout pins the compiler tools of [[CompilerClosure.lock]]. */
+  def open: ZIO[Scope & Resolve & CompilerClosure, IoFailure, Scenario] =
     for
       dir     <- Workspace.work("histos-scenario-cas")
       count   <- Ref.make(0)
       resolve <- ZIO.service[Resolve]
-      tools   <- ZIO.service[DependencyLock]
+      closure <- ZIO.service[CompilerClosure]
     yield Scenario(
       ZEnvironment[Resolve, ContentStore, CompilerStarts](resolve, ContentStore.in(dir), CompilerStarts(count)),
-      tools,
+      closure.lock,
     )
-
-  /** Jars from the coursier cache, never the network, and the lock of the repository the test runs in. */
-  val tools: ZLayer[Any, ResolveError | IoFailure, Resolve & DependencyLock] =
-    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
-      ZLayer.fromZIO(repository.flatMap(Resolve.readLock))
-
-  /** The nearest directory with a build file and a lock. The test JVM may run below the repository root. */
-  private def repository: IO[IoFailure, Path] =
-    val here = Path.of("").toAbsolutePath.normalize
-    ZIO
-      .attemptBlocking(
-        Iterator
-          .unfold(Option(here))(dir => dir.map(found => (found, Option(found.getParent))))
-          .find(dir => Files.isRegularFile(Resolve.lockPath(dir)) && Files.isRegularFile(dir.resolve("histos.scala")))
-          .getOrElse(here)
-      )
-      .mapError(_ => IoFailure(here, IoFault.Stat))
-end Scenario
 
 /** One work tree of one build. `compile` and `test` run it against the scenario store. */
 final class Checkout private[histos] (

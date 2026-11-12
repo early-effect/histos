@@ -294,11 +294,8 @@ object WorkflowLawSpec extends ZIOSpecDefault:
       val doc  = JobName.trusted("doc")
       val test = JobName.trusted("test")
       assertTrue(
-        JobYaml.lift(BuildError.Ci(CiFault.UnknownNeed(doc, test))) == CiError.UnknownNeed(doc, test),
-        JobYaml.lift(BuildError.Ci(CiFault.UnpinnedWorkflowRun("other.yml"))) ==
-          CiError.UnpinnedWorkflowRun("other.yml"),
-        JobYaml.lift(BuildError.PluginGraph(PluginGraphFault.DuplicateSite(doc, test))) ==
-          CiError.DuplicateSite(doc, test),
+        JobYaml.lift(CiFault.UnknownNeed(doc, test)) == CiError.UnknownNeed(doc, test),
+        JobYaml.lift(CiFault.UnpinnedWorkflowRun("other.yml")) == CiError.UnpinnedWorkflowRun("other.yml"),
       )
     ,
     test("an unpinned action is a fault, a local action is not, and a catalog miss is not a mismatch"):

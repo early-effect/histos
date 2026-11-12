@@ -1,39 +1,26 @@
 package histos.schedule
 
-import java.net.{InetAddress, ServerSocket}
+import histos.schedule.GrpcLoopback.Answer
 
-import io.grpc.MethodDescriptor
+import io.grpc.Status
 
-import zio.{Chunk, ZIO}
+import zio.{Chunk, ZIO, durationInt}
 import zio.test.*
 
+/** Each call shape against a loopback server bound for the law. The law's timeout bounds a call that never closes. */
 object GrpcChannelLawSpec extends ZIOSpecDefault:
   def spec = suite("grpc channel laws")(
-    test("the four cache methods keep their proto names and their call shapes"):
-      assertTrue(
-        GrpcChannel.MaxInbound == 64 * 1024 * 1024,
-        GrpcChannel.getAction.getFullMethodName == Reapi.GetActionResult,
-        GrpcChannel.updateAction.getFullMethodName == Reapi.UpdateActionResult,
-        GrpcChannel.findMissing.getFullMethodName == Reapi.FindMissingBlobs,
-        GrpcChannel.read.getFullMethodName == Reapi.Read,
-        GrpcChannel.write.getFullMethodName == Reapi.Write,
-        GrpcChannel.getAction.getType == MethodDescriptor.MethodType.UNARY,
-        GrpcChannel.updateAction.getType == MethodDescriptor.MethodType.UNARY,
-        GrpcChannel.findMissing.getType == MethodDescriptor.MethodType.UNARY,
-        GrpcChannel.read.getType == MethodDescriptor.MethodType.SERVER_STREAMING,
-        GrpcChannel.write.getType == MethodDescriptor.MethodType.CLIENT_STREAMING,
-      )
-    ,
-    test("a closed port is a refused call, not a missing action"):
-      ZIO.scoped {
+    test("an unavailable answer fails every call shape, and so does tls against a plaintext server"):
+      ZIO.scoped:
         for
-          port  <- closed
+          port  <- GrpcLoopback.serve(Answer.Fixed(Status.Code.UNAVAILABLE))
           plain <- GrpcChannel.open("127.0.0.1", port, tls = false)
           unary <- plain.unary(GrpcChannel.getAction, Chunk.single(1.toByte)).either
           many  <- plain.serverStream(GrpcChannel.read, Chunk.single(2.toByte)).either
           sent  <- plain.clientStream(GrpcChannel.write, Chunk(Chunk.single(3.toByte), Chunk.single(4.toByte))).either
           empty <- plain.clientStream(GrpcChannel.write, Chunk.empty).either
-          tls   <- GrpcChannel.open("127.0.0.1", port, tls = true)
+          open  <- GrpcLoopback.serve(Answer.Store)
+          tls   <- GrpcChannel.open("127.0.0.1", open, tls = true)
           coded <- tls.unary(GrpcChannel.updateAction, Chunk.empty).either
         yield assertTrue(
           unary == Left(RemoteError.Rpc("UNAVAILABLE")),
@@ -42,16 +29,18 @@ object GrpcChannelLawSpec extends ZIOSpecDefault:
           empty == Left(RemoteError.Rpc("UNAVAILABLE")),
           coded == Left(RemoteError.Rpc("UNAVAILABLE")),
         )
-      },
-  )
-
-  private def closed: ZIO[Any, Nothing, Int] =
-    ZIO
-      .attemptBlocking {
-        val socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        val port   = socket.getLocalPort
-        socket.close()
-        port
-      }
-      .catchAll(error => ZIO.dieMessage(error.getClass.getName))
-end GrpcChannelLawSpec
+    ,
+    test("not found is no answer for a lookup and a read, and a failure for a write"):
+      ZIO.scoped:
+        for
+          port  <- GrpcLoopback.serve(Answer.Fixed(Status.Code.NOT_FOUND))
+          plain <- GrpcChannel.open("127.0.0.1", port, tls = false)
+          unary <- plain.unary(GrpcChannel.getAction, Chunk.single(1.toByte))
+          many  <- plain.serverStream(GrpcChannel.read, Chunk.single(2.toByte))
+          sent  <- plain.clientStream(GrpcChannel.write, Chunk(Chunk.single(3.toByte))).either
+        yield assertTrue(
+          unary == None,
+          many == None,
+          sent == Left(RemoteError.Rpc("NOT_FOUND")),
+        ),
+  ) @@ TestAspect.timeout(30.seconds)

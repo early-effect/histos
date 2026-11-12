@@ -28,12 +28,13 @@ object PublishRun:
       api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
-  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & IvyRoot, LocalPublishError, Report] =
     ZIO.scoped:
       for
+        root   <- ZIO.service[IvyRoot]
         names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
-        lines  <- localLines(repo, staged, LocalStock.layer(note) >>> build.local)
+        lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
       yield Report(show(staged, lines))
 
   def snapshots(

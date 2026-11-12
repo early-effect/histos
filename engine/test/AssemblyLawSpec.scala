@@ -12,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import org.objectweb.asm.{ClassWriter, Opcodes}
 import org.objectweb.asm.tree.ClassNode
 
-import zio.{Clock, ZIO}
+import zio.ZIO
 import zio.test.*
 
 object AssemblyLawSpec extends ZIOSpecDefault:
@@ -30,7 +30,6 @@ object AssemblyLawSpec extends ZIOSpecDefault:
             val dest    = root.resolve("out.jar")
             val note    = root.resolve("note.txt")
             for
-              _ <- Clock.instant
               _ <- ZIO.attemptBlocking {
                 writeClass(classes, "demo/Main", "own")
                 Files.writeString(note, "hi")
@@ -63,7 +62,6 @@ object AssemblyLawSpec extends ZIOSpecDefault:
             val outside = root.resolve("out.jar")
             val inside  = classes.resolve("out.jar")
             for
-              _ <- Clock.instant
               _ <- ZIO.attemptBlocking {
                 Files.createDirectories(empty)
                 writeClass(classes, "demo/Other", "own")
@@ -89,7 +87,6 @@ object AssemblyLawSpec extends ZIOSpecDefault:
             val dest    = root.resolve("out.jar")
             val note    = root.resolve("note.txt")
             for
-              _ <- Clock.instant
               _ <- ZIO.attemptBlocking {
                 writeClass(classes, "demo/Main", "own")
                 Files.writeString(note, "hi")

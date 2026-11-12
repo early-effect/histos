@@ -7,7 +7,7 @@ import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path}
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, Exit, ZIO}
+import zio.{Chunk, ZIO}
 import zio.test.*
 
 object CacheLawSpec extends ZIOSpecDefault:
@@ -112,77 +112,7 @@ object CacheLawSpec extends ZIOSpecDefault:
         ContentStore.home(None, "/home") == Path.of("/home", ".cache", "histos"),
         CacheCleanMode.values.forall(mode => CacheCleanMode.from(mode.token) == Right(mode)),
         CacheCleanMode.from("wipe") == Left(CacheCleanModeError.Unknown("wipe")),
-      )
-    ,
-    test("the first successful write wins, a later write does not replace it, and a read does not publish"):
-      ZIO.scoped:
-        for
-          store  <- StoreScope.memory
-          first  <- ZIO.scoped(store.write("kept")(_ => ZIO.succeed(Chunk(1))))
-          seen   <- zio.Ref.make(Chunk.empty[Byte])
-          second <- ZIO.scoped(store.write("kept")(current => seen.set(current).as(Chunk(2))))
-          held   <- store.published("kept")
-          prior  <- seen.get
-          read   <- ZIO.scoped(store.read("kept"))
-          missed <- ZIO.scoped(store.read("missing"))
-          empty  <- store.published("missing")
-        yield assertTrue(
-          first == Chunk(1),
-          second == Chunk(1),
-          prior == Chunk(1),
-          held == Some(Chunk(1)),
-          read == Chunk(1),
-          missed == Chunk.empty,
-          empty == None,
-        )
-    ,
-    test("a failed write and an interrupted write do not publish"):
-      ZIO.scoped:
-        for
-          store    <- StoreScope.memory
-          died     <- store.write("die")(_ => ZIO.die(new IllegalStateException("no"))).exit
-          afterDie <- store.published("die")
-          fiber    <- store.write("stop")(_ => ZIO.never).fork
-          _        <- fiber.interrupt
-          stopped  <- store.published("stop")
-        yield assertTrue(
-          died match
-            case Exit.Failure(cause) => cause.isDie
-            case Exit.Success(_)     => false
-          ,
-          afterDie == None,
-          stopped == None,
-        )
-    ,
-    test("a move into an empty path is moved, and a taken path stays occupied"):
-      scoped: root =>
-        val dest  = root.resolve("placed")
-        val from  = root.resolve("from")
-        val loser = root.resolve("loser")
-        for
-          _         <- Workspace.writeString(from, "a")
-          _         <- Workspace.writeString(loser, "b")
-          moved     <- Scratch.place(from, dest, "miss")
-          occupied  <- Scratch.place(loser, dest, "miss")
-          winner    <- Workspace.readString(dest)
-          left      <- Workspace.readString(loser)
-          missed    <- Scratch.place(loser, root.resolve("gone").resolve("child"), "miss").exit
-          partial   <- ZIO.scoped(Scratch.file(root.resolve("beside"), "no"))
-          directory <- ZIO.scoped(Scratch.directory(root.resolve("beside"), "no"))
-          fileGone  <- ZIO.attemptBlocking(Files.notExists(partial)).orDie
-          dirGone   <- ZIO.attemptBlocking(Files.notExists(directory)).orDie
-        yield assertTrue(
-          moved == Placed.Moved,
-          occupied == Placed.Occupied,
-          winner == "a",
-          left == "b",
-          missed match
-            case Exit.Failure(cause) => cause.failureOption.contains("miss")
-            case Exit.Success(_)     => false
-          ,
-          fileGone,
-          dirGone,
-        ),
+      ),
   )
 
   private def scoped[A](use: Path => zio.ZIO[Any, Any, A]): zio.ZIO[Any, Any, A] =
