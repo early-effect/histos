@@ -1230,13 +1230,20 @@ object Workflow:
           s"      - uses: $Checkout",
         ) ++ coursierCli(graph, "test") ++ prepare ++ link ++ testRun("${{ matrix.command }}")
 
-  /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
+  /** The pin runs the suite. Link a client only beside a bootstrap `dist/histos.jar`, which is the only jar the
+    * launcher replaces with that binary.
+    */
   private def clientStep(link: ClientLink): List[String] =
     link match
       case ClientLink.Skip       => Nil
       case ClientLink.Run(scope) =>
         val guard = cellFlag(scope, "client").toList.map(text => s"        if: $text")
-        List(s"      - run: ${quote("./histos client")}") ++ guard
+        List(
+          "      - run: |",
+          "          if [ -f dist/histos.jar ]; then",
+          "            ./histos client",
+          "          fi",
+        ) ++ guard
 
   private def include(job: TestJob, modules: List[Module], tools: RunnerTools, columns: ToolColumns): List[String] =
     val rows = List(

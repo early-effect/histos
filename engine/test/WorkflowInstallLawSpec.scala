@@ -69,12 +69,15 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         "archive.ubuntu.com",
         "timeout 180s",
         "needs.toolchain.outputs.built == 'true'",
+        "if [ -f dist/histos.jar ]; then",
+        "            ./histos client",
       ).filterNot(ci.contains)
       assertTrue(
         fault(rendered) == "",
         missing == Nil,
         ciMissing == Nil,
         !release.contains("needs.toolchain.outputs.built"),
+        !ci.contains("""- run: "./histos client""""),
       )
     ,
     test("the install matrix asks for the mac archive, and a pin that lacks it fails before any text"):

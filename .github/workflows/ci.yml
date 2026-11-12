@@ -172,7 +172,10 @@ jobs:
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
-      - run: "./histos client"
+      - run: |
+          if [ -f dist/histos.jar ]; then
+            ./histos client
+          fi
       - run: "./histos test --affected '${{ needs.affected.outputs.modules }}'"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
