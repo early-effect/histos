@@ -7,52 +7,17 @@ import histos.doctor.DoctorCheck
 import histos.version.CommitSha
 import histos.ProjectName
 
-/** One CI job. Open: a build extends this trait. Histos ships [[TaskJob]], [[CommandJob]], and [[SiteJob]]. A task
-  * belongs to a plugin. A command does not. The renderer matches [[JobRender]], not this trait.
+/** One CI job a plugin contributes. Open: a plugin extends this trait. Histos ships [[TaskJob]] and [[SiteJob]]. A job
+  * runs `./histos run <plugin>/<task>` for one task of the plugin that contributes it. The renderer matches
+  * [[JobRender]], not this trait.
   */
 trait CiJob:
   def name: JobName
-  def step: JobStep
+  def task: TaskName
   def permissions: JobPermissions
   def needs: List[JobName]
   def render: List[JobRender]
   def preflight: List[DoctorCheck] = Nil
-
-/** What a job runs. A task is `./histos run <plugin>/<task>`. A command is a histos verb. */
-enum JobStep:
-  case Task(task: TaskName)
-  case Command(command: HistosCommand, when: ClientWhen)
-
-enum HistosCommand:
-  case Client
-
-/** `Always` runs the command. `PinMissing` runs it only when the pin has no client for this platform. */
-enum ClientWhen:
-  case Always
-  case PinMissing
-
-/** The pin client the launcher would exec for this platform. */
-enum PinClient:
-  case Present
-
-object PinClient:
-  val skipText: String = "the pin already has a client for this platform."
-
-  /** The step after setup. Setup installs the toolchain, so the check cannot be a job condition. */
-  def line(when: ClientWhen): String =
-    when match
-      case ClientWhen.Always     => "./histos client"
-      case ClientWhen.PinMissing =>
-        "pin=$(sed -n 's/^histos.version=//p' build.properties | head -n 1); " +
-          "home=${HISTOS_HOME:-$HOME/.histos}; " +
-          "client=$home/toolchains/$pin/histos-client; " +
-          s"if [ -x \"$$client\" ]; then echo '$skipText'; else ./histos client; fi"
-end PinClient
-
-/** What [[TaskArrange]] runs. A task still needs the contributing plugin. */
-enum RunLine:
-  case Task(task: TaskName)
-  case Client(when: ClientWhen)
 
 /** A task runs in `ci.yml`, or on a cron in its own file. A cron is not a site. */
 final case class TaskJob(
@@ -71,8 +36,6 @@ final case class TaskJob(
     guard: Option[Guard] = None,
     concurrency: Option[Concurrency] = None,
 ) extends CiJob:
-  def step: JobStep = JobStep.Task(task)
-
   def render: List[JobRender] =
     val arranged = arrange
     cron match
@@ -89,7 +52,7 @@ final case class TaskJob(
       case Some(found) => Cond.All(List(base, Guard.cond(found)))
     TaskArrange(
       name,
-      RunLine.Task(task),
+      task,
       permissions,
       needs,
       narrowed,
@@ -108,54 +71,6 @@ object TaskJob:
   /** Cron plus `workflow_dispatch`. The cron is not part of [[Trigger]], so a site cannot take this. */
   def nightly(name: JobName, task: TaskName, cron: Cron): TaskJob =
     TaskJob(name, task, trigger = Trigger.Dispatch, cron = Some(cron))
-
-/** A histos command. [[unless]] runs it only when the pin has no client for this platform. */
-final case class CommandJob(
-    name: JobName,
-    command: HistosCommand,
-    when: ClientWhen = ClientWhen.Always,
-    trigger: Trigger = Trigger.Ci,
-    permissions: JobPermissions = JobPermissions.read,
-    needs: List[JobName] = Nil,
-    runner: Runner = Runner.Default,
-    env: List[(EnvName, EnvValue)] = Nil,
-    environment: Option[EnvironmentName] = None,
-    pre: List[PinnedAction] = Nil,
-    needsPolicy: NeedsPolicy = NeedsPolicy.NoneFailed,
-    graphSecrets: GraphSecrets = GraphSecrets.WhenNoThirdParty,
-    guard: Option[Guard] = None,
-    concurrency: Option[Concurrency] = None,
-) extends CiJob:
-  def step: JobStep = JobStep.Command(command, when)
-
-  def unless(pin: PinClient): CommandJob =
-    pin match
-      case PinClient.Present => copy(when = ClientWhen.PinMissing)
-
-  def render: List[JobRender] =
-    List(JobRender.Task(arrange))
-
-  private def arrange: TaskArrange =
-    val base     = trigger.cond
-    val narrowed = guard match
-      case None        => base
-      case Some(found) => Cond.All(List(base, Guard.cond(found)))
-    TaskArrange(
-      name,
-      RunLine.Client(when),
-      permissions,
-      needs,
-      narrowed,
-      trigger.on,
-      runner,
-      env,
-      environment,
-      pre,
-      needsPolicy,
-      graphSecrets,
-      concurrency,
-    )
-end CommandJob
 
 /** Publishes one directory. There is no cron parameter: a scheduled site cannot be constructed. The default trigger is
   * a push to the repository's default branch, not a tag and not a pull request.
@@ -176,8 +91,6 @@ final case class SiteJob(
     guard: Option[Guard] = None,
     concurrency: Option[Concurrency] = None,
 ) extends CiJob:
-  def step: JobStep = JobStep.Task(task)
-
   def render: List[JobRender] =
     val arranged = arrange
     val deploy   = JobRender.Site(arranged, SiteShape.DeployOnPush)
@@ -232,7 +145,7 @@ enum SiteShape:
 
 final case class TaskArrange(
     name: JobName,
-    line: RunLine,
+    task: TaskName,
     permissions: JobPermissions,
     needs: List[JobName],
     cond: Cond,
