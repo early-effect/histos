@@ -25,7 +25,7 @@ Histos is pre-release. The API breaks when that makes it more honest. What we st
 
 Histos runs on macOS and Linux. On Windows, use WSL.
 
-Histos does not install a JDK, Node, or clang. The launcher checks for JDK 21 or newer, but `test`, `run`, and a native or JavaScript link compile a small `java.lang.foreign` bootstrap, which needs JDK 22 or newer. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
+Histos does not install a JDK, Node, or clang. It needs JDK 25 or newer, and the shim refuses an older `java` with the install guide. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
 
 One POSIX script is the installer and the command:
 
@@ -38,7 +38,7 @@ The script installs itself as `~/.histos/bin/histos` and does not edit a shell r
 
 ### Toolchains and pins
 
-A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest, `histos.jar`, and, when the manifest names one for this platform, the native client `histos-client`. Prebuilt clients exist for `linux-x86_64` and `macos-aarch64`. Without a client, the shim runs `java -jar`.
+A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest, `histos.jar`, and, when the manifest names one for this platform, the native client `histos-client`. Prebuilt clients exist for `linux-x86_64` and `macos-aarch64`. Before a command runs, the shim fetches whatever that directory is missing and checks it against the manifest. Once the directory is complete, a command does not touch the network. Without a client, the shim runs `java -jar`.
 
 A project pins its toolchain in `build.properties`:
 
@@ -54,7 +54,7 @@ The pin wins over `~/.histos/default`. It has three forms:
 
 The shim answers four commands itself:
 
-- `histos toolchain install 0.2.10` downloads one version. It records that version as the default when none is set.
+- `histos toolchain install 0.2.10` installs one version and checks every file it already has. It records that version as the default when none is set.
 - `histos toolchain list` prints the installed versions.
 - `histos self update` replaces the shim when the published one differs.
 - `histos update` moves the pin. Inside a project it rewrites `build.properties`. Outside one it rewrites `~/.histos/default`. `--make-default` writes both.
@@ -147,7 +147,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Information
 
-`histos version` prints the pin. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos toolchain` prints the JDK a compile would use, and Node or clang when a module needs them. `histos observe` prints the stored compile tally.
+`histos version` prints the toolchain this command runs: the pin as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos toolchain` prints the JDK a compile would use, and Node or clang when a module needs them. `histos observe` prints the stored compile tally.
 
 ### Dependencies
 
@@ -238,7 +238,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publ
 
 ## The server
 
-`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`, and the socket is `.histos/server.sock`. When the recorded version differs from the command's, the command reboots the server and runs on the replacement.
+`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`, and the socket is `.histos/server.sock`. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement.
 
 `histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed.
 
@@ -277,7 +277,6 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 
 These are true today and tracked:
 
-- A cached toolchain jar leaves its native client uninstalled, so the shim runs `java -jar` until `toolchain install` runs. With a `-SNAPSHOT` pin and a native client, the version the shim passes and the one the server records disagree, so commands keep rebooting the server. [cli-work-plan.md](docs/cli-work-plan.md)
 - Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
 - `~ --restart run` cannot restart on a server, because the running program holds the compile lock. A failed compile still restarts the program.
 - No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)

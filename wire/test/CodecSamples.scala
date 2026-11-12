@@ -179,6 +179,9 @@ object CodecSamples:
     ResolveError.Io(io),
     ResolveError.Plugin(PluginLoadError.Unlocked("x")),
     ResolveError.Repository(RepositoryIo.Fetch),
+    ResolveError.Download(
+      ::(ArtifactMiss("https://repo1.maven.org/x.jar", DownloadFault.Transient, "download error: read timed out"), Nil)
+    ),
     ResolveError.Scalafmt(histos.format.ScalafmtConfError.NoVersion(path)),
   )
 

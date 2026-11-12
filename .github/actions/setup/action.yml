@@ -21,10 +21,10 @@ runs:
     - name: Install
       shell: bash
       env:
-        HISTOS_VERSION: ${{ inputs.version }}
+        HISTOS_ASKED: ${{ inputs.version }}
       run: |
-        shim="${GITHUB_ACTION_PATH}/histos"
-        version=$HISTOS_VERSION
+        shim="${GITHUB_ACTION_PATH}/../../../install/histos"
+        version=$HISTOS_ASKED
         if [ -z "$version" ] && [ -f build.properties ]; then
           version=$(awk '
             /^[ \t]*#/ || /^[ \t]*$/ { next }

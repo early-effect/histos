@@ -176,7 +176,6 @@ object Help:
     "base",
     "branch",
     "check",
-    "compile-client",
     "dry-run",
     "fix",
     "from",

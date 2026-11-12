@@ -41,7 +41,7 @@ object CliLaunchLawSpec extends ZIOSpecDefault:
             kept == source,
             fixed.exit == CliExit.Success && fixed.out.contains("wrote histos.scala"),
             wrote.contains(".supplyChain(SupplyChain())"),
-            named.exit == CliExit.Success && named.out.contains("JDK 21"),
+            named.exit == CliExit.Success && named.out.contains("JDK 25"),
             other.exit == CliExit.Usage && other.err.contains("no explanation for 'not-a-check'"),
           )
     @@ TestAspect.withLiveSystem,

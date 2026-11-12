@@ -462,6 +462,12 @@ private[resolve] final class CoursierResolve(
               missing.versionConstraint.asString,
             )
           case _ => ResolveError.Repository(RepositoryIo.Metadata)
+      case download: coursier.error.FetchError.DownloadingArtifacts =>
+        download.errors.toList.map((artifact, failed) =>
+          ArtifactMiss(artifact.url, DownloadFaults.of(failed), failed.describe)
+        ) match
+          case first :: rest => ResolveError.Download(::(first, rest))
+          case Nil           => ResolveError.Repository(RepositoryIo.Fetch)
       case _ => ResolveError.Repository(RepositoryIo.Fetch)
 
   private final case class Row(

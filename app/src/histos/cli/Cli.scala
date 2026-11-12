@@ -238,9 +238,20 @@ final case class Completed(
 )
 
 object Cli:
-  /** The version this checkout runs, as `histos version` prints it. */
+  /** The version this process runs, as `histos version` prints it. The shim passes the toolchain it resolved in
+    * `HISTOS_VERSION`, and the native client compares the server record with that same text, so a server and a command
+    * under one `-SNAPSHOT` pin agree. Without it, the pin line. A pin that does not parse still fails.
+    */
   def versionText(repo: Path): IO[LauncherError, String] =
-    LauncherPin.read(repo).map(pin => s"histos ${pin.version}")
+    LauncherPin
+      .read(repo)
+      .flatMap: pin =>
+        zio.System
+          .env("HISTOS_VERSION")
+          .orElseSucceed(None)
+          .map:
+            case Some(passed) if passed.trim.nonEmpty => passed.trim
+            case _                                    => s"histos ${pin.version}"
 
   /** A missing file is no run version. A bad line fails. */
   private def versionOf(repo: Path): IO[LauncherError, Option[String]] =

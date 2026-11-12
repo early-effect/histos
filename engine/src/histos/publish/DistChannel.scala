@@ -97,7 +97,7 @@ object DistChannel:
       clients: List[(DistPlatform, Chunk[Byte])],
   ): List[(String, Chunk[Byte])] =
     val shas     = clients.map((platform, bytes) => platform -> DistLayout.sha256(bytes.toArray))
-    val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), shas, None)
+    val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), shas)
     List(DistLayout.jar(revision) -> jar) ++
       clients.map((platform, bytes) => DistLayout.client(revision, platform) -> bytes) ++
       List(
