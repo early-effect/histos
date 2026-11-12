@@ -4,6 +4,7 @@ import histos.assembly.AssembleError
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cache.ContentStore
+import histos.cli.Cli
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.program.ProgramError
 import histos.publish.IvyRoot
@@ -36,19 +37,23 @@ import zio.{Chunk, IO, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.{TestAspect, TestResult, TestSystem, ZIOSpecDefault, assertTrue, suite, test}
 
 /** A server on its own socket answers version and cache, an empty clean removes products, reload of a missing build is
-  * a fault, and a client that leaves ends its call. The checkout, the socket's home, the store, and the ivy root are
-  * the law's own directory under `/tmp`, where a socket path fits. Nothing compiles.
+  * a fault, a reboot's successor is who its requester named, and a client that leaves ends its call. The checkout, the
+  * socket's home, the store, and the ivy root are the law's own directory under `/tmp`, where a socket path fits.
+  * Nothing compiles.
   */
 object DaemonOpenLawSpec extends ZIOSpecDefault:
   private val version = "0.0.0-law"
   private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("daemonlaw")
 
+  /** A reboot that only stops the law's server. Its relaunch starts nothing. */
+  private val unnamed = Successor(None, None)
+
   def spec = suite("daemon open laws")(
     test("version is the server's version, cache names the store, and clean removes the product"):
       served(identity, Loader.live): repo =>
         for
-          running <- stand(repo, _ => ZIO.unit)
+          running <- stand(repo, version, (_, _) => ZIO.unit)
           socket = running.record.socket
           versionFeeds <- Client.talk(socket, Call.Version).runCollect
           cacheFeeds   <- Client.talk(socket, Call.CachePath).runCollect
@@ -59,7 +64,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           missed     <- Client.talk(socket, Call.PreviewCompile(List(lawName))).runCollect
           assembled  <- Client.talk(socket, Call.Assembly(None)).runCollect
           ran        <- Client.talk(socket, Call.Run(lawName.value, None)).runCollect
-          rebooted   <- Client.talk(socket, Call.Reboot).runCollect
+          rebooted   <- Client.talk(socket, Call.Reboot(unnamed)).runCollect
           stopped    <- running.done.either
           closed     <- ZIO.attempt(Files.exists(socket)).orDie
         yield assertTrue(
@@ -79,10 +84,10 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
     test("reload of a repo with no build file is a fault, and version still answers"):
       served(identity, Loader.live): repo =>
         for
-          running  <- stand(repo, _ => ZIO.unit)
+          running  <- stand(repo, version, (_, _) => ZIO.unit)
           reloaded <- Client.talk(running.record.socket, Call.Reload).runCollect
           answered <- Client.talk(running.record.socket, Call.Version).runCollect
-          _        <- Client.talk(running.record.socket, Call.Reboot).runCollect
+          _        <- Client.talk(running.record.socket, Call.Reboot(unnamed)).runCollect
           _        <- running.done
         yield assertTrue(
           done(reloaded) == Some(
@@ -97,20 +102,46 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           entered <- Promise.make[Nothing, Unit]
           hold    <- Promise.make[Nothing, Unit]
           _       <- ZIO.addFinalizer(hold.succeed(()))
-          running <- stand(repo, _ => entered.succeed(()) *> hold.await)
-          heard   <- Client.talk(running.record.socket, Call.Reboot).runCollect
+          running <- stand(repo, version, (_, _) => entered.succeed(()) *> hold.await)
+          heard   <- Client.talk(running.record.socket, Call.Reboot(unnamed)).runCollect
           _       <- entered.await
           _       <- hold.succeed(())
           ended   <- running.done.either
         yield assertTrue(done(heard).contains(CallResult.reported()), ended == Right(()))
     ,
+    test("a reboot starts its successor with the version and jar its requester named, and the successor records them"):
+      served(identity, Loader.live): repo =>
+        val jar    = repo.resolve("next.jar")
+        val wanted = Successor(Some("histos 0.0.1-law"), Some(jar))
+        for
+          started <- Promise.make[Nothing, ProcessBuilder]
+          running <- stand(repo, version, (at, onto) => started.succeed(Daemon.successor(at, onto)).unit)
+          _       <- Client.talk(running.record.socket, Call.Reboot(wanted)).runCollect
+          _       <- running.done
+          child   <- started.await
+          env     <- ZIO.succeed(child.environment())
+          named = Option(env.get("HISTOS_VERSION"))
+          path  = Option(env.get("HISTOS_ASSEMBLY"))
+          _      <- ZIO.foreachDiscard(named)(TestSystem.putEnv("HISTOS_VERSION", _))
+          _      <- Workspace.writeString(repo.resolve("build.properties"), "histos.version=0.0.1\n")
+          text   <- Cli.versionText(repo)
+          next   <- stand(repo, text, (_, _) => ZIO.unit)
+          record <- Record.read(repo)
+          _      <- Client.talk(next.record.socket, Call.Reboot(unnamed)).runCollect
+          _      <- next.done
+        yield assertTrue(
+          named.contains("histos 0.0.1-law"),
+          path.contains(jar.toString),
+          record.map(_.version).contains("histos 0.0.1-law"),
+        )
+    ,
     test("a checkout deeper than a Unix socket path holds still binds, answers, and removes its socket"):
       served(_.resolve(("d" * 60 + "/") * 4 + "repo"), Loader.live): repo =>
         for
-          running <- stand(repo, _ => ZIO.unit)
+          running <- stand(repo, version, (_, _) => ZIO.unit)
           socket = running.record.socket
           heard   <- Client.talk(socket, Call.Version).runCollect
-          _       <- Client.talk(socket, Call.Reboot).runCollect
+          _       <- Client.talk(socket, Call.Reboot(unnamed)).runCollect
           stopped <- running.done.either
           closed  <- ZIO.attempt(Files.exists(socket)).orDie
         yield assertTrue(
@@ -130,13 +161,13 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           val build = repo.resolve("histos.scala")
           for
             _       <- Workspace.writeString(build, "// first\n")
-            running <- stand(repo, _ => ZIO.unit)
+            running <- stand(repo, version, (_, _) => ZIO.unit)
             socket = running.record.socket
             _     <- Workspace.writeString(build, "// second\n")
             _     <- leave(socket, Call.Graph, entered)
             _     <- interrupted.await
             graph <- Client.talk(socket, Call.Graph).runCollect
-            _     <- Client.talk(socket, Call.Reboot).runCollect
+            _     <- Client.talk(socket, Call.Reboot(unnamed)).runCollect
             _     <- running.done
             asked <- loads.get
           yield assertTrue(
@@ -201,7 +232,8 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
 
   private def stand(
       repo: Path,
-      relaunch: Path => IO[ServerError, Unit],
+      named: String,
+      relaunch: (Path, Successor) => IO[ServerError, Unit],
   ): ZIO[Scope & Daemon.Needs, ServerError, Daemon.Running] =
     for
       machine <- LawMachine.at(repo)
@@ -211,7 +243,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
         repo,
         LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph)),
         LawMachine.fixtureJdk,
-        version,
+        named,
         api,
         Nil,
         ZIO.dieMessage("the law never reports the build"),

@@ -1,7 +1,7 @@
 package histos
 
 import histos.report.BuildFault
-import histos.server.{Call, WatchPolicy}
+import histos.server.{Call, Successor, WatchPolicy}
 import histos.version.{CommitSha, ShipNumber}
 
 import java.nio.charset.StandardCharsets
@@ -71,7 +71,7 @@ object ApiClockLawSpec extends ZIOSpecDefault:
           watched <- ApiClock.judge(repo, Call.Watch(compile, WatchPolicy.Restart), have, Some(want))
           allowed <- ApiClock.judge(repo, Call.Assembly(None), "", Some(want))
           version <- ApiClock.judge(repo, Call.Version, "", Some(want))
-          reboot  <- ApiClock.judge(repo, Call.Reboot, "", Some(want))
+          reboot  <- ApiClock.judge(repo, Call.Reboot(Successor(None, None)), "", Some(want))
           held    <- ApiClock.judge(repo, Call.Watch(Call.Version, WatchPolicy.Restart), have, Some(want))
           unknown <- ApiClock.judge(repo, compile, have, None)
           _       <- write(ApiClock.stampFile(repo), ApiClock.source(have))
@@ -90,7 +90,7 @@ object ApiClockLawSpec extends ZIOSpecDefault:
           ApiClock.skipsReboot(Call.Assembly(None)),
           ApiClock.skipsReboot(Call.Version),
           ApiClock.skipsReboot(Call.Watch(Call.Version, WatchPolicy.Restart)),
-          !ApiClock.skipsReboot(Call.Reboot),
+          !ApiClock.skipsReboot(Call.Reboot(Successor(None, None))),
           !ApiClock.skipsReboot(compile),
           !ApiClock.skipsReboot(Call.Watch(compile, WatchPolicy.Restart)),
           warned == ApiClock.Admit.Warn(continued(have, want)),

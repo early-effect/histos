@@ -152,7 +152,9 @@ enum Call derives JsonCodec:
   case Clean(projects: List[ProjectName])
   case CleanFull
   case Reload
-  case Reboot
+
+  /** Replace the server. The successor starts as `successor` names, never as the server it replaces. */
+  case Reboot(successor: Successor)
   case Version
   case CachePath
   case CacheList

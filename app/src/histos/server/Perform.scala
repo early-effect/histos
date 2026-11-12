@@ -19,12 +19,12 @@ import zio.{Fiber, Ref, UIO, ZIO}
   */
 object Perform:
   /** `compiled` is what a program run signals once its compile is done. The server releases its class-directory lock
-    * then, so a restart can compile while the program runs.
+    * then, so a restart can compile while the program runs. `reboot` starts the successor the call names.
     */
   final case class Edges[R](
       watch: (Call, WatchPolicy, Say) => ZIO[R, ServerError, Unit],
       reload: ZIO[R, ServerError, Unit],
-      reboot: ZIO[R, ServerError, Unit],
+      reboot: Successor => ZIO[R, ServerError, Unit],
       bsp: ZIO[R, ServerError, Unit],
       compiled: UIO[Unit],
   )
@@ -42,7 +42,7 @@ object Perform:
         false
       case Call.Clean(_) | Call.PreviewClean(_) =>
         true
-      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot |
+      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot(_) |
           Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCleanFull =>
         false
@@ -55,10 +55,13 @@ object Perform:
       case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) |
           Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
-      case _ =>
-        Faults.compileStopped(error) match
-          case Some(why) => CallResult.Fault(why)
-          case None      => CallResult.reported(error.message)
+      case _ => notCompiled(error)
+
+  /** A compile that never started, outside a publish. A server that finds no JDK reports the same way. */
+  def notCompiled(error: GraphCompileError): CallResult =
+    Faults.compileStopped(error) match
+      case Some(why) => CallResult.Fault(why)
+      case None      => CallResult.reported(error.message)
 
   def run[R](
       repo: Path,
@@ -226,8 +229,8 @@ object Perform:
             edges.watch(inner, policy, say)
           case Call.Reload =>
             edges.reload
-          case Call.Reboot =>
-            edges.reboot
+          case Call.Reboot(onto) =>
+            edges.reboot(onto)
           case Call.Bsp =>
             edges.bsp
 end Perform

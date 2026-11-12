@@ -43,6 +43,8 @@ import histos.zinc.{
 }
 import histos.{CiFault, JsonLaw, Platform, PlatformError, ProjectNameError, WireSamples}
 
+import java.nio.file.Path
+
 import zio.{Chunk, NonEmptyChunk}
 import zio.test.*
 
@@ -248,8 +250,13 @@ object GoldenLawSpec extends ZIOSpecDefault:
     IoFault.Temp   -> "\"Temp\"",
   )
 
-  /** Every call `histos.client.Batch` builds. The native client writes these and the JVM server reads them. */
+  /** Every call the native client sends: the ones `histos.client.Batch` builds, and the reboot that replaces a server
+    * of another identity. The JVM server reads them.
+    */
   private val batchCalls: List[(Call, String)] = List(
+    Call.Reboot(Successor(Some("histos 0.3.1"), Some(Path.of("/tmp/next.jar")))) ->
+      """{"Reboot":{"successor":{"version":"histos 0.3.1","jar":"/tmp/next.jar"}}}""",
+    Call.Reboot(Successor(None, None))       -> """{"Reboot":{"successor":{}}}""",
     Call.Compile(List(core, api))            -> """{"Compile":{"projects":["core","api"]}}""",
     Call.Test(List(core), Nil, TestMode.Run) -> """{"Test":{"projects":["core"],"patterns":[],"mode":"run"}}""",
     Call.Run("core", Some(Platform.Js))      -> """{"Run":{"id":"core","platform":"js"}}""",

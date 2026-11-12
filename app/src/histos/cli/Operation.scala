@@ -5,7 +5,8 @@ import histos.server.{Call, WatchPolicy}
 import histos.task.TaskId
 import histos.testrun.TestMode
 
-/** The call a command sends. `mcp`, `bsp`, `server`, `portal`, and `observe` are not operations.
+/** The call a command sends. `mcp`, `bsp`, `server`, `portal`, and `observe` are not operations. Neither is `reboot`:
+  * it replaces the server a watch runs on, and its call names the identity of the process that sends it.
   */
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
@@ -33,9 +34,10 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.New(_, _, _, _) |
-          Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _, _, _) | Command.Explain(_) | Command.Deps(_) |
-          Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) | Command.Coverage(_, _, _) =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.Reboot |
+          Command.New(_, _, _, _) | Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _, _, _) |
+          Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) |
+          Command.Coverage(_, _, _) =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
@@ -83,7 +85,6 @@ object Operation:
       case Command.Fmt(targets, mode)       => Right(Call.Format(targets, mode))
       case Command.Launcher(action)         => Right(Call.Launcher(action))
       case Command.Reload                   => Right(Call.Reload)
-      case Command.Reboot                   => Right(Call.Reboot)
       case Command.Cancel(id)               => Right(Call.Cancel(id))
       case Command.PreviewCompile(projects) =>
         Right(Call.PreviewCompile(projects))

@@ -22,6 +22,8 @@ import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
 import java.nio.channels.{Channels, ServerSocketChannel, SocketChannel}
 import java.nio.file.{Files, Path, StandardCopyOption}
 
+import scala.jdk.CollectionConverters.*
+
 import histos.build.BuildEvent
 import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
@@ -176,11 +178,12 @@ object Attach:
       }
     poll(1200)
 
-  /** Ask `socket` to reboot. The replacement's socket when that process records this driver. */
+  /** Ask `socket` to reboot onto this process's identity. The replacement's socket when that process records this
+    * driver.
+    */
   def replace(repo: Path, version: String, socket: Path): UIO[Option[Path]] =
-    Client
-      .talk(socket, Call.Reboot)
-      .runCollect
+    Successor.here
+      .flatMap(onto => Client.talk(socket, Call.Reboot(onto)).runCollect)
       .foldZIO(
         _ => ZIO.succeed(None),
         feeds =>
@@ -301,7 +304,9 @@ object Daemon:
   /** What a connection runs with: the caller's services and the compilers the server opened. */
   private type Served = Needs & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService
 
-  /** `relaunch` starts the successor a reboot hands over to, and `assembly` is the checksum the record carries. */
+  /** `relaunch` starts the successor a reboot hands over to, as the reboot names it, and `assembly` is the checksum the
+    * record carries.
+    */
   def open(
       repo: Path,
       loaded: histos.load.LoadedBuild,
@@ -311,7 +316,7 @@ object Daemon:
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       machine: histos.jdk.Machine,
-      relaunch: Path => IO[ServerError, Unit],
+      relaunch: (Path, Successor) => IO[ServerError, Unit],
       assembly: Option[String],
   ): ZIO[Scope & Needs, ServerError, Running] =
     for
@@ -327,7 +332,7 @@ object Daemon:
         build,
         loaded.plugins,
         machine,
-        relaunch(repo),
+        relaunch(repo, _),
         listening,
         assembly,
       ).tapErrorCause(listening.failCause).forkScoped
@@ -342,10 +347,12 @@ object Daemon:
   private final case class Lifecycle(
       armed: Ref[Boolean],
       stopping: Promise[Nothing, Unit],
-      relaunch: IO[ServerError, Unit],
+      relaunch: Successor => IO[ServerError, Unit],
   )
 
-  /** Cold start and a reboot successor. The child must not inherit the caller's stdin. */
+  /** A cold start runs as this process does, because this process asked for it. The child must not inherit the caller's
+    * stdin.
+    */
   private[histos] def launch(repo: Path): ProcessBuilder =
     val log = repo.resolve(".histos").resolve("server.log")
     new ProcessBuilder("./histos", "server")
@@ -354,13 +361,28 @@ object Daemon:
       .redirectErrorStream(true)
       .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
 
+  /** A reboot's successor runs as `onto` names, whatever this server was started as. */
+  private[histos] def successor(repo: Path, onto: Successor): ProcessBuilder =
+    val built = launch(repo)
+    val env   = built.environment()
+    val next  = onto.environment(env.asScala.toMap)
+    env.clear()
+    env.putAll(next.asJava)
+    built
+
   private[histos] def spawn(repo: Path): IO[ServerError, Unit] =
+    start(repo, launch(repo))
+
+  private[histos] def relaunch(repo: Path, onto: Successor): IO[ServerError, Unit] =
+    start(repo, successor(repo, onto))
+
+  private def start(repo: Path, built: => ProcessBuilder): IO[ServerError, Unit] =
     val log = repo.resolve(".histos").resolve("server.log")
     ZIO
       .attemptBlocking {
         Option(log.getParent).foreach(dir => Files.createDirectories(dir))
         if !Files.exists(log) then Files.createFile(log)
-        launch(repo).start()
+        built.start()
         ()
       }
       .mapError(_ => ServerError.Io(ServerIo.Bind(log)))
@@ -376,7 +398,7 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       plugins: histos.load.PluginRuntime,
       machine: histos.jdk.Machine,
-      relaunch: IO[ServerError, Unit],
+      relaunch: Successor => IO[ServerError, Unit],
       listening: Promise[ServerError, Record.Written],
       assembly: Option[String],
   ): ZIO[Needs, ServerError, Unit] =
@@ -582,7 +604,7 @@ object Daemon:
                 Perform.Edges(
                   watch = (inner, policy, edge) => watched(inner, policy, edge),
                   reload = Calls.finish(out, CallResult.Reported(Report.empty)),
-                  reboot = reboot(repo, bound, server, life, output),
+                  reboot = onto => reboot(repo, bound, server, life, output, onto),
                   bsp = bsp(
                     repo,
                     apiJar,
@@ -763,8 +785,8 @@ object Daemon:
       body: ZIO[R, ServerError, Unit]
   ): ZIO[R, ServerError, Unit] =
     call match
-      case Call.Bsp | Call.Reboot => body
-      case _                      => body.raceFirst(gone(socket, input))
+      case Call.Bsp | Call.Reboot(_) => body
+      case _                         => body.raceFirst(gone(socket, input))
 
   /** Completes when the peer closes. A stray byte is not a close, so the read goes on. */
   private def gone(socket: SocketChannel, input: InputStream): UIO[Unit] =
@@ -887,7 +909,7 @@ object Daemon:
           Call.Format(_, _) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
-          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
+          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
           Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
           Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
@@ -924,6 +946,7 @@ object Daemon:
       server: ServerSocketChannel,
       life: Lifecycle,
       output: OutputStream,
+      onto: Successor,
   ): ZIO[Any, ServerError, Unit] =
     for
       _ <- write(
@@ -933,7 +956,7 @@ object Daemon:
       )
       _ <- life.armed.set(false)
       _ <- remove(repo, bound)
-      _ <- life.relaunch
+      _ <- life.relaunch(onto)
       _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
     yield ()
