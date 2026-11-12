@@ -342,7 +342,6 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
           any[LockStamp],
         )
       )(ZIO.none)
-      _ <- stub[CompileMemo](_.digest(any[List[Path]]))(ZIO.die(new IllegalStateException("digest")))
       _ <- stub[CompileMemo](
         _.classpath(
           any[Path],

@@ -144,16 +144,13 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    ZStream.unwrapScoped:
-      ResolutionService
-        .open(repo, graph)
-        .mapError(GraphCompileError.Lock(_))
-        .map: report =>
-          consoleCounted(repo, graph, names, jdk, native, platform).provideSomeLayer(
-            CompilerStarts.live ++ ZLayer.succeed(report)
-          )
+    fresh[Resolve & ContentStore & CompilerStarts, CompileFeed](Parallelism.default.cpu)(
+      consoleCounted(repo, graph, names, jdk, native, platform)
+    ).provideSomeLayer(CompilerStarts.live)
 
-  /** The same console, with the caller holding the start counter. The compilers die with the stream. */
+  /** The same console, with the caller holding the start counter, the compilers, and the input memo, the way a
+    * checkout's server holds them across compiles.
+    */
   private[histos] def consoleCounted(
       repo: Path,
       graph: ProjectGraph,
@@ -161,16 +158,14 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
-  ): ZStream[Resolve & ContentStore & CompilerStarts, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo, GraphCompileError, CompileFeed] =
     ZStream.unwrapScoped:
       ResolutionService
         .open(repo, graph)
         .mapError(GraphCompileError.Lock(_))
         .map: report =>
-          fresh(Parallelism.default.cpu)(
-            watch(repo, graph, choose(graph, names), None, platform, jdk, native)
-              .provideSomeLayer(ZLayer.succeed(report))
-          )
+          watch(repo, graph, choose(graph, names), None, platform, jdk, native)
+            .provideSomeLayer(ZLayer.succeed(report))
 
   /** The daemon's compile. The caller keeps the compiler services. */
   private[histos] def resident(
@@ -537,7 +532,8 @@ object GraphCompile:
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
   /** Lock checksums and source bytes. A hit does not fetch jars or open a compiler. A deleted source is not a hit: the
-    * path memo drops it, so the key no longer matches.
+    * path memo drops it, so the key no longer matches. The bytes are hashed on every call, so an edit that keeps the
+    * size and the modified time is still a miss.
     */
   private def recall(
       work: CellWork,
@@ -564,7 +560,7 @@ object GraphCompile:
               case _ => Some(Nil)
             (compiler, tools) match
               case (Some(compilerInput), Some(compilation)) =>
-                memo.digest(sources).flatMap { digest =>
+                JvmCompile.sourceDigest(sources).flatMap { digest =>
                   val request = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
                     sources,

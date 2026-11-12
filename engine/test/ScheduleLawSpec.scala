@@ -535,6 +535,29 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           finished(events) == Chunk(Source.Ran),
         )
       ,
+      test("a remote that timed out is a miss and a store it did not take is skipped, and any other failure stops"):
+        val action = core("a")
+        for
+          seen <- arm(
+            RemoteMode.Write,
+            _ => ZIO.fail(RemoteError.Exchange(CacheExchange.ReadTimeout("cache", 9))),
+            _ => ZIO.none,
+          )
+          _ <- stub[RemoteCache](_.store(any[Digest], any[Chunk[Byte]]))((_: Digest, _: Chunk[Byte]) =>
+            ZIO.fail(RemoteError.Exchange(CacheExchange.ConnectTimeout("cache", 9)))
+          )
+          pair  <- watch(ActionId.trusted("a"), List(action), (_, _) => ZIO.succeed("out"))
+          wrote <- seen.puts.get
+          _     <- stub[RemoteCache](_.find(any[Digest]))((_: Digest) => ZIO.fail(RemoteError.Rpc("UNAVAILABLE")))
+          down  <- execute(ActionId.trusted("a"), List(action), (_, _) => ZIO.succeed("out")).either
+          (outcome, events) = pair
+        yield assertTrue(
+          outcome == Outcome.Done("out"),
+          wrote == Chunk("out"),
+          finished(events) == Chunk(Source.Ran),
+          down == Left(ScheduleError.Remote(RemoteError.Rpc("UNAVAILABLE"))),
+        )
+      ,
       test("a changed input is a miss when the cache only holds the previous key"):
         val old = core("a", List(text("k", "1")))
         val now = core("a", List(text("k", "2")))

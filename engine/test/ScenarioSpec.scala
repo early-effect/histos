@@ -4,12 +4,13 @@ import histos.jdk.Sha256
 import histos.program.ProgramFeed
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
 
 import zio.{Chunk, IO, Scope, UIO, ZIO, durationInt}
 import zio.test.*
@@ -45,6 +46,32 @@ object ScenarioSpec extends ZIOSpecDefault:
           starts == 2,
           differs(keyOf(first), keyOf(second)),
           matches(keyOf(first), keyOf(again)),
+        )
+    ,
+    test("a same-size edit with the modified time put back is a sources miss, and the compiler starts again"):
+      ZIO.scoped:
+        for
+          built    <- ZIO.fromEither(Projects.locked(module("core", Jvm)(scala3)))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          source = checkout.root.resolve("core/src/main/scala/Core.scala")
+          _      <- checkout.write("core/src/main/scala/Core.scala", core)
+          first  <- checkout.compile
+          stamp  <- modified(source)
+          _      <- checkout.write("core/src/main/scala/Core.scala", edited)
+          _      <- restore(source, stamp)
+          kept   <- modified(source)
+          second <- checkout.compile
+          starts <- scenario.starts
+        yield assertTrue(
+          core.length == edited.length,
+          kept == stamp,
+          failed(first ++ second).isEmpty,
+          compiled(first),
+          compiled(second),
+          differs(keyOf(first), keyOf(second)),
+          changes(second) == List(KeyMiss.Changed(List(CompileInput.Sources))),
+          starts == 2,
         )
     ,
     test("a quick hit stays in its checkout, and its record is a file there and not a blob"):
@@ -154,6 +181,15 @@ object ScenarioSpec extends ZIOSpecDefault:
   private def exists(path: Path): IO[IoFailure, Boolean] =
     ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => IoFailure(path, IoFault.Stat))
 
+  private def modified(path: Path): IO[IoFailure, FileTime] =
+    ZIO.attemptBlocking(Files.getLastModifiedTime(path)).mapError(_ => IoFailure(path, IoFault.Stat))
+
+  private def restore(path: Path, time: FileTime): IO[IoFailure, Unit] =
+    ZIO.attemptBlocking(Files.setLastModifiedTime(path, time)).mapError(_ => IoFailure(path, IoFault.Write)).unit
+
+  private def changes(feeds: Chunk[CompileFeed]): List[KeyMiss] =
+    feeds.collect { case CompileFeed.Miss(_, _, _, change) => change }.toList
+
   private def compiled(feeds: Chunk[CompileFeed]): Boolean =
     done(feeds).exists(cell => cell.changed && cell.classesWritten.exists(_ >= 1))
 
@@ -229,6 +265,11 @@ object ScenarioSpec extends ZIOSpecDefault:
   private val core =
     """object Core:
       |  def n: Int = 1
+      |""".stripMargin
+
+  private val edited =
+    """object Core:
+      |  def n: Int = 2
       |""".stripMargin
 
   private val lib =

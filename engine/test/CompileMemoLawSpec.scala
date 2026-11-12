@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.jdk.Sha256
 import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCell, LockedDirect, Repository}
-import histos.workspace.{IoFailure, IoFault, Workspace}
+import histos.workspace.Workspace
 import histos.{DepKind, Module, Platform, Platforms, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.nio.charset.StandardCharsets
@@ -53,7 +53,7 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
             reread.stamp != first.stamp,
           )
     ,
-    test("main and test sources stay apart, a deleted file is not a hit, and the digest is the source bytes"):
+    test("main and test sources stay apart, and a deleted file is not a hit"):
       Workspace
         .work("histos-memo-sources")
         .flatMap: root =>
@@ -75,25 +75,15 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
             jsMain  <- memo.sources(root, version, Platform.Js)
             tests   <- memo.tests(root, version, Platform.Jvm)
             again   <- memo.sources(root, version, Platform.Jvm)
-            hashed  <- memo.digest(List(main))
-            direct  <- JvmCompile.sourceDigest(List(main))
-            repeat  <- memo.digest(List(main))
-            empty   <- memo.digest(Nil)
-            blank   <- JvmCompile.sourceDigest(Nil)
             _       <- ZIO.attemptBlocking(Files.deleteIfExists(main))
             dropped <- memo.sources(root, version, Platform.Jvm)
-            unread  <- memo.digest(List(main)).either
           yield assertTrue(
             absent.isEmpty,
             jvm.map(_.getFileName.toString).sorted == List("A.scala", "J.java", "Pkg.scala"),
             jsMain.map(_.getFileName.toString).sorted == List("A.scala", "Js.scala", "Pkg.scala"),
             tests.map(_.getFileName.toString) == List("T.scala"),
             again == jvm,
-            hashed == direct,
-            repeat == hashed,
-            empty == blank,
             !dropped.map(_.getFileName.toString).contains("A.scala"),
-            unread == Left(CompileError.Io(IoFailure(main, IoFault.Read))),
           )
     ,
     test("a hash is remembered for the stamp, a standard library jar is not a jvm hash, and forget drops it"):

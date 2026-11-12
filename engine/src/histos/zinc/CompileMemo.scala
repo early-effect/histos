@@ -31,14 +31,14 @@ final case class StampedLock(lock: DependencyLock, stamp: LockStamp)
 /** Remembered compile inputs. A value is computed the first time something reads it.
   *
   * Source paths are reused only while every cached path still exists and the directories that contain them are
-  * unchanged. A deleted source is not a hit. `clean` and `cleanFull` call [[CompileMemo.forget]].
+  * unchanged. A deleted source is not a hit. The source digest is not remembered: it is the bytes, read on every
+  * compile. `clean` and `cleanFull` call [[CompileMemo.forget]].
   */
 trait CompileMemo:
   def lock(repo: Path): IO[GraphCompileError, StampedLock]
   def note(lock: DependencyLock): UIO[StampedLock]
   def sources(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
   def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
-  def digest(sources: List[Path]): IO[CompileError, Sha256]
   def hashes(
       lock: DependencyLock,
       modules: List[Module],
@@ -70,10 +70,9 @@ object CompileMemo:
       for
         locks      <- Ref.make(Map.empty[String, (LockStamp, DependencyLock)])
         paths      <- Ref.make(Map.empty[PathKey, Listed])
-        digests    <- Ref.make(Map.empty[List[FileStamp], Sha256])
         hashes     <- Ref.make(Map.empty[HashKey, Option[List[Sha256]]])
         classpaths <- Ref.make(Map.empty[ClassKey, ScalacClasspath])
-      yield Live(locks, paths, digests, hashes, classpaths)
+      yield Live(locks, paths, hashes, classpaths)
     }
 
   /** One memo for `effect`, closed over nothing else. The daemon holds one for its lifetime instead. */
@@ -85,7 +84,6 @@ object CompileMemo:
   private final case class PathKey(root: String, version: String, platform: String, tests: Boolean)
   private final case class DirMark(path: Path, modified: Long)
   private final case class Listed(paths: List[Path], dirs: List[DirMark], missing: Boolean)
-  private final case class FileStamp(path: String, modified: Long, size: Long)
   private final case class HashKey(module: String, version: String, platform: String, scope: String, stamp: String)
   private final case class ClassKey(
       repo: String,
@@ -99,7 +97,6 @@ object CompileMemo:
   private final class Live(
       locks: Ref[Map[String, (LockStamp, DependencyLock)]],
       paths: Ref[Map[PathKey, Listed]],
-      digests: Ref[Map[List[FileStamp], Sha256]],
       hashes: Ref[Map[HashKey, Option[List[Sha256]]]],
       classpaths: Ref[Map[ClassKey, ScalacClasspath]],
   ) extends CompileMemo:
@@ -129,18 +126,6 @@ object CompileMemo:
 
     def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
       listed(root, version, platform, tests = true)
-
-    def digest(sources: List[Path]): IO[CompileError, Sha256] =
-      val failed = sources.headOption.getOrElse(Path.of("."))
-      ZIO
-        .attemptBlocking(fileStamps(sources))
-        .mapError(_ => CompileError.Io(IoFailure(failed, IoFault.Read)))
-        .flatMap: marks =>
-          digests.get.flatMap: cached =>
-            cached.get(marks) match
-              case Some(hash) => ZIO.succeed(hash)
-              case None       =>
-                JvmCompile.sourceDigest(sources).tap(hash => digests.update(_.updated(marks, hash)))
 
     def hashes(
         lock: DependencyLock,
@@ -189,7 +174,6 @@ object CompileMemo:
     def forget: UIO[Unit] =
       locks.set(Map.empty) *>
         paths.set(Map.empty) *>
-        digests.set(Map.empty) *>
         hashes.set(Map.empty) *>
         classpaths.set(Map.empty)
 
@@ -258,13 +242,6 @@ object CompileMemo:
         s"${cell.module.value} ${cell.scalaVersion.value} ${cell.platform.token} ${cell.scope.header} $artifacts"
       .mkString("\n")
     LockStamp.content(Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))))
-
-  private def fileStamps(sources: List[Path]): List[FileStamp] =
-    sources
-      .map: path =>
-        val normal = path.toAbsolutePath.normalize
-        FileStamp(normal.toString, Files.getLastModifiedTime(normal).toMillis, Files.size(normal))
-      .sortBy(_.path)
 
   private def directoriesMatch(dirs: List[DirMark]): Boolean =
     dirs.forall: dir =>
