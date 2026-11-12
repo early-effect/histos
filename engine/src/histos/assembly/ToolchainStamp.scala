@@ -11,7 +11,7 @@ import zio.{IO, ZIO}
 /** Writes the ship revision assembly compiles into the toolchain. A checkout with no `app` ship is left alone. */
 object ToolchainStamp:
   def write(repo: Path): IO[AssembleError, Unit] =
-    SnapshotId.current(repo).flatMap {
+    SnapshotId.current(repo, SnapshotId.head).flatMap {
       case None           => ZIO.unit
       case Some(revision) =>
         val path = Sources.unmanagedRoot(repo, "wire").resolve("histos").resolve("Toolchain.scala")

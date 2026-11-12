@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 
 import _root_.scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO}
+import zio.{Ref, Scope, UIO, ZIO}
 import zio.test.{Spec, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
 /** A local assembly whose snapshot is not the revision this checkout would publish fails and names `histos assembly`.
@@ -125,31 +125,31 @@ object ApiClockLawSpec extends ZIOSpecDefault:
         )
       }
     ,
-    test("current is the snapshot coordinate of the app ship at HEAD"):
+    test("current is the snapshot coordinate of the app ship at HEAD, and reads HEAD only for an app ship"):
       work.flatMap { repo =>
-        val file  = repo.resolve("histos.scala")
-        val hooks = repo.resolve("hooks")
+        val file = repo.resolve("histos.scala")
         for
-          bare        <- SnapshotId.current(repo)
-          _           <- write(file, """ships(Ship("histos").next(0, 2, 9)(api, app))""")
-          uncommitted <- SnapshotId.current(repo)
-          _           <- git(repo, "init")
-          _           <- write(hooks.resolve(".keep"), "")
-          _           <- git(repo, "config", "user.email", "clock@example.com")
-          _           <- git(repo, "config", "user.name", "clock")
-          _           <- git(repo, "config", "commit.gpgsign", "false")
-          _           <- git(repo, "config", "core.hooksPath", hooks.toString)
-          _           <- git(repo, "add", "histos.scala")
-          _           <- git(repo, "commit", "-m", "stamp")
-          raw         <- git(repo, "rev-parse", "HEAD")
-          got         <- SnapshotId.current(repo)
+          asked    <- Ref.make(List.empty[Path])
+          bare     <- SnapshotId.current(repo, reading(asked, Some(WireSamples.commit)))
+          _        <- write(file, """ships(Ship("lib").next(0, 2, 9)(api))""")
+          library  <- SnapshotId.current(repo, reading(asked, Some(WireSamples.commit)))
+          _        <- write(file, """ships(Ship("histos").next(0, 2, 9)(api, app))""")
+          headless <- SnapshotId.current(repo, reading(asked, None))
+          got      <- SnapshotId.current(repo, reading(asked, Some(WireSamples.commit)))
+          reads    <- asked.get
         yield assertTrue(
           bare.isEmpty,
-          uncommitted.isEmpty,
-          got == CommitSha.from(raw).toOption.map(SnapshotId.render(histos, _)),
+          library.isEmpty,
+          headless.isEmpty,
+          got.contains(want),
+          reads == List(repo, repo),
         )
       },
   )
+
+  /** A HEAD reader that records each checkout it is asked about. */
+  private def reading(asked: Ref[List[Path]], head: Option[CommitSha]): Path => UIO[Option[CommitSha]] =
+    at => asked.update(_ :+ at).as(head)
 
   private def continued(held: String, wanted: String): String =
     s"${BuildFault.StaleApi(held, wanted).message} .histos/${ApiClock.hatchName} is set, so this command continues."
@@ -162,23 +162,6 @@ object ApiClockLawSpec extends ZIOSpecDefault:
       Files.createDirectories(path.getParent)
       Files.writeString(path, text, StandardCharsets.UTF_8)
     }.unit
-
-  private final case class GitFailed(detail: String)
-
-  private def git(repo: Path, args: String*): ZIO[Any, GitFailed, String] =
-    ZIO
-      .attemptBlocking {
-        val command = List("git", "-C", repo.toString) ++ args.toList
-        val process = new ProcessBuilder(command*)
-          .redirectError(ProcessBuilder.Redirect.DISCARD)
-          .start()
-        val text = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
-        (process.waitFor(), text)
-      }
-      .mapError(error => GitFailed(Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
-      .flatMap:
-        case (0, text) => ZIO.succeed(text)
-        case (code, _) => ZIO.fail(GitFailed(s"git ${args.mkString(" ")} exited $code"))
 
   private def work: ZIO[Scope, Nothing, Path] =
     ZIO.acquireRelease(

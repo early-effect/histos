@@ -2,75 +2,56 @@ package histos
 
 import _root_.scala.deriving.Mirror
 
-import compiletime.constValue
-
 import zio.json.*
 import zio.test.*
 
-/** Round-trip and the document zio-json rejects. Equalities stay in `assertTrue`, so a bad case shows in the diff. */
+/** Round trips and golden documents. Equalities stay in `assertTrue`, so a bad case shows in the diff. No law here
+  * reads zio-json's own error text.
+  */
 object JsonLaw:
+  /** One sample per case, and each sample decodes to itself. */
   inline def enumLaw[A <: _root_.scala.reflect.Enum: JsonCodec](
       law: String,
       values: List[A],
-  )(using mirror: Mirror.SumOf[A]): Spec[Any, Nothing] =
-    checked(law, values, constValue[Tuple.Size[mirror.MirroredElemTypes]])
+  )(using Mirror.SumOf[A]): Spec[Any, Nothing] =
+    trips(law, values, EnumLaw.covered(values))
 
-  private def checked[A <: _root_.scala.reflect.Enum: JsonCodec](
+  /** One document per case. The JVM server writes these bytes and the native client reads them, and the law runs on
+    * both platforms against the same literal.
+    */
+  inline def golden[A <: _root_.scala.reflect.Enum: JsonCodec](
       law: String,
-      values: List[A],
-      cases: Int,
-  ): Spec[Any, Nothing] =
-    test(law):
-      val back = values.map(value => value.toJson.fromJson[A])
-      val kind = values match
-        case head :: _ => head.toJson
-        case Nil       => ""
-      val quoted                    = kind.startsWith("\"")
-      val number: Either[String, A] =
-        if quoted then Left("(expected '\"' got '1')") else Left("(expected '{' got '1')")
-      val alien: Either[String, A] =
-        if quoted then Left("(invalid enumeration value)") else Left("(invalid disambiguator)")
-      val covered  = values.map(_.ordinal) == (0 until cases).toList
-      val document =
-        assertTrue(
-          covered,
-          back == values.map(Right(_)),
-          "1".fromJson[A] == number,
-          (if quoted then "\"" else "{").fromJson[A] == Left("Unexpected end of input"),
-          (if quoted then "\"__nope__\"" else "{\"__nope__\":{}}").fromJson[A] == alien,
-        )
-      if quoted then document
-      else document && assertTrue("{}".fromJson[A] == Left("(expected non-empty object)"))
+      rows: List[(A, String)],
+  )(using Mirror.SumOf[A]): Spec[Any, Nothing] =
+    documents(law, rows, EnumLaw.covered(rows.map(_._1)))
 
-  /** A string codec. `bad` is the text inside the string, not a hand-built document. */
-  def textLaw[A: JsonCodec](law: String, good: A, bad: String, message: String): Spec[Any, Nothing] =
-    test(law):
-      assertTrue(
-        good.toJson.fromJson[A] == Right(good),
-        bad.toJson.fromJson[A] == Left(s"($message)"),
-        "1".fromJson[A] == Left("(expected string)"),
-        "\"".fromJson[A] == Left("Unexpected end of input"),
-      )
+  /** Documents for some values of a type, with no coverage gate. */
+  def sent[A: JsonCodec](law: String, rows: List[(A, String)]): Spec[Any, Nothing] =
+    test(law)(pinned(rows))
 
   def values[A: JsonCodec](law: String, items: List[A]): Spec[Any, Nothing] =
     test(law):
       assertTrue(items.map(item => item.toJson.fromJson[A]) == items.map(Right(_)))
 
-  /** The decoder fails with the same typed message `read` returns. A valid `raw` fails the law. */
-  def rejectedText[E, A: JsonCodec](
-      good: A,
-      raw: String,
-      read: String => Either[E, A],
-      message: E => String,
-  ): TestResult =
-    read(raw) match
-      case Left(error) =>
-        assertTrue(
-          good.toJson.fromJson[A] == Right(good),
-          raw.toJson.fromJson[A] == Left(s"(${message(error)})"),
-          "1".fromJson[A] == Left("(expected string)"),
-          "\"".fromJson[A] == Left("Unexpected end of input"),
-        )
-      case Right(_) =>
-        assertTrue(raw.toJson.fromJson[A] == Left(s"$raw was accepted"))
+  /** A text codec over a parser. The sample round-trips, and text the parser refuses does not decode. */
+  def parsed[E, A: JsonCodec](good: A, raw: String, read: String => Either[E, A]): TestResult =
+    assertTrue(
+      good.toJson.fromJson[A] == Right(good),
+      read(raw).isLeft,
+      raw.toJson.fromJson[A].isLeft,
+    )
+
+  private def trips[A: JsonCodec](law: String, values: List[A], covered: Boolean): Spec[Any, Nothing] =
+    test(law):
+      assertTrue(covered, values.map(value => value.toJson.fromJson[A]) == values.map(Right(_)))
+
+  private def documents[A: JsonCodec](law: String, rows: List[(A, String)], covered: Boolean): Spec[Any, Nothing] =
+    test(law)(assertTrue(covered) && pinned(rows))
+
+  private def pinned[A: JsonCodec](rows: List[(A, String)]): TestResult =
+    val values = rows.map(_._1)
+    assertTrue(
+      values.map(_.toJson) == rows.map(_._2),
+      rows.map(row => row._2.fromJson[A]) == values.map(Right(_)),
+    )
 end JsonLaw

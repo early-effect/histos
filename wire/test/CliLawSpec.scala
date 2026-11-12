@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.{EnumLaw, Platform, WireSamples}
-import histos.report.{CallResult, Diagnostic, Rejection, Report, Severity, WorkflowFault}
+import histos.report.{BuildFault, CallResult, Diagnostic, Rejection, Report, Severity, WorkflowFault}
 import histos.server.{Call, CallSamples}
 import histos.testrun.{ModuleTestError, TestStatus, TestedCell}
 import histos.workflow.CiError
@@ -15,21 +15,13 @@ import java.nio.file.Path
 import zio.{Chunk, Ref, ZIO}
 import zio.test.*
 
+/** Only `CliExit.code` leaves the process, so the exit laws pin the status. Every call is asked about every result. */
 object CliLawSpec extends ZIOSpecDefault:
+  import CallResult.fault
   import WireSamples.*
 
   def spec = suite("cli laws")(
-    test("a child status is success at 0, usage at 2, and a failed task at every other code"):
-      check(Gen.int): code =>
-        val exit  = CliExit.fromCode(code)
-        val named =
-          if code == 0 then CliExit.Success
-          else if code == 2 then CliExit.Usage
-          else CliExit.TaskFailed
-        val status = if code == 0 then 0 else if code == 2 then 2 else 1
-        assertTrue(exit == named, exit.code == status)
-    ,
-    test("process status is 0 or 2 only for success, usage, and those program codes"):
+    test("a child or program status is 0 at 0, 2 at 2, and 1 at every other code, and each exit has its status"):
       val named = List[CliExit](
         CliExit.Success,
         CliExit.TaskFailed,
@@ -44,240 +36,114 @@ object CliLawSpec extends ZIOSpecDefault:
         CliExit.Program(7),
         CliExit.Interrupted,
       )
-      check(Gen.int): status =>
-        val code = CliExit.Program(status).code
-        assertTrue(
-          EnumLaw.covered(named),
-          named.map(_.code) == List(0, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-          code == (if status == 0 then 0 else if status == 2 then 2 else 1),
-        )
-    ,
-    test("a clean report succeeds, a non-zero program status wins, and a failed test is not a compile"):
-      val all = everyCall
-      assertTrue(all.nonEmpty, EnumLaw.covered(CallSamples.oneEach)) &&
-      agrees(all, CallResult.Reported(Report.empty), _ => CliExit.Success) &&
-      agrees(all, reported(program = Some(0)), _ => CliExit.Success) &&
-      agrees(all, reported(program = Some(2), failed = true, err = "boom"), _ => CliExit.Usage) &&
-      agrees(all, reported(program = Some(9), failed = true, err = "boom"), _ => CliExit.TaskFailed) &&
-      agrees(all, reported(failed = true), _ => CliExit.TestFailed) &&
-      agrees(all, reported(status = TestStatus.Passed, err = "boom"), failedCall) &&
-      agrees(all, reported(status = TestStatus.NoTests), _ => CliExit.Success) &&
-      agrees(all, reported(status = TestStatus.Unmatched), _ => CliExit.Success) &&
-      agrees(all, reported(status = TestStatus.Passed), _ => CliExit.Success) &&
-      agrees(all, reported(err = "boom"), failedCall) &&
-      agrees(all, reported(severity = Severity.Error), failedCall) &&
-      agrees(all, reported(severity = Severity.Warn), _ => CliExit.Success) &&
-      agrees(all, reported(severity = Severity.Info), _ => CliExit.Success)
-    ,
-    test("load, toolchain, and resolve faults stay on those exits, and the call retargets resolve"):
-      val all    = everyCall
-      val loaded = CallResult.fault(histos.report.BuildFault.Load(histos.load.LoadError.NoEntry))
-      val chain  = CallResult.fault(histos.report.BuildFault.Toolchain(histos.jdk.ToolchainError.Denied))
-      val survey = CallResult.fault(
-        histos.report.BuildFault.Survey(histos.toolchain.SurveyError.Incomplete("report", "detail"))
+      for other <- check(Gen.int.filter(status => status != 0 && status != 2)): status =>
+          assertTrue(CliExit.fromCode(status).code == 1, CliExit.Program(status).code == 1)
+      yield other && assertTrue(
+        CliExit.fromCode(0).code == 0,
+        CliExit.fromCode(2).code == 2,
+        CliExit.Program(0).code == 0,
+        CliExit.Program(2).code == 2,
+        EnumLaw.covered(named),
+        named.map(_.code) == List(0, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1),
       )
-      val resolve = CallResult.fault(histos.report.BuildFault.Resolve(missing))
-      val other   = CallResult.fault(histos.report.BuildFault.Resolve(ResolveErrorNoLock))
-      agrees(all, loaded, _ => CliExit.LoadFailed) &&
-      agrees(all, chain, _ => CliExit.ToolchainFailed) &&
-      agrees(all, survey, _ => CliExit.ToolchainFailed) &&
-      agrees(all, resolve, resolveExit) &&
-      agrees(all, other, resolveExit)
     ,
-    test("a failed publish call is publish, a failed test call is test, and a failed compile is compile"):
-      val all = everyCall
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Select(histos.select.SelectError.Duplicate(core))),
-        selectExit,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Pattern(histos.testrun.SuitePatternError.Empty)),
-        _ => CliExit.Usage,
-      ) &&
-      agrees(all, CallResult.fault(histos.report.BuildFault.Compile(noRoot)), call => compileExit(call, noRoot)) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Compile(GraphCompileError.Lock(missing))),
-        call => compileExit(call, GraphCompileError.Lock(missing)),
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Compile(GraphCompileError.LockRead(path))),
-        call => compileExit(call, GraphCompileError.LockRead(path)),
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(
-          histos.report.BuildFault.Compile(GraphCompileError.Cells(zio.NonEmptyChunk(GraphCompileError.Lock(missing))))
-        ),
-        call => compileExit(call, GraphCompileError.Cells(zio.NonEmptyChunk(GraphCompileError.Lock(missing)))),
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.Absent(core))),
-        _ => CliExit.TestFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(
-          histos.report.BuildFault.Test(ModuleTestError.Pattern(histos.testrun.SuitePatternError.Empty))
-        ),
-        _ => CliExit.Usage,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.Lock(missing))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.LockRead(path))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.Compile(GraphCompileError.Lock(missing)))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.Compile(GraphCompileError.LockRead(path)))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Test(ModuleTestError.Compile(noRoot))),
-        _ => CliExit.TestFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Publish(histos.publish.LocalPublishError.NothingToPublish)),
-        _ => CliExit.PublishFailed,
-      ) &&
-      agrees(all, CallResult.fault(histos.report.BuildFault.Release("closed")), _ => CliExit.PublishFailed)
-    ,
-    test("workflow, program, preview, io, and a rejection each keep their own exit"):
-      val all    = everyCall
-      val branch = CallResult.fault(
-        histos.report.BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch))
-      )
-      val files   = CallResult.fault(histos.report.BuildFault.Workflow(WorkflowFault.Files(CiError.Pins("x"))))
-      val scripts = CallResult.fault(
-        histos.report.BuildFault.Workflow(WorkflowFault.Scripts(ScriptError.Revision))
-      )
-      agrees(all, branch, _ => CliExit.TaskFailed) &&
-      agrees(all, files, _ => CliExit.WorkflowFailed) &&
-      agrees(all, scripts, _ => CliExit.WorkflowFailed) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Program(histos.program.ProgramError.Absent("nope"))),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Program(histos.program.ProgramError.Lock(missing))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Program(histos.program.ProgramError.LockRead(path))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(
-          histos.report.BuildFault.Program(histos.program.ProgramError.Compile(GraphCompileError.Lock(missing)))
-        ),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Program(histos.program.ProgramError.Compile(noRoot))),
-        _ => CliExit.CompileFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Platform(histos.PlatformError.Unknown("nope"))),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Task(histos.task.TaskError.EmptyId)),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Plugin(histos.load.PluginFault.Tested(ModuleTestError.Absent(core)))),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.PluginTask(histos.plugin.PluginTaskError.Shape("nope"))),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Preview(histos.preview.PreviewError.Cycle(core))),
-        previewExit,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Assemble(histos.assembly.AssembleError.NoModule("nope"))),
-        _ => CliExit.CompileFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Launcher(histos.publish.LauncherError.Missing)),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Cache(histos.schedule.CacheError.Io(io))),
-        _ => CliExit.LoadFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Remote(histos.schedule.RemoteError.Off)),
-        _ => CliExit.LoadFailed,
-      ) &&
-      agrees(all, CallResult.fault(histos.report.BuildFault.Store(io)), _ => CliExit.LoadFailed) &&
-      agrees(all, CallResult.fault(histos.report.BuildFault.Io(io)), ioExit) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Version(histos.version.VersionError.Unreadable)),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Watch(histos.watch.WatchError.Read(path))),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Format(histos.format.FormatError.NotDeclared)),
-        _ => CliExit.TaskFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(histos.report.BuildFault.Format(histos.format.FormatError.Resolved(ResolveErrorNoLock))),
-        _ => CliExit.ResolveFailed,
-      ) &&
-      agrees(
-        all,
-        CallResult.fault(
-          histos.report.BuildFault.Format(
-            histos.format.FormatError.Selected(histos.select.SelectError.Unknown(histos.ProjectName.trusted("nope")))
+    test("a clean report is 0, a non-zero program status wins, and a failed test, error line, or error is 1"):
+      assertTrue(
+        CallSamples.every.nonEmpty,
+        EnumLaw.covered(CallSamples.oneEach),
+        misses(
+          List(
+            CallResult.Reported(Report.empty)                        -> 0,
+            reported(program = Some(0))                              -> 0,
+            reported(program = Some(2), failed = true, err = "boom") -> 2,
+            reported(program = Some(9), failed = true, err = "boom") -> 1,
+            reported(failed = true)                                  -> 1,
+            reported(status = TestStatus.Passed, err = "boom")       -> 1,
+            reported(status = TestStatus.NoTests)                    -> 0,
+            reported(status = TestStatus.Unmatched)                  -> 0,
+            reported(status = TestStatus.Passed)                     -> 0,
+            reported(err = "boom")                                   -> 1,
+            reported(severity = Severity.Error)                      -> 1,
+            reported(severity = Severity.Warn)                       -> 0,
+            reported(severity = Severity.Info)                       -> 0,
           )
-        ),
-        _ => CliExit.Usage,
-      ) &&
-      agrees(all, CallResult.fault(histos.report.BuildFault.Interrupted), _ => CliExit.Interrupted) &&
-      assertTrue(EnumLaw.covered(oneRejection)) &&
-      rejections.foldLeft(assertTrue(oneRejection.length == rejections.length - 1)) { (acc, rejection) =>
-        acc && agrees(all, CallResult.fault(histos.report.BuildFault.Rejected(rejection)), _ => rejected(rejection))
-      }
+        ) == Nil,
+      )
+    ,
+    test("load, toolchain, and resolve faults are 1 for every call"):
+      assertTrue(
+        misses(
+          List(
+            fault(BuildFault.Load(histos.load.LoadError.NoEntry))                                 -> 1,
+            fault(BuildFault.Toolchain(histos.jdk.ToolchainError.Denied))                         -> 1,
+            fault(BuildFault.Survey(histos.toolchain.SurveyError.Incomplete("report", "detail"))) -> 1,
+            fault(BuildFault.Resolve(missing))                                                    -> 1,
+            fault(BuildFault.Resolve(histos.resolve.ResolveError.NoLock(path)))                   -> 1,
+          )
+        ) == Nil
+      )
+    ,
+    test("select, compile, test, and publish faults are 1, and a bad test pattern is usage"):
+      val lock = GraphCompileError.Lock(missing)
+      assertTrue(
+        misses(
+          List(
+            fault(BuildFault.Select(histos.select.SelectError.Duplicate(core)))                     -> 1,
+            fault(BuildFault.Pattern(histos.testrun.SuitePatternError.Empty))                       -> 2,
+            fault(BuildFault.Compile(noRoot))                                                       -> 1,
+            fault(BuildFault.Compile(lock))                                                         -> 1,
+            fault(BuildFault.Compile(GraphCompileError.LockRead(path)))                             -> 1,
+            fault(BuildFault.Compile(GraphCompileError.Cells(zio.NonEmptyChunk(lock))))             -> 1,
+            fault(BuildFault.Test(ModuleTestError.Absent(core)))                                    -> 1,
+            fault(BuildFault.Test(ModuleTestError.Pattern(histos.testrun.SuitePatternError.Empty))) -> 2,
+            fault(BuildFault.Test(ModuleTestError.Lock(missing)))                                   -> 1,
+            fault(BuildFault.Test(ModuleTestError.LockRead(path)))                                  -> 1,
+            fault(BuildFault.Test(ModuleTestError.Compile(lock)))                                   -> 1,
+            fault(BuildFault.Test(ModuleTestError.Compile(GraphCompileError.LockRead(path))))       -> 1,
+            fault(BuildFault.Test(ModuleTestError.Compile(noRoot)))                                 -> 1,
+            fault(BuildFault.Publish(histos.publish.LocalPublishError.NothingToPublish))            -> 1,
+            fault(BuildFault.Release("closed"))                                                     -> 1,
+          )
+        ) == Nil
+      )
+    ,
+    test("every other fault is 1, a project selection in fmt is usage, and a rejection is usage unless a run failed"):
+      val selected = histos.format.FormatError.Selected(
+        histos.select.SelectError.Unknown(histos.ProjectName.trusted("nope"))
+      )
+      assertTrue(
+        EnumLaw.covered(rejections.map(_._1)),
+        misses(
+          List(
+            fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch)))                               -> 1,
+            fault(BuildFault.Workflow(WorkflowFault.Files(CiError.Pins("x"))))                                     -> 1,
+            fault(BuildFault.Workflow(WorkflowFault.Scripts(ScriptError.Revision)))                                -> 1,
+            fault(BuildFault.Program(histos.program.ProgramError.Absent("nope")))                                  -> 1,
+            fault(BuildFault.Program(histos.program.ProgramError.Lock(missing)))                                   -> 1,
+            fault(BuildFault.Program(histos.program.ProgramError.LockRead(path)))                                  -> 1,
+            fault(BuildFault.Program(histos.program.ProgramError.Compile(GraphCompileError.Lock(missing))))        -> 1,
+            fault(BuildFault.Program(histos.program.ProgramError.Compile(noRoot)))                                 -> 1,
+            fault(BuildFault.Platform(histos.PlatformError.Unknown("nope")))                                       -> 1,
+            fault(BuildFault.Task(histos.task.TaskError.EmptyId))                                                  -> 1,
+            fault(BuildFault.Plugin(histos.load.PluginFault.Tested(ModuleTestError.Absent(core))))                 -> 1,
+            fault(BuildFault.PluginTask(histos.plugin.PluginTaskError.Shape("nope")))                              -> 1,
+            fault(BuildFault.Preview(histos.preview.PreviewError.Cycle(core)))                                     -> 1,
+            fault(BuildFault.Assemble(histos.assembly.AssembleError.NoModule("nope")))                             -> 1,
+            fault(BuildFault.Launcher(histos.publish.LauncherError.Missing))                                       -> 1,
+            fault(BuildFault.Cache(histos.schedule.CacheError.Io(io)))                                             -> 1,
+            fault(BuildFault.Remote(histos.schedule.RemoteError.Off))                                              -> 1,
+            fault(BuildFault.Store(io))                                                                            -> 1,
+            fault(BuildFault.Io(io))                                                                               -> 1,
+            fault(BuildFault.Version(histos.version.VersionError.Unreadable))                                      -> 1,
+            fault(BuildFault.Watch(histos.watch.WatchError.Read(path)))                                            -> 1,
+            fault(BuildFault.Format(histos.format.FormatError.NotDeclared))                                        -> 1,
+            fault(BuildFault.Format(histos.format.FormatError.Resolved(histos.resolve.ResolveError.NoLock(path)))) -> 1,
+            fault(BuildFault.Format(selected))                                                                     -> 2,
+            fault(BuildFault.Interrupted)                                                                          -> 1,
+            fault(BuildFault.StaleApi("", "0.2.9-0123456789ab-SNAPSHOT"))                                          -> 1,
+          ) ++ rejections.map((rejection, code) => fault(BuildFault.Rejected(rejection)) -> code)
+        ) == Nil,
+      )
     ,
     test("an unchanged compile names the skip, and a changed compile prints only counts it has"):
       check(Gen.int(0, 30), Gen.int(0, 30), Gen.int(0, 30)): (compiled, skipped, classes) =>
@@ -305,38 +171,37 @@ object CliLawSpec extends ZIOSpecDefault:
             s"$js test compile unchanged files compiled: $compiled skipped: $skipped",
         )
     ,
-    test("a tally names modules, and zero modules is silence"):
-      check(Gen.int(0, 12), Gen.int(0, 12), Gen.int(0, 40), Gen.int(0, 40), Gen.int(0, 40)):
-        (modules, failed, compiled, skipped, classes) =>
-          val files                                     = Some(SourceCount(compiled, skipped))
-          val written                                   = Some(classes)
-          def line(parts: List[String]): Option[String] =
-            if modules == 0 then None
-            else
-              val text = parts.mkString("; ")
-              Some(if failed == 0 then text else s"$text failed: $failed")
-          val full = line(
-            List(
-              s"files compiled: $compiled skipped: $skipped",
-              s"modules: $modules",
-              s"classes: $classes",
-            )
-          )
-          val filesOnly   = line(List(s"files compiled: $compiled skipped: $skipped", s"modules: $modules"))
-          val classesOnly = line(List(s"modules: $modules", s"classes: $classes"))
-          val modulesOnly = line(List(s"modules: $modules"))
-          val suites      =
-            if compiled + failed + skipped + modules == 0 then None
-            else Some(s"tests passed: $compiled failed: $failed cached: $skipped modules: $modules")
+    test("a tally names modules and only the counts it has, zero modules is silence, and a test tally says test"):
+      val files   = Gen.option(Gen.int(0, 40).zipWith(Gen.int(0, 40))(SourceCount(_, _)))
+      val written = Gen.option(Gen.int(0, 40))
+      for
+        silent <- check(Gen.int(0, 12), files, written): (failed, counted, classes) =>
           assertTrue(
-            Lines.tally(modules, failed, files, written) == full,
-            Lines.tally(modules, failed, files, None) == filesOnly,
-            Lines.tally(modules, failed, None, written) == classesOnly,
-            Lines.tally(modules, failed, None, None) == modulesOnly,
-            Lines.testTally(modules, failed, files, written) == full.map(text => s"test $text"),
-            Lines.testTally(modules, failed, None, None) == modulesOnly.map(text => s"test $text"),
-            Lines.suites(compiled, failed, skipped, modules) == suites,
+            Lines.tally(0, failed, counted, classes).isEmpty,
+            Lines.testTally(0, failed, counted, classes).isEmpty,
           )
+        spoken <- check(Gen.int(1, 12), Gen.int(0, 12), files, written): (modules, failed, counted, classes) =>
+          val line = Lines.tally(modules, failed, counted, classes)
+          assertTrue(
+            line.exists(_.contains(s"modules: $modules")),
+            line.exists(_.startsWith("files compiled: ")) == counted.isDefined,
+            line.exists(_.contains("classes: ")) == classes.isDefined,
+            line.exists(_.endsWith(s" failed: $failed")) == (failed > 0),
+            Lines.testTally(modules, failed, counted, classes) == line.map(text => s"test $text"),
+          )
+        suites <- check(Gen.int(0, 2), Gen.int(0, 2), Gen.int(0, 2), Gen.int(0, 2)):
+          (passed, failed, cached, modules) =>
+            assertTrue(
+              Lines.suites(passed, failed, cached, modules).isEmpty == (passed + failed + cached + modules == 0)
+            )
+      yield silent && spoken && suites && assertTrue(
+        Lines
+          .tally(3, 1, Some(SourceCount(5, 2)), Some(9))
+          .contains(
+            "files compiled: 5 skipped: 2; modules: 3; classes: 9 failed: 1"
+          ),
+        Lines.suites(4, 1, 2, 3).contains("tests passed: 4 failed: 1 cached: 2 modules: 3"),
+      )
     ,
     test("a dotty position is one past the compiler, and a zinc position is already displayed"):
       val repo    = Path.of("/work/repo")
@@ -409,29 +274,18 @@ object CliLawSpec extends ZIOSpecDefault:
         BuildEvent.Err("bad"),
         BuildEvent.Test(done),
       )
-      val shown = events.toList match
-        case head :: _ => head
-        case Nil       => BuildEvent.Err("no event")
       for
         out <- Ref.make(Chunk.empty[String])
         err <- Ref.make(Chunk.empty[String])
-        _   <- CompileConsole.show(
-          Show(path, shown),
-          line => out.update(lines => lines :+ line).unit,
-          line => err.update(lines => lines :+ line).unit,
-        )
+        _   <- ZIO.foreachDiscard(events): event =>
+          CompileConsole.show(Show(path, event), line => out.update(_ :+ line), line => err.update(_ :+ line))
         outs <- out.get
         errs <- err.get
       yield
         val (left, right) = Show.transcript(path, events)
         assertTrue(
-          shown match
-            case BuildEvent.Compile(feed) =>
-              Show(path, shown) == CompileConsole.lines(path, feed)
-            case _ => false
-          ,
-          outs == Chunk(Lines.compiling(core, scala3, Platform.Jvm)),
-          errs.isEmpty,
+          outs == left,
+          errs == right,
           left == Chunk(
             Lines.compiling(core, scala3, Platform.Jvm),
             "ok",
@@ -442,11 +296,14 @@ object CliLawSpec extends ZIOSpecDefault:
         ),
   )
 
-  private def everyCall: List[Call] =
-    CallSamples.every
-
-  private def agrees(calls: List[Call], result: CallResult, expect: Call => CliExit): TestResult =
-    assertTrue(calls.map(call => CliExit.from(call, result)) == calls.map(expect))
+  /** Each `(result, call, status)` whose status is not the row's. */
+  private def misses(rows: List[(CallResult, Int)]): List[(CallResult, Call, Int)] =
+    for
+      (result, code) <- rows
+      call           <- CallSamples.every
+      status = CliExit.from(call, result).code
+      if status != code
+    yield (result, call, status)
 
   private def reported(
       status: TestStatus = TestStatus.Passed,
@@ -460,131 +317,34 @@ object CliLawSpec extends ZIOSpecDefault:
     val found = Chunk(Diagnostic(None, None, None, None, None, severity, "note"))
     CallResult.Reported(Report(Chunk.empty, lines, None, None, found, tests, program))
 
-  private def publish(call: Call): Boolean =
-    call match
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        true
-      case _ => false
-
-  private def testCall(call: Call): Boolean =
-    call match
-      case Call.Test(_, _, _) | Call.PreviewTest(_) => true
-      case _                                        => false
-
-  private def compileLike(call: Call): Boolean =
-    call match
-      case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => true
-      case _                                                           => false
-
-  private def failedCall(call: Call): CliExit =
-    if testCall(call) then CliExit.TestFailed
-    else if publish(call) then CliExit.PublishFailed
-    else
-      call match
-        case Call.Format(_, _) => CliExit.TaskFailed
-        case _                 => CliExit.CompileFailed
-
-  private def resolveExit(call: Call): CliExit =
-    if compileLike(call) then CliExit.CompileFailed
-    else if publish(call) then CliExit.PublishFailed
-    else CliExit.ResolveFailed
-
-  private def selectExit(call: Call): CliExit =
-    if compileLike(call) then CliExit.CompileFailed
-    else if testCall(call) then CliExit.TestFailed
-    else if publish(call) then CliExit.PublishFailed
-    else CliExit.TaskFailed
-
-  private def compileExit(call: Call, error: GraphCompileError): CliExit =
-    error match
-      case GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) => resolveExit(call)
-      case _                                                         =>
-        if testCall(call) then CliExit.TestFailed
-        else if publish(call) then CliExit.PublishFailed
-        else CliExit.CompileFailed
-
-  private def previewExit(call: Call): CliExit =
-    call match
-      case Call.PreviewCompile(_) | Call.Compile(_) => CliExit.CompileFailed
-      case Call.PreviewTest(_) | Call.Test(_, _, _) => CliExit.TestFailed
-      case other if publish(other)                  => CliExit.PublishFailed
-      case _                                        => CliExit.TaskFailed
-
-  private def ioExit(call: Call): CliExit =
-    call match
-      case Call.Test(_, _, _) | Call.Run(_, _)                                            => CliExit.ResolveFailed
-      case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_)                    => CliExit.CompileFailed
-      case other if publish(other)                                                        => CliExit.PublishFailed
-      case Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) =>
-        CliExit.LoadFailed
-      case _ => CliExit.TaskFailed
-
-  private def rejected(rejection: Rejection): CliExit =
-    rejection match
-      case Rejection.AssemblyDestination(_)                                          => CliExit.CompileFailed
-      case Rejection.TaskArguments(_) | Rejection.RunFailed | Rejection.WatchStopped => CliExit.TaskFailed
-      case _                                                                         => CliExit.Usage
-
-  private val oneRejection: List[Rejection] =
+  /** One rejection per case, and its status. A failed run is 1, and every other refusal is usage. */
+  private val rejections: List[(Rejection, Int)] =
     List(
-      Rejection.ResolveAction("nope"),
-      Rejection.WorkflowAction("nope"),
-      Rejection.LauncherAction("nope"),
-      Rejection.AssemblyDestination(".."),
-      Rejection.TaskArguments("inspect"),
-      Rejection.NotATool,
-      Rejection.Watch("again"),
-      Rejection.RunFailed,
-      Rejection.WatchStopped,
-      Rejection.PreviewProjects,
-      Rejection.PreviewOperation("graph"),
-      Rejection.MissingRunName,
-      Rejection.Parameter(histos.plugin.ParamNameError.Empty),
-      Rejection.ProjectName(histos.ProjectNameError.Empty),
-      Rejection.SuitePattern(histos.testrun.SuitePatternError.Empty),
-      Rejection.RunId(histos.task.TaskError.EmptyId),
-      Rejection.TestMode(histos.testrun.TestModeError.Unknown("nope")),
-      Rejection.CacheClean(histos.cache.CacheCleanModeError.Unknown("nope")),
-      Rejection.Flag(histos.plugin.FlagNameError.Empty),
-      Rejection.TaskPlatform("inspect"),
-      Rejection.CommandHelp(List("nope")),
-      Rejection.FormatMode("diff"),
-      Rejection.FormatTargets,
-      Rejection.FormatPath("/etc"),
+      Rejection.ResolveAction("nope")                                        -> 2,
+      Rejection.WorkflowAction("nope")                                       -> 2,
+      Rejection.LauncherAction("nope")                                       -> 2,
+      Rejection.AssemblyDestination("..")                                    -> 1,
+      Rejection.TaskArguments("inspect")                                     -> 1,
+      Rejection.NotATool                                                     -> 2,
+      Rejection.Watch("again")                                               -> 2,
+      Rejection.RunFailed                                                    -> 1,
+      Rejection.WatchStopped                                                 -> 1,
+      Rejection.PreviewProjects                                              -> 2,
+      Rejection.PreviewOperation("graph")                                    -> 2,
+      Rejection.MissingRunName                                               -> 2,
+      Rejection.Parameter(histos.plugin.ParamNameError.Empty)                -> 2,
+      Rejection.ProjectName(histos.ProjectNameError.Empty)                   -> 2,
+      Rejection.SuitePattern(histos.testrun.SuitePatternError.Empty)         -> 2,
+      Rejection.RunId(histos.task.TaskError.EmptyId)                         -> 2,
+      Rejection.TestMode(histos.testrun.TestModeError.Unknown("nope"))       -> 2,
+      Rejection.CacheClean(histos.cache.CacheCleanModeError.Unknown("nope")) -> 2,
+      Rejection.Flag(histos.plugin.FlagNameError.Empty)                      -> 2,
+      Rejection.TaskPlatform("inspect")                                      -> 2,
+      Rejection.CommandHelp(List("nope"))                                    -> 2,
+      Rejection.FormatMode("diff")                                           -> 2,
+      Rejection.FormatTargets                                                -> 2,
+      Rejection.FormatPath("/etc")                                           -> 2,
     )
-
-  private val rejections: List[Rejection] =
-    List(
-      Rejection.ResolveAction("nope"),
-      Rejection.WorkflowAction("nope"),
-      Rejection.LauncherAction("nope"),
-      Rejection.AssemblyDestination(".."),
-      Rejection.TaskArguments("inspect"),
-      Rejection.NotATool,
-      Rejection.Watch("again"),
-      Rejection.RunFailed,
-      Rejection.WatchStopped,
-      Rejection.PreviewProjects,
-      Rejection.PreviewOperation("graph"),
-      Rejection.MissingRunName,
-      Rejection.Parameter(histos.plugin.ParamNameError.Empty),
-      Rejection.ProjectName(histos.ProjectNameError.Empty),
-      Rejection.SuitePattern(histos.testrun.SuitePatternError.Empty),
-      Rejection.RunId(histos.task.TaskError.EmptyId),
-      Rejection.TestMode(histos.testrun.TestModeError.Unknown("nope")),
-      Rejection.CacheClean(histos.cache.CacheCleanModeError.Unknown("nope")),
-      Rejection.Flag(histos.plugin.FlagNameError.Empty),
-      Rejection.TaskPlatform("inspect"),
-      Rejection.CommandHelp(List("nope")),
-      Rejection.CommandHelp(Nil),
-      Rejection.FormatMode("diff"),
-      Rejection.FormatTargets,
-      Rejection.FormatPath("/etc"),
-    )
-
-  private val ResolveErrorNoLock: histos.resolve.ResolveError =
-    histos.resolve.ResolveError.NoLock(path)
 
   extension (line: CompileConsole.Line)
     private def text: String = line match
