@@ -74,7 +74,41 @@ object ScenarioSpec extends ZIOSpecDefault:
           after.isDefined,
           after == kept,
           !shared,
-        ),
+        )
+    ,
+    test("a compile error names its file and line, in main sources and in tests, and a warning is not the failure"):
+      ZIO.scoped:
+        for
+          built    <- ZIO.fromEither(Projects.locked(module("app", Jvm)(scala3).test(TestMain("demo.Foo"))))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          lib = checkout.root.resolve("app/src/main/scala/demo/Lib.scala")
+          foo = checkout.root.resolve("app/src/test/scala/demo/Foo.scala")
+          _ <- checkout.write(
+            "app/src/main/scala/demo/Lib.scala",
+            "package demo\n\nobject Lib:\n  def word: String = 1\n",
+          )
+          main <- checkout.compile
+          _    <- writeApp(checkout)
+          _    <- checkout.write(
+            "app/src/test/scala/demo/Foo.scala",
+            "package demo\n\nobject Foo:\n  def n: Int = Lib.nope\n",
+          )
+          tested <- checkout.test(TestMode.Run).either
+        yield
+          val mainText = failed(main).map(_.message).mkString("\n")
+          val testText = tested match
+            case Left(error: histos.testrun.ModuleTestError) => error.message
+            case Left(error: GraphCompileError)              => error.message
+            case Right(_)                                    => ""
+          assertTrue(
+            mainText.contains(s"$lib:4:"),
+            mainText.contains(": error: "),
+            testText.contains(s"$foo:4:"),
+            testText.contains(": error: "),
+            testText.contains("nope"),
+            !testText.contains(": warning: "),
+          ),
   ).provideSomeLayerShared[TestEnvironment & Scope](Scenario.tools) @@ TestAspect.withLiveSystem @@
     TestAspect.timeout(3.minutes)
 

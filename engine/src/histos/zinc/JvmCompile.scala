@@ -761,8 +761,15 @@ private final class CollectingReporter(hear: CompileProblem => Unit) extends xsb
   private val found =
     new java.util.concurrent.ConcurrentLinkedQueue[xsbti.Problem]
 
+  /** Each error as `path:line:column: error: message`. Warnings print as they happen and are not the failure, unless
+    * the compiler reported no error at all.
+    */
   def diagnostics: List[CompileDiagnostic] =
-    found.iterator.asScala.toList.map(problem => CompileDiagnostic.fromCompiler(problem.message))
+    val problems = found.iterator.asScala.toList.map(ZincProblem.fromZinc)
+    val errors   = problems.filter(_.severity == CompileSeverity.Error)
+    (if errors.isEmpty then problems else errors).map(problem =>
+      CompileDiagnostic.fromCompiler(histos.cli.Lines.located(problem))
+    )
 
   def reset(): Unit      = found.clear()
   def hasErrors: Boolean =

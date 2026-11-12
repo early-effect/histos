@@ -279,7 +279,6 @@ These are true today and tracked:
 
 - Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
 - `histos run <name>` prints the program's output when the program exits, not as it runs.
-- A test compile error prints without its file and line.
 - No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)
 
 ## Building Histos
