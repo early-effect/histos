@@ -35,7 +35,7 @@ enum ResolveError:
   case Download(misses: ::[ArtifactMiss])
   case Scalafmt(error: ScalafmtConfError)
 
-  /** Every artifact that failed did so in transit, so the same fetch may succeed. */
+  /** Every artifact that failed did so in transit, after Coursier's own retries, so a later fetch may succeed. */
   def transient: Boolean = this match
     case ResolveError.Download(misses) => misses.forall(_.fault == DownloadFault.Transient)
     case _                             => false
@@ -97,7 +97,7 @@ enum ResolveError:
       Noted.carry(
         "resolve.download",
         message,
-        "Each download failed in transit, and failed again after three retries. A file already in the cache is not fetched again.",
+        "Each download failed in transit, after Coursier's own retries. A file already in the cache is not fetched again.",
         "histos resolve",
       )
     case other =>

@@ -260,13 +260,12 @@ private[resolve] final class CoursierResolve(
   private def execute(
       fetch: coursier.Fetch[coursier.util.Task]
   ): IO[ResolveError, coursier.Fetch.Result] =
-    FetchRetry:
-      ZIO
-        .attemptBlockingInterrupt(fetch.eitherResult())
-        .mapError(_ => ResolveError.Repository(RepositoryIo.Fetch))
-        .flatMap:
-          case Left(error)   => ZIO.fail(lift(error))
-          case Right(result) => ZIO.succeed(result)
+    ZIO
+      .attemptBlockingInterrupt(fetch.eitherResult())
+      .mapError(_ => ResolveError.Repository(RepositoryIo.Fetch))
+      .flatMap:
+        case Left(error)   => ZIO.fail(lift(error))
+        case Right(result) => ZIO.succeed(result)
 
   private def place(
       repositories: Repositories,
@@ -465,7 +464,7 @@ private[resolve] final class CoursierResolve(
           case _ => ResolveError.Repository(RepositoryIo.Metadata)
       case download: coursier.error.FetchError.DownloadingArtifacts =>
         download.errors.toList.map((artifact, failed) =>
-          ArtifactMiss(artifact.url, FetchRetry.fault(failed), failed.describe)
+          ArtifactMiss(artifact.url, DownloadFaults.of(failed), failed.describe)
         ) match
           case first :: rest => ResolveError.Download(::(first, rest))
           case Nil           => ResolveError.Repository(RepositoryIo.Fetch)
