@@ -27,7 +27,9 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
 import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
-/** A named main prints and exits. A missing name and an unbuilt platform never start. */
+/** A named main prints and exits, and signals once its compile is done. A missing name and an unbuilt platform never
+  * start and never signal.
+  */
 object CallsRunLawSpec extends ZIOSpecDefault:
   private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("runlaw")
@@ -50,23 +52,31 @@ object CallsRunLawSpec extends ZIOSpecDefault:
                 jdk   <- found match
                   case Left(error)  => ZIO.dieMessage(error.message)
                   case Right(value) => ZIO.succeed(value)
-                (missed, missedHeard)   <- speak(say => Calls.run(dir, graph, jdk, machine, "missing", None, say))
-                (unbuilt, unbuiltHeard) <- speak(say =>
-                  Calls.run(dir, graph, jdk, machine, lawName.value, Some(Platform.Js), say)
+                signals <- Ref.make(0)
+                compiled = signals.update(_ + 1)
+                (missed, missedHeard) <- speak(say =>
+                  Calls.run(dir, graph, jdk, machine, "missing", None, say, compiled)
                 )
-                _ <- Workspace.createDirectories(parentOf(probe))
-                _ <- Workspace.writeString(
+                (unbuilt, unbuiltHeard) <- speak(say =>
+                  Calls.run(dir, graph, jdk, machine, lawName.value, Some(Platform.Js), say, compiled)
+                )
+                unstarted <- signals.get
+                _         <- Workspace.createDirectories(parentOf(probe))
+                _         <- Workspace.writeString(
                   probe,
                   "object Probe:\n  def main(args: Array[String]): Unit = println(\"ran-law\")\n",
                 )
-                (ran, heard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say))
+                (ran, heard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say, compiled))
+                started      <- signals.get
                 clazz = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
                 wrote <- ZIO.attempt(Files.isRegularFile(clazz)).orDie
                 _     <- Workspace.writeString(
                   probe,
                   "object Probe:\n  def main(args: Array[String]): Unit =\n    println(\"ran-law\")\n    System.exit(4)\n",
                 )
-                (stopped, stoppedHeard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say))
+                (stopped, stoppedHeard) <- speak(say =>
+                  Calls.run(dir, graph, jdk, machine, lawName.value, None, say, compiled)
+                )
               yield
                 val text        = outs(heard)
                 val stoppedText = outs(stoppedHeard)
@@ -75,6 +85,8 @@ object CallsRunLawSpec extends ZIOSpecDefault:
                   done(missedHeard).exists(faultHas("'missing' is not a module")),
                   unbuilt == Right(()),
                   done(unbuiltHeard).exists(faultHas("does not build js")),
+                  unstarted == 0,
+                  started == 1,
                   ran == Right(()),
                   programOf(done(heard)) == Some(0),
                   text.contains("runlaw 3.10.0 jvm"),

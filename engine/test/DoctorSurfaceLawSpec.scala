@@ -167,7 +167,7 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     failed._2.contains("failure"),
                   )
         .provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]),
-  )
+  ) @@ TestAspect.withLiveClock // the doctor bounds each real probe with a timeout
 end DoctorSurfaceLawSpec
 
 private object Dying extends Net:

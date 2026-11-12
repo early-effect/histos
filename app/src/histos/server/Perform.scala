@@ -11,18 +11,22 @@ import histos.zinc.{GraphCompile, GraphCompileError}
 
 import java.nio.file.Path
 
-import zio.{Fiber, Ref, ZIO}
+import zio.{Fiber, Ref, UIO, ZIO}
 
 /** One execution of a [[histos.server.Call]]. Reload, reboot, bsp, and watch stay on [[Perform.Edges]] because they own
   * the process, the socket, or the session. A missing graph is a fault. A fault is [[histos.report.CallResult.Fault]],
   * not a failed effect.
   */
 object Perform:
+  /** `compiled` is what a program run signals once its compile is done. The server releases its class-directory lock
+    * then, so a restart can compile while the program runs.
+    */
   final case class Edges[R](
       watch: (Call, WatchPolicy, Say) => ZIO[R, ServerError, Unit],
       reload: ZIO[R, ServerError, Unit],
       reboot: ZIO[R, ServerError, Unit],
       bsp: ZIO[R, ServerError, Unit],
+      compiled: UIO[Unit],
   )
 
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
@@ -169,7 +173,9 @@ object Perform:
           case Call.Client =>
             held(build => follow(withJdk(jdk => Calls.client(repo, build.graph, jdk, machine, say))))
           case Call.Run(id, platform) =>
-            held(build => follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say))))
+            held(build =>
+              follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say, edges.compiled)))
+            )
           case Call.Task(id, args) =>
             held(build => follow(Calls.task(repo, build.graph, build.plugins, machine, id, args, say)))
           case Call.Graph =>

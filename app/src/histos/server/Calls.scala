@@ -107,6 +107,19 @@ final class Say private (
       kept,
       noted,
     )
+
+  /** [[dropExit]], and the result the inner call finished with lands in `finished`. */
+  def dropExitInto(finished: Ref[Option[CallResult]]): Say =
+    val dropped = dropExit
+    new Say(
+      {
+        case done @ Message.Done(result) => finished.set(Some(result)) *> dropped.send(done)
+        case other                       => dropped.send(other)
+      },
+      minted,
+      kept,
+      noted,
+    )
 end Say
 
 object Say:
@@ -339,6 +352,7 @@ object Calls:
           ),
     )
 
+  /** `compiled` fires once the program's compile is done, before it links and starts. */
   def run(
       repo: Path,
       graph: ProjectGraph,
@@ -347,6 +361,7 @@ object Calls:
       id: String,
       platform: Option[Platform],
       say: Say,
+      compiled: UIO[Unit],
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     CompileConsole
       .open(repo)
@@ -364,7 +379,7 @@ object Calls:
                 runtimes,
                 platform,
                 feed => speak(say, console, feed).ignore,
-                console.announce(text => told(say, text).ignore),
+                console.announce(text => told(say, text).ignore) *> compiled,
               )
               .foreach:
                 case histos.program.ProgramFeed

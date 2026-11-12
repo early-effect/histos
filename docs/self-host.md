@@ -13,6 +13,10 @@ The pin moves through a pull request:
 3. Pin the commit channel, `<ship>-<sha>-SNAPSHOT`, in `build.properties`.
 4. Push.
 
+## Fetch the lock before the suite
+
+The engine laws read compilers and other locked tools from the Coursier cache offline, because a test does not call Central. On a fresh clone, run `./histos resolve` once before `./histos test`. It fetches everything `dependencies.lock` records, including tools the build itself does not compile with, such as the Scala 3.9 compiler the TASTy laws use. CI's setup action runs the same command.
+
 ## A local assembly
 
 `./histos assembly` compiles `app` and its upstream modules with the running jar and writes `dist/histos.jar`, with the api packed at `bootstrap/histos-api.jar`. The default path also writes `.histos/assembly.sha256`. The same run writes the ship's snapshot id into `target/unmanaged/wire/src/histos/Toolchain.scala` and compiles it in.
