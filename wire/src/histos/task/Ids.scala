@@ -4,6 +4,9 @@ import histos.doctor.{Diagnostic, Noted}
 import histos.plugin.PluginRunError
 import histos.version.VersionError
 
+import _root_.scala.annotation.publicInBinary
+import _root_.scala.quoted.*
+
 import zio.NonEmptyChunk
 
 opaque type TaskId = String
@@ -32,14 +35,32 @@ opaque type RunId = String
 object RunId:
   given CanEqual[RunId, RunId] = CanEqual.derived
 
+  inline def apply(inline raw: String): RunId = ${
+    RunIdMacro.literal('raw)
+  }
+
   def from(raw: String): Either[TaskError, RunId] =
     if raw.isEmpty then Left(TaskError.EmptyId) else Right(raw)
 
-  /** Built from `Random.nextUUID`. Not a parser. */
-  private[histos] def trusted(raw: String): RunId = raw
+  /** Built from `Random.nextUUID`, or from a literal the macro checked. Not a parser. */
+  @publicInBinary private[histos] def trusted(raw: String): RunId = raw
 
   extension (id: RunId) def value: String = id
 end RunId
+
+private object RunIdMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[RunId] =
+    raw.value match
+      case None =>
+        quotes.reflect.report.errorAndAbort(
+          "RunId(...) takes a literal. Use RunId.from at runtime.",
+          raw,
+        )
+      case Some(value) =>
+        RunId.from(value) match
+          case Left(error) =>
+            quotes.reflect.report.errorAndAbort(error.message, raw)
+          case Right(_) => '{ RunId.trusted(${ Expr(value) }) }
 
 enum TaskError:
   case EmptyId

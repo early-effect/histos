@@ -3,6 +3,9 @@ package histos.native
 import histos.ClangMajor
 import java.nio.file.Path
 
+import _root_.scala.annotation.publicInBinary
+import _root_.scala.quoted.*
+
 /** The version token `clang --version` reported, such as `21.0.0`. The major is part of it. */
 final case class ClangVersion private (value: String, major: ClangMajor)
 
@@ -32,11 +35,31 @@ opaque type ClangTarget = String
 object ClangTarget:
   given CanEqual[ClangTarget, ClangTarget] = CanEqual.derived
 
+  inline def apply(inline raw: String): ClangTarget = ${
+    ClangTargetMacro.literal('raw)
+  }
+
   def from(raw: String): Either[ClangText, ClangTarget] =
-    if raw.nonEmpty && !raw.exists(_.isWhitespace) then Right(raw) else Left(ClangText.NoTarget)
+    if raw.nonEmpty && !raw.exists(_.isWhitespace) then Right(trusted(raw)) else Left(ClangText.NoTarget)
 
   extension (target: ClangTarget) def value: String = target
+
+  @publicInBinary private[histos] def trusted(raw: String): ClangTarget = raw
 end ClangTarget
+
+private object ClangTargetMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ClangTarget] =
+    raw.value match
+      case None =>
+        quotes.reflect.report.errorAndAbort(
+          "ClangTarget(...) takes a literal. Use ClangTarget.from at runtime.",
+          raw,
+        )
+      case Some(value) =>
+        ClangTarget.from(value) match
+          case Left(error) =>
+            quotes.reflect.report.errorAndAbort(error.message, raw)
+          case Right(_) => '{ ClangTarget.trusted(${ Expr(value) }) }
 
 enum ClangText:
   case Empty

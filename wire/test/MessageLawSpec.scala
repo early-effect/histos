@@ -3,7 +3,6 @@ package histos
 import histos.central.MetadataFault
 import histos.doctor.{Diagnostic, Fix}
 import histos.node.NodeFileFault
-import histos.testrun.{SuitePattern, SuitePatternError}
 import histos.zinc.JsLibraryMiss
 
 import zio.test.*
@@ -1403,83 +1402,75 @@ object MessageLawSpec extends ZIOSpecDefault:
   )
 
   private val moduleTestsLaw: Spec[Any, Nothing] =
-    SuitePattern.from("App*").toOption.toList match
-      case pattern :: Nil =>
-        val samples = moduleTests(pattern)
-        test("every module test error names its sentence and its check"):
-          assertTrue(
-            EnumLaw.covered(samples),
-            samples.map(_.message) == List(
-              "the JavaScript environment could not be fetched",
-              "'core' is listed twice",
-              root,
-              missing,
-              read,
-              s"'core' 3.10.0 failed to compile tests\n$sources",
-              "'core' names demo.TestMain and has no test sources",
-              "'core' runs zio.test.ZTestFramework and has no test sources",
-              "'core' runs zio.test.ZTestFramework and testDependencies do not include dev.zio::zio-test",
-              "'core' ran zio.test.ZTestFramework and it found no tests",
-              "no tests matched App*",
-              "'core' names a test main and a test provider",
-              "'core' 3.10.0 did not start\na child needs a program",
-              "a main class is not empty",
-              "'core' was compiled and is not a module in the graph",
-              "'core' depends on 'api', which has no 3.10.0 classes",
-              "could not prepare the test work directory /work/repo",
-              "could not read test roots under /work/repo",
-              "could not write the test provider runner at /work/repo",
-              "'core' 3.10.0 js failed to link\nlink",
-              "'core' 3.10.0 js has no Node to run on: no Node on config; Histos needs 22.14.0 or newer",
-              "stamp index has no App",
-              "quick record /work/repo is not a stored success",
-              "a test pattern is not empty",
-              "'core' 3.10.0 native has no readable API digest",
-            ),
-            samples.map(error => noted(error.diagnose)) == List(
-              ("test.failed", "histos help test"),
-              ("project.duplicate", "histos graph"),
-              ("compile.failed", "histos help compile"),
-              ("resolve.not-found", "histos resolve --update"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-              ("test.failed", "histos help test"),
-            ),
-          )
-      case _ =>
-        test("every module test error names its sentence and its check"):
-          assertTrue(SuitePattern.from("App*") == Left(SuitePatternError.Empty))
+    test("every module test error names its sentence and its check"):
+      val samples = moduleTests
+      assertTrue(
+        EnumLaw.covered(samples),
+        samples.map(_.message) == List(
+          "the JavaScript environment could not be fetched",
+          "'core' is listed twice",
+          root,
+          missing,
+          read,
+          s"'core' 3.10.0 failed to compile tests\n$sources",
+          "'core' names demo.TestMain and has no test sources",
+          "'core' runs zio.test.ZTestFramework and has no test sources",
+          "'core' runs zio.test.ZTestFramework and testDependencies do not include dev.zio::zio-test",
+          "'core' ran zio.test.ZTestFramework and it found no tests",
+          "no tests matched App*",
+          "'core' names a test main and a test provider",
+          "'core' 3.10.0 did not start\na child needs a program",
+          "a main class is not empty",
+          "'core' was compiled and is not a module in the graph",
+          "'core' depends on 'api', which has no 3.10.0 classes",
+          "could not prepare the test work directory /work/repo",
+          "could not read test roots under /work/repo",
+          "could not write the test provider runner at /work/repo",
+          "'core' 3.10.0 js failed to link\nlink",
+          "'core' 3.10.0 js has no Node to run on: no Node on config; Histos needs 22.14.0 or newer",
+          "stamp index has no App",
+          "quick record /work/repo is not a stored success",
+          "a test pattern is not empty",
+          "'core' 3.10.0 native has no readable API digest",
+        ),
+        samples.map(error => noted(error.diagnose)) == List(
+          ("test.failed", "histos help test"),
+          ("project.duplicate", "histos graph"),
+          ("compile.failed", "histos help compile"),
+          ("resolve.not-found", "histos resolve --update"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+          ("test.failed", "histos help test"),
+        ),
+      )
 
-  /** Check id, then the text of the first fix. An empty fix is not a sentence these lists expect. */
+  /** Check id, then the text of the first fix. */
   private def noted(diagnostic: Diagnostic): (String, String) =
     (diagnostic.check.value, fixText(diagnostic.fixes))
 
+  /** A `::` always has a head, so the first fix and the first step are fields, not lookups. */
   private def fixText(fixes: ::[Fix]): String =
-    fixes.headOption match
-      case Some(Fix.Command(line))        => line.value
-      case Some(Fix.Settings(url, click)) => s"${url.value}  $click"
-      case Some(Fix.Config(file, _))      => file.value
-      case Some(Fix.Steps(items))         =>
-        items.headOption match
-          case Some(step) => step
-          case None       => ""
-      case None => ""
+    fixes.head match
+      case Fix.Command(line)        => line.value
+      case Fix.Settings(url, click) => s"${url.value}  $click"
+      case Fix.Config(file, _)      => file.value
+      case Fix.Steps(items)         => items.head
 end MessageLawSpec

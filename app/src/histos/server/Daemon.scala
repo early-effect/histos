@@ -723,7 +723,7 @@ object Daemon:
                     run(compile, out.dropExitInto(finished)) *>
                       finished.get
                         .zip(watchRoots(call))
-                        .map((result, watched) => Watching.restarts(compile, result, changed, watched))
+                        .map((result, watched) => Watching.restarts(result, changed, watched))
 
               def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &

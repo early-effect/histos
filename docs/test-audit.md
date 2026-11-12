@@ -62,7 +62,8 @@ A law that touches the machine because the product does needs a seam in the prod
 - [ ] S3 `Cli.launch` provides `ReleaseFeed.live` inline. Once a law writes a pin, every launch fetches `repo1.maven.org` and writes `$HOME/.histos/upgrade`. `launch` requires `ReleaseFeed` and `Main` provides the live layer. Owner: app.
 - [ ] S4 `SonaStock`'s snapshot repository is fixed to `SnapshotRepository.central`, so only validation order keeps `SonaPublishLawSpec` off central.sonatype.com. The repository becomes a seam, and the law points it at a loopback that fails any request. Owner: engine M-Z.
 - [ ] S5 The supply surface reads `sys.env` (`GITHUB_REPOSITORY`, `HISTOS_DRY_RUN`) and runs `git` synchronously outside ZIO (`Surface.scala`). The laws test whichever branch the shell selects. Both go through `zio.System` and a git reader. Owner: engine M-Z.
-- [ ] S6 `SnapshotId.current` runs the real `git` on JVM and Native with the ambient environment and global config. The HEAD read becomes a dependency the law stubs. Owner: wire.
+- [x] S6 `SnapshotId.current` runs the real `git` on JVM and Native with the ambient environment and global config. The HEAD read becomes a dependency the law stubs. Owner: wire.
+  - `SnapshotId.current(repo, head)` takes the HEAD reader, `ApiClock` and `ToolchainStamp` pass `SnapshotId.head`, and `ApiClockLawSpec` stubs it with a recording `Ref` (HEAD is read only for an `app` ship). No wire law starts a process; `./histos test wire` is green on JVM and Native.
 - [ ] S7 `FormatterLawSpec` uses `Resolve.retained`, which downloads a missing scalafmt jar from Central, and reads this checkout's `.scalafmt.conf`. The scalafmt jars are read offline like S1, and the law writes its own config. Owner: engine A-L.
 - [ ] S8 Laws read `TestClock.instant` and discard it (`_ <- Clock.instant`), which only starts the "not advancing the test clock" warning. Delete each line: `PackLawSpec`, `PreviewLawSpec`, `PublishLawSpec` (and its helpers), `ScaffoldLawSpec`, `SignerLawSpec`. `TaskLawSpec:62` sleeps an hour on an unadjusted clock where `ZIO.never` is the intent. Owner: engine M-Z.
 
@@ -117,20 +118,27 @@ A law that touches the machine because the product does needs a seam in the prod
 
 ## wire
 
-- [ ] W1 `JsonLaw.enumLaw` (113 call sites in `CodecLawSpec`, `ReportLawSpec`) REWRITE. Asserts zio-json's error text. Keep `covered` and the round trip, delete the rejection asserts (also `rejectedText`, `OpaqueLawSpec`, `ReportLawSpec:199, :299, :309`, `FrameLawSpec:117, :128`), and add golden documents for the sums the native client decodes.
-- [ ] W2 `CodecLawSpec:119-129`, `ReportLawSpec:321` DELETE. Thirteen field-less derived enums. A token that is a wire contract becomes a golden string, as `OpaqueLawSpec:109` does.
-- [ ] W3 `CodecLawSpec:130, :133, :134` MERGE. `reached` at L135 already carries all three.
-- [ ] W4 `OpaqueLawSpec:233-306` WEAK. L265 is `x == x`. L269 and L281 compare `Left` with `Left`. `Dep`'s `::` and `:::` forms are never round-tripped, and `binaryDep` and `fullDep` are unused. Assert each parse is `Right`, round-trip both forms.
-- [ ] W5 `SuitePattern` has no literal, so `CodecLawSpec:155`, `MessageLawSpec:1405-1469`, and `OpaqueLawSpec:236` fall back to `== Left(Empty)` and skip their law when `from` regresses. Add the literal and delete the fallbacks and the `toOption.toList` in `CallSamples`.
-- [ ] W6 `CliLawSpec:55, :72, :87, :161` REWRITE. The expected values come from copies of `CliExit`'s helpers. Assert `.code` per fault family against literals.
-- [ ] W7 `CliLawSpec:307-339` REWRITE. Re-implements `Lines` tally rendering. Assert the properties plus two literal lines.
-- [ ] W8 `CliLawSpec:403-442` WEAK. `show` only gets the first event, so the stderr branch never runs. Run every event and assert both refs equal `Show.transcript`.
-- [ ] W9 `CliLawSpec:32-53` MERGE. Constants rerun inside `check`, and the split repeats L22-30. One property.
-- [ ] W10 `ApiClockLawSpec:128` HOST. Real `git` (S6).
-- [ ] W11 `ReportLawSpec:213-251` WEAK. "Only four failures name a cell" has no coverage gate. Drive it from `CodecSamples.graphErrors`.
-- [ ] W12 `FrameLawSpec:23` REWRITE. `alphaNumericChar` makes chars equal bytes. Generate with `Gen.string`.
-- [ ] W13 `OpaqueLawSpec:54-70` REWRITE. "Rejects anything else" rests on three fixed strings rerun 100 times. Generate wrong lengths and non-hex, move fixed rows out of `check`.
-- [ ] W14 `JsonLaw.textLaw` is never called. Delete. `wire/test/.bsp/scala-cli.json` is tracked. Delete.
+- [x] W1 `JsonLaw.enumLaw` (113 call sites in `CodecLawSpec`, `ReportLawSpec`) REWRITE. Asserts zio-json's error text. Keep `covered` and the round trip, delete the rejection asserts (also `rejectedText`, `OpaqueLawSpec`, `ReportLawSpec:199, :299, :309`, `FrameLawSpec:117, :128`), and add golden documents for the sums the native client decodes.
+  - A refusal that a Histos codec decides (a parser behind `parsed`, a token table) stays as `isLeft`, with no zio-json text. `GoldenLawSpec` pins one document per case of `Message`, `BuildEvent`, both feeds, `TestStatus`, `KeyMiss`, `CallResult`, `BuildFault`, `Rejection`, and `WorkflowFault`, the severity, position, and io tokens they carry, and the calls `Batch` sends.
+- [x] W2 `CodecLawSpec:119-129`, `ReportLawSpec:321` DELETE. Thirteen field-less derived enums. A token that is a wire contract becomes a golden string, as `OpaqueLawSpec:109` does.
+- [x] W3 `CodecLawSpec:130, :133, :134` MERGE. `reached` at L135 already carries all three.
+- [x] W4 `OpaqueLawSpec:233-306` WEAK. L265 is `x == x`. L269 and L281 compare `Left` with `Left`. `Dep`'s `::` and `:::` forms are never round-tripped, and `binaryDep` and `fullDep` are unused. Assert each parse is `Right`, round-trip both forms.
+- [x] W5 `SuitePattern` has no literal, so `CodecLawSpec:155`, `MessageLawSpec:1405-1469`, and `OpaqueLawSpec:236` fall back to `== Left(Empty)` and skip their law when `from` regresses. Add the literal and delete the fallbacks and the `toOption.toList` in `CallSamples`.
+- [x] W6 `CliLawSpec:55, :72, :87, :161` REWRITE. The expected values come from copies of `CliExit`'s helpers. Assert `.code` per fault family against literals.
+- [x] W7 `CliLawSpec:307-339` REWRITE. Re-implements `Lines` tally rendering. Assert the properties plus two literal lines.
+- [x] W8 `CliLawSpec:403-442` WEAK. `show` only gets the first event, so the stderr branch never runs. Run every event and assert both refs equal `Show.transcript`.
+- [x] W9 `CliLawSpec:32-53` MERGE. Constants rerun inside `check`, and the split repeats L22-30. One property.
+- [x] W10 `ApiClockLawSpec:128` HOST. Real `git` (S6).
+- [x] W11 `ReportLawSpec:213-251` WEAK. "Only four failures name a cell" has no coverage gate. Drive it from `CodecSamples.graphErrors`.
+- [x] W12 `FrameLawSpec:23` REWRITE. `alphaNumericChar` makes chars equal bytes. Generate with `Gen.string`.
+- [x] W13 `OpaqueLawSpec:54-70` REWRITE. "Rejects anything else" rests on three fixed strings rerun 100 times. Generate wrong lengths and non-hex, move fixed rows out of `check`.
+- [x] W14 `JsonLaw.textLaw` is never called. Delete. `wire/test/.bsp/scala-cli.json` is tracked. Delete.
+- [x] W15 `CliExit` has twelve cases and the call-dependent helpers `resolveExit`, `selectExit`, `compileExit`, `previewExit`, `ioExit`, and `failedCall`, but only `.code` leaves the process (`histos.cli.Main`, the native client) and `Watching.restarts` reads only `== Success`. Collapse it to `Success`, `Failed`, and `Usage`, and drop the call from `CliExit.from`.
+  - The call that only fed `CliExit.from` is gone from `Watching.restarts`, `Cli.held`, `Cli.completed`, `Cli.recorded`, `Cli.pinned`, `Cli.launcherFailed`, the preview plan helpers, and the client's `frames` and `finish`.
+- [x] W16 `WireJson`'s `given JsonCodec[NonEmptyChunk[A]]` is never used. A derived codec summons a `JsonDecoder` and a `JsonEncoder` per field, and zio-json's own `nonEmptyChunk` instances win. Delete it.
+  - A scala-cli miniature with the given imported decoded `{"Cells":{"errors":[]}}` through a derived codec as zio-json's `Chunk was empty`. Only a direct summon in `WireSchemaLawSpec` reached it. The `BuildFault` golden now pins a `Cells` document on JVM and Native.
+- [x] W17 `RunId` and `ClangTarget` have no literal, so wire laws build them with `trusted` or a `from` fallback. Add the literal.
+- [x] W18 `MessageLawSpec.fixText` has `None` branches for a `::`. Delete them.
 
 ## central
 

@@ -46,7 +46,7 @@ object ApiClock:
       }
 
   def admit(repo: Path, call: Call): UIO[Admit] =
-    SnapshotId.current(repo).flatMap(now => judge(repo, call, Toolchain.snapshot, now))
+    SnapshotId.current(repo, SnapshotId.head).flatMap(now => judge(repo, call, Toolchain.snapshot, now))
 
   /** Assembly and version stay on the server already up. Reboot is the command that replaces it. */
   def skipsReboot(call: Call): Boolean =
@@ -56,7 +56,7 @@ object ApiClock:
       case _                               => false
 
   def drifted(repo: Path): UIO[Boolean] =
-    SnapshotId.current(repo).flatMap(now => drift(repo, Toolchain.snapshot, now).map(_.isDefined))
+    SnapshotId.current(repo, SnapshotId.head).flatMap(now => drift(repo, Toolchain.snapshot, now).map(_.isDefined))
 
   def rebootLine(repo: Path): UIO[String] =
     marks(repo).map: (onto, was, socket) =>
@@ -70,7 +70,7 @@ object ApiClock:
         ServerError.Restart(socket, wanted, stored.flatMap(_.assembly))
 
   def versionLines(repo: Path, versionLine: String): UIO[String] =
-    SnapshotId.current(repo).flatMap(now => render(repo, versionLine, Toolchain.snapshot, now))
+    SnapshotId.current(repo, SnapshotId.head).flatMap(now => render(repo, versionLine, Toolchain.snapshot, now))
 
   def render(repo: Path, versionLine: String, baked: String, current: Option[String]): UIO[String] =
     for
