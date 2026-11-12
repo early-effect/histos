@@ -1102,8 +1102,9 @@ object Cli:
     def poll(left: Int): IO[ServerError, Path] =
       histos.server.Record.read(repo).flatMap {
         case Some(written)     => ZIO.succeed(written.socket)
-        case None if left <= 0 => ZIO.fail(ServerError.Unreachable(histos.server.Record.socket(repo)))
-        case None              => ZIO.sleep(50.millis) *> poll(left - 1)
+        case None if left <= 0 =>
+          histos.server.SocketPath.at(repo).flatMap(socket => ZIO.fail(ServerError.Unreachable(socket)))
+        case None => ZIO.sleep(50.millis) *> poll(left - 1)
       }
     poll(attempts)
 

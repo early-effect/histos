@@ -238,7 +238,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publ
 
 ## The server
 
-`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`, and the socket is `.histos/server.sock`. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement.
+`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement.
 
 `histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed.
 
@@ -280,7 +280,6 @@ These are true today and tracked:
 - Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
 - `histos run <name>` prints the program's output when the program exits, not as it runs.
 - A test compile error prints without its file and line.
-- On macOS, a checkout whose path is long enough that `.histos/server.sock` passes 104 bytes cannot start a server.
 - No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)
 
 ## Building Histos

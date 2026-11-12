@@ -179,12 +179,14 @@ object Main extends ZIOAppDefault:
         case Some(found) =>
           AssemblyMark.read(repo).map(mark => found == record.version && mark == record.assembly)
 
-  /** One starter holds the gate. Everyone waits until `server.sock` accepts. */
+  /** One starter holds the gate. Everyone waits until the checkout's socket accepts. */
   private def boot(repo: Path): IO[ServerError, Path] =
-    val home   = repo.resolve(".histos")
-    val gate   = home.resolve("server.starting")
-    val log    = home.resolve("server.log")
-    val socket = home.resolve("server.sock")
+    histos.server.SocketPath.at(repo).flatMap(socket => bootAt(repo, socket))
+
+  private def bootAt(repo: Path, socket: Path): IO[ServerError, Path] =
+    val home = repo.resolve(".histos")
+    val gate = home.resolve("server.starting")
+    val log  = home.resolve("server.log")
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking {
