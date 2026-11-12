@@ -199,6 +199,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       ZIO.die(new IllegalStateException("reload")),
       ZIO.die(new IllegalStateException("reboot")),
       ZIO.die(new IllegalStateException("bsp")),
+      ZIO.unit,
     )
 
   private def module(name: ProjectName): Module =

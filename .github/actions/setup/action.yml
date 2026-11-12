@@ -1,5 +1,5 @@
 name: Setup Histos
-description: Install the Histos shim and restore toolchains and Coursier
+description: Install the Histos shim, restore toolchains and Coursier, and fetch what dependencies.lock records
 inputs:
   version:
     description: Histos version. Empty installs histos.version from build.properties.
@@ -50,3 +50,7 @@ runs:
           "$shim"
         fi
         echo "$HOME/.histos/bin" >> "$GITHUB_PATH"
+        # A cold Coursier cache holds only what a job fetches first. Fetching the lock makes every later step hermetic.
+        if [ -f dependencies.lock ]; then
+          "$HOME/.histos/bin/histos" resolve
+        fi

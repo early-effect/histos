@@ -480,7 +480,8 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
                   !open._2.contains("x error"),
                 )
       program.provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed])
-    @@ TestAspect.withLiveSystem,
+    // The doctor bounds each real probe with a timeout, which needs the clock that real work runs on.
+    @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock,
     test("node.shadowed walks PATH only when this run launches Node from PATH"):
       val program =
         ZIO.scoped:
@@ -652,7 +653,8 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
                 nativeDoctor._2.contains("link links with clang"),
                 nativeDoctor._2.contains("clang.source"),
               )
-      program.provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed]),
+      program.provideSomeLayer[TestEnvironment](stubbed[ReleaseFeed])
+    @@ TestAspect.withLiveClock,
   )
 
   private def central(env: Map[String, String], reply: IO[SupplyFault, Reply]): UIO[(CentralProbe.Auth, List[String])] =

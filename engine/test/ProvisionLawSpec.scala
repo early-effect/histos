@@ -126,7 +126,7 @@ object ProvisionLawSpec extends ZIOSpecDefault:
                 gone == Left(ProvisionError.Import("no project/ZipxVersions.scala")),
               )
           program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve]),
-  )
+  ) @@ TestAspect.withLiveClock // a full scaffold runs doctor, which bounds each real probe with a timeout
 
   private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
     ZIO

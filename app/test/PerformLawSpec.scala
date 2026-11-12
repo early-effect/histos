@@ -108,6 +108,7 @@ object PerformLawSpec extends ZIOSpecDefault:
             die("reload"),
             die("reboot"),
             die("bsp"),
+            ZIO.unit,
           )
           watched <- drive(Right(None), Call.Watch(inner, WatchPolicy.After), watch)
           found   <- seen.get
@@ -164,7 +165,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ZIO.die(new IllegalStateException(name))
 
   private def quietEdges: Perform.Edges[Any] =
-    Perform.Edges((_, _, _) => die("watch"), die("reload"), die("reboot"), die("bsp"))
+    Perform.Edges((_, _, _) => die("watch"), die("reload"), die("reboot"), die("bsp"), ZIO.unit)
 
   private def edge(hit: Ref[List[String]], name: String): Perform.Edges[Any] =
     Perform.Edges(
@@ -172,6 +173,7 @@ object PerformLawSpec extends ZIOSpecDefault:
       mark(hit, "reload", name),
       mark(hit, "reboot", name),
       mark(hit, "bsp", name),
+      ZIO.unit,
     )
 
   private def mark(hit: Ref[List[String]], label: String, name: String): ZIO[Any, ServerError, Unit] =
