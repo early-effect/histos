@@ -1,14 +1,14 @@
 package histos.client
 
-import histos.LawDir
+import histos.{LawDir, LawMachine, LawPlugins}
 import histos.build.BuildEvent
 import histos.cache.ContentStore
 import histos.load.{LoadedBuild, Loader}
-import histos.publish.{LauncherError, LauncherPin}
+import histos.publish.{IvyRoot, LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Report}
 import histos.resolve.Resolve
-import histos.server.{Call, Calls, Feed, Fingerprint, Record, ServerError}
-import histos.{HistosBuild, ProjectGraph}
+import histos.server.{Call, Feed, Fingerprint, Record, ServerError}
+import histos.{HistosBuild, ProjectGraph, Resolution}
 import slayer.stubbed
 
 import java.nio.file.{Files, Path}
@@ -41,7 +41,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           root   <- ZIO.service[Path]
           repo   <- LawDir.child(root, "absent")
           desk   <- Session.desk
-          result <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version)
+          result <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Version)
         yield assertTrue(
           result == CallResult.Fault(BuildFault.Launcher(LauncherError.Absent(repo.resolve(LauncherPin.file))))
         )
@@ -55,7 +55,7 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           desk   <- Session.desk
           _      <- hold(repo, desk, scope)
           before <- desk.held.get
-          result <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Compile(Nil))
+          result <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Compile(Nil))
           after  <- desk.held.get
           _      <- scope.close(Exit.unit)
         yield assertTrue(
@@ -75,30 +75,33 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           _      <- ZIO
             .attemptBlocking(Files.writeString(repo.resolve(LauncherPin.file), "histos.version=9.8.7\n"))
             .orDie
-          fingerprint <- ready(Fingerprint.read(repo))
-          _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock")))
+          fingerprint <- ready(Fingerprint.read(repo, Resolution.Solve))
+          _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock"), None))
           desk        <- Session.desk
           _           <- hold(repo, desk, scope)
-          result      <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version).either
+          result      <- Session.perform(repo, jar, LawMachine.idle, desk, Call.Version).either
           held        <- desk.held.get
           gone        <- closed.get
+          said        <- TestConsole.outputErr
         yield assertTrue(
           result == Left(
-            Session.SessionError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
+            Session.TransportError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
           ),
           held.isEmpty,
           gone,
+          said == Vector(s"rebooting server onto none (was none) at ${repo.resolve("server.sock")}\n"),
         ),
     ).provideSomeLayerShared[TestEnvironment & Scope](
-      LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore]
+      LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+        ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
     ),
   )
 
   private def hold(repo: Path, desk: Session.Desk, scope: Scope.Closeable): UIO[Unit] =
     val empty = ProjectGraph.trusted(Nil)
-    ready(Fingerprint.read(repo)).flatMap { fingerprint =>
+    ready(Fingerprint.read(repo, Resolution.Solve)).flatMap { fingerprint =>
       desk.held.set(
-        Some(Session.Held(fingerprint, LoadedBuild(empty, Calls.quiet, HistosBuild.fixed(empty)), scope))
+        Some(Session.Held(fingerprint, LoadedBuild(empty, LawPlugins.none, HistosBuild.fixed(empty)), scope))
       )
     }
 

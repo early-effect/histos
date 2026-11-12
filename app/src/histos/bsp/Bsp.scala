@@ -224,14 +224,17 @@ object Bsp:
       }
     }
 
+  /** `gate` runs a compile under a server's permit, and `shared` is the graph that server reloads. A stdio session
+    * passes the compile through and keeps a graph of its own.
+    */
   def open(
       repo: Path,
       graph: ProjectGraph,
       jdk: JdkRuntime,
       runtimes: Runtimes,
-      buildClasspath: List[Path] = Nil,
-      notify: String => UIO[Unit] = _ => ZIO.unit,
-      build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
+      buildClasspath: List[Path],
+      notify: String => UIO[Unit],
+      build: IO[LoadError, BuildNotes],
       gate: ZIO[
         Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
         Nothing,
@@ -240,8 +243,8 @@ object Bsp:
         Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
         Nothing,
         Int,
-      ] = effect => effect,
-      shared: Option[Ref[ProjectGraph]] = None,
+      ],
+      shared: Option[Ref[ProjectGraph]],
   ): IO[ResolveError, Session] =
     for
       buildScala <- BuildCompiler.version

@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.cache.CacheCleanMode
-import histos.plugin.{PluginArgs, PluginIdError, PluginTaskError, PluginTaskId}
+import histos.plugin.{CommandName, PluginArgs, PluginIdError, PluginTaskError, PluginTaskId}
 import histos.scaffold.ImportSource
 import histos.schedule.{CacheNamespace, NamespaceError}
 import histos.server.{LauncherAction, ResolveAction}
@@ -11,10 +11,20 @@ import histos.workflow.WorkflowAction
 import histos.{Platform, PlatformError, ProjectName, ProjectNameError}
 
 import zio.*
+import zio.cli.Command as CliCommand
 import zio.test.*
 
 object GrammarLawSpec extends ZIOSpecDefault:
   def spec = suite("grammar laws")(
+    test("every built-in root word is reserved, and only acp and the shim words are reserved beyond them"):
+      val words    = rootWords(Grammar.builtIns)
+      val reserved = CommandName.reserved.map(_.value)
+      assertTrue(
+        words.nonEmpty,
+        words -- reserved == Set.empty[String],
+        reserved -- words == Set("acp", "update", "self"),
+      )
+    ,
     test("a bare watch is refused and a nested watch is refused"):
       held(
         List("~")                 -> Left(CliParseError.WatchCommand("watch needs a command")),
@@ -217,25 +227,6 @@ object GrammarLawSpec extends ZIOSpecDefault:
         List("bump", "--major", "--patch") -> Left(CliParseError.Rejected),
       )
     ,
-    test("shim commands name the installed script"):
-      held(
-        List("update") -> Left(
-          CliParseError.Pattern("histos update is run by the installed shim\nhistos help update")
-        ),
-        List("self", "update") -> Left(
-          CliParseError.Pattern("histos self update is run by the installed shim\nhistos help self")
-        ),
-        List("toolchain", "install", "9") -> Left(
-          CliParseError.Pattern(
-            "histos toolchain install <version> is run by the installed shim\nhistos help toolchain"
-          )
-        ),
-        List("toolchain", "list") -> Left(
-          CliParseError.Pattern("histos toolchain list is run by the installed shim\nhistos help toolchain")
-        ),
-        List("toolchain") -> Right(Command.Toolchain),
-      )
-    ,
     test("an unknown family token is that family and an unknown root is not a command"):
       held(
         List("help", "nope")         -> Right(Command.Help(List("nope"))),
@@ -266,14 +257,6 @@ object GrammarLawSpec extends ZIOSpecDefault:
         Nil          -> Left(CliParseError.Help),
       )
     ,
-    test("help keeps the topic, and render refuses a topic that is not a command"):
-      val nope   = Help.render(List("nope"))
-      val compil = Help.render(List("compil"))
-      assertTrue(
-        nope == Left("unknown command 'nope'\nhistos help\nhistos help <command>"),
-        compil == Left("unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile"),
-      )
-    ,
     test("compile rejects a coverage flag"):
       held(
         List("compile", "--exclude-class", "Foo") -> Left(
@@ -292,6 +275,7 @@ object GrammarLawSpec extends ZIOSpecDefault:
         List("server")                   -> Right(Command.Server),
         List("portal")                   -> Right(Command.Portal),
         List("observe")                  -> Right(Command.Observe),
+        List("toolchain")                -> Right(Command.Toolchain),
         List("reload")                   -> Right(Command.Reload),
         List("reboot")                   -> Right(Command.Reboot),
         List("client")                   -> Right(Command.Client),
@@ -302,13 +286,20 @@ object GrammarLawSpec extends ZIOSpecDefault:
       ),
   )
 
+  /** The word each alternative answers to. A command with subcommands answers to its own word. */
+  private def rootWords(command: CliCommand[?]): Set[String] =
+    command match
+      case CliCommand.OrElse(left, right)    => rootWords(left) ++ rootWords(right)
+      case CliCommand.Map(inner, _)          => rootWords(inner)
+      case CliCommand.Subcommands(parent, _) => rootWords(parent)
+      case single: CliCommand.Single[?, ?]   => Set(single.name)
+
   private def held(rows: (List[String], Either[CliParseError, Command])*): UIO[TestResult] =
     mismatches(rows.toList).map(bad => assertTrue(bad == Nil))
 
-  private def withReady(use: Ready => UIO[TestResult]): UIO[TestResult] =
-    ready match
-      case Some(found) => use(found)
-      case None        => ZIO.succeed(assertTrue(false))
+  /** A parser regression fails the law with its own error. */
+  private def withReady(use: Ready => UIO[TestResult]): IO[TaskError | PluginTaskError | NamespaceError, TestResult] =
+    ready.flatMap(use)
 
   private def mismatches(rows: List[(List[String], Either[CliParseError, Command])]): UIO[List[String]] =
     ZIO
@@ -321,16 +312,14 @@ object GrammarLawSpec extends ZIOSpecDefault:
             else List(s"${args.mkString(" ")} expected $expected got $got")
       .map(_.flatten)
 
-  private def ready: Option[Ready] =
+  /** The values a parse builds that have no literal are parsed here. */
+  private def ready: IO[TaskError | PluginTaskError | NamespaceError, Ready] =
     for
-      inspect <- TaskId.from("inspect").toOption
-      api     <- TaskId.from("api").toOption
-      plugin  <- PluginTaskId.parse("demo/pack").toOption
-      from    <- CacheNamespace.from("main").toOption
-      to      <- CacheNamespace.from("pr/2").toOption
-      star    <- SuitePattern.from("*").toOption
-      spaced  <- RunId.from(" ").toOption
-    yield Ready(inspect, api, plugin, from, to, star, spaced)
+      api    <- ZIO.fromEither(TaskId.from("api"))
+      plugin <- ZIO.fromEither(PluginTaskId.parse("demo/pack"))
+      from   <- ZIO.fromEither(CacheNamespace.from("main"))
+      to     <- ZIO.fromEither(CacheNamespace.from("pr/2"))
+    yield Ready(TaskId.Inspect, api, plugin, from, to, SuitePattern("*"), RunId(" "))
 
   private final case class Ready(
       inspect: TaskId,

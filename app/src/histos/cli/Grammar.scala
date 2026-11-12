@@ -271,10 +271,12 @@ object Grammar:
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
   )
-  private val root =
-    CliCommand("histos").subcommands(
-      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
-    )
+  private val commands =
+    version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
+  private val root = CliCommand("histos").subcommands(commands)
+
+  /** The root commands. Each one's word is in `CommandName.reserved`, so no plugin command can take it. */
+  private[cli] val builtIns: CliCommand[?] = commands
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
     */

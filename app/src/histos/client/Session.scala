@@ -15,26 +15,25 @@ import histos.Platform
 
 import java.nio.file.Path
 
-import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO}
+import zio.{Chunk, Console, Exit, Fiber, Ref, Scope, UIO, ZIO}
 
 /** One MCP process. It sends [[histos.server.Call]] while the server matches, and keeps a single graph otherwise.
   */
 object Session:
-  enum SessionError:
-    case DifferentVersion
+  /** A call that reached no result. */
+  enum TransportError:
     case Remote(error: ServerError)
     case DidNotFinish
 
     def message: String = this match
-      case DifferentVersion => ServerError.DifferentVersion.message
-      case Remote(error)    => error.message
-      case DidNotFinish     => "the call did not finish"
-  end SessionError
+      case Remote(error) => error.message
+      case DidNotFinish  => "the call did not finish"
+  end TransportError
 
-  /** A tool failed. A fault is a request that never became a report. Transport never started the call. */
+  /** A tool failed. A fault is a request that never became a report. Transport is a call that reached no result. */
   enum CallProblem:
     case Fault(fault: BuildFault)
-    case Transport(error: SessionError)
+    case Transport(error: TransportError)
 
   final case class Held(
       fingerprint: Fingerprint,
@@ -53,7 +52,7 @@ object Session:
       runs <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
     yield Desk(held, runs)
 
-  private type Env = Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope
+  private type Env = Loader & histos.resolve.Resolve & histos.cache.ContentStore & histos.publish.IvyRoot & Scope
 
   def perform(
       repo: Path,
@@ -61,7 +60,7 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     Cli
       .versionText(repo)
       .foldZIO(
@@ -78,7 +77,7 @@ object Session:
             case ApiClock.Admit.Stop(fault) => ZIO.succeed(CallResult.Fault(fault))
             case admitted                   =>
               val warned = admitted match
-                case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
+                case ApiClock.Admit.Warn(line) => Console.printLineError(line).ignore
                 case _                         => ZIO.unit
               warned *> ApiClock.drifted(repo).flatMap { stale =>
                 val hold = stale && ApiClock.skipsReboot(call)
@@ -89,12 +88,12 @@ object Session:
                   case Decision.DifferentVersion(socket) =>
                     drop(desk) *>
                       ApiClock.rebootLine(repo).flatMap { line =>
-                        ZIO.succeed(java.lang.System.err.println(line)) *>
+                        Console.printLineError(line).ignore *>
                           Attach.replace(repo, text, socket).flatMap {
                             case Some(fresh) =>
                               ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
                             case None =>
-                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(SessionError.Remote(error)))
+                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(TransportError.Remote(error)))
                           }
                       }
                   case Decision.Open(socket) =>
@@ -131,7 +130,7 @@ object Session:
       call: Call,
       shown: String,
       socket: Path,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     Build
       .attached(socket)
       .perform(call)
@@ -144,49 +143,51 @@ object Session:
         {
           case ServerError.Unreachable(_) =>
             locally(repo, apiJar, machine, desk, call, shown)
-          case other => ZIO.fail(SessionError.Remote(other))
+          case other => ZIO.fail(TransportError.Remote(other))
         },
         beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
       )
 
   /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */
-  def deliver[R](call: ZIO[R, SessionError, CallResult]): ZIO[R, CallProblem, Report] =
+  def deliver[R](call: ZIO[R, TransportError, CallResult]): ZIO[R, CallProblem, Report] =
     call
       .mapError(CallProblem.Transport(_))
       .flatMap:
         case CallResult.Reported(report) => ZIO.succeed(report)
         case CallResult.Fault(fault)     => ZIO.fail(CallProblem.Fault(fault))
 
-  /** `inspect`, `versions`, `doc`, and a plugin task reject a platform. A main may name one.
+  /** `inspect`, `versions`, `doc`, and a plugin task reject a platform. A main may name one. An empty id names nothing,
+    * as `run ""` on the command line.
     */
   def runCall(
       id: String,
       platform: Option[String],
       args: PluginArgs,
   ): Either[BuildFault, Call] =
-    val task =
-      id.contains("/") || TaskId
-        .from(id)
-        .toOption
-        .exists(_.builtIn)
-    if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
-    else
-      platform match
-        case Some(_) if task =>
-          Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
-        case Some(raw) =>
-          Platform.from(raw) match
-            case Left(error)  => Left(BuildFault.Platform(error))
-            case Right(found) => Right(Call.Run(id, Some(found)))
-        case None if task => Right(Call.Task(id, args))
-        case None         => Right(Call.Run(id, None))
+    TaskId
+      .from(id)
+      .left
+      .map(_ => BuildFault.Rejected(Rejection.MissingRunName))
+      .flatMap: named =>
+        val task = id.contains("/") || named.builtIn
+        if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
+        else
+          platform match
+            case Some(_) if task =>
+              Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
+            case Some(raw) =>
+              Platform.from(raw) match
+                case Left(error)  => Left(BuildFault.Platform(error))
+                case Right(found) => Right(Call.Run(id, Some(found)))
+            case None if task => Right(Call.Task(id, args))
+            case None         => Right(Call.Run(id, None))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
-  def spoken(repo: Path, feeds: List[Feed]): Either[SessionError, CallResult] =
+  def spoken(repo: Path, feeds: List[Feed]): Either[TransportError, CallResult] =
     val events          = Chunk.fromIterable(feeds.collect { case Feed.Event(event) => event })
     val (out, errLines) = Show.transcript(repo, events)
     feeds.reverse.collectFirst { case Feed.Done(result) => result } match
-      case None                              => Left(SessionError.DidNotFinish)
+      case None                              => Left(TransportError.DidNotFinish)
       case Some(fault @ CallResult.Fault(_)) => Right(fault)
       case Some(CallResult.Reported(report)) =>
         Right(
@@ -205,7 +206,7 @@ object Session:
       desk: Desk,
       call: Call,
       shown: String,
-  ): ZIO[Env, SessionError, CallResult] =
+  ): ZIO[Env, TransportError, CallResult] =
     val build =
       Build.here[Env](
         repo,
@@ -221,7 +222,7 @@ object Session:
           case Beat.Finished(_)  => ZIO.unit
         },
       )
-    build.perform(call).runCollect.mapError(SessionError.Remote(_)).flatMap { beats =>
+    build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
       ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList))
     }
 
@@ -319,7 +320,7 @@ object Session:
       Perform.Edges(
         watch = (inner, policy, edge) => watch(repo, apiJar, machine, desk, inner, policy, edge),
         reload = ZIO.fail(ServerError.NoServer),
-        reboot = Cli.bootCall(repo).flatMap { socket =>
+        reboot = Cli.bootCall(repo, histos.server.Daemon.spawn).flatMap { socket =>
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
         },
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
@@ -334,11 +335,7 @@ object Session:
       inner: Call,
       policy: histos.server.WatchPolicy,
       say: Say,
-  ): ZIO[
-    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
-    ServerError,
-    Unit,
-  ] =
+  ): ZIO[Env, ServerError, Unit] =
     Operation.underWatch(inner, policy) match
       case Left(error) =>
         Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))

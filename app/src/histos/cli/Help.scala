@@ -225,7 +225,7 @@ object Help:
         case Some(text) => Right(text)
         case None       => Left(unknown(key, names))
 
-  def unknown(token: String, known: List[String] = names): String =
+  def unknown(token: String, known: List[String]): String =
     val typed = if token.isEmpty then "command" else token
     val near  = if token.isEmpty then Nil else Suggest.near(token, known)
     val guess = near match

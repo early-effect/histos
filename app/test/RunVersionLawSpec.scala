@@ -24,7 +24,7 @@ object RunVersionLawSpec extends ZIOSpecDefault:
         _      <- TestSystem.putEnv("HISTOS_VERSION", resolved)
         served <- Cli.versionText(repo)
         socket = repo.resolve(".histos").resolve("server.sock")
-        _       <- Record.write(repo, served, Fingerprint.trusted("abc"), socket)
+        _       <- Record.write(repo, served, Fingerprint.trusted("abc"), socket, None)
         next    <- Cli.versionText(repo)
         decided <- Attach.decide(repo, next)
       yield assertTrue(

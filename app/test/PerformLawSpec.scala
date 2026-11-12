@@ -3,9 +3,11 @@ package histos.server
 import histos.assembly.AssembleError
 import histos.build.BuildEvent
 import histos.cache.{CacheCleanMode, ContentStore}
+import histos.format.{FormatMode, FormatTargets}
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.PluginArgs
 import histos.program.ProgramError
+import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.{ResolutionService, Resolve, ResolveError}
 import histos.schedule.CacheNamespace
@@ -14,7 +16,7 @@ import histos.task.{RunId, TaskError}
 import histos.testrun.{ModuleTestError, SuitePatternError, TestMode}
 import histos.workflow.WorkflowAction
 import histos.zinc.{CompileError, CompileMemo, Compilers, GraphCompileError}
-import histos.{Platform, ProjectName, ScalaVersion}
+import histos.{LawMachine, Platform, ProjectName, ScalaVersion}
 import slayer.{stub, stubbed}
 
 import java.nio.file.Path
@@ -43,7 +45,7 @@ object PerformLawSpec extends ZIOSpecDefault:
       val bad = needed.collect { case (label, call, need) if Perform.needsGraph(call) != need => label }
       assertTrue(bad == Nil)
     ,
-    test("publish keeps the compile fault and a test lock is resolve"):
+    test("publish keeps the compile fault, and every other call reports a cell that ran and faults one that never did"):
       val bad = jdkRows.collect {
         case (call, error, want) if Perform.jdkMissed(call, error) != want =>
           s"${call.productPrefix} ${error.productPrefix}"
@@ -79,8 +81,8 @@ object PerformLawSpec extends ZIOSpecDefault:
       val reject  = Chunk(Message.Done(CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed))))
       val program =
         for
-          loaded <- drive(Left(fault), Call.Version)
-          missed <- ZIO.foreach(readers)(call => drive(Right(None), call))
+          loaded <- drive(Left(fault), Call.Version, quietEdges)
+          missed <- ZIO.foreach(readers)(call => drive(Right(None), call, quietEdges))
         yield
           val bad = readers.zip(missed).collect { case (call, heard) if heard != reject => call.productPrefix }
           assertTrue(loaded == Chunk(Message.Done(CallResult.Fault(fault))), bad == Nil)
@@ -88,7 +90,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ,
     test("version prints the fixture and does not ask for a graph"):
       val program =
-        for heard <- drive(Right(None), Call.Version)
+        for heard <- drive(Right(None), Call.Version, quietEdges)
         yield assertTrue(
           heard == Chunk(
             Message.Event(BuildEvent.Out(s"$version\nserver $version\nno local assembly")),
@@ -135,9 +137,9 @@ object PerformLawSpec extends ZIOSpecDefault:
               ZIO.succeed(Nil)
             else ZIO.die(new IllegalStateException(s"clean $now $retention $mode"))
           }
-          path  <- drive(Right(None), Call.CachePath)
-          list  <- drive(Right(None), Call.CacheList)
-          clean <- drive(Right(None), Call.CacheClean(CacheCleanMode.DryRun))
+          path  <- drive(Right(None), Call.CachePath, quietEdges)
+          list  <- drive(Right(None), Call.CacheList, quietEdges)
+          clean <- drive(Right(None), Call.CacheClean(CacheCleanMode.DryRun), quietEdges)
         yield assertTrue(
           path == Chunk(Message.Event(BuildEvent.Out("cas")), Message.Done(CallResult.reported())),
           list == Chunk(Message.Done(CallResult.reported())),
@@ -150,16 +152,18 @@ object PerformLawSpec extends ZIOSpecDefault:
     ,
     test("cancel of an unknown id does not boot an edge"):
       val program =
-        for heard <- drive(Right(None), Call.Cancel(runId))
+        for heard <- drive(Right(None), Call.Cancel(runId), quietEdges)
         yield assertTrue(
           heard == Chunk(Message.Done(CallResult.Fault(BuildFault.Task(TaskError.UnknownRun(runId)))))
         )
       program.provideSomeLayer[TestEnvironment](services),
   )
 
+  /** Nothing here publishes, so the ivy root is never written. */
   private def services =
     stubbed[Resolve] ++ stubbed[Loader] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ stubbed[CompileMemo] ++
-      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters]
+      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters] ++
+      ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
 
   private def die(name: String): ZIO[Any, ServerError, Unit] =
     ZIO.die(new IllegalStateException(name))
@@ -183,9 +187,9 @@ object PerformLawSpec extends ZIOSpecDefault:
   private def drive(
       loaded: Either[BuildFault, Option[LoadedBuild]],
       call: Call,
-      edges: Perform.Edges[Any] = quietEdges,
+      edges: Perform.Edges[Any],
   ): ZIO[
-    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters,
+    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters & IvyRoot,
     ServerError,
     Chunk[Message],
   ] =
@@ -193,33 +197,12 @@ object PerformLawSpec extends ZIOSpecDefault:
       messages <- Ref.make(Chunk.empty[Message])
       say = new Say(message => messages.update(_ :+ message))
       runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
-      _     <- Perform.run(repo, jar, loaded, Calls.idleMachine, runs, false, version, call, say, edges)
+      _     <- Perform.run(repo, jar, loaded, LawMachine.idle, runs, false, version, call, say, edges)
       heard <- messages.get
     yield heard
 
-  private def readers: List[Call] = List(
-    Call.Compile(Nil),
-    Call.Test(Nil, Nil, TestMode.Run),
-    Call.PublishLocal(Nil),
-    Call.PublishSnapshots(Nil),
-    Call.PublishRelease(Nil, true),
-    Call.PublishDrop("drop"),
-    Call.PublishAssets(Nil),
-    Call.Assembly(None),
-    Call.Client,
-    Call.Run("api", None),
-    Call.Task("demo/pack", PluginArgs.empty),
-    Call.Graph,
-    Call.Toolchain,
-    Call.Workflow(WorkflowAction.Check),
-    Call.Clean(List(api)),
-    Call.PreviewCompile(List(api)),
-    Call.PreviewTest(Nil),
-    Call.PreviewPublishLocal(Nil),
-    Call.PreviewPublishSnapshots(Nil),
-    Call.PreviewClean(List(api)),
-    Call.PreviewRun("api", None),
-  )
+  private def readers: List[Call] =
+    needed.collect { case (_, call, true) => call }
 
   private val publishCalls = List(
     Call.PublishLocal(Nil),
@@ -239,28 +222,32 @@ object PerformLawSpec extends ZIOSpecDefault:
     CallResult.reported(error.message)
 
   private def jdkRows: List[(Call, GraphCompileError, CallResult)] =
-    val errors  = List(lock, cells, missed, ran, target)
     val publish =
       for
         call  <- publishCalls
-        error <- errors
+        error <- List(lock, cells, missed, ran, target)
       yield (call, error, compileFault(error))
-    def testRow(call: Call): List[(Call, GraphCompileError, CallResult)] = List(
-      (call, lock, resolveFault),
-      (call, cells, reported(cells)),
-      (call, ran, reported(ran)),
-      (call, missed, compileFault(missed)),
-      (call, target, compileFault(target)),
+    val others = List(
+      Call.Test(Nil, Nil, TestMode.Run),
+      Call.PreviewTest(Nil),
+      Call.Compile(Nil),
+      Call.Format(FormatTargets.Build, FormatMode.Write),
+      Call.PublishDrop("drop"),
+      Call.Version,
     )
-    def other(call: Call): List[(Call, GraphCompileError, CallResult)] = List(
-      (call, lock, resolveFault),
-      (call, cells, reported(cells)),
-      (call, ran, reported(ran)),
-      (call, missed, compileFault(missed)),
-      (call, target, compileFault(target)),
+    val stopped = List(
+      lock   -> resolveFault,
+      cells  -> reported(cells),
+      ran    -> reported(ran),
+      missed -> compileFault(missed),
+      target -> compileFault(target),
     )
-    publish ++ testRow(Call.Test(Nil, Nil, TestMode.Run)) ++ testRow(Call.PreviewTest(Nil)) ++
-      other(Call.Compile(Nil)) ++ other(Call.PublishDrop("drop")) ++ other(Call.Version)
+    val other =
+      for
+        call            <- others
+        (error, wanted) <- stopped
+      yield (call, error, wanted)
+    publish ++ other
 
   private def needed: List[(String, Call, Boolean)] = List(
     ("compile", Call.Compile(Nil), true),
@@ -277,6 +264,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("toolchain", Call.Toolchain, true),
     ("workflow", Call.Workflow(WorkflowAction.Check), true),
     ("assembly", Call.Assembly(None), true),
+    ("format", Call.Format(FormatTargets.Build, FormatMode.Write), true),
     ("preview compile", Call.PreviewCompile(Nil), true),
     ("preview test", Call.PreviewTest(Nil), true),
     ("preview publish local", Call.PreviewPublishLocal(Nil), true),

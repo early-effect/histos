@@ -249,6 +249,8 @@ object Watching:
       case Call.Compile(names)                  => listed(names)
       case Call.PreviewCompile(names)           => listed(names)
       case Call.PreviewTest(names)              => listed(names)
+      case Call.PublishLocal(tokens)            => publish(graph, tokens)
+      case Call.PublishSnapshots(tokens)        => publish(graph, tokens)
       case Call.PreviewPublishLocal(tokens)     => publish(graph, tokens)
       case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)
       case Call.PreviewClean(names)             => listed(names)

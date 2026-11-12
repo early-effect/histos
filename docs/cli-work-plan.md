@@ -237,7 +237,7 @@ Each item audits the files it touches against the Totality list and adds what it
 - [x] **Restart watch.** `~ --restart run` restarts a running program on a change, on a server and in process. The program does not hold the compile lock. A failed compile leaves the program running and prints the failure. Proof: a law with a real child that counts starts: a source change restarts it once, a broken change leaves it running, and leaving the watch stops it. The same law on the server path. Done:
   - `Daemon.lease` holds the writer permit for a program run only until `Calls.run` signals its compile, through `Perform.Edges.compiled`.
   - `Watching.compileFor` and `Watching.restarts` replace the three copies of the restart decision (row 45), and `Say.dropExitInto` hands the compile's result back.
-  - Proof by mechanism, with no new end-to-end server law: `RestartLawSpec` (existing, real child) already proves start, keep, and stop for whatever decision it is given.
+  - Proof by mechanism, with no new end-to-end server law: `RestartLawSpec` proves start, keep, and stop for whatever decision it is given. Since the test audit (P38) its child is a fiber and the poll runs on the test clock.
   - `WatchRestartLawSpec` proves the decision: only a successful compile of a change under a root restarts, while a failed report, a fault, or no result keeps the program.
   - `LeaseLawSpec` proves the lock: a run frees it at its compile signal while it still runs, so a compile takes it, and a failed run frees it.
   - `CallsRunLawSpec` proves a real run signals once and a refused run never does.

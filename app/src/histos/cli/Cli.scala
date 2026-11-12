@@ -34,7 +34,7 @@ import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.{Plan, PreviewError}
 import histos.program.ProgramError
-import histos.publish.{LauncherError, LauncherPin, UpgradeNotice}
+import histos.publish.{IvyRoot, LauncherError, LauncherPin, UpgradeNotice}
 import histos.scaffold.{ImportSource, Provision, ProvisionError, ScaffoldKind, Skeleton}
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
 import histos.select.SelectError
@@ -44,7 +44,7 @@ import histos.resolve.{Resolve, ResolveError}
 import histos.task.{RunId, TaskError, TaskId}
 import histos.workflow.{Affected, WorkflowAction}
 import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestMode, TestStatus}
-import histos.workspace.IoFailure
+import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.{Platform, PlatformError, ProjectName, ProjectNameError}
 
@@ -174,7 +174,7 @@ enum CliParseError:
     case Help                        => histos.cli.Help.grouped
     case UnknownCommand(token, near) =>
       histos.cli.Help.unknown(token, if near.isEmpty then histos.cli.Help.names else near)
-    case UnknownRoot(token)   => histos.cli.Help.unknown(token)
+    case UnknownRoot(token)   => histos.cli.Help.unknown(token, histos.cli.Help.names)
     case MissingArgument      => "run needs one name"
     case UnexpectedArguments  => "unexpected arguments\nhistos help"
     case BadTaskId            => "a task id is not empty"
@@ -216,7 +216,7 @@ enum CliParseError:
       histos.doctor.Noted.error(
         "cli.unknown-command",
         if token.isEmpty then "unknown command" else s"unknown command '$token'",
-        histos.cli.Help.unknown(token),
+        histos.cli.Help.unknown(token, histos.cli.Help.names),
         histos.doctor.Noted.command("histos help"),
       )
     case Rejected =>
@@ -270,7 +270,7 @@ object Cli:
       args: List[String],
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve & IvyRoot & Stdio, Completed] =
     Connection.ensure(repo).ignore *>
       parse(args).foldZIO(
         {
@@ -292,9 +292,11 @@ object Cli:
       yes: Boolean,
       source: Option[ImportSource],
       branch: Option[String],
-  ): URIO[Loader & ContentStore & Machine & Resolve, Completed] =
-    ZIO.serviceWithZIO[Machine]: machine =>
-      kindOf(bare, yes).flatMap: kind =>
+  ): URIO[Loader & ContentStore & Machine & Resolve & Stdio, Completed] =
+    ZIO.environmentWithZIO[Machine & Stdio]: services =>
+      val machine = services.get[Machine]
+      val stdio   = services.get[Stdio]
+      kindOf(stdio, bare, yes).flatMap: kind =>
         System.envs
           .orElseSucceed(Map.empty)
           .flatMap: env =>
@@ -302,7 +304,7 @@ object Cli:
               .env("HISTOS_VERSION")
               .orElseSucceed(None)
               .flatMap: raw =>
-                val request = Provision.Request(kind, source, branch, askBranch(yes, branch), env)
+                val request = Provision.Request(kind, source, branch, askBranch(stdio, yes, branch), env)
                 val written =
                   ZIO.fromEither(Skeleton.versionOf(raw)).mapError(ProvisionError.Files(_)).flatMap { version =>
                     name match
@@ -318,37 +320,31 @@ object Cli:
                     report => Completed(CliExit.Success, report.out, "", Playback.Held),
                   )
 
-  private def kindOf(bare: Boolean, yes: Boolean): UIO[ScaffoldKind] =
-    if bare || yes || java.lang.System.console() == null then
-      ZIO.succeed(if bare then ScaffoldKind.Bare else ScaffoldKind.Full)
-    else
-      ZIO
-        .attemptBlocking:
-          val console = java.lang.System.console()
-          val read    =
-            if console == null then ""
-            else
-              val line = console.readLine("Write CI, a lock, .gitignore, and ./histos? [Y/n] ")
-              if line == null then "" else line
-          val answer = read.trim.toLowerCase
-          if answer == "n" || answer == "no" || answer == "bare" then ScaffoldKind.Bare else ScaffoldKind.Full
-        .orElseSucceed(ScaffoldKind.Full)
+  /** A prompt reads `Console` only when a person is there to answer. An unreadable answer is the default. */
+  private[cli] def kindOf(stdio: Stdio, bare: Boolean, yes: Boolean): UIO[ScaffoldKind] =
+    stdio match
+      case _ if bare                                   => ZIO.succeed(ScaffoldKind.Bare)
+      case _ if yes                                    => ZIO.succeed(ScaffoldKind.Full)
+      case Stdio(Attached.Terminal, Attached.Terminal) =>
+        Console
+          .readLine("Write CI, a lock, .gitignore, and ./histos? [Y/n] ")
+          .orElseSucceed("")
+          .map: answer =>
+            answer.trim.toLowerCase match
+              case "n" | "no" | "bare" => ScaffoldKind.Bare
+              case _                   => ScaffoldKind.Full
+      case _ => ZIO.succeed(ScaffoldKind.Full)
 
-  private def askBranch(yes: Boolean, branch: Option[String]): UIO[String] =
-    branch match
-      case Some(name)                                        => ZIO.succeed(name)
-      case None if yes || java.lang.System.console() == null => ZIO.succeed(Provision.DefaultBranch)
-      case None                                              =>
-        ZIO
-          .attemptBlocking:
-            val console = java.lang.System.console()
-            val read    =
-              if console == null then ""
-              else
-                val line = console.readLine(s"CI branch [${Provision.DefaultBranch}]: ")
-                if line == null then "" else line
-            if read.trim.isEmpty then Provision.DefaultBranch else read.trim
-          .orElseSucceed(Provision.DefaultBranch)
+  private[cli] def askBranch(stdio: Stdio, yes: Boolean, branch: Option[String]): UIO[String] =
+    (branch, stdio) match
+      case (Some(name), _)                                     => ZIO.succeed(name)
+      case (None, _) if yes                                    => ZIO.succeed(Provision.DefaultBranch)
+      case (None, Stdio(Attached.Terminal, Attached.Terminal)) =>
+        Console
+          .readLine(s"CI branch [${Provision.DefaultBranch}]: ")
+          .orElseSucceed("")
+          .map(answer => if answer.trim.isEmpty then Provision.DefaultBranch else answer.trim)
+      case (None, _) => ZIO.succeed(Provision.DefaultBranch)
 
   private def explain(raw: String): Completed =
     histos.doctor.ToolchainExplain.text(raw) match
@@ -362,14 +358,7 @@ object Cli:
         )
 
   private def stamped: UIO[Long] =
-    ZIO.attempt(java.time.Instant.now().toEpochMilli).orDie
-
-  private def printed(console: java.io.PrintStream)(line: String): UIO[Unit] =
-    ZIO
-      .attempt:
-        console.println(line)
-        console.flush()
-      .ignore
+    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
   private def cover(
       repo: Path,
@@ -412,8 +401,8 @@ object Cli:
                               at,
                             ),
                             histos.coverage.CoverageLines(
-                              out = printed(java.lang.System.out),
-                              err = printed(java.lang.System.err),
+                              out = line => Console.printLine(line).ignore,
+                              err = line => Console.printLineError(line).ignore,
                             ),
                           )
                           .fold(
@@ -451,40 +440,39 @@ object Cli:
       part: histos.version.BumpPart,
       ships: List[histos.version.ShipName],
   ): URIO[Loader & Scope, Completed] =
-    val source = repo.resolve("histos.scala")
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
-      .either
-      .flatMap:
-        case Left(error) =>
-          ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
-        case Right(loaded) =>
-          ZIO
-            .attemptBlocking(java.nio.file.Files.readString(source))
-            .mapError(_ => histos.version.BumpFault.Io(source.toString))
-            .flatMap: text =>
-              histos.version.ShipBumpRun.run(
-                loaded.graph,
-                part,
-                ships,
-                text,
-                module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
-              )
-            .foldZIO(
-              fault => ZIO.succeed(Completed(bumpExit(fault), "", fault.message, Playback.Held)),
-              report =>
-                report.source match
-                  case None =>
-                    ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held))
-                  case Some(next) =>
-                    ZIO
-                      .attemptBlocking(java.nio.file.Files.writeString(source, next))
-                      .mapError(_ => histos.version.BumpFault.Io(source.toString))
-                      .foldZIO(
-                        fault => ZIO.succeed(Completed(CliExit.Failed, "", fault.message, Playback.Held)),
-                        _ => ZIO.succeed(Completed(CliExit.Success, report.text, "", Playback.Held)),
-                      ),
-            )
+      .foldZIO(
+        error => ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held)),
+        loaded =>
+          rewrite(repo.resolve("histos.scala")): text =>
+            histos.version.ShipBumpRun.run(
+              loaded.graph,
+              part,
+              ships,
+              text,
+              module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
+            ),
+      )
+
+  /** Read `source`, edit its text, and write the text the edit returns. A read and a write each name their fault. */
+  private[cli] def rewrite(
+      source: Path
+  )(edit: String => IO[histos.version.BumpFault, histos.version.ShipBumpRun.Report]): UIO[Completed] =
+    val edited: IO[IoFailure | histos.version.BumpFault, String] =
+      for
+        text   <- ZIO.attemptBlocking(Files.readString(source)).orElseFail(IoFailure(source, IoFault.Read))
+        report <- edit(text)
+        _      <- ZIO.foreachDiscard(report.source): next =>
+          ZIO.attemptBlocking(Files.writeString(source, next)).orElseFail(IoFailure(source, IoFault.Write))
+      yield report.text
+    edited.fold(
+      {
+        case fault: IoFailure                => Completed(CliExit.Failed, "", fault.message, Playback.Held)
+        case fault: histos.version.BumpFault => Completed(bumpExit(fault), "", fault.message, Playback.Held)
+      },
+      text => Completed(CliExit.Success, text, "", Playback.Held),
+    )
 
   private def bumpExit(fault: histos.version.BumpFault): CliExit =
     fault match
@@ -562,24 +550,35 @@ object Cli:
                 else CliExit.Failed
               Completed(exit, result.text, "", Playback.Held)
 
-  private def setup(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): Completed =
-    val (code, text) = histos.supply.SetupSurface.run(repo, from, fix, yes)
-    val exit         = if code == 0 then CliExit.Success else if code == 2 then CliExit.Usage else CliExit.Failed
-    Completed(exit, text, "", Playback.Held)
+  /** The surface reads the build and the zipx files and writes the build on the calling thread. */
+  private def setup(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): UIO[Completed] =
+    ZIO
+      .attemptBlocking(histos.supply.SetupSurface.run(repo, from, fix, yes))
+      .refineToOrDie[java.io.IOException]
+      .fold(
+        _ =>
+          Completed(
+            CliExit.Failed,
+            "",
+            s"setup supply-chain could not read or write a file under $repo",
+            Playback.Held,
+          ),
+        (code, text) =>
+          val exit = if code == 0 then CliExit.Success else if code == 2 then CliExit.Usage else CliExit.Failed
+          Completed(exit, text, "", Playback.Held),
+      )
 
-  /** The process entry. A socket hit names none of the compile services. Each miss provides only what that miss uses.
+  /** The process entry. A socket hit builds none of the compile services. Each miss provides only what that miss uses.
+    * [[Main]] provides the live release feed, Coursier's resolve, and the probed standard streams.
     */
-  private[histos] def launch(args: List[String], repo: Path): URIO[Scope, Completed] =
+  private[histos] def launch(args: List[String], repo: Path): URIO[Scope & ReleaseFeed & Resolve & Stdio, Completed] =
     System.property("os.name").orElseSucceed(None).flatMap {
       case Some(name) if Os.from(name) == Os.Windows =>
         ZIO.succeed(Completed(CliExit.Usage, "", HostSupport.refused, Playback.Held))
       case _ =>
         UpgradeNotice
           .advice(repo)
-          .provideLayer(ReleaseFeed.live)
-          .flatMap { lag =>
-            ZIO.foreachDiscard(lag)(found => ZIO.succeed(java.lang.System.err.println(found.text)))
-          } *>
+          .flatMap(lag => ZIO.foreachDiscard(lag)(found => sayError(found.text))) *>
           Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
             {
@@ -596,7 +595,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       command: Command,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     command match
       case Command.Version =>
         versionText(repo).foldZIO(
@@ -701,7 +700,7 @@ object Cli:
       case Command.Deps(action) =>
         deps(repo, apiJar, action)
       case Command.Setup(from, fix, yes) =>
-        ZIO.succeed(setup(repo, from, fix, yes))
+        setup(repo, from, fix, yes)
       case Command.Help(words) =>
         ZIO.succeed(answered(words))
 
@@ -711,7 +710,7 @@ object Cli:
       case Left(text)  => Completed(CliExit.Usage, "", text, Playback.Held)
 
   /** Loopback rehearsal of the Central portal. Does not load the graph. */
-  private def portal(repo: Path): URIO[Machine & Scope, Completed] =
+  private def portal(repo: Path): URIO[Machine & Scope & Stdio, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
       PortalServer.credentials(machine.env) match
         case Left(error) =>
@@ -769,10 +768,10 @@ object Cli:
       inner: Call,
       policy: WatchPolicy,
   ): URIO[Local, Completed] =
-    Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
+    Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(ZIO.environment[Stdio]).flatMap { (result, io) =>
       val printing = new Say({
         case Message.Event(event) =>
-          CompileConsole.show(Show(repo, event), say, sayError)
+          CompileConsole.show(Show(repo, event), say, sayError).provideEnvironment(io)
         case Message.Done(done) =>
           val finished = done match
             case CallResult.Reported(_) =>
@@ -827,7 +826,8 @@ object Cli:
       case Call.Toolchain =>
         recorded(repo, toolchainSay(repo, apiJar, _))
       case other =>
-        ZIO.serviceWithZIO[Machine] { machine =>
+        ZIO.environmentWithZIO[Machine & Stdio] { services =>
+          val machine = services.get[Machine]
           Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
             versionText(repo).orElseSucceed("").flatMap { shown =>
               val build =
@@ -840,7 +840,7 @@ object Cli:
                   shown,
                   adopted(repo, apiJar, _),
                   cliEdges(repo, _),
-                  heard(repo, _),
+                  heard(repo, _).provideEnvironment(services),
                 )
               build
                 .perform(other)
@@ -931,7 +931,7 @@ object Cli:
           ),
         ),
       reload = ZIO.fail(ServerError.NoServer),
-      reboot = bootCall(repo).flatMap { socket =>
+      reboot = bootCall(repo, Daemon.spawn).flatMap { socket =>
         say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
       },
       bsp = Calls.finish(
@@ -941,7 +941,7 @@ object Cli:
       compiled = ZIO.unit,
     )
 
-  private def heard(repo: Path, beat: Beat): UIO[Unit] =
+  private def heard(repo: Path, beat: Beat): URIO[Stdio, Unit] =
     beat match
       case Beat.Heard(event) =>
         CompileConsole.show(Show(repo, event), say, sayError)
@@ -985,12 +985,15 @@ object Cli:
         )
     }
 
-  private type Local = Loader & Scope & ContentStore & Machine & Resolve
+  private type Local = Loader & Scope & ContentStore & Machine & Resolve & IvyRoot & Stdio
+
+  /** What a launch provides before a miss builds its services. */
+  private type Launched = Scope & Resolve & Stdio
 
   private def graph(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Resolve & Stdio, Completed] =
     attach(repo, Call.Graph, graphLocal(repo, apiJar))
 
   private def graphLocal(
@@ -1014,7 +1017,7 @@ object Cli:
       apiJar: Path,
       id: TaskId,
       platform: Option[Platform],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     val call =
       if id.builtIn then Call.Task(id.value, PluginArgs.empty)
       else Call.Run(id.value, platform)
@@ -1032,7 +1035,7 @@ object Cli:
       repo: Path,
       projects: List[ProjectName],
       miss: => URIO[R, Completed],
-  ): URIO[R, Completed] =
+  ): URIO[R & Stdio, Completed] =
     val call = Call.Compile(projects)
     pinned(repo, miss)(text =>
       Attach
@@ -1061,17 +1064,20 @@ object Cli:
         }
     )
 
-  /** No `./histos` means compile here. A script starts one server and this command attaches to it. */
-  private def ensureServer(repo: Path): UIO[Either[ServerError, Option[Path]]] =
+  /** No `./histos` means compile here. A script starts one server with `spawn` and this command attaches to it. */
+  private def ensureServer(
+      repo: Path,
+      spawn: Path => IO[ServerError, Unit],
+  ): UIO[Either[ServerError, Option[Path]]] =
     val script = repo.resolve("histos")
     ZIO
       .attemptBlocking(Files.isRegularFile(script))
       .orDie
       .flatMap: present =>
-        if present then startServer(repo).either.map(_.map(Some(_)))
+        if present then startServer(repo, spawn).either.map(_.map(Some(_)))
         else ZIO.succeed(Right(None))
 
-  private def startServer(repo: Path): IO[ServerError, Path] =
+  private def startServer(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
     val home = repo.resolve(".histos")
     val gate = home.resolve("server.starting")
     ZIO.acquireReleaseWith(
@@ -1091,7 +1097,7 @@ object Cli:
         .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
         .flatMap {
           case None    => awaitServer(repo)
-          case Some(_) => Daemon.spawn(repo) *> awaitServer(repo)
+          case Some(_) => spawn(repo) *> awaitServer(repo)
         }
     }
 
@@ -1114,8 +1120,8 @@ object Cli:
       repo: Path,
       call: Call,
       miss: => URIO[R, Completed],
-  ): URIO[R, Completed] =
-    ensureServer(repo).flatMap {
+  ): URIO[R & Stdio, Completed] =
+    ensureServer(repo, Daemon.spawn).flatMap {
       case Left(error)         => ZIO.succeed(stopped(error))
       case Right(None)         => miss
       case Right(Some(socket)) =>
@@ -1130,7 +1136,7 @@ object Cli:
       repo: Path,
       socket: Path,
       fallback: => URIO[R, Completed],
-  )(use: Path => URIO[R, Completed]): URIO[R, Completed] =
+  )(use: Path => URIO[R, Completed]): URIO[R & Stdio, Completed] =
     versionOf(repo).orElseSucceed(None).flatMap {
       case None       => fallback
       case Some(text) =>
@@ -1150,7 +1156,7 @@ object Cli:
       repo: Path,
       socket: Path,
       miss: => URIO[R, Completed],
-  ): URIO[R, Completed] =
+  ): URIO[R & Stdio, Completed] =
     ApiClock.rebootLine(repo).flatMap { line =>
       sayError(line) *>
         remote(repo, socket, Call.Reboot).foldZIO(
@@ -1177,7 +1183,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.PreviewCompile(projects),
@@ -1200,7 +1206,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.PreviewTest(projects),
@@ -1223,7 +1229,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       tokens: List[String],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     val call = Call.PreviewPublishLocal(tokens)
     ZIO.serviceWithZIO[Machine]: machine =>
       attach(
@@ -1236,7 +1242,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       tokens: List[String],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     val call = Call.PreviewPublishSnapshots(tokens)
     ZIO.serviceWithZIO[Machine]: machine =>
       attach(
@@ -1276,7 +1282,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.PreviewClean(projects),
@@ -1302,7 +1308,7 @@ object Cli:
 
   private def previewCleanFull(
       repo: Path
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(repo, Call.PreviewCleanFull, previewCleanFullLocal(repo))
 
   private def previewCleanFullLocal(repo: Path): UIO[Completed] =
@@ -1314,7 +1320,7 @@ object Cli:
       apiJar: Path,
       id: String,
       platform: Option[Platform],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.PreviewRun(id, platform),
@@ -1405,10 +1411,10 @@ object Cli:
     val call = Call.Test(projects, patterns, mode)
     attach(repo, call, locally(repo, apiJar, call))
 
-  private def say(text: String): UIO[Unit] =
+  private def say(text: String): URIO[Stdio, Unit] =
     Paint.render(text).flatMap(line => Console.printLine(line).orElseSucceed(()))
 
-  private def sayError(text: String): UIO[Unit] =
+  private def sayError(text: String): URIO[Stdio, Unit] =
     Paint.render(text).flatMap(line => Console.printLineError(line).orElseSucceed(()))
 
   private def cachePath: URIO[ContentStore, Completed] =
@@ -1464,7 +1470,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.Clean(projects),
@@ -1497,7 +1503,7 @@ object Cli:
       case found: SelectError => BuildFault.Select(found)
       case found: IoFailure   => BuildFault.Io(found)
 
-  private def cleanFull(repo: Path): URIO[ContentStore, Completed] =
+  private def cleanFull(repo: Path): URIO[ContentStore & Stdio, Completed] =
     attach(repo, Call.CleanFull, cleanFullLocal(repo))
 
   /** Products go first. A store failure is exit 3 and does not claim success.
@@ -1521,7 +1527,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       action: ResolveAction,
-  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
+  ): URIO[Local, Completed] =
     attach(
       repo,
       Call.Resolve(action),
@@ -1532,7 +1538,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       action: ResolveAction,
-  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
+  ): URIO[Local, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       Calls
         .resolveWork(repo, apiJar, action, machine.native)
@@ -1550,7 +1556,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       action: WorkflowAction,
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Resolve & Stdio, Completed] =
     attach(
       repo,
       Call.Workflow(action),
@@ -1569,27 +1575,38 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
         case Right(loaded) =>
-          val text = Affected.report(loaded.graph, base, changed(repo, base))
-          ZIO.succeed(Completed(CliExit.Success, s"$text\n", "", Playback.Held))
+          val diff = if base == "all" then ZIO.none else changed(repo, base).option
+          diff.map: found =>
+            Completed(CliExit.Success, s"${Affected.report(loaded.graph, base, found)}\n", "", Playback.Held)
 
-  private def affectedLocal(
-      repo: Path,
-      apiJar: Path,
-      base: String,
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    affected(repo, apiJar, base)
+  /** Why `git diff` named no files. `affected` then selects the whole suite. */
+  private[cli] enum DiffFault:
+    case Start
+    case Read
+    case Status(code: Int)
 
-  private def changed(repo: Path, base: String): Option[List[String]] =
-    if base == "all" then None
-    else
-      try
-        val process = ProcessBuilder("git", "diff", "--name-only", s"$base...HEAD")
-        process.directory(repo.toFile)
-        process.redirectError(ProcessBuilder.Redirect.DISCARD)
-        val running = process.start()
-        val text    = String(running.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
-        if running.waitFor() == 0 then Some(text.split('\n').toList.filter(_.nonEmpty)) else None
-      catch case _: Throwable => None
+  /** The files `git diff --name-only <base>...HEAD` names in `repo`. */
+  private[cli] def changed(repo: Path, base: String): IO[DiffFault, List[String]] =
+    for
+      running <- ZIO
+        .attemptBlocking(
+          ProcessBuilder("git", "diff", "--name-only", s"$base...HEAD")
+            .directory(repo.toFile)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        )
+        .refineToOrDie[java.io.IOException]
+        .orElseFail(DiffFault.Start)
+      exit <- ZIO
+        .attemptBlocking:
+          val text = String(running.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
+          (running.waitFor(), text)
+        .refineToOrDie[java.io.IOException]
+        .orElseFail(DiffFault.Read)
+      names <- exit match
+        case (0, text)   => ZIO.succeed(text.split('\n').toList.filter(_.nonEmpty))
+        case (status, _) => ZIO.fail(DiffFault.Status(status))
+    yield names
 
   private def workflowLocal(
       repo: Path,
@@ -1616,13 +1633,13 @@ object Cli:
   private def toolchain(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     attach(repo, Call.Toolchain, toolchainLocal(repo, apiJar))
 
   private def toolchainLocal(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
       ZIO
         .serviceWithZIO[Loader](_.load(repo, apiJar))
@@ -1657,7 +1674,7 @@ object Cli:
   private def mcp(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & Machine & Resolve & ContentStore, Completed] =
+  ): URIO[Local, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       HistosMcp
         .serve(repo, apiJar, LinePipe.standard, machine)
@@ -1684,7 +1701,7 @@ object Cli:
   private def bsp(repo: Path, apiJar: Path): URIO[Local, Completed] =
     bspAt(repo, bspLocal(repo, apiJar))
 
-  private def bspAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R, Completed] =
+  private def bspAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R & Stdio, Completed] =
     pinned(repo, miss)(text =>
       Attach
         .decide(repo, text)
@@ -1731,7 +1748,7 @@ object Cli:
         }
     )
 
-  private def reload(repo: Path): UIO[Completed] =
+  private def reload(repo: Path): URIO[Stdio, Completed] =
     pinned(
       repo,
       ZIO.succeed(Completed(CliExit.Failed, "", ServerError.NoServer.message, Playback.Held)),
@@ -1798,7 +1815,7 @@ object Cli:
     )
 
   /** The id is the run id the server minted. No server has no runs. */
-  private def cancel(repo: Path, id: RunId): UIO[Completed] =
+  private def cancel(repo: Path, id: RunId): URIO[Stdio, Completed] =
     attach(
       repo,
       Call.Cancel(id),
@@ -1810,9 +1827,9 @@ object Cli:
   private[cli] def recorded[R](
       repo: Path,
       run: Say => ZIO[R, ServerError, Unit],
-  ): URIO[R, Completed] =
-    Ref.make(Chunk.empty[Feed]).flatMap { feeds =>
-      run(speaking(repo, feeds)).foldCauseZIO(
+  ): URIO[R & Stdio, Completed] =
+    Ref.make(Chunk.empty[Feed]).zip(ZIO.environment[Stdio]).flatMap { (feeds, io) =>
+      run(speaking(repo, feeds, io)).foldCauseZIO(
         cause =>
           if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Failed, "", "", Playback.Heard))
           else
@@ -1836,14 +1853,14 @@ object Cli:
   /** Print, then append, so the line is on the console before the next message. A fault is printed here and marked
     * heard, so finish does not print it again.
     */
-  private def speaking(repo: Path, feeds: Ref[Chunk[Feed]]): Say =
+  private def speaking(repo: Path, feeds: Ref[Chunk[Feed]], io: ZEnvironment[Stdio]): Say =
     new Say({
       case Message.Event(event) =>
-        CompileConsole.show(Show(repo, event), say, sayError) *>
+        CompileConsole.show(Show(repo, event), say, sayError).provideEnvironment(io) *>
           feeds.update(_ :+ Feed.Event(event))
       case Message.Done(CallResult.Fault(fault)) =>
         val text  = FaultText.show(fault.diagnose)
-        val shown = if text.isEmpty then ZIO.unit else sayError(text)
+        val shown = if text.isEmpty then ZIO.unit else sayError(text).provideEnvironment(io)
         shown *> feeds.update(_ :+ Feed.Done(CallResult.Fault(fault)))
       case Message.Done(result) =>
         feeds.update(_ :+ Feed.Done(result))
@@ -1866,16 +1883,16 @@ object Cli:
         Completed(CliExit.Failed, out, "the call did not finish", Playback.Heard)
 
   /** A running server replaces itself. No server starts one. The command returns when a server is listening. */
-  private[histos] def reboot(repo: Path): URIO[Any, Completed] =
+  private[histos] def reboot(repo: Path): URIO[Stdio, Completed] =
     rebootAt(repo, cold(repo))
 
   private def cold(repo: Path): URIO[Any, Completed] =
-    bootCall(repo).fold(
+    bootCall(repo, Daemon.spawn).fold(
       error => Completed(CliExit.Failed, "", error.message, Playback.Held),
       socket => Completed(CliExit.Success, socket.toString, "", Playback.Held),
     )
 
-  private def rebootAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R, Completed] =
+  private def rebootAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R & Stdio, Completed] =
     pinned(repo, miss)(text =>
       Attach
         .decide(repo, text)
@@ -1898,7 +1915,7 @@ object Cli:
   private def boot(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Boot] =
+  ): URIO[Local, Boot] =
     ZIO.environmentWithZIO[Machine & Resolve & ContentStore] { env =>
       val machine = env.get[Machine]
       ZIO.serviceWithZIO[Loader] { loader =>
@@ -1927,16 +1944,15 @@ object Cli:
                                   Daemon
                                     .open(
                                       repo,
-                                      loaded.graph,
-                                      loaded.build,
+                                      loaded,
                                       jdk,
                                       text,
                                       apiJar,
                                       classpath,
                                       loader.reportBuild(repo, apiJar).provideEnvironment(env),
-                                      loaded.plugins,
                                       machine,
-                                      assembly = mark,
+                                      Daemon.spawn,
+                                      mark,
                                     )
                                     .flatMap { running =>
                                       say(running.record.socket.toString) *> running.done
@@ -1960,7 +1976,7 @@ object Cli:
   private def serve(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
+  ): URIO[Local, Completed] =
     boot(repo, apiJar).map:
       case Boot.Up               => Completed(CliExit.Success, "", "", Playback.Held)
       case Boot.Load(error)      => held("", CallResult.Fault(BuildFault.Load(error)))
@@ -1969,9 +1985,11 @@ object Cli:
       case Boot.Transport(error) =>
         Completed(CliExit.Failed, "", error.message, Playback.Held)
 
-  /** The socket a listening server recorded. A missing `./histos` is [[ServerError.NoServer]]. */
-  private[histos] def bootCall(repo: Path): IO[ServerError, Path] =
-    ensureServer(repo).flatMap {
+  /** The socket the server `spawn` started recorded. A missing `./histos` is [[ServerError.NoServer]], and nothing is
+    * spawned.
+    */
+  private[histos] def bootCall(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
+    ensureServer(repo, spawn).flatMap {
       case Left(error)         => ZIO.fail(error)
       case Right(None)         => ZIO.fail(ServerError.NoServer)
       case Right(Some(socket)) => ZIO.succeed(socket)
@@ -1984,7 +2002,7 @@ object Cli:
       repo: Path,
       call: Call,
       local: => URIO[R, Completed],
-  ): URIO[R, Completed] =
+  ): URIO[R & Stdio, Completed] =
     ApiClock.admit(repo, call).flatMap {
       case ApiClock.Admit.Stop(fault) =>
         ZIO.succeed(held("", CallResult.Fault(fault)))
@@ -2015,7 +2033,7 @@ object Cli:
       socket: Path,
       call: Call,
       local: => URIO[R, Completed],
-  ): URIO[R, Completed] =
+  ): URIO[R & Stdio, Completed] =
     remote(repo, socket, call).foldZIO(
       {
         case ServerError.Unreachable(_) => local
@@ -2036,7 +2054,7 @@ object Cli:
       repo: Path,
       socket: java.nio.file.Path,
       call: Call,
-  ): ZIO[Any, ServerError, Completed] =
+  ): ZIO[Stdio, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
       Build.attached(socket).perform(call).foreach {
         case Beat.Heard(event) =>
@@ -2054,7 +2072,7 @@ object Cli:
   private def bspLocal(
       repo: Path,
       apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
     ZIO.environmentWithZIO[Loader & Resolve & ContentStore & Machine]: env =>
       val loader = env.get[Loader]
       loader
@@ -2108,6 +2126,8 @@ object Cli:
                                 loader
                                   .reportBuild(repo, apiJar)
                                   .provideEnvironment(env),
+                                compile => compile,
+                                None,
                               )
                               .either
                               .flatMap:
@@ -2283,12 +2303,12 @@ object Cli:
         Some(Call.Format(targets, mode))
       case _ => None
 
-  private def dispatched(command: Command)(use: Call => URIO[Scope, Completed]): URIO[Scope, Completed] =
+  private def dispatched(command: Command)(use: Call => URIO[Launched, Completed]): URIO[Launched, Completed] =
     callOf(command) match
       case Some(call) => use(call)
       case None       => ZIO.succeed(Completed(CliExit.Usage, "", "histos could not build that call", Playback.Held))
 
-  private def route(repo: Path, command: Command): URIO[Scope, Completed] =
+  private def route(repo: Path, command: Command): URIO[Launched, Completed] =
     command match
       case Command.Version =>
         versionText(repo).foldZIO(
@@ -2311,7 +2331,7 @@ object Cli:
         stamped.flatMap: at =>
           inProcessReady(repo)((api, machine) => withLoader(machine)(cover(repo, api, machine, asked, at)))
       case Command.Affected(base) =>
-        inProcessReady(repo)((api, machine) => withLoader(machine)(affectedLocal(repo, api, base)))
+        inProcessReady(repo)((api, machine) => withLoader(machine)(affected(repo, api, base)))
       case Command.TestOnly(modules, patterns) =>
         served(repo, Call.Test(modules, patterns, TestMode.Run))
       case Command.TestQuick(modules, patterns) =>
@@ -2366,7 +2386,7 @@ object Cli:
       case Command.Server =>
         inProcessReady(repo)((api, machine) => withLocal(machine)(serve(repo, api)))
       case Command.Portal =>
-        machineReady(repo)(machine => portal(repo).provideSome[Scope](ZLayer.succeed(machine)))
+        machineReady(repo)(machine => portal(repo).provideSome[Scope & Stdio](ZLayer.succeed(machine)))
       case Command.Toolchain =>
         attach(
           repo,
@@ -2465,28 +2485,30 @@ object Cli:
       case Command.Deps(action) =>
         inProcessReady(repo)((api, machine) => withLoader(machine)(deps(repo, api, action)))
       case Command.Setup(from, fix, yes) =>
-        ZIO.succeed(setup(repo, from, fix, yes))
+        setup(repo, from, fix, yes)
       case Command.Help(words) =>
         ZIO.succeed(answered(words))
 
   /** A call the server can answer. The local build runs only when the socket does not. */
-  private def served(repo: Path, call: Call): URIO[Scope, Completed] =
+  private def served(repo: Path, call: Call): URIO[Launched, Completed] =
     attach(repo, call, compileServices(repo, call))
 
-  /** Loader, resolve, the toolchain, and the compiler. Built only when this effect runs. */
-  private def compileServices(repo: Path, call: Call): URIO[Scope, Completed] =
+  /** Loader, the toolchain, and the compiler. Built only when this effect runs. */
+  private def compileServices(repo: Path, call: Call): URIO[Launched, Completed] =
     inProcessReady(repo)((api, machine) => withLocal(machine)(locally(repo, api, call)))
 
-  private def loadedMiss(repo: Path)(use: histos.load.LoadedBuild => UIO[Completed]): URIO[Scope, Completed] =
+  private def loadedMiss(repo: Path)(use: histos.load.LoadedBuild => UIO[Completed]): URIO[Launched, Completed] =
     inProcessReady(repo)((api, machine) => withLoader(machine)(loaded(repo, api)(use)))
 
   /** Jars and the machine, then `use`. Nothing here runs until the caller runs this effect. */
-  private def inProcess(repo: Path)(use: (Path, Machine) => URIO[Scope, Completed]): URIO[Scope, Completed] =
+  private def inProcess(repo: Path)(use: (Path, Machine) => URIO[Launched, Completed]): URIO[Launched, Completed] =
     apiAndMachine(repo).flatMap:
       case Left(done)            => ZIO.succeed(done)
       case Right((api, machine)) => use(api, machine)
 
-  private def inProcessReady(repo: Path)(use: (Path, Machine) => URIO[Scope, Completed]): URIO[Scope, Completed] =
+  private def inProcessReady(
+      repo: Path
+  )(use: (Path, Machine) => URIO[Launched, Completed]): URIO[Launched, Completed] =
     inProcess(repo) { (api, machine) =>
       Toolchain
         .prepare(machine)
@@ -2496,10 +2518,10 @@ object Cli:
         )
     }
 
-  private def machineOf(repo: Path)(use: Machine => URIO[Scope, Completed]): URIO[Scope, Completed] =
+  private def machineOf(repo: Path)(use: Machine => URIO[Launched, Completed]): URIO[Launched, Completed] =
     Machine.load(repo).foldZIO(err => ZIO.succeed(toolchainFailed(err)), use)
 
-  private def machineReady(repo: Path)(use: Machine => URIO[Scope, Completed]): URIO[Scope, Completed] =
+  private def machineReady(repo: Path)(use: Machine => URIO[Launched, Completed]): URIO[Launched, Completed] =
     machineOf(repo): machine =>
       Toolchain
         .prepare(machine)
@@ -2508,21 +2530,20 @@ object Cli:
           _ => use(machine),
         )
 
-  private def withLocal(machine: Machine)(body: URIO[Local, Completed]): URIO[Scope, Completed] =
-    body.provideSome[Scope](
+  private def withLocal(machine: Machine)(body: URIO[Local, Completed]): URIO[Launched, Completed] =
+    body.provideSome[Launched](
       Loader.live,
       ZLayer.succeed(ContentStore.in(machine.cache)),
       ZLayer.succeed(machine),
-      Resolve.coursier,
+      IvyRoot.ivy2Local,
     )
 
   private def withLoader(
       machine: Machine
-  )(body: URIO[Loader & ContentStore & Resolve & Scope, Completed]): URIO[Scope, Completed] =
-    body.provideSome[Scope](
+  )(body: URIO[Loader & ContentStore & Launched, Completed]): URIO[Launched, Completed] =
+    body.provideSome[Launched](
       Loader.live,
       ZLayer.succeed(ContentStore.in(machine.cache)),
-      Resolve.coursier,
     )
 
   private def storeOf(machine: Machine)(body: URIO[ContentStore, Completed]): URIO[Scope, Completed] =
@@ -2584,7 +2605,10 @@ object Main extends ZIOAppDefault:
   def run =
     for
       args <- getArgs.map(_.toList)
-      _    <- Cli.launch(args, Path.of("").toAbsolutePath).flatMap(finish)
+      _    <- Cli
+        .launch(args, Path.of("").toAbsolutePath)
+        .flatMap(finish)
+        .provideSomeLayer[Scope](ReleaseFeed.live ++ Resolve.coursier ++ Stdio.probed)
     yield ()
 
   /** A successful `run` is process status 0. `exit` is the status the operating system sees.

@@ -1,11 +1,20 @@
 package histos.cli
 
+import histos.LawMachine
+import histos.central.{MavenModule, ReleaseFeed}
+import histos.publish.LauncherPin
+import histos.resolve.Resolve
+import histos.version.ShipNumber
 import histos.workspace.Workspace
+import slayer.{any, stub, stubbed}
 
-import zio.ZIO
-import zio.test.{TestSystem, ZIOSpecDefault, assertTrue, suite, test}
+import zio.{Scope, ZIO}
+import zio.test.{TestConsole, TestEnvironment, TestSystem, ZIOSpecDefault, assertTrue, suite, test}
 
-/** `graph` loads the build. The api jar is the one this process packed, not the classes directory. */
+/** `graph` loads the build. The api jar is the one this process packed, not the classes directory. A build with no
+  * plugins resolves nothing, so `Resolve` and the release feed are stubs that fail any law that reads them, unless the
+  * law answers the feed itself.
+  */
 object CliReadyLawSpec extends ZIOSpecDefault:
   private val build =
     """import histos.*
@@ -18,15 +27,9 @@ object CliReadyLawSpec extends ZIOSpecDefault:
 
   def spec = suite("cli ready laws")(
     test("graph, affected, and toolchain run on a build with no plugins"):
-      val jdk  = java.lang.System.getProperty("java.home")
-      val os   = java.lang.System.getProperty("os.name")
-      val arch = java.lang.System.getProperty("os.arch")
       for
         dir      <- Workspace.work("histos-cli-ready")
-        _        <- TestSystem.putProperty("java.home", jdk)
-        _        <- TestSystem.putProperty("os.name", os)
-        _        <- TestSystem.putProperty("os.arch", arch)
-        _        <- TestSystem.putProperty("user.home", dir.toString)
+        _        <- LawMachine.system(dir)
         _        <- TestSystem.putEnv("XDG_CACHE_HOME", "")
         _        <- Workspace.writeString(dir.resolve("histos.scala"), build)
         graph    <- Cli.launch(List("graph"), dir)
@@ -45,5 +48,20 @@ object CliReadyLawSpec extends ZIOSpecDefault:
         tools.out.contains("node not required"),
         tools.out.contains("clang not required"),
       )
-  )
+    ,
+    test("a release past the pin is one line on standard error, and the command still answers"):
+      for
+        dir  <- Workspace.work("histos-cli-notice")
+        _    <- LawMachine.system(dir)
+        _    <- TestSystem.putEnv("XDG_CACHE_HOME", "")
+        _    <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=0.1.0\n")
+        _    <- stub[ReleaseFeed](_.newest(any[MavenModule]))(ZIO.succeed(Some(ShipNumber("0.2.0"))))
+        done <- Cli.launch(List("help", "version"), dir)
+        err  <- TestConsole.outputErr
+      yield assertTrue(
+        err == Vector("histos 0.2.0 is released and histos.version pins 0.1.0. Run `histos update`.\n"),
+        done.exit == CliExit.Success,
+        done.out.startsWith("histos version\n"),
+      ),
+  ).provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed] ++ stubbed[Resolve] ++ LawMachine.redirected)
 end CliReadyLawSpec

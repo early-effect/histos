@@ -18,7 +18,7 @@ object AttachLawSpec extends ZIOSpecDefault:
         repo <- LawDir.child(root, "record")
         socket      = repo.resolve("server.sock")
         fingerprint = Fingerprint.trusted("abc")
-        _     <- Record.write(repo, version, fingerprint, socket)
+        _     <- Record.write(repo, version, fingerprint, socket, None)
         read  <- Record.read(repo)
         text  <- ZIO.attemptBlocking(Files.readString(Record.file(repo))).orDie
         open  <- Attach.decide(repo, version)
@@ -26,7 +26,7 @@ object AttachLawSpec extends ZIOSpecDefault:
       yield
         val absolute = socket.toAbsolutePath.normalize
         assertTrue(
-          read == Some(Record.Written(version, fingerprint, absolute)),
+          read == Some(Record.Written(version, fingerprint, absolute, None)),
           open == Decision.Open(absolute),
           other == Decision.DifferentVersion(absolute),
           text.contains("\"version\""),
@@ -62,7 +62,7 @@ object AttachLawSpec extends ZIOSpecDefault:
         repo <- LawDir.child(root, "mark")
         socket      = repo.resolve("server.sock")
         fingerprint = Fingerprint.trusted("abc")
-        _       <- Record.write(repo, version, fingerprint, socket)
+        _       <- Record.write(repo, version, fingerprint, socket, None)
         _       <- write(repo.resolve(".histos").resolve("assembly.sha256"), sha + "\n")
         drifted <- Attach.decide(repo, version)
         _       <- Record.write(repo, version, fingerprint, socket, Some(sha))

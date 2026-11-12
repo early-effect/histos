@@ -1,9 +1,12 @@
 package histos.server
 
 import histos.build.BuildEvent
-import histos.cache.ContentStore
+import histos.cache.{CacheProject, ContentStore}
 import histos.clean.Products
-import histos.report.CallResult
+import histos.jdk.Sha256Digest
+import histos.report.{BuildFault, CallResult}
+import histos.schedule.Digest
+import histos.select.SelectError
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers}
@@ -20,18 +23,24 @@ import histos.{
   Splits,
 }
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.time.Instant
 
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
 import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 
-/** Named clean removes that module's products and leaves the shared root. A full clean forgets an empty store. */
+/** Named clean removes that module's products and leaves the shared root. A full clean forgets this checkout's store
+  * entries and keeps another checkout's.
+  */
 object CallsProductLawSpec extends ZIOSpecDefault:
   private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("productlaw")
 
   def spec = suite("calls product laws")(
-    test("an unknown name deletes nothing, a named clean leaves the shared root, and a full clean forgets nothing"):
+    test(
+      "an unknown name deletes nothing, a named clean leaves the shared root, and a full clean forgets only this checkout"
+    ):
       Workspace
         .work("histos-calls-product")
         .flatMap: dir =>
@@ -43,7 +52,7 @@ object CallsProductLawSpec extends ZIOSpecDefault:
               _                     <- write(clazz)
               _                     <- write(shared)
               _                     <- write(tally)
-              (missed, missedHeard) <- speak(say => Calls.clean(dir, graph, List(ProjectName.trusted("missing")), say))
+              (missed, missedHeard) <- speak(say => Calls.clean(dir, graph, List(missing), say))
               missedKept            <- exists(clazz)
               missedShared          <- exists(shared)
               (named, namedHeard)   <- speak(say => Calls.clean(dir, graph, List(lawName), say))
@@ -54,10 +63,17 @@ object CallsProductLawSpec extends ZIOSpecDefault:
               (wiped, wipedHeard)   <- speak(say => Calls.wipe(dir, say))
               wipedShared           <- exists(shared)
               wipedTally            <- exists(tally)
+              store                 <- ZIO.service[ContentStore]
+              _                     <- store.put(ours, oursBytes, Instant.EPOCH)
+              _                     <- store.put(theirs, theirsBytes, Instant.EPOCH)
+              _                     <- store.replace(CacheProject.of(dir), Set(ours))
+              _                     <- store.replace(CacheProject.of(dir.resolve("other")), Set(theirs))
               (full, fullHeard)     <- speak(say => Calls.cleanFull(dir, say))
+              oursLeft              <- store.read(ours)
+              theirsLeft            <- store.read(theirs)
             yield assertTrue(
               missed == Right(()),
-              done(missedHeard).exists(faultNamesMissing),
+              done(missedHeard) == Some(CallResult.Fault(BuildFault.Select(SelectError.Unknown(missing)))),
               missedKept,
               missedShared,
               named == Right(()),
@@ -70,15 +86,18 @@ object CallsProductLawSpec extends ZIOSpecDefault:
               !wipedShared,
               !wipedTally,
               full == Right(()),
-              outs(fullHeard) == Products.forgotten(Nil),
+              outs(fullHeard) == s"cleaned\nremoved ${ours.value}",
+              oursLeft == None,
+              theirsLeft == Some(theirsBytes),
             )
           program.provideSomeLayer[Scope](session(dir))
   )
 
-  private def faultNamesMissing(result: CallResult): Boolean =
-    result match
-      case CallResult.Fault(fault) => fault.message.contains("'missing' is not a project")
-      case _                       => false
+  private val missing     = ProjectName.trusted("missing")
+  private val oursBytes   = Chunk.fromArray("ours\n".getBytes(StandardCharsets.UTF_8))
+  private val theirsBytes = Chunk.fromArray("theirs\n".getBytes(StandardCharsets.UTF_8))
+  private val ours        = Digest.trusted(Sha256Digest.of(oursBytes).value)
+  private val theirs      = Digest.trusted(Sha256Digest.of(theirsBytes).value)
 
   private def exists(path: Path): ZIO[Any, Nothing, Boolean] =
     ZIO.attempt(Files.isRegularFile(path)).orDie
