@@ -1,10 +1,13 @@
 package histos.central
 
+import scala.compiletime.testing.typeCheckErrors
+
 import zio.{Chunk, Config, Ref, ZIO, durationInt}
 import zio.test.*
 
 object PortalFlowLawSpec extends ZIOSpecDefault:
   private val fingerprintHex = "0123456789abcdef0123456789abcdef01234567"
+  private val key            = Fingerprint("0123456789abcdef0123456789abcdef01234567")
 
   def spec = suite("portal flow")(
     test("a changed poll speaks and resets, and a quiet poll speaks on the 30th read"):
@@ -67,6 +70,11 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
         Fingerprint.from("0x") == Left(PreflightError.BadFingerprint),
         Fingerprint.from("") == Left(PreflightError.BadFingerprint),
         Fingerprint.from(fingerprintHex + "zz") == Left(PreflightError.BadFingerprint),
+        Fingerprint(" 0Xaabbccddeeff0011 ").value == "AABBCCDDEEFF0011",
+        Fingerprint.from("aabbccddeeff0011") == Right(Fingerprint(" 0Xaabbccddeeff0011 ")),
+        typeCheckErrors("""Fingerprint("abc")""").map(_.message) == List("the signing key is not a fingerprint"),
+        typeCheckErrors("def raw: String = \"aabbccddeeff0011\"\nFingerprint(raw)").map(_.message) ==
+          List("Fingerprint(...) takes a literal. Use Fingerprint.from at runtime."),
       )
     ,
     test("an unset or blank portal is central, and a set value is one base"):
@@ -83,7 +91,6 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
       val upload = ZIO.die(new IllegalStateException("uploaded"))
       val gavs   = Chunk(Gav("demo", "widget", "1.0.0"))
       for
-        key  <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
         ftp  <- Preflight.release(Map("HISTOS_PORTAL" -> "ftp://example.com"), gavs, key, upload).either
         http <- Preflight.release(Map("HISTOS_PORTAL" -> "http://example.com"), gavs, key, upload).either
       yield assertTrue(
@@ -96,7 +103,6 @@ object PortalFlowLawSpec extends ZIOSpecDefault:
       val env        = Map("HISTOS_PORTAL" -> "http://127.0.0.1:9")
       val deployment = Deployment(DeploymentId("deploy-1"), DeploymentState.Validated)
       for
-        key     <- ZIO.fromEither(Fingerprint.from(fingerprintHex))
         refused <- Preflight.release(env, gavs, key, ZIO.fail(PortalError.Unauthorized)).either
         passed  <- Preflight.release(env, gavs, key, ZIO.succeed(deployment))
       yield assertTrue(

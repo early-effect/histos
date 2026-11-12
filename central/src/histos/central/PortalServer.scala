@@ -143,7 +143,9 @@ object PortalServer:
         case PortalStore.Error.Missing(_)       => Response.notFound()
         case PortalStore.Error.NotPromotable(_) =>
           Response.text("the deployment cannot be promoted", Status.Conflict)
-        case PortalStore.Error.Io(_) =>
+        case PortalStore.Error.Read(_) =>
+          Response.internalServerError("the rehearsal portal could not read its store")
+        case PortalStore.Error.Write(_) =>
           Response.internalServerError("the rehearsal portal could not store the deployment")
         case PortalStore.Error.Unreadable(_, _) =>
           Response.internalServerError("the rehearsal portal could not read the deployment")
