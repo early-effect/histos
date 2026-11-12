@@ -210,6 +210,11 @@ object GrammarLawSpec extends ZIOSpecDefault:
           Command.Setup(Some("zipx"), true, true)
         ),
         List("affected", "--base", "abc") -> Right(Command.Affected("abc")),
+        List("bump")                      -> Right(Command.Bump(histos.version.BumpPart.Patch, Nil)),
+        List("bump", "--minor", "histos") -> Right(
+          Command.Bump(histos.version.BumpPart.Minor, List(histos.version.ShipName("histos")))
+        ),
+        List("bump", "--major", "--patch") -> Left(CliParseError.Rejected),
       )
     ,
     test("shim commands name the installed script"):

@@ -295,6 +295,7 @@ object PublishRun:
                   dependency.name.value,
                   dependency.version.value,
                   dependency.exclusions,
+                  dependency.scope,
                 )
               )
             ),

@@ -77,6 +77,12 @@ object Help:
     ),
     Entry("publish promote", "publish", "histos publish promote <deployment>", "Promote a held deployment."),
     Entry("publish drop", "publish", "histos publish drop <deployment>", "Drop a held deployment."),
+    Entry(
+      "bump",
+      "publish",
+      "histos bump [--major | --minor | --patch] [ship ...]",
+      "Move .next past the newest stable coursier.Versions lists. The default is the next patch. A maven repository wins over ivy2 local. Does not change histos.version.",
+    ),
     Entry("portal", "publish", "histos portal", "Rehearse the Central portal on loopback."),
     Entry("resolve", "dependencies", "histos resolve [--update | --check]", "Check the lock, or write it."),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),

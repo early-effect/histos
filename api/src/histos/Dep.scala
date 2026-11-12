@@ -8,9 +8,11 @@ import _root_.scala.annotation.publicInBinary
 enum DepKind:
   case Java, Binary, Full
 
-/** `Published` is a pom dependency. `CompileOnly` is on the compile classpath and absent from the pom. */
+/** `Published` is a pom dependency with no scope element. `CompileOnly` is on the compile classpath and absent from the
+  * pom. `Provided` is on the compile classpath, off a JVM run and a fat jar, and written as `<scope>provided</scope>`.
+  */
 enum DepLink:
-  case Published, CompileOnly
+  case Published, CompileOnly, Provided
 
 /** One POM exclusion. `artifact` is the published artifact id, with any Scala suffix already written. */
 final case class DepExclusion(organization: Organization, artifact: ArtifactBase)
@@ -43,6 +45,9 @@ sealed trait Dep:
   /** Compile against this coordinate. The published pom does not fetch it. */
   def compileOnly: Dep { type Kind = Dep.this.Kind }
 
+  /** Compile and test against this coordinate. The pom writes scope `provided`, and a JVM run or a fat jar omits it. */
+  def provided: Dep { type Kind = Dep.this.Kind }
+
   def applies(platform: Platform): Boolean =
     platforms match
       case None         => true
@@ -63,9 +68,13 @@ object Dep:
   def select(deps: List[Dep], platform: Platform): List[Dep] =
     deps.filter(_.applies(platform))
 
+  /** Coordinates a JVM run and a fat jar fetch. A provided edge stays on the compile classpath and off this list. */
+  def runtime(deps: List[Dep], platform: Platform): List[Dep] =
+    select(deps, platform).filter(_.link != DepLink.Provided)
+
   /** Coordinates the pom lists. Compile-only edges stay on the compile classpath and off this list. */
-  def published(deps: List[Dep], platform: Platform): List[Dep] =
-    select(deps, platform).filter(_.link == DepLink.Published)
+  def declared(deps: List[Dep], platform: Platform): List[Dep] =
+    select(deps, platform).filter(dep => dep.link == DepLink.Published || dep.link == DepLink.Provided)
 
   /** Spliced by the literal macro. A range is still a value here so resolve can refuse one that was built past `from`.
     */
@@ -171,6 +180,9 @@ object Dep:
 
     def compileOnly: Dep { type Kind = K } =
       copy(link = DepLink.CompileOnly)
+
+    def provided: Dep { type Kind = K } =
+      copy(link = DepLink.Provided)
 
     def member(next: String): Dep { type Kind = K } =
       Made(kind, organization, next, revision, None, DepLink.Published, Nil, None)

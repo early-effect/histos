@@ -15,7 +15,7 @@ export HISTOS_BRANCH=default
 ./histos run versions
 ```
 
-`releases` is the registry the versions task reads. An empty file means nothing in the catalog is released. A line is `histos matches`, `histos moved`, or `histos unknown`. `histos doctor` reports `ship.releases` when the file is missing, `ship.session` when `HISTOS_*` is incomplete, and `ship.should-bump` when `.next(...)` is already released. The bump finding is a warning. Histos does not open a bump pull request.
+`releases` is the registry the versions task reads. An empty file means nothing in the catalog is released. A line is `histos matches`, `histos moved`, or `histos unknown`. `histos doctor` reports `ship.releases` when the file is missing, `ship.session` when `HISTOS_*` is incomplete, and `ship.should-bump` when `.next(...)` is already released. The bump finding is a warning. `histos bump` rewrites `.next` past the newest stable `coursier.Versions` lists. A maven repository wins over ivy2 local. The default is the next patch. `--minor` and `--major` move that component. The command does not change `histos.version`.
 
 Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are different types.
 
@@ -23,7 +23,7 @@ Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are d
 Ship("histos").next(0, 2, 3).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
 ```
 
-Third-party Maven coordinates stay `dep"org::name:revision"`. That literal is one root. A family member is `.module("other")` on that value. `.module` copies organization, kind, and revision, and clears platforms, compile-only, exclusions, and an sbt series. An sbt plugin series is `.sbt(sbt"2")` on a `::` coordinate. An exclusion is `.excluding(organization"...", artifact"published-id")`. Ship pins stay `.pointer`, `.commit`, and `.released`.
+Third-party Maven coordinates stay `dep"org::name:revision"`. That literal is one root. A family member is `.module("other")` on that value. `.module` copies organization, kind, and revision, and clears platforms, compile-only, provided, exclusions, and an sbt series. `.compileOnly` stays on the compile classpath and out of the pom. `.provided` stays on the compile classpath, stays off a JVM run and a fat jar, and the pom writes `<scope>provided</scope>`. An sbt plugin series is `.sbt(sbt"2")` on a `::` coordinate. An exclusion is `.excluding(organization"...", artifact"published-id")`. Ship pins stay `.pointer`, `.commit`, and `.released`.
 
 ## The effect
 
@@ -94,7 +94,7 @@ The local publisher's interface is Coursier, the library resolve already calls. 
 
 The high-level API is `coursier.Resolve` and `coursier.Fetch` ([API](https://get-coursier.io/docs/api)). Those types resolve and fetch. They do not publish. A local install is done when a later `Resolve`, with Coursier's default repositories, finds the coordinate. The test asks Coursier. It does not open `~/.m2` or `~/.ivy2`.
 
-`Publishing` does not take a `Path`. `publishLocal` does not take a directory. A test checks the install by resolving the coordinate through Coursier. The local effect does not sign. It installs a snapshot or a release. A development session installs the snapshot coordinate of HEAD. A release session already in the environment installs the release number.
+`Publishing` does not take a `Path`. `publishLocal` does not take a directory. A test checks the install by resolving the coordinate through Coursier. The local effect does not sign. It installs a snapshot or a release. A development session installs the snapshot coordinate of HEAD. A release session already in the environment installs the release number. `publish local` still writes `ivy.xml`, and that file maps every dependency as compile. A consumer of the local install inherits a provided edge. Central and the snapshot repository write `<scope>provided</scope>` in the pom, and those consumers do not.
 
 ## What a build overrides
 

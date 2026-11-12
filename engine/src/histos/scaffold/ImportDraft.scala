@@ -1,7 +1,7 @@
 package histos.scaffold
 
 import histos.supply.ZipxImport
-import histos.{Dep, DepKind, MainClass, Organization, ProjectName, ProjectPath, ScalaVersion}
+import histos.{Dep, DepKind, DepLink, MainClass, Organization, ProjectName, ProjectPath, ScalaVersion}
 
 /** A `histos.scala` draft. A setting that is not mapped stays as a comment.
   */
@@ -179,14 +179,16 @@ object ImportDraft:
             version match
               case None =>
                 (compile, test, notes :+ s"// unmapped: ${line.trim}")
-              case Some(_) if config.exists(token => !compileConfig(token) && !testConfig(token)) =>
+              case Some(_)
+                  if config.exists(token => !compileConfig(token) && !testConfig(token) && !providedConfig(token)) =>
                 (compile, test, notes :+ s"// unmapped: ${line.trim}")
               case Some(revision) =>
                 coordinate(hit.group(1), hit.group(2), hit.group(3), revision) match
                   case None      => (compile, test, notes :+ s"// unmapped: ${line.trim}")
                   case Some(dep) =>
-                    if config.exists(testConfig) then (compile, test :+ dep, notes)
-                    else (compile :+ dep, test, notes)
+                    val linked = if config.exists(providedConfig) then dep.provided else dep
+                    if config.exists(testConfig) then (compile, test :+ linked, notes)
+                    else (compile :+ linked, test, notes)
 
   private def thisBuildDeps(text: String, vals: Map[String, String]): Shared =
     val lines = text.linesIterator.filter(line => line.contains("ThisBuild") && line.contains("libraryDependencies"))
@@ -212,6 +214,9 @@ object ImportDraft:
   private def testConfig(token: String): Boolean =
     token == "Test" || token == "test"
 
+  private def providedConfig(token: String): Boolean =
+    token == "Provided" || token == "provided"
+
   private def lib(body: String, vals: Map[String, String]): Either[String, Coord] =
     val trimmed     = body.trim
     val (raw, rest) = trimmed.headOption match
@@ -224,13 +229,17 @@ object ImportDraft:
           case Some(value) => (value, trimmed.drop(token.length))
           case None        => (trimmed, "")
     val resolved = interpolate(raw, vals)
-    val test     = rest.toLowerCase.contains("test")
-    val other    = rest.trim.nonEmpty && !test
-    if other then Left(s"// unmapped: Lib($body)")
+    val lowered  = rest.toLowerCase
+    val test     = lowered.contains("test")
+    val provided = lowered.contains("provided")
+    val other    = rest.trim.nonEmpty && !test && !provided
+    if other || (test && provided) then Left(s"// unmapped: Lib($body)")
     else
       Dep.from(resolved) match
-        case Right(dep) => Right(Coord(dep, test))
-        case Left(_)    => Left(s"// unmapped: Lib($body)")
+        case Right(dep) =>
+          val linked = if provided then dep.provided else dep
+          Right(Coord(linked, test))
+        case Left(_) => Left(s"// unmapped: Lib($body)")
 
   private def quoted(text: String, vals: Map[String, String]): (String, String) =
     val start = text.indexOf('"')
@@ -408,7 +417,11 @@ object ImportDraft:
       case DepKind.Java   => ":"
       case DepKind.Binary => "::"
       case DepKind.Full   => ":::"
-    s"""dep"${dep.organization}$sep${dep.name}:${dep.revision}""""
+    val mark = dep.link match
+      case DepLink.Published   => ""
+      case DepLink.CompileOnly => ".compileOnly"
+      case DepLink.Provided    => ".provided"
+    s"""dep"${dep.organization}$sep${dep.name}:${dep.revision}"$mark"""
 
   private def schedule(pending: List[Compiled]): (List[Compiled], List[String]) =
     def go(rest: List[Compiled], done: Set[String], notes: List[String]): (List[Compiled], List[String]) =

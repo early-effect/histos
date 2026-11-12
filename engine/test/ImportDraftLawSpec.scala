@@ -32,6 +32,33 @@ object ImportDraftLawSpec extends ZIOSpecDefault:
         !draft.contains("// unmapped:"),
       )
     ,
+    test("a provided configuration stays on the compile list and is marked provided"):
+      val quoted = ImportDraft.sbt(
+        s"""ThisBuild / scalaVersion := "$scala"
+           |lazy val core = project.settings(
+           |  libraryDependencies += "javax.servlet" % "javax.servlet-api" % "4.0.1" % "provided"
+           |)
+           |""".stripMargin,
+        "",
+        "app",
+      )
+      val named = ImportDraft.sbt(
+        s"""ThisBuild / scalaVersion := "$scala"
+           |lazy val core = project.settings(
+           |  libraryDependencies += "javax.servlet" % "javax.servlet-api" % "4.0.1" % Provided
+           |)
+           |""".stripMargin,
+        "",
+        "app",
+      )
+      val marked = """.libraryDependencies(dep"javax.servlet:javax.servlet-api:4.0.1".provided)"""
+      assertTrue(
+        quoted.contains(marked),
+        named.contains(marked),
+        !quoted.contains("// unmapped:"),
+        !named.contains("// unmapped:"),
+      )
+    ,
     test("a setting the draft does not map stays an unmapped line"):
       val badScala = ImportDraft.sbt(
         """ThisBuild / scalaVersion := "nope"
