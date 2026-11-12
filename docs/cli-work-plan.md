@@ -157,7 +157,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 8 | Self-host in the CLI | `assembly` defaults to `dist/histos.jar` and writes `.histos/assembly.sha256` | Ship row |
 | 9 | Cache identity | `ToolchainStamp` writes the commit into `wire` sources | Ship row |
 | 10 | Self-host in the CLI | `histos client` links the module named `client` | Dist layer |
-| 11 | Self-host at run time | `ApiClock` stop, `allow-drift`, `AssemblyMark`, `HISTOS_ASSEMBLY`, the wrapper's `dist/histos.jar` | Dist layer |
+| 11 | Self-host at run time | `ApiClock` stop, `allow-drift`, `AssemblyMark`, `HISTOS_ASSEMBLY`, the wrapper's `dist/histos.jar`. A reboot's `Successor` carries `HISTOS_ASSEMBLY` until then ([test-audit.md](test-audit.md) B29) | Dist layer |
 | 12 | Snapshot clients | A laptop publish names only `macos-aarch64` | Container |
 | 13 | Consumer CI | Generated workflows use local `setup` and `origin-head` actions only this repository has | CI setup |
 | 14 | Moving asset | `dist/shim` moves, so a pinned wrapper needs `shim-<sha256>` | CI setup |
@@ -176,7 +176,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 27 | Docs gate | Nothing checks that README commands parse or that its links exist | README |
 | 28 | Handshake bug | The shim exports the resolved timestamp as `HISTOS_VERSION`, and the server records the `build.properties` pointer. With a `-SNAPSHOT` pin and a client, every command reboots the server and then fails | Shim |
 | 29 | JDK floor | The shim, the wrapper, and the engine accept JDK 21. The child-process bootstrap that test, run, and link use compiles `java.lang.foreign`, which JDK 21 marks preview | Shim (the floor is 25). The rendered `./histos` wrapper keeps 21 until the CI setup item rewrites it, because CI's `workflow --check` renders it with the pin |
-| 30 | Startup race | The client reads `server.json` when the socket accepts, before a new server rewrites it. The restart error names only the assembly, even when the version is what differs | Dist layer |
+| 30 | Startup race | The client reads `server.json` when the socket accepts, before a new server rewrites it. The restart error names only the assembly, even when the version is what differs. The reboot loop after the `0.3.0` pin was a different cause: the successor inherited the old server's `HISTOS_VERSION` and `HISTOS_ASSEMBLY` ([test-audit.md](test-audit.md) B29, fixed). This race is still open | Dist layer |
 | 31 | Hatch skew | The MCP `test` tool refuses a stale local assembly with `.histos/allow-drift` set. The terminal path continues | Dist layer (the hatch is deleted) |
 | 32 | Drift at HEAD | `1b88d92` moved `.next` to `0.3.0`. The committed wrapper and `histos-release.yml` still say `0.2.10` | README (`workflow --update`) |
 | 33 | Help text | `publish snapshots` says the pointer moves on the default branch (it moves from any checkout). `fmt --check` says it writes nothing (it rewrites `.histos/format/ledger`). `histos help` does not list `--explain` | Grammar |
@@ -197,6 +197,8 @@ Each item audits the files it touches against the Totality list and adds what it
 | 50 | Silent test warnings | A suite's test compile passes no problem listener, so test-source warnings print nowhere. The CLI shows them only when the compile fails | Program output (both are feed changes) |
 | 49 | Test value | Laws written in bulk: each needs to assert a property users depend on, fail when that property breaks, and stay deterministic and hermetic. The findings, the product bugs they hid, and the seams they need are [test-audit.md](test-audit.md) | Test audit |
 | 45 | Three restart copies | The daemon, the CLI, and the MCP session each chose the restart compile and ignored its result | Restart watch |
+| 51 | Raw deployment id | `Command.PublishPromote(id: String)`, `Command.PublishDrop(id: String)`, `Call.PublishPromote`, and `Call.PublishDrop` carry the id as typed. The grammar should parse it as a `DeploymentId`, whose `from` already names an empty or spaced id | Grammar |
+| 52 | Unverified store | Nothing verifies a compile's output before it is stored, so a missed invalidation, such as B28 in [test-audit.md](test-audit.md), becomes a permanent hit under its key. Recovery is `cleanFull`. A design question for Russ: does the store verify what it keeps, and how, or is `cleanFull` the recovery? | Remote cache |
 
 ## Left out
 
@@ -242,7 +244,10 @@ Each item audits the files it touches against the Totality list and adds what it
   - `LeaseLawSpec` proves the lock: a run frees it at its compile signal while it still runs, so a compile takes it, and a failed run frees it.
   - `CallsRunLawSpec` proves a real run signals once and a refused run never does.
   - The doctor's real-probe laws now take `withLiveClock` (row 43).
-- [ ] **Test audit.** Read-only reviewers go module by module over every spec. Each law must assert a property a user or this repository depends on, must fail when that property breaks (shown against a broken implementation where it is cheap), and must be deterministic and hermetic: no wall-clock races, no ambient cache, no network, no shared mutable state across laws. A law that tests ZIO, the JDK, or a library is deleted. A duplicate is merged. Findings land in [test-audit.md](test-audit.md) with the pull request that fixes them, and each module's fixes ship as their own pull request (engine as two). Audited: 1,401 laws, 368 flagged, nine product bugs (B1 to B9), four decisions for Russ (D1 to D4), and eight seams (S1 to S8).
+- [x] **Test audit.** Read-only reviewers go module by module over every spec. Each law must assert a property a user or this repository depends on, must fail when that property breaks (shown against a broken implementation where it is cheap), and must be deterministic and hermetic: no wall-clock races, no ambient cache, no network, no shared mutable state across laws. A law that tests ZIO, the JDK, or a library is deleted. A duplicate is merged. Findings land in [test-audit.md](test-audit.md) with the pull request that fixes them, and each module's fixes ship as their own pull request (engine as two). Audited: 1,401 laws, 368 flagged, 29 product bugs (B1 to B29), nine decisions for Russ (D1 to D9), and eight seams (S1 to S8). Done:
+  - Every row the audit owns is checked: the api, wire, central, engine A-L, engine M-Z, and app layers, then the follow-ups for E98, E100 to E103, W19, P49, and B29.
+  - E29 stays open. The CI setup item (row 29) owns it, because the rendered wrapper's floor moves with that item.
+  - `./histos test api wire central engine app` is green on JVM and Native with no clock warning, and `fmt --check`, `workflow --check`, and `run doc` are clean.
 - [x] **Socket path.** The server socket lives at a short path under `~/.histos` keyed by the checkout, so any checkout depth binds. Proof: a law that a 200-byte checkout path yields a socket path under the platform limit, and a server bound there in a deep temp checkout. Done:
   - `SocketPath` (in `wire`, shared by the JVM server and the native client) is `<HISTOS_HOME or ~/.histos>/run/<FNV-1a 64 of the checkout path>.sock`.
   - `SocketPathLawSpec`, on JVM and Native: a 200-byte checkout's socket is under 104 bytes, the name is stable and per checkout, both platforms produce the JDK-computed `1cd4fc81c8742440` for `/work/repo`, and the home is `HISTOS_HOME` or `.histos` under the user home.
