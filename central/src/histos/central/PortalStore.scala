@@ -14,6 +14,13 @@ object PortalStore:
     case Io(path: Path)
     case Missing(id: DeploymentId)
     case NotPromotable(id: DeploymentId)
+    case Unreadable(path: Path, fault: Fault)
+
+  /** Why a stored deployment does not decode. */
+  enum Fault:
+    case State(token: String)
+    case Findings(error: FindingError)
+    case Coordinates(error: GavError)
 
   def published(root: Path): IO[Error, Set[Gav]] =
     blocking(root):
@@ -136,25 +143,26 @@ object PortalStore:
         case _ => None
 
   private def decode(dir: Path, state: String, report: String, gavs: String): Either[Error, Record] =
-    val parsed = state.trim match
-      case "VALIDATED" => Some(DeploymentState.Validated)
-      case "PUBLISHED" => Some(DeploymentState.Published)
-      case "FAILED"    => Some(DeploymentState.Failed)
-      case _           => None
-    parsed match
-      case None        => Left(Error.Io(dir))
-      case Some(found) =>
-        val findings    = lines(report).map(Finding.from)
-        val coordinates = lines(gavs).map(Gav.from)
-        if findings.exists(_.isEmpty) || coordinates.exists(_.isEmpty) then Left(Error.Io(dir))
-        else
-          Right(
-            Record(
-              found,
-              findings.flatMap(item => Chunk.fromIterable(item.toList)),
-              coordinates.flatMap(item => Chunk.fromIterable(item.toList)),
-            )
-          )
+    val decoded =
+      for
+        found       <- stored(state)
+        findings    <- every(lines(report))(Finding.from).left.map(Fault.Findings(_))
+        coordinates <- every(lines(gavs))(Gav.from).left.map(Fault.Coordinates(_))
+      yield Record(found, findings, coordinates)
+    decoded.left.map(Error.Unreadable(dir, _))
+
+  /** Only the states a stored deployment can rest in. */
+  private def stored(state: String): Either[Fault, DeploymentState] =
+    state.trim match
+      case "VALIDATED" => Right(DeploymentState.Validated)
+      case "PUBLISHED" => Right(DeploymentState.Published)
+      case "FAILED"    => Right(DeploymentState.Failed)
+      case other       => Left(Fault.State(other))
+
+  /** The first line that does not parse, or every parsed line. */
+  private def every[E, A](rows: Chunk[String])(parse: String => Either[E, A]): Either[E, Chunk[A]] =
+    val (bad, good) = rows.partitionMap(parse)
+    bad.headOption.toLeft(good)
 
   private def lines(text: String): Chunk[String] =
     if text.isEmpty then Chunk.empty

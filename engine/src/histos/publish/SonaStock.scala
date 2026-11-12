@@ -211,11 +211,12 @@ object SonaStock:
       case ReleaseError.Bundle(_)                                       => PublishFault.Bundle
       case ReleaseError.Client(histos.central.PortalError.Unauthorized) =>
         PublishFault.Rejected
-      case ReleaseError.Client(_)    => PublishFault.Client
-      case ReleaseError.Io(path)     => PublishFault.Write(path)
-      case ReleaseError.Record(ship) => PublishFault.Record(ship)
-      case ReleaseError.Stage(error) => PublishFault.Refused(error.message)
-      case ReleaseError.Asset(error) => PublishFault.Refused(error.message)
+      case ReleaseError.Client(_)         => PublishFault.Client
+      case ReleaseError.Io(path)          => PublishFault.Write(path)
+      case ReleaseError.Record(ship)      => PublishFault.Record(ship)
+      case ReleaseError.Deployment(error) => PublishFault.Refused(error.message)
+      case ReleaseError.Stage(error)      => PublishFault.Refused(error.message)
+      case ReleaseError.Asset(error)      => PublishFault.Refused(error.message)
 
   private final case class Ready(
       secret: RepositorySecret,

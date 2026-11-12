@@ -50,6 +50,7 @@ enum ReleaseError:
   case Credentials
   case Rejected
   case Portal(error: PortalBase.Error)
+  case Deployment(error: DeploymentId.Error)
   case Signer(error: SignerError)
   case Stage(error: LocalPublishError)
   case Bundle(error: BundleError)
@@ -59,16 +60,17 @@ enum ReleaseError:
   case Asset(error: AssetError)
 
   def message: String = this match
-    case Credentials   => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
-    case Rejected      => "the portal rejected the token. Regenerate the portal user token."
-    case Portal(error) => error.message
-    case Signer(error) => error.message
-    case Stage(error)  => error.message
-    case Bundle(error) => error.message
-    case Client(error) => error.message
-    case Record(ship)  => s"$ship deployment record is not readable"
-    case Io(path)      => s"could not write $path"
-    case Asset(error)  => error.message
+    case Credentials       => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
+    case Rejected          => "the portal rejected the token. Regenerate the portal user token."
+    case Portal(error)     => error.message
+    case Deployment(error) => error.message
+    case Signer(error)     => error.message
+    case Stage(error)      => error.message
+    case Bundle(error)     => error.message
+    case Client(error)     => error.message
+    case Record(ship)      => s"$ship deployment record is not readable"
+    case Io(path)          => s"could not write $path"
+    case Asset(error)      => error.message
 end ReleaseError
 
 /** One staged release. `root` is the Maven directory. Upload has not run. */
@@ -178,7 +180,7 @@ private[publish] object ReleaseRun:
     for
       secret <- ZIO.fromEither(credentials(env))
       base   <- ZIO.fromEither(Preflight.portal(env).left.map(ReleaseError.Portal(_)))
-      id     <- ZIO.fromEither(DeploymentId.from(raw).left.map(ReleaseError.Client(_)))
+      id     <- ZIO.fromEither(DeploymentId.from(raw).left.map(ReleaseError.Deployment(_)))
     yield (base, secret, id)
 
   private def erase(
