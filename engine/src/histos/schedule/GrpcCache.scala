@@ -1,22 +1,24 @@
 package histos.schedule
 
-import zio.{Chunk, IO, Scope, ZIO}
+import zio.{Chunk, Duration, IO, Scope, ZIO}
 
 /** Bazel gRPC cache. The action cache is `GetActionResult` and `UpdateActionResult`. The blob is `ByteStream.Read` and
   * `ByteStream.Write`, after `FindMissingBlobs`. The instance name is the namespace token (`main`, `pr/1`, `dev/name`).
   * A lookup walks that role's prefixes. `NOT_FOUND` tries the next one. Any other status stops. The action-cache body
   * is the same `ActionResult` the HTTP client stores, so the two protocols can read each other. The blob is written
-  * first. `purge` is not a remote-execution method.
+  * first. `purge` is not a remote-execution method. A call with no frame moving for `idle` is
+  * `CacheExchange.ReadTimeout`, the same fault the HTTP client reports when its server stops answering.
   */
 object GrpcCache:
   def open(
-      host: String,
-      port: Int,
-      tls: Boolean,
+      target: CacheConfig.Target.Grpc,
+      idle: Duration,
       mode: RemoteMode,
       namespace: CacheNamespace,
   ): ZIO[Scope, RemoteError, RemoteCache] =
-    GrpcChannel.open(host, port, tls).map(session => new Cache(session, host, port, mode, namespace))
+    GrpcChannel
+      .open(target, idle)
+      .map(session => new Cache(session, target.host, target.port, mode, namespace))
 
   private final class Cache(
       session: GrpcChannel.Session,

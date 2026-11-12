@@ -102,16 +102,8 @@ object NativeLink:
       digest <- JvmCompile
         .sourceDigest(sources)
         .mapError(NativeError.Compile(_))
-      compiled <- compile(
-        sources,
-        libs,
-        work,
-        jdk,
-        version,
-      ).mapError(
-        NativeError.Compile(_)
-      )
-      linker <- view
+      compiled <- compile(request, sources, libs).mapError(NativeError.Compile(_))
+      linker   <- view
         .selected(
           NativeRequests.linker(toolchain, view.catalog, view.repositories)
         )
@@ -174,36 +166,26 @@ object NativeLink:
     yield binary
 
   private def compile(
+      link: NativeLinkRequest,
       sources: List[Path],
       libs: NativeClasspath,
-      work: Path,
-      jdk: JdkRuntime,
-      version: ScalaVersion,
   ): ZIO[LockedTools, CompileError, CompileOutput] =
     val request = CompileRequest(
       CompileToolchain(
-        version,
+        link.version,
         Platform.Native,
-        jdk,
+        link.jdk,
         ScalacFlags.empty,
       ),
       sources,
       libs.libraries,
-      work.resolve("classes"),
-      work.resolve("analysis"),
+      link.work.resolve("classes"),
+      link.work.resolve("analysis"),
       Nil,
       Nil,
     )
     CompileReplay.isolated(
-      JvmCompile.compilePrepared(
-        request.copy(
-          compilationTools = List(libs.input),
-          compilerPlugins = List(
-            libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin))
-          ),
-        ),
-        List(libs.plugin),
-      )
+      JvmCompile.compilePrepared(request, histos.zinc.CellPlatform.Native(link.toolchain), List(libs.plugin))
     )
 
   /** The toolchain appends its own native libraries. A resolved jar of the same library, at any revision, is dropped.
