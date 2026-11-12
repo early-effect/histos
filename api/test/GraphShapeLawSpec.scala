@@ -111,6 +111,17 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         Projects(js("core")).map(at("core")(_.clang)) == Right(Some(ClangPin.Unused)),
       )
     ,
+    test("a native module's thread stack is 8m until it names one, and a jvm module cannot name one"):
+      val bare    = module("native", Native)(scala3).clang(ClangMajor(21))
+      val sized   = bare.threadStack(ThreadStack("16m")).threadStack(ThreadStack("32m"))
+      val onJvm   = typeCheckErrors("""module("core", Jvm)(scala"3.10.0").threadStack(ThreadStack("16m"))""")
+      val stackOf = at("native")(_.threadStack.value)
+      assertTrue(
+        Projects(bare).map(stackOf) == Right(Some("8m")),
+        Projects(sized).map(stackOf) == Right(Some("32m")),
+        onJvm.map(_.message) == List("threadStack is a Native setting, and this module does not build Native"),
+      )
+    ,
     test("one publication is kept, and an assembly is one jvm jar with at most one asset"):
       val main      = MainClass("app.Main")
       val jar       = asset"dist/app.jar"

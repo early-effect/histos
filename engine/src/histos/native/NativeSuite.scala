@@ -13,14 +13,15 @@ import histos.zinc.{
 
   ScalacFlags,
 }
-import histos.Platform
+import histos.{Platform, ThreadStack}
 import histos.resolve.{LockedTools, ResolveError}
 
 import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One native test-adapter run. The engine does not load `scala.scalanative`.
+/** One native test-adapter run. The engine does not load `scala.scalanative`. `stack` is the module's
+  * [[histos.ThreadStack]]: the suite environment is the one Histos curates, so nothing else can set it.
   */
 final case class NativeSuiteRequest(
     toolchain: NativeToolchain,
@@ -30,6 +31,7 @@ final case class NativeSuiteRequest(
     work: Path,
     jdk: JdkRuntime,
     processEnv: Map[String, String],
+    stack: ThreadStack,
     patterns: List[SuitePattern] = Nil,
 )
 
@@ -39,24 +41,28 @@ final case class NativeSuiteRequest(
 object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
-  /** Scala Native sizes a thread at max(1MB, the OS default): 8MB on Linux, 1MB on macOS. A debug link's ZIO run loop
-    * frame is about 5.5KB, and ZIO nests 300 of them before it trampolines, so 1MB overflows where 8MB holds. Every
-    * suite thread gets 8MB, so a law passes or fails the same on both. The adapter hands the runner's environment to
-    * the binary.
-    */
-  private val ThreadStack: (String, String) = "SCALANATIVE_THREAD_STACK_SIZE" -> "8m"
+  /** The runner's environment. The adapter hands it to the binary. */
+  private[histos] def environment(request: NativeSuiteRequest): Map[String, String] =
+    request.processEnv ++ NativeStack.environment(request.stack) ++ Map(
+      "NATIVE_BINARY"    -> request.binary.toAbsolutePath.toString,
+      "NATIVE_FRAMEWORK" -> request.framework,
+      "NATIVE_SHAPES"    -> shapesOf(request.work).toAbsolutePath.toString,
+    )
+
+  private def shapesOf(work: Path): Path = work.resolve("shapes.txt")
 
   def run(
       request: NativeSuiteRequest
   ): ZIO[LockedTools, NativeSuiteError, ChildRequest] =
     val NativeSuiteRequest(
       toolchain,
-      framework,
-      binary,
+      _,
+      _,
       classpath,
       work,
       jdk,
-      processEnv,
+      _,
+      _,
       patterns,
     )              = request
     val bridgeRoot = work.resolve("runner")
@@ -65,7 +71,7 @@ object NativeSuite:
       .resolve("src")
       .resolve("subprocess")
       .resolve("NativeSuite.scala")
-    val shapes = work.resolve("shapes.txt")
+    val shapes = shapesOf(work)
     val child  = work.resolve("runner-child")
     for
       found <- ClassShapes.read(classpath).mapError(NativeSuiteError.Shapes(_))
@@ -104,12 +110,7 @@ object NativeSuite:
       ChildClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
-      processEnv ++ Map(
-        "NATIVE_BINARY"    -> binary.toAbsolutePath.toString,
-        "NATIVE_FRAMEWORK" -> framework,
-        "NATIVE_SHAPES"    -> shapes.toAbsolutePath.toString,
-        ThreadStack,
-      ),
+      environment(request),
     )
 
   private def encode(shapes: List[ClassShapes.Shape]): String =

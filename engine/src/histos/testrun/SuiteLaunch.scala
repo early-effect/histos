@@ -441,6 +441,7 @@ private[testrun] object SuiteLaunch:
                     linkDir,
                     jdk,
                     TestCompile.suiteEnv(repo, runtimes.env),
+                    module.threadStack,
                     selected,
                   )
                 )
