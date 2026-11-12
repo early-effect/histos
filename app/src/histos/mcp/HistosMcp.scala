@@ -340,7 +340,14 @@ object HistosMcp:
                     ),
                     machine,
                   )
-                  .provide(histos.central.ReleaseFeed.live, histos.supply.GitRead.live, histos.supply.Terminal.detached)
+                  .provide(
+                    histos.central.ReleaseFeed.live,
+                    histos.supply.GitRead.live,
+                    histos.supply.Terminal.detached,
+                    ZLayer.succeed(histos.supply.Net.live),
+                    histos.doctor.GhAuth.live,
+                    histos.supply.Shell.live,
+                  )
                   .map((_, text) => DoctorText(text))
         }
       )

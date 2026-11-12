@@ -313,7 +313,8 @@ object Cli:
                   }
                 written
                   .provideSomeLayer[Loader & Resolve](
-                    ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live
+                    ReleaseFeed.live ++ histos.supply.GitRead.live ++ histos.supply.Terminal.live ++
+                      ZLayer.succeed(histos.supply.Net.live) ++ histos.doctor.GhAuth.live ++ histos.supply.Shell.live
                   )
                   .fold(
                     error => Completed(CliExit.Usage, "", error.message, Playback.Held),
@@ -509,7 +510,14 @@ object Cli:
                   histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes, launch, verbose),
                   machine,
                 )
-                .provide(ReleaseFeed.live, histos.supply.GitRead.live, histos.supply.Terminal.live)
+                .provide(
+                  ReleaseFeed.live,
+                  histos.supply.GitRead.live,
+                  histos.supply.Terminal.live,
+                  ZLayer.succeed(histos.supply.Net.live),
+                  histos.doctor.GhAuth.live,
+                  histos.supply.Shell.live,
+                )
                 .map: (code, text) =>
                   val exit = if code == 0 then CliExit.Success else CliExit.Failed
                   Completed(exit, text, "", Playback.Held)
