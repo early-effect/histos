@@ -108,6 +108,7 @@ object CellToolsLawSpec extends ZIOSpecDefault:
         artifacts,
         apis,
         coverage = coverage,
+        checkout = Path.of("/repo"),
       )
 
   private val genSha: Gen[Any, Sha256] = Gen.alphaNumericStringBounded(0, 12).map(digest)

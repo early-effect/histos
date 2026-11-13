@@ -23,7 +23,7 @@ object ScenarioSpec extends ZIOSpecDefault:
   private val locked: URIO[CompilerClosure, ScalaVersion] = ZIO.serviceWith[CompilerClosure](_.scalaVersion)
 
   def spec = suite("scenarios")(
-    test("a second checkout of the same bytes compiles again, and the wiped checkout restores without a start"):
+    test("a second checkout of the same bytes is a hit, and the wiped checkout restores without a start"):
       ZIO.scoped:
         for
           scala3   <- locked
@@ -35,6 +35,7 @@ object ScenarioSpec extends ZIOSpecDefault:
           _        <- right.write("core/src/main/scala/Core.scala", core)
           first    <- left.compile
           second   <- right.compile
+          landed   <- exists(coreClass(right, scala3))
           _        <- left.clean
           wiped    <- exists(coreClass(left, scala3))
           again    <- left.compile
@@ -43,13 +44,15 @@ object ScenarioSpec extends ZIOSpecDefault:
         yield assertTrue(
           failed(first ++ second ++ again).isEmpty,
           compiled(first),
-          compiled(second),
+          restored(second),
           restored(again),
+          missed(second).isEmpty,
           missed(again).isEmpty,
+          landed,
           !wiped,
           back,
-          starts == 2,
-          differs(keyOf(first), keyOf(second)),
+          starts == 1,
+          matches(keyOf(first), keyOf(second)),
           matches(keyOf(first), keyOf(again)),
         )
     ,

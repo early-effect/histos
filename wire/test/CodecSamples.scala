@@ -59,6 +59,8 @@ import histos.workspace.IoFailure
 import histos.zinc.*
 import histos.native.NativeSamples
 
+import java.nio.file.Path
+
 import zio.{Chunk, Config, NonEmptyChunk}
 
 /** One value per constructor, in declaration order. A defaulted field is not the default. */
@@ -215,6 +217,7 @@ object CodecSamples:
     CompileError.UnsupportedPlatform(Platform.Native),
     CompileError.UnsupportedScala(scala213),
     noSources,
+    CompileError.Outside(path, Path.of("/other")),
     CompileError.Banned(path, ClasspathBan.Histos),
     CompileError.Failed(List(CompileDiagnostic.fromCompiler("boom"))),
     CompileError.Toolchain(ToolchainMiss.Fetch(scala3)),

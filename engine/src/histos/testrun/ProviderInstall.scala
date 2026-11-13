@@ -85,6 +85,7 @@ private[testrun] final class ProviderInstall(
             Nil,
             Nil,
             permitted = permitted,
+            checkout = root,
           )
         )
         .mapError(error => ModuleTestError.Sources(module, version, error))

@@ -35,7 +35,8 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
             for
               _     <- Workspace.writeString(marker, "entry")
               found <- counted(
-                JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), js, Nil, List(plugin), Nil)
+                JvmCompile
+                  .compileWith(request(scala3, Platform.Js, Nil, Nil, Path.of("checkout")), js, Nil, List(plugin), Nil)
               )
             yield assertTrue(
               found.result == Left(CompileError.NoSources),
@@ -45,8 +46,9 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
     ,
     test("javascript with scala 3 and no sources is NoSources"):
       val program =
-        counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil), js, Nil, Nil, Nil)).map: found =>
-          assertTrue(found.result == Left(CompileError.NoSources), found.idle)
+        counted(JvmCompile.compileWith(request(scala3, Platform.Js, Nil, Nil, Path.of("checkout")), js, Nil, Nil, Nil))
+          .map: found =>
+            assertTrue(found.result == Left(CompileError.NoSources), found.idle)
       program.provideSomeLayer[TestEnvironment](gate)
     ,
     test("a classpath file that is not a zip fails the stat before the compiler"):
@@ -60,7 +62,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
               _     <- Workspace.writeString(source, "class A")
               _     <- Workspace.writeString(plain, "not a zip")
               found <- counted(
-                JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), List(plain)), Nil, _ => ())
+                JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), List(plain), dir), Nil, _ => ())
               )
             yield assertTrue(
               found.result == Left(CompileError.Io(IoFailure(plain, IoFault.Stat))),
@@ -74,7 +76,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
         .flatMap: dir =>
           val source  = dir.resolve("Gone.scala")
           val program =
-            counted(JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), Nil), Nil, _ => ())).map:
+            counted(JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), Nil, dir), Nil, _ => ())).map:
               found =>
                 assertTrue(
                   found.result == Left(CompileError.Io(IoFailure(source, IoFault.Read))),
@@ -148,6 +150,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
       platform: Platform,
       sources: List[Path],
       classpath: List[Path],
+      checkout: Path,
   ): CompileRequest =
     CompileRequest(
       CompileToolchain(version, platform, jdk, ScalacFlags.empty),
@@ -157,5 +160,6 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
       Path.of("analysis"),
       Nil,
       Nil,
+      checkout = checkout,
     )
 end JvmCompileLawSpec

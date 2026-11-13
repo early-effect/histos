@@ -959,7 +959,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           "CompileError",
           (
             "Resolved(error) | UnsupportedPlatform(platform) | " +
-              "UnsupportedScala(version) | NoSources() | Banned(path,ban) | " +
+              "UnsupportedScala(version) | NoSources() | Outside(source,checkout) | Banned(path,ban) | " +
               "Failed(diagnostics) | Toolchain(miss) | Io(failure) | JsLibrary(miss) | " +
               "NativeFetch(error) | NativeOrigin(error) | NativeLibrary(text) | " +
               "Stored(error)"

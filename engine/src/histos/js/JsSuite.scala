@@ -109,6 +109,7 @@ object JsSuite:
             bridgeRoot.resolve("analysis"),
             Nil,
             Nil,
+            checkout = bridgeRoot,
           )
         )
         .mapError(JsSuiteError.Library(_))

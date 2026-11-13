@@ -39,6 +39,36 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
   private val lawName = ProjectName.trusted("law")
 
   def spec = suite("zinc compile laws")(
+    test("the source row is the path relative to the checkout, then the bytes"):
+      Workspace
+        .work("histos-source-row")
+        .flatMap: dir =>
+          val left    = dir.resolve("left")
+          val right   = dir.resolve("right")
+          val outside = dir.resolve("outside.scala")
+          val text    = "object Core\n"
+          val core    = "core/src/main/scala/Core.scala"
+          val other   = "core/src/main/scala/Other.scala"
+          for
+            _       <- Workspace.writeString(left.resolve(core), text)
+            _       <- Workspace.writeString(right.resolve(core), text)
+            _       <- Workspace.writeString(left.resolve(other), text)
+            _       <- Workspace.writeString(outside, text)
+            same    <- JvmCompile.sourceDigest(left, List(left.resolve(core)))
+            twin    <- JvmCompile.sourceDigest(right, List(right.resolve(core)))
+            swapped <- JvmCompile.sourceDigest(left, List(left.resolve(other), left.resolve(core)))
+            ordered <- JvmCompile.sourceDigest(left, List(left.resolve(core), left.resolve(other)))
+            moved   <- JvmCompile.sourceDigest(left, List(left.resolve(other)))
+            refused <- JvmCompile.sourceDigest(left, List(outside)).either
+          yield assertTrue(
+            same == twin,
+            same != moved,
+            swapped == ordered,
+            refused == Left(
+              CompileError.Outside(outside.toAbsolutePath.normalize, left.toAbsolutePath.normalize)
+            ),
+          )
+    ,
     test(
       "a one-file program compiles, the same request does not start the compiler again, and a type error is that diagnostic"
     ):
@@ -52,15 +82,16 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
               for
                 _      <- Workspace.writeString(hello, "object Hello:\n  def ready: Int = 1\n")
                 _      <- Workspace.writeString(bad, "object Bad:\n  val n: Int = \"no\"\n")
-                first  <- compile(closure.scalaVersion, hello, dir.resolve("classes"), dir.resolve("analysis"))
+                first  <- compile(closure.scalaVersion, hello, dir.resolve("classes"), dir.resolve("analysis"), dir)
                 after  <- ZIO.serviceWithZIO[CompilerStarts](_.get)
-                second <- compile(closure.scalaVersion, hello, dir.resolve("classes"), dir.resolve("analysis"))
+                second <- compile(closure.scalaVersion, hello, dir.resolve("classes"), dir.resolve("analysis"), dir)
                 held   <- ZIO.serviceWithZIO[CompilerStarts](_.get)
                 broken <- compile(
                   closure.scalaVersion,
                   bad,
                   dir.resolve("bad-classes"),
                   dir.resolve("bad-analysis"),
+                  dir,
                 ).either
                 spent <- ZIO.serviceWithZIO[CompilerStarts](_.get)
                 wrote <- ZIO.attemptBlocking(Files.isRegularFile(dir.resolve("classes").resolve("Hello.class"))).orDie
@@ -146,7 +177,7 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
             ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](graphEnv(closure, dir)),
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer ++ Compilers.live(1))
 
-  private def compile(scala3: ScalaVersion, source: Path, classes: Path, analysis: Path) =
+  private def compile(scala3: ScalaVersion, source: Path, classes: Path, analysis: Path, checkout: Path) =
     JvmCompile
       .compilePooled(
         CompileRequest(
@@ -157,6 +188,7 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
           analysis,
           Nil,
           Nil,
+          checkout = checkout,
         ),
         Nil,
         _ => (),

@@ -236,6 +236,7 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
       analysis,
       Nil,
       Nil,
+      checkout = Path.of("/repo"),
     )
 
   private def replayed(request: CompileRequest, key: Sha256): CompileOutput =

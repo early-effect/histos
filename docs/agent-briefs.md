@@ -68,7 +68,7 @@ Read-through is last, after every other brief.
 ### Repo-relative sources
 
 - **Goal.** The source row of a compile key hashes each source's path relative to the checkout, then its bytes. Two checkouts of the same tree share a compile hit, and the second does not start the compiler. A wiped checkout of either one still restores.
-- **Start at.** `engine/src/histos/zinc/CompileInputs.scala`, `CellTools.scala` (the one key function, B23), and `engine/test/ScenarioSpec.scala`, where today's law asserts a miss across two checkouts.
+- **Start at.** `engine/src/histos/zinc/CompileInputs.scala`, `CellTools.scala` (the one key function, B23), and `engine/test/ScenarioSpec.scala`, where the law shows one compile hit across two checkouts.
 - **Binds.** D7: content, never modified times. B23: recall and compile build the key with one function, so change it there. Absolute paths that Zinc or the compiler embed in outputs stay out of the key.
 - **Proof.** `ScenarioSpec`, with the cross-checkout miss assertion replaced by the hit: no miss and one compiler start in total, plus a wiped checkout that restores. Check the item in both plans.
 

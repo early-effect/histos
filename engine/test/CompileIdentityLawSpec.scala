@@ -453,12 +453,19 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
               banned <- jar(dir.resolve("api.jar"), ClassMarker.HistosBuild.entry)
               _      <- Workspace.writeString(ClassMarker.HistosBuild.under(tree), "")
               _      <- Workspace.writeString(plugin.resolve("META-INF").resolve("histos").resolve("plugin"), "")
-              hidden <- refused(cell(dir.resolve("c1"), dir.resolve("a1"), List(source), List(banned)))
+              hidden <- refused(cell(dir.resolve("c1"), dir.resolve("a1"), List(source), List(banned), checkout = dir))
               waived <- refused(
-                cell(dir.resolve("c2"), dir.resolve("a2"), List(source), List(banned), permitted = List(banned))
+                cell(
+                  dir.resolve("c2"),
+                  dir.resolve("a2"),
+                  List(source),
+                  List(banned),
+                  permitted = List(banned),
+                  checkout = dir,
+                )
               )
-              passed <- refused(cell(dir.resolve("c3"), dir.resolve("a3"), List(source), List(tree)))
-              marked <- refused(cell(dir.resolve("c4"), dir.resolve("a4"), List(source), List(plugin)))
+              passed <- refused(cell(dir.resolve("c3"), dir.resolve("a3"), List(source), List(tree), checkout = dir))
+              marked <- refused(cell(dir.resolve("c4"), dir.resolve("a4"), List(source), List(plugin), checkout = dir))
             yield assertTrue(
               hidden._1 == Left(CompileError.Banned(banned, ClasspathBan.Histos)),
               kind(waived._1) == "no-tool",
@@ -507,6 +514,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
       version: String = "3.10.0",
       platform: Platform = Platform.Jvm,
       permitted: List[Path] = Nil,
+      checkout: Path = Path.of("/repo"),
   ): CompileRequest =
     CompileRequest(
       CompileToolchain(
@@ -522,6 +530,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
       Nil,
       Nil,
       permitted = permitted,
+      checkout = checkout,
     )
 
   private def replayed(request: CompileRequest, key: Sha256): CompileOutput =

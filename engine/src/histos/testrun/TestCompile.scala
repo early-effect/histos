@@ -292,6 +292,7 @@ private[histos] object TestCompile:
         linked.hashes,
         apis,
         permitted = linked.permitted,
+        checkout = repo,
       )
       held  <- holdMeasured(coverage, linked.classDirs, module.name, cell.version)
       facts <- compileSuite(

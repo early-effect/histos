@@ -205,6 +205,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "compile does not support Native",
           "compile supports Scala 3 and Scala 2.13, not 2.13.16",
           sources,
+          "/work/repo is outside /other",
           "/work/repo is histos and is not a user dependency",
           "boom",
           "the 3.10.0 compiler could not be fetched",

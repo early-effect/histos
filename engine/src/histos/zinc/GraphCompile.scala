@@ -533,8 +533,9 @@ object GraphCompile:
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
   /** Lock checksums and source bytes. A hit does not fetch jars, read the store, or open a compiler. The caller listed
-    * the sources and this hashes their bytes, so an added, deleted, or edited source is a miss whatever the modified
-    * times say. The key is [[CellTools.recall]]'s, which the compile stores through the same function.
+    * the sources and this hashes each path relative to the checkout, then its bytes, so an added, deleted, or edited
+    * source is a miss whatever the modified times say. The key is [[CellTools.recall]]'s, which the compile stores
+    * through the same function.
     */
   private def recall(
       work: CellWork,
@@ -564,9 +565,10 @@ object GraphCompile:
                   hashes,
                   apis,
                   coverage = identity,
+                  checkout = plan.repo,
                 )
                 JvmCompile
-                  .sourceDigest(sources)
+                  .sourceDigest(base.checkout, sources)
                   .flatMap(digest => CellTools.recall(plan.tools, placed, base, digest))
                   .flatMap:
                     case Some(keyed) => CompileReplay.recall(keyed.request, keyed.key)
@@ -627,6 +629,7 @@ object GraphCompile:
                     permitted = assembled.permitted,
                     coverage = planned.map(_.identity),
                     coverageTools = planned.fold(List.empty[ToolInput])(_.tools),
+                    checkout = plan.repo,
                   )
                   compiled <- compile(
                     work,
