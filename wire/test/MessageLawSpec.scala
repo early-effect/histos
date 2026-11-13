@@ -3,11 +3,14 @@ package histos
 import histos.central.MetadataFault
 import histos.doctor.{Diagnostic, Fix}
 import histos.node.NodeFileFault
+import histos.process.ChildError
+import histos.testrun.ModuleTestError
 import histos.zinc.JsLibraryMiss
 
 import zio.test.*
 
 import CodecSamples.*
+import WireSamples.{core, scala3}
 
 /** The sentence is the contract. A wrong arm or a dropped field fails. */
 object MessageLawSpec extends ZIOSpecDefault:
@@ -58,6 +61,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "the child did not report a status",
           "could not read the child's output",
           read,
+          "a child outlived the process, which exited 7, and held its output",
         ),
       )
     ,
@@ -1382,6 +1386,8 @@ object MessageLawSpec extends ZIOSpecDefault:
       val samples = moduleTests
       assertTrue(
         EnumLaw.covered(samples),
+        ModuleTestError.Process(core, scala3, ChildError.Orphan(7)).message ==
+          "'core' 3.10.0 exited 7 and left a child holding its output",
         samples.map(_.message) == List(
           "the JavaScript environment could not be fetched",
           "'core' is listed twice",

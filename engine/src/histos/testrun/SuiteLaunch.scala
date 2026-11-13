@@ -941,7 +941,8 @@ private[testrun] object SuiteLaunch:
       TestCompile.suiteEnv(repo, runtimes.env) ++ extra,
     )
 
-  /** Header, then lines as the process writes them, then the cell. `NoneFound` fails the stream.
+  /** Header, then lines as the process writes them, then the cell. A child that holds the pipes after the process exits
+    * fails the stream. `NoneFound` fails the stream.
     */
   private[testrun] def session(
       module: ProjectName,

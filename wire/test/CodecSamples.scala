@@ -112,6 +112,7 @@ object CodecSamples:
     ChildError.Status,
     ChildError.Console,
     ChildError.Io(io),
+    ChildError.Orphan(7),
   )
 
   val pluginIos: List[PluginIo] = List(

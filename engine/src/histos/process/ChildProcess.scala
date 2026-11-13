@@ -12,7 +12,8 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Scope, System, UIO, ZIO}
+import zio.{Chunk, Duration, IO, Promise, Scope, System, UIO, ZIO}
+import zio.durationInt
 import zio.stream.{ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses.
@@ -55,6 +56,9 @@ enum ChildEvent:
   case Exited(code: ProcessExit)
 
 object ChildProcess:
+  /** How long a process's pipes may stay open after it exits. A child still holding them past this is an orphan. */
+  private[process] val Drain: Duration = 1.second
+
   private val EntryClass: MainClass = MainClass.trusted("subprocess.Entry")
 
   /** Calls `setpgid(0, 0)` before the user main, so children join that group. A parent cannot change the group after
@@ -87,7 +91,8 @@ object ChildProcess:
       |""".stripMargin
 
   /** One subprocess for one main. Stdout and stderr are lines, merged so neither pipe fills up. The environment is the
-    * request's map. Interrupt kills the process group and every descendant.
+    * request's map. The stream waits for the process, then drains for [[Drain]]. Interrupt, and an orphan, end the
+    * process group and every descendant.
     */
   def events(request: ChildRequest): ZStream[Any, ChildError, ChildEvent] =
     if request.platform != Platform.Jvm then ZStream.fail(ChildError.UnsupportedPlatform(request.platform))
@@ -98,14 +103,13 @@ object ChildProcess:
           compiler <- ZIO.fromEither(javac(request.java))
           entry    <- bootstrap(request.work, compiler)
           child    <- spawn(start(request, entry), Group.Own)
-        yield child.console ++ ZStream.fromZIO(
-          finish(request, child.process).map(ChildEvent.Exited(_))
-        )
+        yield attend(child, finish(request, child.process), Group.Own)
       }
 
   /** A linked program: `node`, or a native binary. A small JVM calls `setpgid(0, 0)` and then `execvp`, so the program
-    * and everything it starts share that group. Interrupt kills the group, which still names a descendant after its
-    * parent has exited. On Linux that also closes the pipe a blocked read is waiting on.
+    * and everything it starts share that group. The stream waits for the program, then drains for [[Drain]]. Interrupt,
+    * and an orphan, end the group, which still names a descendant after its parent has exited. On Linux that also
+    * closes the pipe a blocked read is waiting on.
     */
   def command(
       argv: List[String],
@@ -124,9 +128,7 @@ object ChildProcess:
               startCommand(java, classes, argv, work, environment),
               Group.Own,
             )
-          yield child.console ++ ZStream.fromZIO(
-            wait(child.process).map(ChildEvent.Exited(_))
-          )
+          yield attend(child, wait(child.process), Group.Own)
 
   /** Collect [[events]] for a caller that wants the text after the process ends.
     */
@@ -139,9 +141,7 @@ object ChildProcess:
   ): ZStream[Any, ChildError, ChildEvent] =
     ZStream.unwrapScoped:
       spawn(start, group).map: child =>
-        child.console ++ ZStream.fromZIO(
-          wait(child.process).map(ChildEvent.Exited(_))
-        )
+        attend(child, wait(child.process), group)
 
   private def collect(
       events: ZStream[Any, ChildError, ChildEvent]
@@ -201,6 +201,48 @@ object ChildProcess:
         .flattenTake
         .merge(ZStream.fromQueue(err).flattenTake),
     )
+
+  /** Lines while the process runs, then its status. The status waits on the process, not on the pipes. After it exits,
+    * a child that inherited a pipe may still hold that pipe. The drain is [[Drain]], waited on a blocking thread so the
+    * caller's clock cannot hold the suite. Past that the group is ended and the stream fails with
+    * [[ChildError.Orphan]], so a suite cannot be recorded as finished while the child lives.
+    */
+  private def attend(
+      child: Child,
+      finish: IO[ChildError, ProcessExit],
+      group: Group,
+  ): ZStream[Any, ChildError, ChildEvent] =
+    ZStream.unwrapScoped:
+      for
+        closed <- Promise.make[Nothing, Unit]
+        result <- Promise.make[ChildError, ChildEvent]
+        _      <- finish
+          .foldZIO(
+            error => end(child.process, group) *> result.fail(error),
+            code =>
+              closed.isDone.flatMap:
+                case true  => result.succeed(ChildEvent.Exited(code))
+                case false =>
+                  closed.await
+                    .as(true)
+                    .race(pause(Drain).as(false))
+                    .flatMap:
+                      case true  => result.succeed(ChildEvent.Exited(code))
+                      case false => end(child.process, group) *> result.fail(ChildError.Orphan(code.value)),
+          )
+          .forkScoped
+      yield child.console.ensuring(closed.succeed(()).unit) ++ ZStream.fromZIO(result.await)
+
+  /** Real time. A test clock cannot close the pipe, so this wait does not sleep on the caller's clock. */
+  private def pause(bound: Duration): UIO[Unit] =
+    ZIO.attemptBlockingInterrupt(Thread.sleep(bound.toMillis)).orDie
+
+  private def end(process: Process, group: Group): UIO[Unit] =
+    val killed =
+      group match
+        case Group.Own       => killGroup(process)
+        case Group.Inherited => ZIO.unit
+    killed *> ProcessTree.of(process).flatMap(_.destroy)
 
   private def text(input: InputStream): ZStream[Any, ChildError, String] =
     ZStream

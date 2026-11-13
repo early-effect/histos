@@ -72,7 +72,11 @@ enum ModuleTestError:
     case Mixed(module) =>
       s"'${module.value}' names a test main and a test provider"
     case Process(module, version, error) =>
-      s"'${module.value}' ${version.value} did not start\n${error.message}"
+      error match
+        case ChildError.Orphan(exit) =>
+          s"'${module.value}' ${version.value} exited $exit and left a child holding its output"
+        case _ =>
+          s"'${module.value}' ${version.value} did not start\n${error.message}"
     case Main(error)    => error.message
     case Absent(module) =>
       s"'${module.value}' was compiled and is not a module in the graph"

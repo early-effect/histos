@@ -874,7 +874,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
             "UnsupportedPlatform(platform) | Java(path) | Classes(path) | " +
               "Artifact(path) | Work(path) | Group(op) | Bootstrap(output) | " +
               "NoProgram() | Start(program) | Property(name) | Status() | Console() | " +
-              "Io(failure)"
+              "Io(failure) | Orphan(exit)"
           ),
           """{"NoProgram":{}}""",
           histos.process.ChildError.NoProgram,
