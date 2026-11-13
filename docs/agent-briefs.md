@@ -57,7 +57,7 @@ Three tracks can run side by side. Within a track, one brief at a time, because 
 | Cache | Repo-relative sources, then Link cache, then Remote cache | no |
 | Toolchain | Ship row, then Dist layer, then Container, then CI setup | each one |
 | Command line | Grammar | only if the rendered workflow changes |
-| Small fixes | Row 50. B40 closes with Link cache. B41 and B42 are closed | no |
+| Small fixes | Closed. B40 closed with Link cache. B41, B42, and row 50 are closed | no |
 
 Read-through is last, after every other brief.
 
@@ -148,7 +148,7 @@ Each is one pull request with its red law. They touch different code, so they ca
 
 - **B41.** Closed. `attend` waits for the process, drains its pipes for one second on a blocking thread, ends the process group, and fails with `ChildError.Orphan`. The law is `ChildCommandLawSpec`. The ledger row has the red and green counts.
 - **B42.** Closed. Zinc's class-file manager deletes a `.class` and whatever `AuxiliaryClassFiles` names. `JvmCompile.once` passed `IncOptions.of()`, so a deleted source's `.class` went and its `.tasty` stayed. `once` now passes `ProductSiblings`, and that same delete removes `.tasty`, `.nir`, and `.sjsir` with the class. The law is `ScenarioSpec`. The ledger row has the red and green.
-- **Row 50.** A suite's test compile passes no problem listener, so test-source warnings print nowhere. The CLI shows them only when the compile fails. Pass the listener, as the main compile does, and prove a warning in a test source is printed.
+- **Row 50.** Closed. `SuiteLaunch` passed no `hear`, so the default listener dropped every test-compile problem. `ModuleTest.heard` offers each `CompileFeed.Diagnostic` while the test compile runs. A warning does not fail the suite. The law is `ScenarioSpec`. The red and green are on the cli-work-plan row.
 
 ## Read-through
 

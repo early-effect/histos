@@ -267,6 +267,7 @@ private[load] object PluginCells:
           origin,
           lock,
           BuildResolvers(graph.resolvers),
+          _ => (),
         )
         .provideSome[
           Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache

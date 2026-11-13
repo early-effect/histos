@@ -137,6 +137,10 @@ final class Checkout private[histos] (
     * written under this work tree.
     */
   def test(mode: TestMode): IO[ModuleTestError | GraphCompileError | ResolveError, Chunk[TestFeed]] =
+    session(mode).map(_.collect { case SessionFeed.Test(feed) => feed })
+
+  /** The compile feed and the test feed, as the server's `test` streams them. */
+  def session(mode: TestMode): IO[ModuleTestError | GraphCompileError | ResolveError, Chunk[SessionFeed]] =
     for
       machine  <- here
       jdk      <- GraphCompile.jdk(machine)
@@ -145,7 +149,6 @@ final class Checkout private[histos] (
       remote   <- cache.get
       feeds    <- ModuleTest
         .sessionOn(TestRun(root, build, Nil, jdk, runtimes, mode))
-        .collect { case SessionFeed.Test(feed) => feed }
         .runCollect
         .provideLayer(
           ZLayer.succeedEnvironment(env) ++ ZLayer.succeed(remote) >+> ResolutionService.pinned(lock)

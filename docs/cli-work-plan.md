@@ -269,15 +269,21 @@ The open items are written as agent-ready briefs, with their order, bindings, an
   - `./histos test wire app central`: wire 251 on JVM and Native, app 201, central 81. The native client compiles.
 - [x] **Error positions.** A test compile error prints `file:line:col` like a main compile error. Proof: a law on the rendered failure of a broken test source. Done:
   - The reporter kept only each problem's message. Now each failure diagnostic is `path:line:column: error: message`, through the same `Lines` rendering the console streams, and a warning is not part of the failure.
-  - A suite's test compile still does not stream its problems, so warnings in test sources print nowhere. That is a feed change for a later item.
+  - Streaming a test-source warning, while the suite still passes, is the silent test warnings item.
   - Proof: a new `ScenarioSpec` law compiles a broken main source and a broken test source with the real compiler. Both failure texts name the file and line, carry `: error: `, and carry no warning. It was red against the old reporter for both.
   - `./histos test wire engine app`: wire 251 on JVM and Native, engine 693, app 201.
+- [x] **Silent test warnings.** A warning in a test source is a `CompileFeed.Diagnostic` on the test session, with the file and the line, and the suite still passes. Proof: `ScenarioSpec`, "a warning in a test source is on the feed, and the suite still passes". Done:
+  - `SuiteLaunch` called `TestCompile.compiledTests` without `hear`. The default listener was `_ => ()`, so a problem never reached the session. The CLI prints `CompileFeed.Diagnostic` already. Nothing else reports it.
+  - `ModuleTest.heard` passes that listener. The compiler calls it on its own thread, and the callback offers `CompileFeed.Diagnostic` onto the session while the test compile is still running. A warning is not a failure.
+  - Red: `shown` was `Chunk()`. The suite had passed, and the feed had no warning. That run was 738 passed and 1 failed.
+  - Green: the same law. The line names the test file, `:5:`, and `: warn:`, and the message contains `deprecated`.
+  - `./histos test api wire central engine app`: api 196 on jvm and on native, wire 247 on jvm and on native, central 86, engine 740, app 214. No test-clock warning. `./histos fmt --check`, `./histos workflow --check`, and `./histos run doc` are clean.
 - [x] **Program output.** `histos run` streams the program's output as it runs. Proof: a law with a real child that prints a line, then waits on a gate: the line arrives before the gate opens. Done:
   - `Program.runCell` ran each cell as a step that collected the whole feed with `runCollect`, so nothing printed until the program exited.
   - The step now hands each feed to a queue that the stream reads as it fills. The producer is forked into the stream's scope, so ending the stream stops the program.
   - Proof: the `ScenarioSpec` law runs a real program that prints `ready`, then waits for a gate the law opens only after it sees `ready`. It was red before the fix (no output within 60 seconds) and is green after.
   - `./histos test engine app`: engine 694, app 201.
-  - Row 50, silent test warnings, is still open: a test compile still passes no listener.
+  - Silent test warnings closed after this: a test compile now passes the same problem listener the main compile uses.
 - [x] **Link cache.** A native or JavaScript link whose key (`NativeKey`, `JsKey` on product digests) is in the store restores the linked output and does not start the linker. Read [cache-work-plan.md](cache-work-plan.md) first. Proof: a scenario counts linker starts: a trailing comment keeps the link, a method body relinks, a changed path constant relinks, and a wiped checkout restores without a link. Done:
   - D10. `ProductDigest.normalize` strips only the checkout root, on a path boundary, and leaves every other string. Two directories that differ by `/api/v1/users` against `/api/v2/users` digest differently. A filesystem root is not a checkout root. Red: both directories hashed to `c859aaff191ea80f46c45021b876546bc890750b45837b361cebe17ed8b2ca08`. Green: `ProductDigestLawSpec`, 2 passed.
   - B40. A Native compile that wrote class files and no `.nir` for a `.scala` source fails with `CompileError.NoNir` and stores nothing. Recall of a Native analysis in that shape drops the store entry and misses. Red: the compile returned `Right` with two class files and two store entries. Green: `ZincCompileLawSpec`, 6 passed, including "a native compile that produced no nir for a source fails and stores nothing".

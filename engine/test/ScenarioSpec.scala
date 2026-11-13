@@ -5,9 +5,19 @@ import histos.jdk.{Sha256, Sha256Digest}
 import histos.preview.QuickAnswer
 import histos.program.ProgramFeed
 import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCell, Resolve, ResolveError, ToolRole}
-import histos.testrun.{TestFeed, TestMode, TestStatus}
+import histos.cli.Lines
+import histos.testrun.{SessionFeed, TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{ApiDigest, CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
+import histos.zinc.{
+  ApiDigest,
+  CompileFeed,
+  CompileInput,
+  CompileSeverity,
+  CompiledCell,
+  GraphCompile,
+  GraphCompileError,
+  KeyMiss,
+}
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
@@ -507,6 +517,34 @@ object ScenarioSpec extends ZIOSpecDefault:
             !testText.contains(": warning: "),
           )
     ,
+    test("a warning in a test source is on the feed, and the suite still passes"):
+      ZIO.scoped:
+        for
+          scala3 <- locked
+          built  <- ZIO.fromEither(
+            Projects.locked(
+              module("app", Jvm)(scala3).scalac(ScalacFlag.Deprecation).test(TestMain("demo.Foo"))
+            )
+          )
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          foo = checkout.root.resolve("app/src/test/scala/demo/Foo.scala")
+          _     <- checkout.write("app/src/main/scala/demo/Lib.scala", deprecatedLib)
+          _     <- checkout.write("app/src/test/scala/demo/Foo.scala", callsDeprecated)
+          feeds <- checkout.session(TestMode.Run)
+          tests = feeds.collect { case SessionFeed.Test(feed) => feed }
+          shown = feeds.collect {
+            case SessionFeed.Compile(CompileFeed.Diagnostic(_, _, _, problem))
+                if problem.severity == CompileSeverity.Warn =>
+              Lines.located(problem)
+          }
+        yield assertTrue(
+          shown.exists(line => line.contains(foo.toString) && line.contains(":5:") && line.contains(": warn: ")),
+          shown.exists(_.contains("deprecated")),
+          statuses(tests) == List(TestStatus.Passed),
+          failed(feeds.collect { case SessionFeed.Compile(feed) => feed }).isEmpty,
+        )
+    ,
     test("a restored upstream enum re-expands an unchanged test that inlines its mirror size, and clean keeps it"):
       ZIO.scoped:
         for
@@ -830,6 +868,23 @@ object ScenarioSpec extends ZIOSpecDefault:
       |
       |object Lib:
       |  def word: String = "alpha"
+      |""".stripMargin
+
+  /** The call in the test source is the warning. Defining `word` does not warn. */
+  private val deprecatedLib =
+    """package demo
+      |
+      |object Lib:
+      |  @deprecated("gone", "0")
+      |  def word: String = "alpha"
+      |""".stripMargin
+
+  private val callsDeprecated =
+    """package demo
+      |
+      |object Foo:
+      |  def main(args: Array[String]): Unit =
+      |    println(Lib.word)
       |""".stripMargin
 
   /** `core`'s `Lib`. `home` looks like a path, so a scrub that cuts a path to its leaf reads `v1` and `v2` as one. */
