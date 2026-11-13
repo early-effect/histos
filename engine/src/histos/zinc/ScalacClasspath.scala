@@ -18,7 +18,8 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** The scalac classpath of one cell. Compile and BSP both call this.
+/** The scalac classpath of one cell over the upstream cells [[UpstreamCells.read]] picked. Compile, BSP, and scaladoc
+  * call this. Each upstream's lock jars and classes directory are its own cell's, at that cell's Scala version.
   *
   * `paths` is the runtime library, then the lock jars, then the upstream class directories. On the JVM and on Native
   * the lock's copy of the JVM standard library is dropped, because the compiler already puts that runtime first. A
@@ -39,18 +40,16 @@ object ScalacClasspath:
     */
   private[zinc] def lockHashes(
       lock: DependencyLock,
-      modules: List[Module],
       module: Module,
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       scope: ClasspathScope,
   ): Option[List[histos.jdk.Sha256]] =
-    val chain = Module.chain(module, modules, platform)
-    val asked = chain.map(item => item -> ClasspathScope.Compile) :+ (module -> scope)
-    val found = asked.map: (item, itemScope) =>
+    val found = asked(module, upstream, version, scope).map: (item, itemVersion, itemScope) =>
       lock.cells.find: cell =>
         cell.module == item.name &&
-          cell.scalaVersion == version &&
+          cell.scalaVersion == itemVersion &&
           cell.platform == platform &&
           cell.scope == itemScope
     if found.exists(_.isEmpty) then None
@@ -68,22 +67,29 @@ object ScalacClasspath:
   private def standardLibrary(artifact: LockedArtifact): Boolean =
     artifact.name == "scala-library" || artifact.name.startsWith("scala3-library_")
 
+  /** Each upstream's compile cell at its own version, then `module`'s `scope` cell at `version`. */
+  private def asked(
+      module: Module,
+      upstream: List[UpstreamCell],
+      version: ScalaVersion,
+      scope: ClasspathScope,
+  ): List[(Module, ScalaVersion, ClasspathScope)] =
+    upstream.map(cell => (cell.module, cell.version, ClasspathScope.Compile)) :+ (module, version, scope)
+
   def of(
       repo: Path,
-      modules: List[Module],
       module: Module,
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
       scope: ClasspathScope,
   ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, ScalacClasspath] =
-    val chain = Module.chain(module, modules, platform)
-    val asked = chain.map(item => item -> ClasspathScope.Compile) :+ (module -> scope)
     for
       fetched <- ZIO
-        .foreach(asked):
-          case (item, itemScope) => load(item, version, platform, lock, repositories, itemScope)
+        .foreach(asked(module, upstream, version, scope)):
+          case (item, itemVersion, itemScope) => load(item, itemVersion, platform, lock, repositories, itemScope)
         .map(merge)
       kept = if dropJvmLibrary(platform) then withoutStdlib(fetched) else fetched
       runtime <- runtimeOf(module, version, platform)
@@ -91,7 +97,7 @@ object ScalacClasspath:
         if asks(dependenciesOf(module, platform, scope), version, platform) then hostApi(repo).map(Some(_))
         else ZIO.none
     yield
-      val dirs = directories(repo, module, chain, version, platform, scope)
+      val dirs = directories(repo, module, upstream, version, platform, scope)
       val jars = kept.paths ++ api.toList
       ScalacClasspath(runtime ++ jars ++ dirs, jars, kept.hashes, api.toList)
 
@@ -112,16 +118,16 @@ object ScalacClasspath:
   private def directories(
       repo: Path,
       module: Module,
-      chain: List[Module],
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       scope: ClasspathScope,
   ): List[Path] =
-    val upstream = chain.map(item => GraphCompile.classesDir(repo, item.name, version, platform))
+    val dirs = upstream.map(_.classes)
     scope match
-      case ClasspathScope.Compile => upstream
+      case ClasspathScope.Compile => dirs
       case ClasspathScope.Test    =>
-        GraphCompile.classesDir(repo, module.name, version, platform) :: upstream
+        GraphCompile.classesDir(repo, module.name, version, platform) :: dirs
 
   private def load(
       module: Module,

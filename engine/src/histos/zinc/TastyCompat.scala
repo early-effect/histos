@@ -1,7 +1,7 @@
 package histos.zinc
 
+import histos.ScalaVersion
 import histos.workspace.{IoFailure, IoFault}
-import histos.{Module, Platform, ProjectName, ScalaVersion}
 
 import java.lang.reflect.Method
 import java.net.{URL, URLClassLoader}
@@ -147,57 +147,3 @@ private[zinc] object TastyCompat:
       if (piece & 0x80) != 0 then Some((next, at + 1))
       else nat(bytes, at + 1, next)
 end TastyCompat
-
-/** Which declared cell a depender waits for. An exact cell wins. */
-private[histos] object UpstreamCells:
-  private type Cell = (ProjectName, ScalaVersion, Platform)
-
-  def isScala3(version: ScalaVersion): Boolean =
-    version.value.startsWith("3.")
-
-  def is213(version: ScalaVersion): Boolean =
-    version.value.startsWith("2.13.")
-
-  def rank(version: ScalaVersion): (Int, Int, Int) =
-    val head                = version.value.takeWhile(ch => ch.isDigit || ch == '.')
-    val parts               = head.split('.')
-    def at(index: Int): Int =
-      if index >= parts.length then 0
-      else parts(index).toIntOption.getOrElse(0)
-    (at(0), at(1), at(2))
-
-  def required(
-      depender: ScalaVersion,
-      upstream: Module,
-      platform: Platform,
-      declared: Set[Cell],
-  ): List[Cell] =
-    val cells = upstream.versions.all.flatMap: item =>
-      val key = (upstream.name, item, platform)
-      if declared.contains(key) then List(key) else Nil
-    val exact = (upstream.name, depender, platform)
-    if declared.contains(exact) then List(exact)
-    else if is213(depender) then
-      cells.filter((_, item, _) => is213(item)).sortBy((_, item, _) => rank(item)).takeRight(1)
-    else if isScala3(depender) then cells.filter((_, item, _) => isScala3(item))
-    else Nil
-
-  /** The cell compile would put on the classpath. Exact wins. Otherwise the newest declared version this compiler can
-    * read: same series, not a newer minor.
-    */
-  def chosen(
-      depender: ScalaVersion,
-      upstream: Module,
-      platform: Platform,
-      modules: List[Module],
-  ): Option[ScalaVersion] =
-    val declared = modules.flatMap(item => item.versions.all.map(version => (item.name, version, platform))).toSet
-    val eligible =
-      required(depender, upstream, platform, declared).filter((_, item, _) => atMost(item, depender))
-    eligible.sortBy((_, item, _) => rank(item)).lastOption.map((_, version, _) => version)
-
-  private def atMost(version: ScalaVersion, limit: ScalaVersion): Boolean =
-    val (major, minor, patch)                = rank(version)
-    val (limitMajor, limitMinor, limitPatch) = rank(limit)
-    major < limitMajor || (major == limitMajor && (minor < limitMinor || (minor == limitMinor && patch <= limitPatch)))
-end UpstreamCells

@@ -35,8 +35,8 @@ trait CompileMemo:
   def note(lock: DependencyLock): UIO[StampedLock]
   def hashes(
       lock: DependencyLock,
-      modules: List[Module],
       module: Module,
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       scope: ClasspathScope,
@@ -44,8 +44,8 @@ trait CompileMemo:
   ): UIO[Option[List[Sha256]]]
   def classpath(
       repo: Path,
-      modules: List[Module],
       module: Module,
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       lock: DependencyLock,
@@ -74,15 +74,27 @@ object CompileMemo:
       live.build.flatMap(env => effect.provideSomeLayer(ZLayer.succeed(env.get[CompileMemo])))
     )
 
-  private final case class HashKey(module: String, version: String, platform: String, scope: String, stamp: String)
-  private final case class ClassKey(
-      repo: String,
+  private final case class HashKey(
       module: String,
+      upstream: List[String],
       version: String,
       platform: String,
       scope: String,
       stamp: String,
   )
+  private final case class ClassKey(
+      repo: String,
+      module: String,
+      upstream: List[String],
+      version: String,
+      platform: String,
+      scope: String,
+      stamp: String,
+  )
+
+  /** Each upstream cell the key's classpath reads, so a different pick is a different entry. */
+  private def cells(upstream: List[UpstreamCell]): List[String] =
+    upstream.map(cell => s"${cell.module.name.value} ${cell.version.value} ${cell.classes}")
 
   private final class Live(
       locks: Ref[Map[String, (LockStamp, DependencyLock)]],
@@ -112,25 +124,25 @@ object CompileMemo:
 
     def hashes(
         lock: DependencyLock,
-        modules: List[Module],
         module: Module,
+        upstream: List[UpstreamCell],
         version: ScalaVersion,
         platform: Platform,
         scope: ClasspathScope,
         stamp: LockStamp,
     ): UIO[Option[List[Sha256]]] =
-      val key = HashKey(module.name.value, version.value, platform.token, scope.header, stamp.token)
+      val key = HashKey(module.name.value, cells(upstream), version.value, platform.token, scope.header, stamp.token)
       hashes.get.flatMap: cached =>
         cached.get(key) match
           case Some(found) => ZIO.succeed(found)
           case None        =>
-            val found = ScalacClasspath.lockHashes(lock, modules, module, version, platform, scope)
+            val found = ScalacClasspath.lockHashes(lock, module, upstream, version, platform, scope)
             hashes.update(_.updated(key, found)).as(found)
 
     def classpath(
         repo: Path,
-        modules: List[Module],
         module: Module,
+        upstream: List[UpstreamCell],
         version: ScalaVersion,
         platform: Platform,
         lock: DependencyLock,
@@ -141,6 +153,7 @@ object CompileMemo:
       val key = ClassKey(
         repo.toAbsolutePath.normalize.toString,
         module.name.value,
+        cells(upstream),
         version.value,
         platform.token,
         scope.header,
@@ -151,7 +164,7 @@ object CompileMemo:
           case Some(found) => ZIO.succeed(found)
           case None        =>
             ScalacClasspath
-              .of(repo, modules, module, version, platform, lock, repositories, scope)
+              .of(repo, module, upstream, version, platform, lock, repositories, scope)
               .tap(found => classpaths.update(_.updated(key, found)))
 
     def forget: UIO[Unit] =

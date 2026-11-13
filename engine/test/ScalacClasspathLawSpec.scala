@@ -73,18 +73,18 @@ object ScalacClasspathLawSpec extends ZIOSpecDefault:
           cell(coreName, scala213, Platform.Jvm, ClasspathScope.Compile, List(artifact("scala-compiler", "11"))),
         )
       )
-      val mods = List(core, app)
+      val on = (version: ScalaVersion) => List(UpstreamCell(core, version, Path.of("core")))
       assertTrue(
-        ScalacClasspath.lockHashes(lock, mods, app, scala3, Platform.Jvm, ClasspathScope.Test) ==
+        ScalacClasspath.lockHashes(lock, app, on(scala3), scala3, Platform.Jvm, ClasspathScope.Test) ==
           Some(List(legacy.sha256, kit.sha256, sources.sha256, tests.sha256)),
-        ScalacClasspath.lockHashes(lock, mods, app, scala3, Platform.Jvm, ClasspathScope.Compile) ==
+        ScalacClasspath.lockHashes(lock, app, on(scala3), scala3, Platform.Jvm, ClasspathScope.Compile) ==
           Some(List(legacy.sha256, kit.sha256, sources.sha256, other.sha256)),
-        ScalacClasspath.lockHashes(lock, mods, app, scala3, Platform.Js, ClasspathScope.Compile) ==
+        ScalacClasspath.lockHashes(lock, app, on(scala3), scala3, Platform.Js, ClasspathScope.Compile) ==
           Some(List(library.sha256, kit.sha256)),
-        ScalacClasspath.lockHashes(lock, mods, app, scala3, Platform.Native, ClasspathScope.Compile) ==
+        ScalacClasspath.lockHashes(lock, app, on(scala3), scala3, Platform.Native, ClasspathScope.Compile) ==
           Some(List(kit.sha256)),
-        ScalacClasspath.lockHashes(lock, mods, app, scala213, Platform.Jvm, ClasspathScope.Compile).isEmpty,
-        ScalacClasspath.lockHashes(lock, mods, core, scala3, Platform.Jvm, ClasspathScope.Test).isEmpty,
+        ScalacClasspath.lockHashes(lock, app, on(scala213), scala213, Platform.Jvm, ClasspathScope.Compile).isEmpty,
+        ScalacClasspath.lockHashes(lock, core, Nil, scala3, Platform.Jvm, ClasspathScope.Test).isEmpty,
         ScalacClasspath
           .asks(List(Dep.trusted("earlyeffect", "histos-api-extra", "1", DepKind.Java)), scala3, Platform.Jvm),
         ScalacClasspath.asks(List(Dep.trusted("earlyeffect", "histos-api", "1", DepKind.Binary)), scala3, Platform.Js),
@@ -149,8 +149,8 @@ object ScalacClasspathLawSpec extends ZIOSpecDefault:
           refused      <- ScalacClasspath
             .of(
               dir,
-              mods,
               base,
+              Nil,
               scala212,
               Platform.Jvm,
               DependencyLock(Nil),
@@ -162,8 +162,8 @@ object ScalacClasspathLawSpec extends ZIOSpecDefault:
           locked <- ScalacClasspath
             .of(
               dir,
-              List(module(missing, Nil)),
               module(missing, Nil),
+              Nil,
               scala3,
               Platform.Jvm,
               DependencyLock(Nil),
@@ -221,8 +221,11 @@ object ScalacClasspathLawSpec extends ZIOSpecDefault:
       tools: LockedTools,
       resolve: Resolve,
   ) =
+    val upstream = Module
+      .chain(module, modules, platform)
+      .map(item => UpstreamCell(item, version, GraphCompile.classesDir(repo, item.name, version, platform)))
     ScalacClasspath
-      .of(repo, modules, module, version, platform, DependencyLock(Nil), Repositories.central, scope)
+      .of(repo, module, upstream, version, platform, DependencyLock(Nil), Repositories.central, scope)
       .provide(ZLayer.succeed(tools) ++ ZLayer.succeed(resolve))
       .map(found => Line(found.paths, found.jars, found.hashes.map(_.value)))
       .either

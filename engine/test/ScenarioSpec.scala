@@ -1,8 +1,9 @@
 package histos
 
+import histos.doc.DocClasspath
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.program.ProgramFeed
-import histos.resolve.ResolveError
+import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCell, Resolve, ResolveError, ToolRole}
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{ApiDigest, CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
@@ -125,6 +126,46 @@ object ScenarioSpec extends ZIOSpecDefault:
           matches(keyOf(first), keyOf(second)),
           starts == 1,
         )
+    ,
+    test("a module over an older upstream compiles, hits, and documents against that upstream's own lock cell"):
+      ZIO.scoped:
+        for
+          newest  <- locked
+          older   <- ZIO.serviceWithZIO[CompilerClosure](_.previous)
+          closure <- ZIO.service[CompilerClosure]
+          base = module("lib", Jvm)(older)
+          built <- ZIO.fromEither(Projects.locked(base, module("app", Jvm)(newest).dependsOn(base)))
+          tasty = tastyCore(closure.lock, older)
+          jars     <- ZIO.serviceWithZIO[Resolve](resolve => ZIO.foreach(tasty)(resolve.fetch))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          cells = List(cell(ProjectName("lib"), older, tasty), cell(ProjectName("app"), newest, Nil))
+          _ <- checkout.write(
+            "dependencies.lock",
+            DependencyLock.render(DependencyLock(cells, tools = closure.lock.tools)),
+          )
+          _      <- checkout.write("lib/src/main/scala/Core.scala", core)
+          _      <- checkout.write("app/src/main/scala/Extra.scala", extra)
+          first  <- checkout.compile
+          _      <- scenario.emptyStore
+          second <- checkout.compile
+          starts <- scenario.starts
+          app      = done(first).find(_.module == ProjectName("app"))
+          declared = built.projects.collectFirst { case found: Module if found.name == ProjectName("app") => found }
+          docs <- ZIO.foreach(app.zip(declared))((compiled, module) =>
+            DocClasspath.of(checkout.root, built, module, compiled).either
+          )
+        yield
+          val libClasses = GraphCompile.classesDir(checkout.root, ProjectName("lib"), older, Platform.Jvm)
+          assertTrue(
+            tasty.nonEmpty,
+            failed(first ++ second).isEmpty,
+            done(first).map(_.module.value) == Chunk("lib", "app"),
+            done(second).map(_.changed) == Chunk(false, false),
+            changes(second).isEmpty,
+            starts == 2,
+            docs == app.map(compiled => Right(compiled.classes :: jars.map(_.path) ++ List(libClasses))),
+          )
     ,
     test("an upstream comment keeps the quick stamp, and a new public method the suite never calls moves it"):
       ZIO.scoped:
@@ -365,6 +406,16 @@ object ScenarioSpec extends ZIOSpecDefault:
       checkout.write("core/src/test/scala/demo/Law.scala", law) *>
       checkout.write("core/src/test/scala/demo/Samples.scala", values) *>
       checkout.write("core/src/test/scala/demo/Check.scala", check)
+
+  /** The `tasty-core_3` jar of the locked `version` compiler. Every Scala 3 compiler row has one. */
+  private def tastyCore(lock: DependencyLock, version: ScalaVersion): List[LockedArtifact] =
+    lock.tools
+      .filter(row => row.id.role == ToolRole.Compiler && row.id.scalaVersion == version)
+      .flatMap(_.artifacts.filter(_.name == "tasty-core_3"))
+
+  /** A JVM compile cell of a module with no dependencies, holding `artifacts`. */
+  private def cell(name: ProjectName, version: ScalaVersion, artifacts: List[LockedArtifact]): LockedCell =
+    LockedCell(name, version, Platform.Jvm, Nil, artifacts, Nil, ClasspathScope.Compile)
 
   private def coreClass(checkout: Checkout, version: ScalaVersion): Path =
     GraphCompile.classesDir(checkout.root, ProjectName("core"), version).resolve("Core.class")

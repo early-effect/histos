@@ -14,7 +14,7 @@ import histos.central.{
 }
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarIo, JavadocJar, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
@@ -769,7 +769,7 @@ object LocalPublish:
           module <- ZIO.fromEither(moduleOf(graph, cell.module))
           paths  <- DocClasspath
             .of(repo, graph, module, cell)
-            .mapError(text => LocalPublishError.Jar(cell.module, cell.version, cell.platform, JarError.Scaladoc(text)))
+            .mapError(LocalPublishError.Compile(_))
           packed <- JavadocJar
             .write(
               cell.classes,

@@ -61,7 +61,7 @@ object DocTask:
           .resolve(cell.platform.token)
         DocClasspath
           .of(repo, graph, module, cell)
-          .mapError(refused)
+          .mapError(error => refused(error.message))
           .flatMap: classpath =>
             ScaladocSite
               .render(cell.classes, classpath, cell.module.value, cell.version.value, output, failOnWarning = true)
