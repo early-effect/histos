@@ -90,6 +90,9 @@ object Session:
                       ApiClock.rebootLine(repo).flatMap { line =>
                         Console.printLineError(line).ignore *>
                           Attach.replace(repo, text, socket).flatMap {
+                            // Replacing the server was the reboot, so the replacement is not asked again.
+                            case Some(_) if rebooting(call) =>
+                              withProcess(repo, call, CallResult.reported())
                             case Some(fresh) =>
                               ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
                             case None =>
@@ -105,6 +108,11 @@ object Session:
               }
           },
       )
+
+  private def rebooting(call: Call): Boolean =
+    call match
+      case Call.Reboot(_) => true
+      case _              => false
 
   /** Version names this MCP process. Reboot returns the line and the socket instead of an empty tool result. */
   private def withProcess(repo: Path, call: Call, result: CallResult): UIO[CallResult] =

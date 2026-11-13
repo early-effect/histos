@@ -1660,7 +1660,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
     import histos.server.{ServerError, ServerIo}
     mixed[ServerError](
       "ServerError",
-      "Toolchain(error) | Compiled(error) | Resolve(error) | Unreachable(path) | DifferentVersion() | " +
+      "Toolchain(error) | Compiled(error) | Resolve(error) | Unreachable(path) | Listening(socket) | " +
+        "DifferentVersion() | " +
         "Restart(socket,wanted,got) | NoServer() | Protocol() | Address(path) | Io(op)",
       """{"Io":{"op":{"Read":{"path":"/work/repo"}}}}""",
       ServerError.Io(ServerIo.Read(home)),

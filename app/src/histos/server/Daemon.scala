@@ -465,25 +465,38 @@ object Daemon:
   private def bindAt(repo: Path): IO[ServerError, (Path, ServerSocketChannel)] =
     SocketPath.at(repo).flatMap(socket => bind(socket).map(channel => (socket, channel)))
 
+  /** A socket file a live server answers on stays its own. A file nobody answers on is left from a server that died, so
+    * it is removed and bound again.
+    */
   private def bind(socket: Path): IO[ServerError, ServerSocketChannel] =
     for
       _ <- ZIO
         .attemptBlocking(Files.createDirectories(socket.getParent))
         .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
-      _ <- ZIO
-        .attemptBlocking(Files.deleteIfExists(socket))
-        .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
       where <- ZIO
         .attempt(UnixDomainSocketAddress.of(socket.toAbsolutePath.normalize))
         .mapError(_ => ServerError.Address(socket))
-      channel <- ZIO
-        .attemptBlocking {
-          val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
-          server.bind(where)
-          server
-        }
-        .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
+      channel <- listen(socket, where).catchAll: _ =>
+        answers(where).flatMap: live =>
+          if live then ZIO.fail(ServerError.Listening(socket.toAbsolutePath.normalize))
+          else
+            ZIO
+              .attemptBlocking(Files.deleteIfExists(socket))
+              .mapError(_ => ServerError.Io(ServerIo.Bind(socket))) *> listen(socket, where)
     yield channel
+
+  private def listen(socket: Path, where: UnixDomainSocketAddress): IO[ServerError, ServerSocketChannel] =
+    ZIO
+      .acquireReleaseExitWith(ZIO.attemptBlocking(ServerSocketChannel.open(StandardProtocolFamily.UNIX)))(
+        (server, exit) => ZIO.when(exit.isFailure)(ZIO.attempt(server.close()).ignore)
+      )(server => ZIO.attemptBlocking(server.bind(where)).as(server))
+      .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
+
+  /** Whether a server accepts a connection at `where` now. */
+  private def answers(where: UnixDomainSocketAddress): UIO[Boolean] =
+    ZIO
+      .attemptBlocking(SocketChannel.open(where).close())
+      .fold(_ => false, _ => true)
 
   private enum Uses:
     case Live(n: Int)

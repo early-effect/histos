@@ -153,21 +153,40 @@ object Main extends ZIOAppDefault:
         exit.code
       case _ => exit.code
 
+  /** The server that heard the reboot starts its successor, so this client waits for it and starts none. A server that
+    * did not answer is gone, so this client starts one, as on a cold start.
+    */
   private def replace(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
     ApiClock.rebootLine(repo).zip(Successor.here).flatMap { (line, onto) =>
       ZIO.succeed(java.lang.System.err.println(line)) *>
-        exchange(repo, socket, Call.Reboot(onto)).ignore *>
-        boot(repo).flatMap { fresh =>
-          readRecord(repo).flatMap {
-            case Some(record) =>
-              agrees(repo, record).flatMap: ok =>
-                if ok then exchange(repo, fresh, call)
-                else ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
-            case None =>
-              exchange(repo, fresh, call)
-          }
+        exchange(repo, socket, Call.Reboot(onto)).either.flatMap {
+          case Right(_) => successor(repo, socket).flatMap(fresh => exchange(repo, fresh, call))
+          case Left(_)  =>
+            boot(repo).flatMap { fresh =>
+              readRecord(repo).flatMap {
+                case Some(record) =>
+                  agrees(repo, record).flatMap: ok =>
+                    if ok then exchange(repo, fresh, call)
+                    else ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
+                case None =>
+                  exchange(repo, fresh, call)
+              }
+            }
         }
     }
+
+  /** The socket a record that agrees with this client names, once the successor writes it. */
+  private def successor(repo: Path, socket: Path): IO[ServerError, Path] =
+    def poll(left: Int): IO[ServerError, Path] =
+      readRecord(repo)
+        .flatMap:
+          case Some(record) => agrees(repo, record).map(ok => Option.when(ok)(Path.of(record.socket)))
+          case None         => ZIO.none
+        .flatMap:
+          case Some(fresh)      => ZIO.succeed(fresh)
+          case None if left > 0 => ZIO.sleep(50.millis) *> poll(left - 1)
+          case None             => ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
+    poll(1200)
 
   private def readRecord(repo: Path): IO[ServerError, Option[ServerFile]] =
     val file = repo.resolve(".histos").resolve("server.json")

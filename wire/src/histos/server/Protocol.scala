@@ -24,6 +24,9 @@ enum ServerError:
   case Compiled(error: histos.zinc.GraphCompileError)
   case Resolve(error: histos.resolve.ResolveError)
   case Unreachable(path: Path)
+
+  /** Another server already answers on this checkout's socket, so this one does not take it. */
+  case Listening(socket: Path)
   case DifferentVersion
   case Restart(socket: Path, wanted: Option[String], got: Option[String])
   case NoServer
@@ -36,6 +39,7 @@ enum ServerError:
     case Compiled(error)   => error.message
     case Resolve(error)    => error.message
     case Unreachable(path) => s"histos server at $path is not listening"
+    case Listening(socket) => s"another histos server is listening at $socket"
     case DifferentVersion  =>
       "histos server is a different version and the restart did not finish"
     case Restart(socket, wanted, got) =>

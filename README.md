@@ -240,7 +240,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publ
 
 ## The server
 
-`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement, which starts as the command's toolchain and not as the server it replaced.
+`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. One server serves a checkout: a server that finds another listening on its socket stops with `another histos server is listening at <socket>`. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement, which starts as the command's toolchain and not as the server it replaced.
 
 `histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
