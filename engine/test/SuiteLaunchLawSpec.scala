@@ -14,7 +14,7 @@ import histos.resolve.{
 }
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{ApiDigest, CompiledCell, CompilerRequests, GraphCompile}
+import histos.zinc.{ApiDigest, CompiledCell, CompilerRequests, GraphCompile, UpstreamCell}
 import histos.{
   Dep,
   DepKind,
@@ -86,7 +86,7 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
                 compiled(name, Platform.Js, repo.resolve("js")),
                 names,
                 Nil,
-                ask(bare(name), List(bare(name)), Platform.Js, DependencyLock(Nil), None),
+                ask(repo, bare(name), List(bare(name)), Platform.Js, DependencyLock(Nil), None),
                 TestMode.Run,
                 TestStore.Off,
                 blocked,
@@ -98,7 +98,7 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
                 compiled(name, Platform.Jvm, repo.resolve("jvm")),
                 names,
                 Nil,
-                ask(tested(name), List(tested(name)), Platform.Jvm, DependencyLock(Nil), None),
+                ask(repo, tested(name), List(tested(name)), Platform.Jvm, DependencyLock(Nil), None),
                 TestMode.Run,
                 TestStore.Off,
                 blocked,
@@ -126,12 +126,12 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
             _          <- writeApi(repo, alpha, "a" * 64)
             _          <- writeApi(repo, zeta, "b" * 64)
             _          <- writeBytes(classes.resolve("demo").resolve("A.class"), classBytes("demo/A"))
-            zetaFirst  <- ZIO.fromEither(SuiteCover.stored(repo, naming(zeta, alpha)))
-            alphaFirst <- ZIO.fromEither(SuiteCover.stored(repo, naming(alpha, zeta)))
+            zetaFirst  <- ZIO.fromEither(SuiteCover.stored(naming(repo, zeta, alpha)))
+            alphaFirst <- ZIO.fromEither(SuiteCover.stored(naming(repo, alpha, zeta)))
             one        <- digestOf("demo.A", classes, zetaFirst)
             two        <- digestOf("demo.A", classes, alphaFirst)
             _          <- writeApi(repo, zeta, "c" * 64)
-            changed    <- ZIO.fromEither(SuiteCover.stored(repo, naming(alpha, zeta)))
+            changed    <- ZIO.fromEither(SuiteCover.stored(naming(repo, alpha, zeta)))
             three      <- digestOf("demo.A", classes, changed)
           yield assertTrue(
             zetaFirst.apis == List(s"zeta ${"b" * 64}", s"alpha ${"a" * 64}"),
@@ -146,7 +146,7 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
         .flatMap: repo =>
           val name  = ProjectName.trusted("bare")
           val mod   = bare(name)
-          val asked = ask(mod, List(mod), Platform.Jvm, toolLock, None)
+          val asked = ask(repo, mod, List(mod), Platform.Jvm, toolLock, None)
           val cell  = compiled(name, Platform.Jvm, repo.resolve("classes"))
           for
             empty <- SuiteLaunch
@@ -191,9 +191,9 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
     val name    = ProjectName.trusted("core")
     val mod     = bare(name)
     val classes = repo.resolve("classes")
-    val asked   = ask(mod, List(mod), Platform.Jvm, toolLock, None)
+    val asked   = ask(repo, mod, List(mod), Platform.Jvm, toolLock, None)
     ZIO
-      .fromEither(SuiteCover.stored(repo, asked))
+      .fromEither(SuiteCover.stored(asked))
       .flatMap: cover =>
         for
           _       <- writeBytes(classes.resolve("demo").resolve("A.class"), classBytes("demo/A"))
@@ -225,7 +225,7 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
     val classes  = GraphCompile.classesDir(repo, core, scala3, Platform.Jvm)
     val upstream = bare(core)
     val current  = bare(app).copy(dependsOn = List(ProjectDep(core, None)))
-    val asked    = ask(current, List(upstream, current), Platform.Jvm, toolLock, None)
+    val asked    = ask(repo, current, List(upstream, current), Platform.Jvm, toolLock, None)
     GraphCompile.analysisDirOf(classes) match
       case None =>
         ZIO.succeed(Left(ModuleTestError.Api(ProjectName.trusted("missing"), scala3, Platform.Jvm)))
@@ -245,10 +245,10 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
             .either
 
   /** `app` over the upstreams `alpha` and `zeta`, named in the order given. */
-  private def naming(first: ProjectName, second: ProjectName): SuiteAsk =
+  private def naming(repo: Path, first: ProjectName, second: ProjectName): SuiteAsk =
     val app = bare(ProjectName.trusted("app")).copy(dependsOn = List(ProjectDep(first, None), ProjectDep(second, None)))
     val ups = List(ProjectName.trusted("alpha"), ProjectName.trusted("zeta")).map(bare)
-    ask(app, ups :+ app, Platform.Jvm, toolLock, None)
+    ask(repo, app, ups :+ app, Platform.Jvm, toolLock, None)
 
   /** The `api.sha256` a compile of `name` would leave. */
   private def writeApi(repo: Path, name: ProjectName, sha: String): ZIO[Any, IoFailure, Unit] =
@@ -269,14 +269,19 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
   private def compiled(name: ProjectName, platform: Platform, classes: Path): CompiledCell =
     CompiledCell(name, scala3, platform, classes, 0, None, false, None, None)
 
+  /** Each upstream at its `scala3` cell under `repo`. */
   private def ask(
+      repo: Path,
       module: Module,
       modules: List[Module],
       platform: Platform,
       lock: DependencyLock,
       node: Option[RuntimeIdentity],
   ): SuiteAsk =
-    SuiteAsk(module, modules, scala3, platform, lock, repos, ToolCatalog.default, NativeOrigin.Central, jdk, node)
+    val upstream = Module
+      .chain(module, modules, platform)
+      .map(item => UpstreamCell(item, scala3, GraphCompile.classesDir(repo, item.name, scala3, platform)))
+    SuiteAsk(module, upstream, scala3, platform, lock, repos, ToolCatalog.default, NativeOrigin.Central, jdk, node)
 
   private def bare(name: ProjectName): Module =
     Module(

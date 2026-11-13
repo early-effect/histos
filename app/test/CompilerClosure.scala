@@ -16,15 +16,25 @@ final case class CompilerClosure(lock: DependencyLock, compilers: ::[ScalaVersio
   /** The newest locked Scala 3 compiler. */
   def scalaVersion: ScalaVersion = compilers.head
 
+  /** The newest locked compiler older than [[scalaVersion]], of any series. [[scalaVersion]] reads its TASTy. */
+  def previous: IO[CompilerClosure.Missing, ScalaVersion] =
+    compilers match
+      case _ :: next :: _ => ZIO.succeed(next)
+      case _              => ZIO.fail(CompilerClosure.Missing.OneCompiler(scalaVersion))
+
   /** The lock with an empty JVM compile cell for each module at [[scalaVersion]], in place of any cell the checkout
     * pins under that name. A law's modules name no dependencies, so their cells pin no jars.
     */
   def pinning(modules: ProjectName*): DependencyLock =
-    val added = modules.toList.map: module =>
-      LockedCell(module, scalaVersion, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
+    pinningAt(modules.map(_ -> scalaVersion)*)
+
+  /** [[pinning]] with each module's Scala version named. */
+  def pinningAt(cells: (ProjectName, ScalaVersion)*): DependencyLock =
+    val added = cells.toList.map: (module, version) =>
+      LockedCell(module, version, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
     val kept = lock.cells.filterNot: cell =>
-      modules.contains(cell.module) && cell.scalaVersion == scalaVersion && cell.platform == Platform.Jvm &&
-        cell.scope == ClasspathScope.Compile
+      added.exists(next => next.module == cell.module && next.scalaVersion == cell.scalaVersion) &&
+        cell.platform == Platform.Jvm && cell.scope == ClasspathScope.Compile
     lock.copy(cells = added ++ kept)
 end CompilerClosure
 
@@ -77,6 +87,7 @@ object CompilerClosure:
     case Lock(error: ResolveError)
     case Compiler(lock: Path)
     case Jar(tool: ToolId, artifact: LockedArtifact, error: ResolveError)
+    case OneCompiler(newest: ScalaVersion)
 
     def message: String = this match
       case Checkout(from)         => s"no directory at or above $from has histos.scala and dependencies.lock"
@@ -85,6 +96,7 @@ object CompilerClosure:
       case Jar(tool, artifact, _) =>
         s"the locked ${tool.token} jar ${artifact.organization}:${artifact.name}:${artifact.revision} is not in the " +
           s"Coursier cache. $resolve"
+      case OneCompiler(newest) => s"dependencies.lock pins no Scala 3 compiler older than ${newest.value}"
 
     override def toString: String = message
 

@@ -4,7 +4,8 @@ import histos.doctor.HistosCommand
 import histos.workspace.{IoFailure, Workspace}
 
 import java.nio.file.{Files, Path}
-import java.util.concurrent.TimeUnit
+
+import scala.jdk.OptionConverters.*
 
 import zio.*
 import zio.test.*
@@ -46,7 +47,10 @@ object CommandRunnerLawSpec extends ZIOSpecDefault:
   private def run(repo: Path, command: HistosCommand, runner: ULayer[CommandRunner]): UIO[Ran] =
     ZIO.serviceWithZIO[CommandRunner](_.run(repo, command)).provideLayer(runner)
 
-  /** Whether the child is alive after its run is interrupted. The child writes its pid, then sleeps. */
+  /** Whether the child is alive after its run is interrupted. The child writes its pid, then sleeps. The interrupt may
+    * land before the runner's wait begins, and the child must still end. The wait for its exit is bounded by the
+    * suite's timeout, so a child that outlives its fix fails the law.
+    */
   private def interrupted(repo: Path, runner: ULayer[CommandRunner], name: String): UIO[Boolean] =
     val pid = repo.resolve(name)
     for
@@ -54,10 +58,9 @@ object CommandRunnerLawSpec extends ZIOSpecDefault:
       _      <- ZIO.attemptBlocking(Files.isRegularFile(pid) && Files.size(pid) > 0).orDie.repeatUntil(identity)
       number <- ZIO.attemptBlocking(Files.readString(pid).trim.toLong).orDie
       _      <- fiber.interrupt
-      alive  <- ZIO
-        .attemptBlocking(ProcessHandle.of(number).map(_.onExit().get(30, TimeUnit.SECONDS).isAlive).orElse(false))
-        .orDie
-    yield alive
+      handle <- ZIO.succeed(ProcessHandle.of(number).toScala)
+      alive  <- ZIO.foreach(handle)(child => ZIO.fromCompletableFuture(child.onExit()).orDie.map(_.isAlive))
+    yield alive.contains(true)
 
   private def script(repo: Path, text: String): IO[IoFailure, Unit] =
     val path = repo.resolve("histos")

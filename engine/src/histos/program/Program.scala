@@ -20,7 +20,7 @@ import histos.resolve.{
 import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
-import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile}
+import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile, UpstreamCells}
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
 import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
 import histos.{Aggregate, ClangPin, Dep, MainClass, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -149,7 +149,6 @@ object Program:
         cell,
         lock,
         repositories,
-        Dep.select(module.dependencies, cell.platform),
       )
       linkDir   <- fresh(workDir(repo, cell))
       major     <- nativeMajor(module, cell.version)
@@ -346,7 +345,6 @@ object Program:
                 cell,
                 lock,
                 repositories,
-                Dep.runtime(module.dependencies, cell.platform),
               )
               work <- fresh(workDir(repo, cell))
             yield events(
@@ -372,7 +370,6 @@ object Program:
                 cell,
                 lock,
                 repositories,
-                Dep.select(module.dependencies, cell.platform),
               )
               _      <- fresh(linkDir)
               linked <- JsLink
@@ -427,7 +424,6 @@ object Program:
                 cell,
                 lock,
                 repositories,
-                Dep.select(module.dependencies, cell.platform),
               )
               _         <- fresh(linkDir)
               toolchain <- ZIO
@@ -511,7 +507,9 @@ object Program:
             code.value,
           )
 
-  /** Main classes, upstream main classes, the JVM library on JVM, then compile jars.
+  /** Main classes, each upstream cell's classes, the JVM library on JVM, then this cell's lock jars and each upstream
+    * cell's. The upstream cells are the ones [[UpstreamCells.read]] picks. A JVM run takes runtime dependencies, and a
+    * link takes compile dependencies.
     */
   private[histos] def classpath(
       repo: Path,
@@ -520,46 +518,43 @@ object Program:
       cell: histos.zinc.CompiledCell,
       lock: DependencyLock,
       repositories: Repositories,
-      dependencies: List[Dep],
   ): ZIO[Resolve & LockedTools, ProgramError, List[Path]] =
-    val resolveCell = ResolveCell(
-      module.name,
-      dependencies,
-      cell.version,
-      cell.platform,
-      repositories,
-      ClasspathScope.Compile,
-    )
-    for
-      fetched <- ZIO
+    val jars = (item: Module, version: ScalaVersion) =>
+      val dependencies = cell.platform match
+        case Platform.Jvm                  => Dep.runtime(item.dependencies, cell.platform)
+        case Platform.Js | Platform.Native => Dep.select(item.dependencies, cell.platform)
+      val asked = ResolveCell(item.name, dependencies, version, cell.platform, repositories, ClasspathScope.Compile)
+      ZIO
         .serviceWithZIO[LockedTools]: tools =>
           val view = if tools.service.isDefined then tools else tools.copy(lock = lock)
-          view.module(resolveCell)
-        .mapError(ProgramError.Lock(_))
-      upstream <- ZIO.foreach(Module.chain(module, modules, cell.platform)): dependency =>
-        val path = GraphCompile.classesDir(
-          repo,
-          dependency.name,
+          view.module(asked)
+        .mapBoth(ProgramError.Lock(_), _.artifacts.map(_.path))
+    for
+      cells <- UpstreamCells
+        .read(
+          module,
+          Module.chain(module, modules, cell.platform),
           cell.version,
           cell.platform,
+          UpstreamCells.declared(repo, modules, cell.platform),
         )
+        .mapError(ProgramError.Compile(_))
+      upstream <- ZIO.foreach(cells): read =>
         ZIO
-          .attemptBlocking(Files.isDirectory(path))
-          .mapError(_ => ProgramError.Root(path))
+          .attemptBlocking(Files.isDirectory(read.classes))
+          .mapError(_ => ProgramError.Root(read.classes))
           .flatMap: found =>
-            if found then ZIO.succeed(path)
-            else
-              ZIO.fail(
-                ProgramError
-                  .MissingUpstream(module.name, dependency.name, cell.version)
-              )
+            if found then ZIO.succeed(read.classes)
+            else ZIO.fail(ProgramError.MissingUpstream(module.name, read.module.name, read.version))
+      own     <- jars(module, cell.version)
+      theirs  <- ZIO.foreach(cells)(read => jars(read.module, read.version))
       library <- cell.platform match
         case Platform.Jvm =>
           JvmCompile
             .runtime(cell.version)
             .mapError(ProgramError.Library(_))
         case Platform.Js | Platform.Native => ZIO.succeed(Nil)
-      paths = fetched.artifacts.map(_.path).distinct
+      paths = (own ++ theirs.flatten).distinct
       jars  =
         cell.platform match
           case Platform.Jvm                  => paths.filterNot(JvmCompile.isStandardLibrary)

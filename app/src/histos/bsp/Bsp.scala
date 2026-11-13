@@ -35,6 +35,7 @@ import histos.zinc.{
   ScalaSeries,
   ScalacClasspath,
   SemanticDb,
+  UpstreamCells,
 }
 import histos.{Dep, Module, Platform, PlatformError, ProjectGraph, ProjectName, ScalaVersion, ScalaVersionError}
 
@@ -784,22 +785,25 @@ object Bsp:
         graph <- request.get
         lock  <- readLock
         modules = modulesOf(graph)
+        chain   = Module.chain(module, modules, platform)
         found <- withTools(
-          ZIO
-            .serviceWithZIO[histos.zinc.CompileMemo]: memo =>
-              memo.note(lock).flatMap { stamped =>
-                memo.classpath(
-                  repo,
-                  modules,
-                  module,
-                  version,
-                  platform,
-                  stamped.lock,
-                  BuildResolvers(graph.resolvers),
-                  scope,
-                  stamped.stamp,
-                )
-              }
+          UpstreamCells
+            .read(module, chain, version, platform, UpstreamCells.declared(repo, modules, platform))
+            .flatMap: upstream =>
+              ZIO.serviceWithZIO[histos.zinc.CompileMemo]: memo =>
+                memo.note(lock).flatMap { stamped =>
+                  memo.classpath(
+                    repo,
+                    module,
+                    upstream,
+                    version,
+                    platform,
+                    stamped.lock,
+                    BuildResolvers(graph.resolvers),
+                    scope,
+                    stamped.stamp,
+                  )
+                }
             .mapError(compiled)
         )
       yield found.paths
@@ -1097,7 +1101,6 @@ object Bsp:
                   cell,
                   lock,
                   BuildResolvers(seen.resolvers),
-                  Dep.runtime(id.module.dependencies, id.platform),
                 )
                 .mapError(BspError.Run(_))
             )

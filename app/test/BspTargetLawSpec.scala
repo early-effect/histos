@@ -3,7 +3,7 @@ package histos.bsp
 import histos.cache.ContentStore
 import histos.load.BuildNotes
 import histos.publish.LauncherPin
-import histos.resolve.{ResolutionService, Resolve}
+import histos.resolve.{DependencyLock, ResolutionService, Resolve}
 import histos.program.Program
 import histos.toolchain.Runtimes
 import histos.version.Catalog
@@ -15,6 +15,7 @@ import histos.{
   Module,
   Platform,
   Platforms,
+  ProjectDep,
   ProjectGraph,
   ProjectName,
   Resolution,
@@ -29,9 +30,12 @@ import zio.json.*
 import zio.test.{TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 import zio.{Scope, ZIO, ZLayer}
 
-/** A build target names the module and the build file, and the sources are the files on disk. */
+/** A build target names the module and the build file, and the sources are the files on disk. A target's classpath
+  * names each upstream's own cell.
+  */
 object BspTargetLawSpec extends ZIOSpecDefault:
   private val lawName = ProjectName.trusted("bsplaw")
+  private val upName  = ProjectName.trusted("bspup")
   private val quiet   = ZIO.succeed(BuildNotes(false, Nil))
 
   def spec = suite("bsp target laws")(
@@ -97,7 +101,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                   rpcError(unknown).exists(_.error.message == "unknown build target"),
                   rpcError(missing).exists(_.error.message == "bsp params are required"),
                 )
-            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure))
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure.pinning(lawName)))
     ,
     test("compiling the module writes its class, and a type error is not success"):
       ZIO.serviceWithZIO[CompilerClosure]: closure =>
@@ -152,8 +156,63 @@ object BspTargetLawSpec extends ZIOSpecDefault:
                   ),
                   rpcError(refused).exists(_.error.message == "jvmRunEnvironment needs a main target"),
                 )
-            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure)),
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, closure.pinning(lawName)))
+    ,
+    test("a target over an older upstream names that upstream's own classes before either compiles"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val newest = closure.scalaVersion
+        Workspace
+          .work("histos-bsp-upstream")
+          .flatMap: dir =>
+            val appUri = Bsp.mainUri(dir, lawName.value, newest, Platform.Jvm)
+            for
+              older <- closure.previous
+              _     <- Workspace.writeString(dir.resolve("histos.scala"), "// law\n")
+              _     <- Workspace.writeString(dir.resolve(LauncherPin.file), "histos.version=9.8.7\n")
+              pin = closure.pinningAt(upName -> older, lawName -> newest)
+              opted <- (
+                for
+                  runtimes <- Runtimes.read(LawMachine.idle, None)
+                  session  <- Bsp.open(
+                    dir,
+                    mixed(newest, older),
+                    LawMachine.fixtureJdk,
+                    runtimes,
+                    Nil,
+                    _ => ZIO.unit,
+                    quiet,
+                    compile => compile,
+                    None,
+                  )
+                  _     <- ask(session, request(1, "build/initialize"))
+                  _     <- ask(session, note("build/initialized"))
+                  opted <- ask(session, asked(2, "buildTarget/scalacOptions", List(appUri)))
+                yield opted
+              ).provideSomeLayer[Resolve & Scope](sessionLayer(dir, pin))
+            yield
+              val classpath = rpcOk[Rpc.ScalacOptionsResult](opted).toOption
+                .flatMap(_.result.items.find(_.target.uri == appUri))
+                .map(_.classpath)
+              assertTrue(
+                rpcError(opted).isEmpty,
+                classpath.exists(_.exists(_.contains(s"/classes/${upName.value}/${older.value}/jvm"))),
+                classpath.exists(!_.exists(_.contains(s"/classes/${upName.value}/${newest.value}/"))),
+              ),
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer)
+
+  /** `bsplaw` at `newest` over `bspup` at `older`, which declares no `newest` cell. */
+  private def mixed(newest: ScalaVersion, older: ScalaVersion): ProjectGraph =
+    val up =
+      Module(upName, Platforms(Platform.Jvm, Nil), ScalaVersions(older, Nil), Nil, Nil, SourcePos("law.scala", 1, 1))
+    val law = Module(
+      lawName,
+      Platforms(Platform.Jvm, Nil),
+      ScalaVersions(newest, Nil),
+      Nil,
+      List(ProjectDep(upName, None)),
+      SourcePos("law.scala", 2, 1),
+    )
+    ProjectGraph.trusted(List(up, law), Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
   private def lawTarget(uri: String, scala3: ScalaVersion)(item: Rpc.BuildTarget): Boolean =
     item.id.uri == uri &&
@@ -191,11 +250,11 @@ object BspTargetLawSpec extends ZIOSpecDefault:
     )
     ProjectGraph.trusted(List(law), Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
-  private def sessionLayer(dir: Path, closure: CompilerClosure) =
+  private def sessionLayer(dir: Path, pin: DependencyLock) =
     ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
       Compilers.live(1) ++
       CompileMemo.live ++
-      ResolutionService.pinned(closure.pinning(lawName))
+      ResolutionService.pinned(pin)
 
   private def ask(session: Bsp.Session, payload: String) =
     session.answer(payload)

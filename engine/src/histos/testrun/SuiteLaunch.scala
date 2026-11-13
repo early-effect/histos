@@ -98,7 +98,7 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
-      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
@@ -239,7 +239,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         onCompiled = noted,
       )
-      stamp  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+      stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <-
         SuiteNames
           .discover(classes, linked.paths, provider.framework.value)
@@ -307,7 +307,7 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
-      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
@@ -477,7 +477,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         onCompiled = noted,
       )
-      stamp  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+      stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <-
         SuiteNames
           .discover(classes, linked.paths, provider.framework.value)
@@ -592,7 +592,7 @@ private[testrun] object SuiteLaunch:
       ],
   ): ZIO[R, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     ZIO
-      .fromEither(SuiteCover.stored(repo, ask))
+      .fromEither(SuiteCover.stored(ask))
       .mapError(refused(cell, _))
       .flatMap: cover =>
         SuiteStamp
@@ -645,7 +645,7 @@ private[testrun] object SuiteLaunch:
 
   private def prepared(
       module: Module,
-      modules: List[Module],
+      upstream: List[histos.zinc.UpstreamCell],
       cell: CompiledCell,
       jdk: JdkRuntime,
       runtimes: Runtimes,
@@ -660,7 +660,7 @@ private[testrun] object SuiteLaunch:
         case None          => ZIO.succeed(lock)
     yield SuiteAsk(
       module,
-      modules,
+      upstream,
       cell.version,
       cell.platform,
       seen,
@@ -775,7 +775,7 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
-      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
@@ -893,7 +893,7 @@ private[testrun] object SuiteLaunch:
             onCompiled = noted,
             coverage = coverage,
           )
-          stamp <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
+          stamp <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
           found <- SuiteNames
             .discover(classes, linked.paths, provider.framework.value)
             .mapError(_ => ModuleTestError.Root(classes))

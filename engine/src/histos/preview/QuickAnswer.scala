@@ -2,17 +2,17 @@ package histos.preview
 
 import histos.jdk.{Machine, Toolchain}
 import histos.node.NodeToolchain
-import histos.resolve.{BuildResolvers, Resolve}
+import histos.resolve.{BuildResolvers, DependencyLock, LockedTools, Resolve}
 import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp}
 import histos.toolchain.RuntimeIdentity
-import histos.zinc.GraphCompile
+import histos.zinc.{GraphCompile, UpstreamCell, UpstreamCells}
 import histos.{Module, NodePath, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, UIO, ZIO}
+import zio.{IO, UIO, ZIO, ZLayer}
 
 /** What a quick run would do with the classes and the lock already on disk. Preview does not launch a framework, fetch
   * a dependency, or write a record.
@@ -50,13 +50,15 @@ object QuickAnswer:
         namesOf(classes).flatMap:
           case Seen.Failed => ZIO.succeed(QuickAnswer.Partial(Nil))
           case seen        =>
-            cover(repo, module, modules, version, platform, graph).flatMap: found =>
-              decide(repo, module, modules, version, platform, classes, seen, found)
+            cover(repo, module, modules, version, platform, graph).flatMap:
+              case Some((stamp, upstream)) =>
+                decide(repo, module, upstream, version, platform, classes, seen, Some(stamp))
+              case None => decide(repo, module, Nil, version, platform, classes, seen, None)
 
   private def decide(
       repo: Path,
       module: Module,
-      modules: List[Module],
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       classes: Path,
@@ -72,18 +74,19 @@ object QuickAnswer:
             found match
               case None        => ZIO.succeed(QuickAnswer.Named(Nil, Nil, names.sorted))
               case Some(stamp) =>
-                judge(repo, module, modules, version, platform, classes, names, stamp)
+                judge(repo, module, upstream, version, platform, classes, names, stamp)
       case Seen.Inner =>
         found match
           case None        => ZIO.succeed(QuickAnswer.Partial(Nil))
           case Some(stamp) =>
-            matchingRecords(repo, module, modules, version, platform, classes, stamp)
+            matchingRecords(repo, module, upstream, version, platform, classes, stamp)
       case Seen.Names(names) =>
         found match
           case None        => ZIO.succeed(QuickAnswer.Named(Nil, Nil, names.sorted))
           case Some(stamp) =>
-            judge(repo, module, modules, version, platform, classes, names, stamp)
+            judge(repo, module, upstream, version, platform, classes, names, stamp)
 
+  /** The cover a quick run would store, and the upstream cells its test compile read. */
   private def cover(
       repo: Path,
       module: Module,
@@ -91,38 +94,70 @@ object QuickAnswer:
       version: ScalaVersion,
       platform: Platform,
       graph: ProjectGraph,
-  ): UIO[Option[SuiteStamp.Cover]] =
+  ): UIO[Option[(SuiteStamp.Cover, List[UpstreamCell])]] =
     Resolve
       .readLock(repo)
       .either
       .flatMap:
         case Left(_)     => ZIO.succeed(None)
         case Right(lock) =>
-          Machine
-            .load(repo)
-            .either
-            .flatMap:
-              case Left(_)        => ZIO.succeed(None)
-              case Right(machine) =>
-                accepted(platform, machine, graph.runnerTools.nodePath).map: runtime =>
-                  runtime.flatMap: (jdk, node) =>
-                    SuiteCover
-                      .stored(
-                        repo,
-                        SuiteAsk(
-                          module,
-                          modules,
-                          version,
-                          platform,
-                          lock,
-                          BuildResolvers(graph.resolvers),
-                          graph.tools,
-                          machine.native,
-                          jdk,
-                          node,
-                        ),
-                      )
-                      .toOption
+          upstreamOf(repo, module, modules, version, platform, graph, lock).flatMap:
+            case None           => ZIO.succeed(None)
+            case Some(upstream) =>
+              Machine
+                .load(repo)
+                .either
+                .flatMap:
+                  case Left(_)        => ZIO.succeed(None)
+                  case Right(machine) =>
+                    accepted(platform, machine, graph.runnerTools.nodePath).map: runtime =>
+                      runtime.flatMap: (jdk, node) =>
+                        SuiteCover
+                          .stored(
+                            SuiteAsk(
+                              module,
+                              upstream,
+                              version,
+                              platform,
+                              lock,
+                              BuildResolvers(graph.resolvers),
+                              graph.tools,
+                              machine.native,
+                              jdk,
+                              node,
+                            )
+                          )
+                          .toOption
+                          .map(_ -> upstream)
+
+  /** [[UpstreamCells.read]] over the Coursier cache, read offline: preview does not fetch. A cell it cannot read has no
+    * answer.
+    */
+  private def upstreamOf(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      platform: Platform,
+      graph: ProjectGraph,
+      lock: DependencyLock,
+  ): UIO[Option[List[UpstreamCell]]] =
+    UpstreamCells
+      .read(
+        module,
+        Module.chain(module, modules, platform),
+        version,
+        platform,
+        UpstreamCells.declared(repo, modules, platform),
+      )
+      .provide(
+        Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) >>>
+          ZLayer.fromZIO(
+            ZIO
+              .serviceWith[Resolve](resolve => LockedTools(lock, graph.tools, BuildResolvers(graph.resolvers), resolve))
+          )
+      )
+      .option
 
   private def accepted(
       platform: Platform,
@@ -148,14 +183,14 @@ object QuickAnswer:
   private def judge(
       repo: Path,
       module: Module,
-      modules: List[Module],
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       classes: Path,
       names: List[String],
       stamp: SuiteStamp.Cover,
   ): UIO[QuickAnswer] =
-    directories(repo, module, modules, version, platform, classes).flatMap: dirs =>
+    directories(repo, module, upstream, version, platform, classes).flatMap: dirs =>
       SuiteStamp
         .digests(names, dirs, stamp)
         .foldZIO(
@@ -196,7 +231,7 @@ object QuickAnswer:
   private def matchingRecords(
       repo: Path,
       module: Module,
-      modules: List[Module],
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       classes: Path,
@@ -205,7 +240,7 @@ object QuickAnswer:
     recordNames(repo, module.name, version, platform).flatMap: names =>
       if names.isEmpty then ZIO.succeed(QuickAnswer.Partial(Nil))
       else
-        directories(repo, module, modules, version, platform, classes).flatMap: dirs =>
+        directories(repo, module, upstream, version, platform, classes).flatMap: dirs =>
           SuiteStamp
             .digests(names, dirs, stamp)
             .foldZIO(
@@ -237,17 +272,13 @@ object QuickAnswer:
   private def directories(
       repo: Path,
       module: Module,
-      modules: List[Module],
+      upstream: List[UpstreamCell],
       version: ScalaVersion,
       platform: Platform,
       classes: Path,
   ): UIO[List[Path]] =
-    val upstream = Module
-      .chain(module, modules, platform)
-      .map: dependency =>
-        GraphCompile.classesDir(repo, dependency.name, version, platform)
     val candidates =
-      classes :: GraphCompile.classesDir(repo, module.name, version, platform) :: upstream
+      classes :: GraphCompile.classesDir(repo, module.name, version, platform) :: upstream.map(_.classes)
     ZIO.filter(candidates)(isDirectory).map(_.distinct)
 
   private def recordNames(

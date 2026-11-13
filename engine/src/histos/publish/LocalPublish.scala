@@ -14,7 +14,7 @@ import histos.central.{
 }
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarIo, JavadocJar, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
@@ -467,13 +467,18 @@ object LocalPublish:
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
-      name   <- artifactId(group, artifact, job.revision.render)
-      module <- ZIO.fromEither(moduleOf(graph, cell.module))
-      ordered = module :: Module.chain(module, modulesOf(graph), cell.platform)
-      dirs     <- ZIO.fromEither(classDirectories(ordered, cell.version, cell.platform, cells))
+      name     <- artifactId(group, artifact, job.revision.render)
+      module   <- ZIO.fromEither(moduleOf(graph, cell.module))
+      upstream <- upstreamOf(repo, graph, module, cell, cells)
+      dirs = cell.classes :: upstream.map(_.classes)
       products <- productDigests(dirs, cell)
-      jars     <- runtimeJars(repo, graph, ordered, cell.version, cell.platform)
-      packed   <- sourcesOf(repo, graph, cell)
+      jars     <- runtimeJars(
+        repo,
+        graph,
+        (module -> cell.version) :: upstream.map(found => found.module -> found.version),
+        cell,
+      )
+      packed <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
       stamp   <- versionStamp(repo, graph, cell, api)
       classes <- Assembly
@@ -574,33 +579,45 @@ object LocalPublish:
           LocalPublishError.Compile(GraphCompileError.Failed(cell.module, cell.version, cell.platform, error))
         )
 
-  private def classDirectories(
-      ordered: List[Module],
-      version: ScalaVersion,
-      platform: Platform,
+  /** The upstream cells the assembled cell's compile read, from the cells this publish compiled. */
+  private def upstreamOf(
+      repo: Path,
+      graph: ProjectGraph,
+      module: Module,
+      cell: histos.zinc.CompiledCell,
       cells: List[histos.zinc.CompiledCell],
-  ): Either[LocalPublishError, List[Path]] =
-    ordered.foldLeft[Either[LocalPublishError, List[Path]]](Right(Nil)): (acc, item) =>
-      acc.flatMap: paths =>
-        cells.find(cell => cell.module == item.name && cell.version == version && cell.platform == platform) match
-          case Some(cell) => Right(paths :+ cell.classes)
-          case None       => Left(LocalPublishError.MissingClasses(item.name, version, platform))
+  ): ZIO[Resolve, LocalPublishError, List[histos.zinc.UpstreamCell]] =
+    for
+      lock     <- Resolve.readLock(repo).mapError(LocalPublishError.Classpath(_))
+      upstream <- histos.zinc.UpstreamCells
+        .read(
+          module,
+          Module.chain(module, modulesOf(graph), cell.platform),
+          cell.version,
+          cell.platform,
+          histos.zinc.UpstreamCells.compiled(cells),
+        )
+        .mapError(LocalPublishError.Compile(_))
+        .provideSome[Resolve](ZLayer.fromZIO(LockedTools.make(lock, graph)))
+    yield upstream
 
+  /** The JVM runtime of `cell`, then each module's runtime jars at its own cell's version. */
   private def runtimeJars(
       repo: Path,
       graph: ProjectGraph,
-      ordered: List[Module],
-      version: ScalaVersion,
-      platform: Platform,
+      placed: List[(Module, ScalaVersion)],
+      cell: histos.zinc.CompiledCell,
   ): ZIO[Resolve, LocalPublishError, List[Path]] =
+    val platform = cell.platform
     for
       lock    <- Resolve.readLock(repo).mapError(LocalPublishError.Classpath(_))
       runtime <- JvmCompile
-        .runtime(version)
+        .runtime(cell.version)
         .mapError(LocalPublishError.Runtime(_))
         .provideSome[Resolve](ZLayer.fromZIO(LockedTools.make(lock, graph)))
-      external <- ZIO.foldLeft(ordered)(List.empty[Path]): (acc, item) =>
-        val request = ResolveCell(
+      external <- ZIO.foldLeft(placed)(List.empty[Path]): (acc, entry) =>
+        val (item, version) = entry
+        val request         = ResolveCell(
           item.name,
           Dep.runtime(item.dependencies, platform),
           version,
@@ -769,7 +786,7 @@ object LocalPublish:
           module <- ZIO.fromEither(moduleOf(graph, cell.module))
           paths  <- DocClasspath
             .of(repo, graph, module, cell)
-            .mapError(text => LocalPublishError.Jar(cell.module, cell.version, cell.platform, JarError.Scaladoc(text)))
+            .mapError(LocalPublishError.Compile(_))
           packed <- JavadocJar
             .write(
               cell.classes,

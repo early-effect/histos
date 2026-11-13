@@ -325,8 +325,8 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       _ <- stub[CompileMemo](
         _.hashes(
           any[DependencyLock],
-          any[List[Module]],
           any[Module],
+          any[List[UpstreamCell]],
           any[ScalaVersion],
           any[Platform],
           any[ClasspathScope],
@@ -336,8 +336,8 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       _ <- stub[CompileMemo](
         _.classpath(
           any[Path],
-          any[List[Module]],
           any[Module],
+          any[List[UpstreamCell]],
           any[ScalaVersion],
           any[Platform],
           any[DependencyLock],

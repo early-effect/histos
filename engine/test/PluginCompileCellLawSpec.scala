@@ -3,6 +3,7 @@ package histos.load
 import histos.cache.ContentStore
 import histos.jdk.Machine
 import histos.native.NativeOrigin
+import histos.plugin.{DeclaredTask, Seal, TaskDep, TaskName}
 import histos.resolve.{ResolutionService, Resolve}
 import histos.testrun.TestCompile
 import histos.version.Catalog
@@ -13,6 +14,7 @@ import histos.{
   Module,
   Platform,
   Platforms,
+  ProjectDep,
   ProjectGraph,
   ProjectName,
   Resolution,
@@ -74,7 +76,71 @@ object PluginCompileCellLawSpec extends ZIOSpecDefault:
               ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
                 ResolutionService.pinned(closure.pinning(lawName))
             )
+    ,
+    test("a cell over an older upstream compiles, and its classpath names that upstream's own classes"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        val newest = closure.scalaVersion
+        Workspace
+          .work("histos-plugin-older")
+          .flatMap: dir =>
+            val program =
+              for
+                older   <- closure.previous
+                machine <- Machine.load(dir)
+                jdk     <- GraphCompile.jdk(machine)
+                _       <- Workspace.writeString(
+                  dir.resolve(upName.value).resolve("src").resolve("main").resolve("scala").resolve("Up.scala"),
+                  "object Up:\n  def ready: Int = 1\n",
+                )
+                _ <- Workspace.writeString(
+                  dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Plug.scala"),
+                  "object Plug:\n  def ready: Int = Up.ready\n",
+                )
+                pin   = closure.pinningAt(upName -> older, lawName -> newest)
+                built = mixed(older, newest)
+                law <- ZIO.fromOption(built.projects.collectFirst {
+                  case found: Module if found.name == lawName => found
+                })
+                session = CompileSession(dir, built, jdk, NativeOrigin.read(machine.env), pin)
+                compiled <- PluginCells
+                  .compile(session, PluginCells.Cell(law, newest, Platform.Jvm))
+                  .either
+                  .provideSomeLayer[Resolve & Scope](
+                    ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ResolutionService.pinned(pin)
+                  )
+                read <- PluginCells
+                  .classpath(
+                    dir,
+                    built,
+                    DeclaredTask(
+                      TaskName.trusted("pack"),
+                      Seal.Hermetic,
+                      Set.empty,
+                      Nil,
+                      Nil,
+                      List(TaskDep.Compile(lawName, Some(newest), Some(Platform.Jvm))),
+                    ),
+                    ZIO.succeed(pin),
+                  )
+                  .either
+              yield
+                val compile = read.toOption.toList.flatMap(_.flatMap(_.compile))
+                assertTrue(
+                  compiled == Right(()),
+                  compile.contains(GraphCompile.classesDir(dir, upName, older, Platform.Jvm)),
+                  !compile.contains(GraphCompile.classesDir(dir, upName, newest, Platform.Jvm)),
+                )
+            program,
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
+
+  private val upName = ProjectName.trusted("plugup")
+
+  /** `plugup` at `older`, and `pluglaw` at `newest` over it. */
+  private def mixed(older: ScalaVersion, newest: ScalaVersion): ProjectGraph =
+    val up =
+      Module(upName, Platforms(Platform.Jvm, Nil), ScalaVersions(older, Nil), Nil, Nil, SourcePos("law.scala", 1, 1))
+    val law = module(newest).copy(dependsOn = List(ProjectDep(upName, None)))
+    ProjectGraph.trusted(List(up, law), Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)
 
   private def module(scala3: ScalaVersion): Module =
     Module(

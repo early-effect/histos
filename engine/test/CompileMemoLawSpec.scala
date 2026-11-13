@@ -68,36 +68,20 @@ object CompileMemoLawSpec extends ZIOSpecDefault:
       val stamp = LockStamp.content(sha)
       for
         memo   <- CompileMemo.live.build.map(_.get[CompileMemo])
-        jvm    <- memo.hashes(pin, List(module), module, version, Platform.Jvm, ClasspathScope.Compile, stamp)
-        cached <- memo.hashes(
-          DependencyLock(Nil),
-          List(module),
-          module,
-          version,
-          Platform.Jvm,
-          ClasspathScope.Compile,
-          stamp,
-        )
-        script <- memo.hashes(
-          js,
-          List(module),
-          module,
-          version,
-          Platform.Js,
-          ClasspathScope.Compile,
-          LockStamp.content(library),
-        )
+        jvm    <- memo.hashes(pin, module, Nil, version, Platform.Jvm, ClasspathScope.Compile, stamp)
+        cached <- memo.hashes(DependencyLock(Nil), module, Nil, version, Platform.Jvm, ClasspathScope.Compile, stamp)
+        script <- memo.hashes(js, module, Nil, version, Platform.Js, ClasspathScope.Compile, LockStamp.content(library))
         missing <- memo.hashes(
           DependencyLock(Nil),
-          List(module),
           module,
+          Nil,
           version,
           Platform.Jvm,
           ClasspathScope.Compile,
           LockStamp.content(library),
         )
         _     <- memo.forget
-        fresh <- memo.hashes(pin, List(module), module, version, Platform.Jvm, ClasspathScope.Compile, stamp)
+        fresh <- memo.hashes(pin, module, Nil, version, Platform.Jvm, ClasspathScope.Compile, stamp)
       yield assertTrue(
         jvm == Some(List(sha)),
         cached == Some(List(sha)),
