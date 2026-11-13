@@ -94,7 +94,7 @@ object PerformLawSpec extends ZIOSpecDefault:
         for heard <- drive(Right(None), Call.Version, quietEdges)
         yield assertTrue(
           heard == Chunk(
-            Message.Event(BuildEvent.Out(s"$version\nserver $version\nno local assembly")),
+            Message.Event(BuildEvent.Out(s"$version\nserver $version")),
             Message.Done(CallResult.reported()),
           )
         )
@@ -181,7 +181,7 @@ object PerformLawSpec extends ZIOSpecDefault:
       ZIO.unit,
     )
 
-  private val successor = Successor(Some("histos 0.3.1"), None)
+  private val successor = Successor(Some("histos 0.3.1"))
 
   private def mark(hit: Ref[List[String]], label: String, name: String): ZIO[Any, ServerError, Unit] =
     if label == name then hit.update(_ :+ name)

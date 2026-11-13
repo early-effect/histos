@@ -46,7 +46,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
   private val lawName = ProjectName.trusted("daemonlaw")
 
   /** A reboot that only stops the law's server. Its relaunch starts nothing. */
-  private val unnamed = Successor(None, None)
+  private val unnamed = Successor(None)
 
   def spec = suite("daemon open laws")(
     test("version is the server's version, cache names the store, and clean removes the product"):
@@ -67,7 +67,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           stopped    <- running.done.either
           closed     <- ZIO.attempt(Files.exists(socket)).orDie
         yield assertTrue(
-          outs(versionFeeds) == s"$version\nserver $version\nno local assembly",
+          outs(versionFeeds) == s"$version\nserver $version",
           done(versionFeeds).contains(CallResult.reported()),
           outs(cacheFeeds) == repo.resolve("store").toString,
           outs(cleanFeeds) == "cleaned",
@@ -92,7 +92,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           done(reloaded) == Some(
             CallResult.Fault(BuildFault.Load(LoadError.MissingFile(repo.resolve("histos.scala"))))
           ),
-          outs(answered) == s"$version\nserver $version\nno local assembly",
+          outs(answered) == s"$version\nserver $version",
         )
     ,
     test("reboot reaches the client before the successor runs"):
@@ -108,10 +108,9 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           ended   <- running.done.either
         yield assertTrue(done(heard).contains(CallResult.reported()), ended == Right(()))
     ,
-    test("a reboot starts its successor with the version and jar its requester named, and the successor records them"):
+    test("a reboot starts its successor with the version its requester named, and the successor records it"):
       served(identity, Loader.live): repo =>
-        val jar    = repo.resolve("next.jar")
-        val wanted = Successor(Some("histos 0.0.1-law"), Some(jar))
+        val wanted = Successor(Some("histos 0.0.1-law"))
         for
           started <- Promise.make[Nothing, ProcessBuilder]
           running <- stand(repo, version, (at, onto) => started.succeed(Daemon.successor(at, onto)).unit)
@@ -130,7 +129,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           _      <- next.done
         yield assertTrue(
           named.contains("histos 0.0.1-law"),
-          path.contains(jar.toString),
+          path.isEmpty,
           record.map(_.version).contains("histos 0.0.1-law"),
         )
     ,
@@ -263,7 +262,6 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
         ZIO.dieMessage("the law never reports the build"),
         machine,
         relaunch,
-        None,
       )
     yield running
 

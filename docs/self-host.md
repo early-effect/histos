@@ -1,6 +1,6 @@
 # How Histos builds Histos
 
-This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is the plan that replaces most of it. The toolchain is on the ship row. `publish local` still installs nothing, and that install is the Dist layer. `assembly` is the fat-jar verb and takes module names. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
+This is how the machinery works today. The toolchain is on the ship row, `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)`. `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before anything uploads. `assembly` is the fat-jar verb and takes module names. It does not install a toolchain. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
 
 ## The pin is the builder
 
@@ -9,31 +9,43 @@ This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is t
 The pin moves through a pull request:
 
 1. Commit the change, so the snapshot coordinate names HEAD.
-2. Run `./histos publish snapshots` on the laptop.
+2. Run `./histos publish snapshots` on the laptop. That command packs the launcher, links the host client, and proves the pair before the Maven publish and before the `dist` upload.
 3. Pin the commit channel, `<ship>-<sha>-SNAPSHOT`, in `build.properties`.
 4. Push.
+
+`./histos` in this checkout is still the pin at `c5d402f`, channel `0.3.0-c7d1b280cc0a-SNAPSHOT`. That pin does not pack or prove. The pin move runs once a toolchain built from this layer is what `./histos` executes. This layer does not change `histos.version`.
 
 ## Fetch the lock before the suite
 
 The engine laws read compilers and other locked tools from the Coursier cache offline, because a test does not call Central. On a fresh clone, run `./histos resolve` once before `./histos test`. It fetches everything `dependencies.lock` records, including tools the build itself does not compile with, such as the Scala 3.9 compiler the TASTy laws use. CI's setup action runs the same command.
 
-## A local assembly
+## A local toolchain
 
-`./histos assembly app` compiles that module and the modules it depends on, and writes the module's asset. For this repository that path is `dist/histos.jar`. When `app` is the ship's launcher, the jar packs the ship's library members at `bootstrap/histos-api.jar` and writes `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. No source file carries the commit. The command does not write `.histos/assembly.sha256`. An empty argument list is an error that names the assembly modules.
+`./histos publish local` writes the Maven snapshot into Coursier's `ivy2Local` and, for a ship that names `.toolchain`, packs the launcher, links the host client, and proves the pair first. The pair is the new client running `version`, then `graph`, against the new jar, in a copy of HEAD. A failed handshake is `PairError.Handshake` and the install does not happen.
 
-The repository `./histos` is rendered by `workflow --update` from the ship number. It uses `HISTOS_ASSEMBLY` or `dist/histos.jar` when that jar's checksum matches `.histos/assembly.sha256`, and fails on a mismatch. With no local jar, it runs the installed shim. With a local jar and an executable `dist/histos-client`, it runs that client.
+The install is `~/.histos/toolchains/<id>/`: `histos.jar`, this platform's `histos-client`, and `manifest.json`. The command writes `.histos/toolchain`, one path segment, the ship coordinate. The shim prefers that file over `build.properties` and does not fetch. A missing jar fails with `local toolchain <id> is not installed`. Delete the file to return to the pin. The tracked pin does not change.
 
-There is no `client` command. A removed `./histos client` names `publish`. `publish local`, `publish snapshots`, and `publish release` are the commands that link the client, and that link is the Dist layer, which has not landed. Until then the wrapper runs `dist/histos-client` only when that file is already there and executable.
+`./histos assembly <module>` still writes that module's asset. For this repository `app`'s asset is `dist/histos.jar`. When `app` is the ship's launcher, a pack writes the ship's library members at `bootstrap/histos-api.jar` and `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. No source file carries the commit. Nothing writes `.histos/assembly.sha256`. The checkout script does not launch `dist/histos.jar`. An empty argument list is an error that names the assembly modules.
 
-A running server keeps the jar it started with. The next command compares the version line and the assembly checksum, and a mismatch reboots the server first. The replacement starts with the command's `HISTOS_VERSION` and `HISTOS_ASSEMBLY`, or without one the command does not have, never with the old server's.
+`./histos` is rendered by `workflow --update` from the ship number. It checks the operating system, then execs `~/.histos/bin/histos`. The shim chooses the local toolchain or the pin. The generator writes that script. The committed `./histos` in this repository stays the pin's script until the pin moves, because `workflow --check` compares the file to the pin.
 
-When the local assembly's snapshot id is not what HEAD would publish, a command fails before it loads the build:
+There is no `client` command and no `launcher` command. A removed `./histos client` names `publish`. A removed `./histos launcher` names `update`.
+
+`histos version` prints two lines: the toolchain id, then the server's id. With `.histos/toolchain` set, the id is that local toolchain. A local toolchain built from another commit, or from a dirty tree, prints one warning on stderr:
 
 ```text
-toolchain is 0.2.10-7230ba21293f-SNAPSHOT; this checkout would publish 0.3.0-1b88d92a50e1-SNAPSHOT. Run histos assembly.
+local toolchain built from <commit> (dirty); this checkout is <head>
 ```
 
-`assembly`, `version`, and `reboot` still run. A gitignored `.histos/allow-drift` turns the failure into a warning on the command line. The MCP `test` tool still refuses.
+The `(dirty)` word is omitted when the pack was clean. `doctor` reports the same sentence as `toolchain.local`, a warning, and the exit stays 0. The command runs. There is no stop and no `.histos/allow-drift`.
+
+A running server keeps the jar it started with. The next command compares the version. A different version reboots. The client notes the `server.json` stamp before it spawns, and after the socket accepts it reads only a record written strictly later, so it does not take the previous server's file. The restart error names the version:
+
+```text
+histos server at <socket> did not record version <wanted>; it has <got>
+```
+
+The successor starts with the requester's `HISTOS_VERSION`. An inherited `HISTOS_ASSEMBLY` is dropped and is not set.
 
 ## Snapshots
 
@@ -44,13 +56,13 @@ toolchain is 0.2.10-7230ba21293f-SNAPSHOT; this checkout would publish 0.3.0-1b8
 - `<timestamp>-histos.jar`
 - `<timestamp>-client-<platform>` for each file under `dist/clients/client-<platform>/histos-client`
 
-The ship names `.toolchain(launcher = app, client = client)`, so a publish of this ship expects a client for every dist platform. A platform with no file is omitted from the manifest, and none at all is refused before a token. A Mac links only `macos-aarch64` until the container item, so copy `dist/histos-client` to `dist/clients/client-macos-aarch64/histos-client` first. A laptop publish then has no Linux client, and CI on that pin runs `java -jar`. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
+The ship names `.toolchain(launcher = app, client = client)`. This layer links the host only. A platform that was not linked is omitted from the manifest, and none at all is refused before a token. A Mac publish names `macos-aarch64`. Linux waits for the container item, so a Linux job on that pin runs `java -jar`. The proof runs before the upload. `PairError.Handshake` refuses the Maven publish and the `dist` upload. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
 
-`histos-snapshots.yml` is the same publish on GitHub runners. It is dispatch only. A toolchain ship links both clients on their own runners, assembles the launcher, and publishes with `HISTOS_BRANCH=default`. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
+The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./histos publish local` and uploads `client-macos-aarch64`, then a publish job that needs that job, downloads `client-*`, installs Linux LLVM, and runs `./histos publish snapshots`. The committed workflow stays the pin's render until the pin moves, because `workflow --check` compares the file to the pin. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
 
 ## Releases
 
-`gh workflow run histos-release.yml --ref main` publishes the ship to Central. A toolchain ship then assembles the launcher, links both clients on Ubuntu and macOS with Temurin 25, and uploads the jar, the clients, the manifest, and the shim to `dist`. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The generator, for a toolchain ship, renders a `macos-26` client job that runs `./histos publish local`, then a release job that needs it, installs Linux LLVM, runs `./histos publish release` (which proves the pair before the portal upload), and uploads the jar, the shim, and the Linux client. The committed workflow stays the pin's render until the pin moves. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
 
 ## The other self-host commands
 

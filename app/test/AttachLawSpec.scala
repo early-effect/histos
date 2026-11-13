@@ -55,19 +55,18 @@ object AttachLawSpec extends ZIOSpecDefault:
         directory == Decision.Absent,
       )
     ,
-    test("a checksum the server did not record is a different driver"):
+    test("a matching version opens, and a record without an assembly field still parses"):
       val sha = "ab" * 32
       for
         root <- ZIO.service[Path]
         repo <- LawDir.child(root, "mark")
         socket      = repo.resolve("server.sock")
         fingerprint = Fingerprint.trusted("abc")
-        _       <- Record.write(repo, version, fingerprint, socket, None)
-        _       <- write(repo.resolve(".histos").resolve("assembly.sha256"), sha + "\n")
-        drifted <- Attach.decide(repo, version)
-        _       <- Record.write(repo, version, fingerprint, socket, Some(sha))
-        matched <- Attach.decide(repo, version)
-        _       <- ZIO.attemptBlocking {
+        _      <- Record.write(repo, version, fingerprint, socket, None)
+        plain  <- Attach.decide(repo, version)
+        _      <- Record.write(repo, version, fingerprint, socket, Some(sha))
+        stored <- Attach.decide(repo, version)
+        _      <- ZIO.attemptBlocking {
           Files.writeString(
             Record.file(repo),
             s"""{"version":"$version","fingerprint":"abc","socket":"${socket.toAbsolutePath.normalize}"}""",
@@ -78,10 +77,10 @@ object AttachLawSpec extends ZIOSpecDefault:
       yield
         val absolute = socket.toAbsolutePath.normalize
         assertTrue(
-          drifted == Decision.DifferentVersion(absolute),
-          matched == Decision.Open(absolute),
+          plain == Decision.Open(absolute),
+          stored == Decision.Open(absolute),
           legacy.exists(_.assembly.isEmpty),
-          again == Decision.DifferentVersion(absolute),
+          again == Decision.Open(absolute),
         )
     ,
     test("solve ignores the lock file and lock hashes it"):

@@ -8,7 +8,6 @@ import histos.central.{PortalServer, ReleaseFeed}
 import histos.build.{Beat, Build, BuildEvent}
 import histos.load.LoadedBuild
 import histos.server.{
-  AssemblyMark,
   Attach,
   Call,
   Calls,
@@ -630,7 +629,7 @@ object Cli:
         versionText(repo).foldZIO(
           error => ZIO.succeed(held("", CallResult.Fault(BuildFault.Launcher(error)))),
           text =>
-            ApiClock.versionLines(repo, text).flatMap { shown =>
+            ZIO.succeed(ApiClock.versionLines(text)).flatMap { shown =>
               attach(
                 repo,
                 Call.Version,
@@ -1067,36 +1066,50 @@ object Cli:
   private def startServer(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
     val home = repo.resolve(".histos")
     val gate = home.resolve("server.starting")
-    ZIO.acquireReleaseWith(
-      ZIO
-        .attemptBlocking {
-          Files.createDirectories(home)
-          java.nio.channels.FileChannel.open(
-            gate,
-            java.nio.file.StandardOpenOption.CREATE,
-            java.nio.file.StandardOpenOption.WRITE,
-          )
+    histos.server.ServerStamp
+      .note(repo)
+      .flatMap: before =>
+        ZIO.acquireReleaseWith(
+          ZIO
+            .attemptBlocking {
+              Files.createDirectories(home)
+              java.nio.channels.FileChannel.open(
+                gate,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.WRITE,
+              )
+            }
+            .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+        )(channel => ZIO.attemptBlocking(channel.close()).ignore) { channel =>
+          ZIO
+            .attemptBlocking(Option(channel.tryLock()))
+            .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+            .flatMap {
+              case None    => awaitServer(repo, before)
+              case Some(_) => spawn(repo) *> awaitServer(repo, before)
+            }
         }
-        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
-    )(channel => ZIO.attemptBlocking(channel.close()).ignore) { channel =>
-      ZIO
-        .attemptBlocking(Option(channel.tryLock()))
-        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
-        .flatMap {
-          case None    => awaitServer(repo)
-          case Some(_) => spawn(repo) *> awaitServer(repo)
-        }
-    }
 
-  private def awaitServer(repo: Path): IO[ServerError, Path] =
+  /** A record written at or before `before` is the previous server. The socket can accept before the new file lands. */
+  private def awaitServer(
+      repo: Path,
+      before: Option[java.nio.file.attribute.FileTime],
+  ): IO[ServerError, Path] =
     val attempts                               = 1200
     def poll(left: Int): IO[ServerError, Path] =
-      histos.server.Record.read(repo).flatMap {
-        case Some(written)     => ZIO.succeed(written.socket)
-        case None if left <= 0 =>
-          histos.server.SocketPath.at(repo).flatMap(socket => ZIO.fail(ServerError.Unreachable(socket)))
-        case None => ZIO.sleep(50.millis) *> poll(left - 1)
-      }
+      histos.server.ServerStamp
+        .note(repo)
+        .flatMap: now =>
+          if histos.server.ServerStamp.writtenAfter(before, now) then
+            histos.server.Record.read(repo).flatMap {
+              case Some(written)     => ZIO.succeed(written.socket)
+              case None if left <= 0 =>
+                histos.server.SocketPath.at(repo).flatMap(socket => ZIO.fail(ServerError.Unreachable(socket)))
+              case None => ZIO.sleep(50.millis) *> poll(left - 1)
+            }
+          else if left <= 0 then
+            histos.server.SocketPath.at(repo).flatMap(socket => ZIO.fail(ServerError.Unreachable(socket)))
+          else ZIO.sleep(50.millis) *> poll(left - 1)
     poll(attempts)
 
   private def stopped(error: ServerError): Completed =
@@ -1127,12 +1140,15 @@ object Cli:
     versionOf(repo).orElseSucceed(None).flatMap {
       case None       => fallback
       case Some(text) =>
-        ApiClock.rebootLine(repo).flatMap { line =>
+        histos.server.Record.read(repo).flatMap { stored =>
+          val was  = stored.map(_.version).getOrElse(text)
+          val line = ApiClock.rebootText(text, was, socket.toString)
           sayError(line) *>
             Attach.replace(repo, text, socket).flatMap {
               case Some(next) => use(next)
               case None       =>
-                ApiClock.restart(repo, socket).map { error =>
+                ZIO.succeed {
+                  val error = ApiClock.restart(socket, text, was)
                   Completed(CliExit.Failed, "", error.message, Playback.Held)
                 }
             }
@@ -1144,7 +1160,10 @@ object Cli:
       socket: Path,
       miss: => URIO[R, Completed],
   ): URIO[R & Stdio, Completed] =
-    ApiClock.rebootLine(repo).zip(Successor.here).flatMap { (line, onto) =>
+    Successor.here.zip(histos.server.Record.read(repo)).flatMap { (onto, stored) =>
+      val next = onto.version.getOrElse("none")
+      val was  = stored.map(_.version).getOrElse(next)
+      val line = ApiClock.rebootText(next, was, socket.toString)
       sayError(line) *>
         remote(repo, socket, Call.Reboot(onto)).foldZIO(
           {
@@ -1892,31 +1911,28 @@ object Cli:
                               case None =>
                                 ZIO.succeed(Boot.Pin(LauncherError.Absent(repo.resolve(LauncherPin.file))))
                               case Some(text) =>
-                                AssemblyMark.read(repo).flatMap { mark =>
-                                  Daemon
-                                    .open(
-                                      repo,
-                                      loaded,
-                                      jdk,
-                                      text,
-                                      apiJar,
-                                      classpath,
-                                      loader.reportBuild(repo, apiJar).provideEnvironment(env),
-                                      machine,
-                                      Daemon.relaunch,
-                                      mark,
-                                    )
-                                    .flatMap { running =>
-                                      say(running.record.socket.toString) *> running.done
-                                    }
-                                    .foldCauseZIO(
-                                      cause =>
-                                        cause.failureOrCause match
-                                          case Left(error) => ZIO.succeed(Boot.Transport(error))
-                                          case Right(rest) => ZIO.failCause(rest),
-                                      _ => ZIO.succeed(Boot.Up),
-                                    )
-                                }
+                                Daemon
+                                  .open(
+                                    repo,
+                                    loaded,
+                                    jdk,
+                                    text,
+                                    apiJar,
+                                    classpath,
+                                    loader.reportBuild(repo, apiJar).provideEnvironment(env),
+                                    machine,
+                                    Daemon.relaunch,
+                                  )
+                                  .flatMap { running =>
+                                    say(running.record.socket.toString) *> running.done
+                                  }
+                                  .foldCauseZIO(
+                                    cause =>
+                                      cause.failureOrCause match
+                                        case Left(error) => ZIO.succeed(Boot.Transport(error))
+                                        case Right(rest) => ZIO.failCause(rest),
+                                    _ => ZIO.succeed(Boot.Up),
+                                  )
                             },
                           ),
                       ),
@@ -1955,29 +1971,22 @@ object Cli:
       call: Call,
       local: => URIO[R, Completed],
   ): URIO[R & Stdio, Completed] =
-    ApiClock.admit(repo, call).flatMap {
-      case ApiClock.Admit.Stop(fault) =>
-        ZIO.succeed(held("", CallResult.Fault(fault)))
-      case admitted =>
-        val noted = admitted match
-          case ApiClock.Admit.Warn(line) => sayError(line)
-          case _                         => ZIO.unit
-        noted *> ApiClock.drifted(repo).flatMap { stale =>
-          val hold = stale && ApiClock.skipsReboot(call)
-          pinned(repo, local)(text =>
-            Attach
-              .decide(repo, text)
-              .flatMap {
-                case Decision.Open(socket) =>
-                  speak(repo, socket, call, local)
-                case Decision.DifferentVersion(socket) if hold =>
-                  speak(repo, socket, call, local)
-                case Decision.DifferentVersion(socket) =>
-                  supplant(repo, socket, local)(next => speak(repo, next, call, local))
-                case Decision.Absent => local
-              }
-          )
-        }
+    ApiClock.admit(repo).flatMap { admitted =>
+      val noted = admitted match
+        case ApiClock.Admit.Warn(line) => sayError(line)
+        case ApiClock.Admit.Go         => ZIO.unit
+      noted *>
+        pinned(repo, local)(text =>
+          Attach
+            .decide(repo, text)
+            .flatMap {
+              case Decision.Open(socket) =>
+                speak(repo, socket, call, local)
+              case Decision.DifferentVersion(socket) =>
+                supplant(repo, socket, local)(next => speak(repo, next, call, local))
+              case Decision.Absent => local
+            }
+        )
     }
 
   private def speak[R](

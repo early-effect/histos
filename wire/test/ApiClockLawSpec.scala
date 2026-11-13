@@ -1,7 +1,6 @@
 package histos
 
-import histos.report.BuildFault
-import histos.server.{Call, Successor, WatchPolicy}
+import histos.server.ServerError
 import histos.version.{CommitSha, ShipNumber}
 
 import java.nio.charset.StandardCharsets
@@ -10,19 +9,16 @@ import java.nio.file.{Files, Path}
 import _root_.scala.jdk.CollectionConverters.*
 
 import zio.{Ref, Scope, UIO, ZIO}
-import zio.test.{Spec, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
+import zio.test.{TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
-/** A local assembly whose snapshot is not the revision this checkout would publish fails and names `histos assembly`.
-  * No local assembly does not.
+/** A local toolchain built from another commit, or a dirty tree, warns. The command runs. There is no stop.
   */
 object ApiClockLawSpec extends ZIOSpecDefault:
-  private val want     = "0.2.9-0123456789ab-SNAPSHOT"
-  private val have     = "0.2.9-ba9876543210-SNAPSHOT"
-  private val markHex  = "ab" * 32
-  private val otherHex = "cd" * 32
-  private val head     = "0123456789abcdef0123456789abcdef01234567"
-  private val histos   = ShipNumber.trusted(0, 2, 9)
-  private val early    = ShipNumber.trusted(1, 2, 3)
+  private val want   = "0.2.9-0123456789ab-SNAPSHOT"
+  private val head   = "0123456789abcdef0123456789abcdef01234567"
+  private val other  = "fedcba9876543210fedcba9876543210fedcba98"
+  private val histos = ShipNumber.trusted(0, 2, 9)
+  private val early  = ShipNumber.trusted(1, 2, 3)
 
   private val spaced =
     """Ship("lib").next(9, 8, 7)(api)
@@ -50,71 +46,32 @@ object ApiClockLawSpec extends ZIOSpecDefault:
         SnapshotId.publishing("""ship("histos", ship"0.2.9")(api, app)""").isEmpty,
       )
     ,
-    test("no local assembly does not fail, and a matching baked id is that snapshot"):
-      work.flatMap { repo =>
-        for
-          plain <- ApiClock.judge(repo, Call.Compile(Nil), have, Some(want))
-          _     <- mark(repo)
-          baked <- ApiClock.judge(repo, Call.Compile(Nil), want, Some(want))
-        yield assertTrue(plain == ApiClock.Admit.Go, baked == ApiClock.Admit.Go)
-      }
-    ,
-    test("a different snapshot fails and names histos assembly, and the hatch continues"):
-      work.flatMap { repo =>
-        val compile = Call.Compile(Nil)
-        for
-          _       <- mark(repo)
-          blocked <- ApiClock.judge(repo, compile, "", Some(want))
-          watched <- ApiClock.judge(repo, Call.Watch(compile, WatchPolicy.Restart), have, Some(want))
-          allowed <- ApiClock.judge(repo, Call.Assembly(Nil), "", Some(want))
-          version <- ApiClock.judge(repo, Call.Version, "", Some(want))
-          reboot  <- ApiClock.judge(repo, Call.Reboot(Successor(None, None)), "", Some(want))
-          held    <- ApiClock.judge(repo, Call.Watch(Call.Version, WatchPolicy.Restart), have, Some(want))
-          unknown <- ApiClock.judge(repo, compile, have, None)
-          _       <- write(ApiClock.hatchFile(repo), "")
-          warned  <- ApiClock.judge(repo, compile, have, Some(want))
-        yield assertTrue(
-          blocked == ApiClock.Admit.Stop(BuildFault.StaleApi("", want)),
-          watched == ApiClock.Admit.Stop(BuildFault.StaleApi(have, want)),
-          allowed == ApiClock.Admit.Go,
-          version == ApiClock.Admit.Go,
-          reboot == ApiClock.Admit.Go,
-          held == ApiClock.Admit.Go,
-          unknown == ApiClock.Admit.Go,
-          ApiClock.skipsReboot(Call.Assembly(Nil)),
-          ApiClock.skipsReboot(Call.Version),
-          ApiClock.skipsReboot(Call.Watch(Call.Version, WatchPolicy.Restart)),
-          !ApiClock.skipsReboot(Call.Reboot(Successor(None, None))),
-          !ApiClock.skipsReboot(compile),
-          !ApiClock.skipsReboot(Call.Watch(compile, WatchPolicy.Restart)),
-          warned == ApiClock.Admit.Warn(continued(have, want)),
-          BuildFault.StaleApi("", want).message ==
-            s"toolchain is no snapshot id; this checkout would publish $want. Run histos assembly.",
-        )
-      }
-    ,
-    test("version names the assembly checksum and the snapshot this checkout would publish"):
-      work.flatMap { repo =>
-        val line = "histos 0.2.8"
-        for
-          absent <- ApiClock.render(repo, line, have, Some(want))
-          _      <- mark(repo)
-          none   <- ApiClock.render(repo, line, have, None)
-          stale  <- ApiClock.render(repo, line, have, Some(want))
-          fresh  <- ApiClock.render(repo, line, want, Some(want))
-        yield assertTrue(
-          absent == s"$line\nserver 0.2.8\nno local assembly",
-          none == s"$line\nserver 0.2.8 assembly abababab\nno ship snapshot",
-          stale == s"$line\nserver 0.2.8 assembly abababab\n${BuildFault.StaleApi(have, want).message}",
-          fresh == s"$line\nserver 0.2.8 assembly abababab\nsnapshot $want",
-          ApiClock.rebootText(Some(markHex), Some(otherHex), "/tmp/server.sock") ==
-            "rebooting server onto abababab (was cdcdcdcd) at /tmp/server.sock",
-          ApiClock.rebootText(None, None, "/tmp/server.sock") ==
-            "rebooting server onto none (was none) at /tmp/server.sock",
-          ApiClock.mcpNote(Some(want)) == s"mcp $want",
-          ApiClock.mcpNote(None) == "mcp is not this assembly",
-        )
-      }
+    test("a local toolchain warns only when its packed commit is not this checkout"):
+      val fresh  = ToolchainIdentity(want, head, false)
+      val dirty  = ToolchainIdentity(want, head, true)
+      val moved  = ToolchainIdentity(want, other, false)
+      val line   = "histos 0.2.8"
+      val socket = Path.of("/tmp/server.sock")
+      assertTrue(
+        ApiClock.decide(false, Some(moved), Some(head)) == ApiClock.Admit.Go,
+        ApiClock.decide(true, Some(fresh), Some(head)) == ApiClock.Admit.Go,
+        ApiClock.decide(true, Some(moved), Some(head)) ==
+          ApiClock.Admit.Warn(ToolchainSkew.line(other, false, head)),
+        ApiClock.decide(true, Some(dirty), Some(head)) ==
+          ApiClock.Admit.Warn(ToolchainSkew.line(head, true, head)),
+        ApiClock.decide(true, None, Some(head)) == ApiClock.Admit.Go,
+        ToolchainSkew.line(other, false, head) ==
+          s"local toolchain built from $other; this checkout is $head",
+        ToolchainSkew.line(head, true, head) ==
+          s"local toolchain built from $head (dirty); this checkout is $head",
+        ApiClock.versionLines(line) == s"$line\nserver 0.2.8",
+        ApiClock.rebootText("histos 0.3.1", "histos 0.2.8", socket.toString) ==
+          "rebooting server onto histos 0.3.1 (was histos 0.2.8) at /tmp/server.sock",
+        ApiClock.mcpNote(Some(want)) == s"mcp $want",
+        ApiClock.mcpNote(None) == "mcp has no toolchain id",
+        ApiClock.restart(socket, "histos 0.3.1", "histos 0.2.8") ==
+          ServerError.Restart(socket, "histos 0.3.1", "histos 0.2.8"),
+      )
     ,
     test("current is the snapshot coordinate of the toolchain ship at HEAD, and reads HEAD only then"):
       work.flatMap { repo =>
@@ -144,12 +101,6 @@ object ApiClockLawSpec extends ZIOSpecDefault:
   /** A HEAD reader that records each checkout it is asked about. */
   private def reading(asked: Ref[List[Path]], head: Option[CommitSha]): Path => UIO[Option[CommitSha]] =
     at => asked.update(_ :+ at).as(head)
-
-  private def continued(held: String, wanted: String): String =
-    s"${BuildFault.StaleApi(held, wanted).message} .histos/${ApiClock.hatchName} is set, so this command continues."
-
-  private def mark(repo: Path): ZIO[Any, Throwable, Unit] =
-    write(repo.resolve(".histos").resolve("assembly.sha256"), markHex + "\n")
 
   private def write(path: Path, text: String): ZIO[Any, Throwable, Unit] =
     ZIO.attemptBlocking {

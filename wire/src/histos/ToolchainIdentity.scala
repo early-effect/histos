@@ -31,9 +31,18 @@ object ToolchainIdentity:
                     status.map(text => ToolchainIdentity(coordinate, sha.value, text.trim.nonEmpty))
 
   def coordinateOf(text: String): Option[String] =
-    text.fromJson[ToolchainIdentity] match
-      case Right(found) => Some(found.coordinate)
-      case Left(_)      => None
+    parse(text).map(_.coordinate)
+
+  def parse(text: String): Option[ToolchainIdentity] =
+    text.fromJson[ToolchainIdentity].toOption
+
+  /** The identity packed into this jar. None when the running jar has no toolchain resource. */
+  def loaded: Option[ToolchainIdentity] =
+    val loader = classOf[ToolchainIdentity].getClassLoader
+    Option(loader.getResourceAsStream(entry)).flatMap: stream =>
+      try parse(String(stream.readAllBytes, StandardCharsets.UTF_8))
+      catch case _: java.io.IOException => None
+      finally stream.close()
 
   private def git(repo: Path, args: List[String]): UIO[Option[String]] =
     ZIO

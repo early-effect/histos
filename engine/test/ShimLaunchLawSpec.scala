@@ -2,6 +2,9 @@ package histos.publish
 
 import histos.version.ShipNumber
 
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
+
 import zio.ZIO
 import zio.test.*
 
@@ -76,6 +79,47 @@ object ShimLaunchLawSpec extends ZIOSpecDefault:
             "macOS: brew install --cask temurin@25",
             "Linux: https://adoptium.net/temurin/releases?version=25",
           ),
+        )
+    ,
+    test("a checkout toolchain wins over the pin, and a missing install fails without fetching"):
+      ZIO.scoped:
+        for
+          rig <- loopback
+          _   <- ZIO.attemptBlocking {
+            Files.createDirectories(rig.installed.getParent)
+            Files.copy(rig.shim, rig.installed)
+            Files.setPosixFilePermissions(rig.installed, PosixFilePermissions.fromString("rwxr-xr-x"))
+            Files.createDirectories(rig.project.resolve(".histos"))
+          }.orDie
+          _ <- rig.pin("9.9.9")
+          id  = "0.3.0-local"
+          dir = rig.toolchain(id)
+          _ <- ZIO
+            .attemptBlocking(Files.writeString(rig.project.resolve(".histos").resolve("toolchain"), id + "\n"))
+            .orDie
+          missing <- rig.launch("compile")
+          quiet   <- rig.executed
+          _       <- ZIO.attemptBlocking {
+            Files.createDirectories(dir)
+            Files.writeString(dir.resolve("histos.jar"), "local\n")
+          }.orDie
+          ran  <- rig.launch("compile", "api")
+          seen <- rig.executed
+          jar = dir.resolve("histos.jar").toString
+          _ <- ZIO
+            .attemptBlocking(Files.writeString(rig.project.resolve(".histos").resolve("toolchain"), "a/b\n"))
+            .orDie
+          bad <- rig.launch("compile")
+        yield assertTrue(
+          missing.exit != 0,
+          missing.err.exists(_.contains(s"local toolchain $id is not installed")),
+          quiet.isEmpty,
+          ran.exit == 0,
+          seen.exists(_.program == "java"),
+          seen.exists(_.jar == jar),
+          seen.exists(_.args == List("--enable-native-access=ALL-UNNAMED", "-jar", jar, "compile", "api")),
+          bad.exit != 0,
+          bad.err.exists(_.contains("not one path segment")),
         ),
   ) @@ TestAspect.withLiveSystem
 

@@ -19,42 +19,41 @@ import java.nio.file.{Files, Path}
 import zio.*
 import zio.test.*
 
-/** A mismatched record is rebooted onto the command's own version and jar. The call runs on the replacement, not on the
-  * driver that was already up. The old driver records the replacement before it answers the reboot, so the wait for it
-  * never sleeps on the test clock.
+/** A mismatched version is rebooted onto the command's own version. The call runs on the replacement, not on the driver
+  * that was already up. The old driver records the replacement before it answers the reboot, so the wait for it never
+  * sleeps on the test clock.
   */
 object DriverLawSpec extends ZIOSpecDefault:
   private val pin   = "histos.version=1.2.3\n"
   private val shown = "histos 1.2.3"
-  private val sha   = "ab" * 32
 
   def spec = suite("driver laws")(
     test("a different version reboots and the call runs on the replacement"):
-      drive(recorded = "stale", mark = None)
+      drive("stale")
     ,
-    test("a new assembly checksum reboots when the version line matches"):
-      drive(recorded = shown, mark = Some(sha))
+    test("a matching version stays on the recorded server"):
+      drive(shown)
     ,
     test("the MCP reboot of a different version reboots once, and the replacement hears nothing"):
-      replaced("stale", None): repo =>
+      replaced("stale"): repo =>
         ZIO.scoped:
           Session.desk.flatMap: desk =>
             Session
-              .perform(repo, Path.of("api.jar"), LawMachine.idle, desk, Call.Reboot(Successor(Some(shown), None)))
+              .perform(repo, Path.of("api.jar"), LawMachine.idle, desk, Call.Reboot(Successor(Some(shown))))
               .either
               .provideSomeLayer[Scope](
                 stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
                   ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
               )
-      .map: (result, calls, jar) =>
+      .map: (result, calls) =>
         val reported = result match
           case Right(CallResult.Reported(_)) => true
           case _                             => false
-        assertTrue(reported, calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))))),
+        assertTrue(reported, calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown)))))),
   ) @@ TestAspect.timeout(20.seconds)
 
-  private def drive(recorded: String, mark: Option[String]): UIO[TestResult] =
-    replaced(recorded, mark): repo =>
+  private def drive(recorded: String): UIO[TestResult] =
+    replaced(recorded): repo =>
       Ref
         .make(0)
         .flatMap: missed =>
@@ -66,20 +65,23 @@ object DriverLawSpec extends ZIOSpecDefault:
             )
             .provideLayer(LawMachine.redirected)
             .zip(missed.get)
-    .map: (done, calls, jar) =>
+    .map: (done, calls) =>
       val (completed, n) = done
+      val expected       =
+        if recorded == shown then Chunk(Call.encode(Call.Compile(Nil)))
+        else Chunk(Call.encode(Call.Reboot(Successor(Some(shown)))), Call.encode(Call.Compile(Nil)))
       assertTrue(
         n == 0,
         completed.exit == CliExit.Success,
         completed.out != "miss",
-        calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))), Call.encode(Call.Compile(Nil))),
+        calls == expected,
       )
 
   /** A record names an old peer under the law's directory. The old peer writes a record for the next peer before it
-    * answers, as a server that relaunches does. Each peer answers one call. The requester runs as `shown` with the
-    * law's jar, and `act` is what it does. The result is what `act` returned, every call the peers heard, and that jar.
+    * answers, as a server that relaunches does. Each peer answers one call. The requester runs as `shown`, and `act` is
+    * what it does. The result is what `act` returned and every call the peers heard.
     */
-  private def replaced[A](recorded: String, mark: Option[String])(act: Path => UIO[A]): UIO[(A, Chunk[String], Path)] =
+  private def replaced[A](recorded: String)(act: Path => UIO[A]): UIO[(A, Chunk[String])] =
     ZIO.scoped {
       for
         root <- short
@@ -90,10 +92,6 @@ object DriverLawSpec extends ZIOSpecDefault:
         _     <- ZIO.attemptBlocking {
           List(repo, old, next).foreach(dir => Files.createDirectories(dir))
           Files.writeString(repo.resolve("build.properties"), pin)
-          mark.foreach { value =>
-            Files.createDirectories(AssemblyMark.file(repo).getParent)
-            Files.writeString(AssemblyMark.file(repo), value + "\n")
-          }
         }.orDie
         fingerprint <- must(Fingerprint.read(repo, Resolution.Solve))
         oldSocket  = old.resolve("s")
@@ -104,15 +102,13 @@ object DriverLawSpec extends ZIOSpecDefault:
         _        <- answer(
           oldPeer,
           heard,
-          must(Record.write(repo, shown, fingerprint, nextSocket, mark)),
+          must(Record.write(repo, shown, fingerprint, nextSocket, None)),
         ).forkScoped
-        _ <- answer(nextPeer, heard, ZIO.unit).forkScoped
-        jar = root.resolve("next.jar")
+        _     <- answer(nextPeer, heard, ZIO.unit).forkScoped
         _     <- TestSystem.putEnv("HISTOS_VERSION", shown)
-        _     <- TestSystem.putEnv("HISTOS_ASSEMBLY", jar.toString)
         done  <- act(repo)
         calls <- heard.get
-      yield (done, calls, jar)
+      yield (done, calls)
     }
 
   /** The law's own directory, removed after it. A Unix socket path fits in about 100 bytes, so it is under `/tmp`. */

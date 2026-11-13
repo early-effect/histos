@@ -59,7 +59,7 @@ object CleanLawSpec extends ZIOSpecDefault:
               _     <- plant(repo)
               wiped <- Products.named(repo, graph, Nil)
               left  <- remaining(planted(repo))
-              kept  <- present(repo.resolve(".histos").resolve("assembly.sha256"))
+              kept  <- present(repo.resolve(".histos").resolve("keep.txt"))
               tally <- missing(Products.observation(repo))
             yield assertTrue(wiped == Nil, left == Nil, kept, tally, Products.line(Nil) == "cleaned")
     ,
@@ -138,7 +138,7 @@ object CleanLawSpec extends ZIOSpecDefault:
 
   private def plant(repo: Path): zio.IO[histos.workspace.IoFailure, Unit] =
     ZIO.foreachDiscard(planted(repo))(Workspace.writeString(_, "p")) *>
-      Workspace.writeString(repo.resolve(".histos").resolve("assembly.sha256"), "a") *>
+      Workspace.writeString(repo.resolve(".histos").resolve("keep.txt"), "a") *>
       Workspace.writeString(Products.observation(repo), "{}")
 
   /** The files of `paths` still on disk. */

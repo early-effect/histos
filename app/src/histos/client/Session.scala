@@ -9,7 +9,21 @@ import histos.mcp.Notice
 import histos.plugin.PluginArgs
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.publish.LauncherError
-import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Message, Perform, Say, ServerError, Watching}
+import histos.server.{
+  Attach,
+  Call,
+  Calls,
+  Decision,
+  Feed,
+  Fingerprint,
+  Message,
+  Perform,
+  Record,
+  Say,
+  ServerError,
+  Successor,
+  Watching,
+}
 import histos.task.{RunId, TaskId}
 import histos.Platform
 
@@ -73,38 +87,32 @@ object Session:
             ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
         },
         text =>
-          ApiClock.admit(repo, call).flatMap {
-            case ApiClock.Admit.Stop(fault) => ZIO.succeed(CallResult.Fault(fault))
-            case admitted                   =>
-              val warned = admitted match
-                case ApiClock.Admit.Warn(line) => Console.printLineError(line).ignore
-                case _                         => ZIO.unit
-              warned *> ApiClock.drifted(repo).flatMap { stale =>
-                val hold = stale && ApiClock.skipsReboot(call)
-                Attach.decide(repo, text).flatMap {
-                  case Decision.DifferentVersion(socket) if hold =>
-                    drop(desk) *>
-                      ask(repo, apiJar, machine, desk, call, text, socket).flatMap(withProcess(repo, call, _))
-                  case Decision.DifferentVersion(socket) =>
-                    drop(desk) *>
-                      ApiClock.rebootLine(repo).flatMap { line =>
-                        Console.printLineError(line).ignore *>
-                          Attach.replace(repo, text, socket).flatMap {
-                            // Replacing the server was the reboot, so the replacement is not asked again.
-                            case Some(_) if rebooting(call) =>
-                              withProcess(repo, call, CallResult.reported())
-                            case Some(fresh) =>
-                              ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
-                            case None =>
-                              ApiClock.restart(repo, socket).flatMap(error => ZIO.fail(TransportError.Remote(error)))
-                          }
-                      }
-                  case Decision.Open(socket) =>
-                    drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
-                      .flatMap(withProcess(repo, call, _))
-                  case Decision.Absent =>
-                    locally(repo, apiJar, machine, desk, call, text).flatMap(withProcess(repo, call, _))
-                }
+          ApiClock.admit(repo).flatMap { admitted =>
+            val warned = admitted match
+              case ApiClock.Admit.Warn(line) => Console.printLineError(line).ignore
+              case ApiClock.Admit.Go         => ZIO.unit
+            warned *>
+              Attach.decide(repo, text).flatMap {
+                case Decision.DifferentVersion(socket) =>
+                  drop(desk) *>
+                    Record.read(repo).flatMap { stored =>
+                      val was  = stored.map(_.version).getOrElse(text)
+                      val line = ApiClock.rebootText(text, was, socket.toString)
+                      Console.printLineError(line).ignore *>
+                        Attach.replace(repo, text, socket).flatMap {
+                          case Some(_) if rebooting(call) =>
+                            withProcess(repo, call, CallResult.reported())
+                          case Some(fresh) =>
+                            ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
+                          case None =>
+                            ZIO.fail(TransportError.Remote(ApiClock.restart(socket, text, was)))
+                        }
+                    }
+                case Decision.Open(socket) =>
+                  drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
+                    .flatMap(withProcess(repo, call, _))
+                case Decision.Absent =>
+                  locally(repo, apiJar, machine, desk, call, text).flatMap(withProcess(repo, call, _))
               }
           },
       )
@@ -120,7 +128,13 @@ object Session:
       case Call.Version =>
         ApiClock.mcpLine.map(line => note(result, line, front = false))
       case Call.Reboot(_) =>
-        ApiClock.rebootLine(repo).map(line => note(result, line, front = true))
+        Successor.here.zip(Record.read(repo)).map { (onto, stored) =>
+          val next   = onto.version.getOrElse("none")
+          val was    = stored.map(_.version).getOrElse(next)
+          val socket = stored.map(_.socket.toString).getOrElse(repo.toString)
+          val line   = ApiClock.rebootText(next, was, socket)
+          note(result, line, front = true)
+        }
       case _ => ZIO.succeed(result)
 
   private def note(result: CallResult, line: String, front: Boolean): CallResult =

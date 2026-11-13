@@ -665,7 +665,7 @@ object Calls:
       case graph: BuildError => BuildFault.Load(LoadError.BrokenGraph(graph))
 
   def version(repo: Path, text: String, say: Say): IO[ServerError, Unit] =
-    histos.ApiClock.versionLines(repo, text).flatMap(shown => told(say, shown) *> ok(say))
+    ZIO.succeed(histos.ApiClock.versionLines(text)).flatMap(shown => told(say, shown) *> ok(say))
 
   def cachePath(say: Say): ZIO[ContentStore, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>

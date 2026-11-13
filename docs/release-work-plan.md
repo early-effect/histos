@@ -135,7 +135,7 @@ The required suite proves the in-process signer against the fake portal. The ass
 
 Humans and downstream CI fetch it with `gh release download`. `./histos` keeps the Maven pin in [LauncherPin](../engine/src/histos/publish/LauncherPin.scala) and the sha256 check. The pin is a Maven URL. A GitHub asset URL does not fit it, and the script does not grow a second shape. Two ways in, the same bytes.
 
-Inside this repository, `./histos` already prefers `dist/histos.jar` when the digest matches. The asset is for a checkout that is not this repo, and for CI of another build.
+Inside this repository, `./histos` execs the user shim. A checkout with `.histos/toolchain` runs that local toolchain. Otherwise the shim keeps the Maven pin. The asset path `dist/histos.jar` is what `assembly` writes. The checkout script does not launch it. The asset is for a checkout that is not this repo, and for CI of another build.
 
 The asset client uses heddle. Tests bind a loopback server. They do not call GitHub. `--automatic` does not upload assets. The caller runs `publish assets`.
 

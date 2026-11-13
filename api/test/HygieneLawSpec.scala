@@ -44,6 +44,7 @@ object HygieneLawSpec extends ZIOSpecDefault:
         ToolchainDiagnostic.Clang("detail"),
         ToolchainDiagnostic.Cover("detail", "shape"),
         ToolchainDiagnostic.Agree("detail", "shape"),
+        ToolchainDiagnostic.Local("local toolchain built from abc; this checkout is def"),
       )
       val ids    = findings.map(_.check.value).toSet
       val levels = findings.map(item => item.check.value -> item.level).toMap
@@ -58,6 +59,7 @@ object HygieneLawSpec extends ZIOSpecDefault:
           "clang.source"       -> Level.Error,
           "runner-tools.cover" -> Level.Error,
           "runner-tools.agree" -> Level.Error,
+          "toolchain.local"    -> Level.Warning,
         ),
         command(ToolchainDiagnostic.NodeShadowed("export HISTOS_NODE=/usr/bin/node", "detail")) ==
           Some("export HISTOS_NODE=/usr/bin/node"),

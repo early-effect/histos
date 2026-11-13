@@ -154,19 +154,16 @@ object Record:
 end Record
 
 object Attach:
-  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. The command then runs in-process. A checksum the server
-    * did not record is [[Decision.DifferentVersion]], including a record that predates the field.
+  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. The command then runs in-process. A different version is
+    * [[Decision.DifferentVersion]].
     */
   def decide(repo: Path, version: String): UIO[Decision] =
-    AssemblyMark.read(repo).flatMap { mark =>
-      Record.read(repo).flatMap {
-        case None                                                                 => ZIO.succeed(Decision.Absent)
-        case Some(record) if record.version != version || record.assembly != mark =>
-          ZIO.succeed(Decision.DifferentVersion(record.socket))
-        case Some(record) =>
-          ZIO.succeed(Decision.Open(record.socket))
-      }
-    }
+    Record
+      .read(repo)
+      .map:
+        case None                                      => Decision.Absent
+        case Some(record) if record.version != version => Decision.DifferentVersion(record.socket)
+        case Some(record)                              => Decision.Open(record.socket)
 
   /** Poll until the recorded driver matches. The wait is the same as a cold start. */
   def await(repo: Path, version: String): IO[ServerError, Path] =
@@ -304,9 +301,7 @@ object Daemon:
   /** What a connection runs with: the caller's services and the compilers the server opened. */
   private type Served = Needs & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService
 
-  /** `relaunch` starts the successor a reboot hands over to, as the reboot names it, and `assembly` is the checksum the
-    * record carries.
-    */
+  /** `relaunch` starts the successor a reboot hands over to, as the reboot names it. */
   def open(
       repo: Path,
       loaded: histos.load.LoadedBuild,
@@ -317,7 +312,6 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       machine: histos.jdk.Machine,
       relaunch: (Path, Successor) => IO[ServerError, Unit],
-      assembly: Option[String],
   ): ZIO[Scope & Needs, ServerError, Running] =
     for
       listening <- Promise.make[ServerError, Record.Written]
@@ -334,7 +328,6 @@ object Daemon:
         machine,
         relaunch(repo, _),
         listening,
-        assembly,
       ).tapErrorCause(listening.failCause).forkScoped
       record <- listening.await
     yield Running(record, serving.join)
@@ -400,7 +393,6 @@ object Daemon:
       machine: histos.jdk.Machine,
       relaunch: Successor => IO[ServerError, Unit],
       listening: Promise[ServerError, Record.Written],
-      assembly: Option[String],
   ): ZIO[Needs, ServerError, Unit] =
     bindAt(repo).flatMap: (socket, channel) =>
       ZIO.scoped {
@@ -413,7 +405,7 @@ object Daemon:
           stopping <- Promise.make[Nothing, Unit]
           life = Lifecycle(armed, stopping, relaunch)
           fingerprint <- Fingerprint.read(repo, graph.resolution)
-          _           <- Record.write(repo, version, fingerprint, socket, assembly)
+          _           <- Record.write(repo, version, fingerprint, socket, None)
           held        <- Scope.make
           uses        <- Ref.make[Uses](Uses.Live(0))
           graphs      <- Ref.make(graph)
@@ -426,7 +418,7 @@ object Daemon:
             .open(repo, graph)
             .mapError(ServerError.Resolve(_))
           formatters <- histos.format.Formatters.make
-          warm = Warm(live, graphs, reloading, spliced, report, assembly, formatters)
+          warm = Warm(live, graphs, reloading, spliced, report, None, formatters)
           permit <- Semaphore.make(1)
           runs   <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
           _      <- listening
@@ -435,7 +427,7 @@ object Daemon:
                 version,
                 fingerprint,
                 socket.toAbsolutePath.normalize,
-                assembly,
+                None,
               )
             )
             .unit
@@ -669,21 +661,22 @@ object Daemon:
                 ServerError,
                 Unit,
               ] =
-                ApiClock.admit(repo, target).flatMap {
-                  case ApiClock.Admit.Stop(fault) =>
-                    Calls.finish(out, CallResult.Fault(fault))
-                  case _ =>
-                    if adopts(target) then withGraph(target, out)
-                    else
-                      val chosen =
-                        target match
-                          case Call.Resolve(_) =>
-                            histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
-                          case _ =>
-                            ZIO.succeed(machine)
-                      chosen.flatMap { fresh =>
-                        occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit))
-                      }
+                ApiClock.admit(repo).flatMap { admitted =>
+                  val noted = admitted match
+                    case ApiClock.Admit.Warn(line) =>
+                      out(Message.Event(histos.build.BuildEvent.Err(line)))
+                    case ApiClock.Admit.Go => ZIO.unit
+                  noted *>
+                    (if adopts(target) then withGraph(target, out)
+                     else
+                       val chosen = target match
+                         case Call.Resolve(_) =>
+                           histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
+                         case _ =>
+                           ZIO.succeed(machine)
+                       chosen.flatMap { fresh =>
+                         occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit))
+                       })
                 }
 
               def watched(

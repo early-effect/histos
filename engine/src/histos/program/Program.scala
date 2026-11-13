@@ -86,8 +86,7 @@ object Program:
                     case _ => ZIO.unit
               else ZStream.empty
 
-  /** Link the native client and copy the binary to [[ClientBinary.destination]]. Does not start it.
-    */
+  /** Link the native client and copy the binary to [[ClientBinary.destination]]. Does not start it. */
   def install(
       repo: Path,
       graph: ProjectGraph,
@@ -95,8 +94,20 @@ object Program:
       runtimes: Runtimes,
       report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
+    link(repo, graph, ClientBinary.moduleName, ClientBinary.destination(repo), jdk, runtimes, report)
+
+  /** Link `moduleName` and copy the binary to `destination`. Does not start it. */
+  def link(
+      repo: Path,
+      graph: ProjectGraph,
+      moduleName: String,
+      destination: Path,
+      jdk: JdkRuntime,
+      runtimes: Runtimes,
+      report: CompileFeed => UIO[Unit],
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
     for
-      module   <- ZIO.fromEither(locate(graph, ClientBinary.moduleName))
+      module   <- ZIO.fromEither(locate(graph, moduleName))
       main     <- ZIO.fromEither(module.application.toRight(ProgramError.NoMain(module.name)))
       binary   <- ZIO.fromEither(Binary.from(main.value).left.map(ProgramError.Main(_)))
       _        <- ZIO.fromEither(pick(module, Some(Platform.Native)))
@@ -115,7 +126,7 @@ object Program:
       cells = compiled.filter(cell => cell.module == module.name && cell.platform == Platform.Native)
       linked <- cells match
         case cell :: Nil =>
-          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes, store)
+          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes, store, destination)
             .provideSomeLayer[Resolve & RemoteCache](zio.ZLayer.succeed(tools))
         case _ =>
           module.versions.all match
@@ -128,7 +139,7 @@ object Program:
                   "the client did not compile to one native cell",
                 )
               )
-            case Nil => ZIO.fail(ProgramError.Absent(ClientBinary.moduleName))
+            case Nil => ZIO.fail(ProgramError.Absent(moduleName))
     yield linked
 
   private def linkClient(
@@ -141,6 +152,7 @@ object Program:
       binary: Binary,
       runtimes: Runtimes,
       store: ContentStore,
+      destination: Path,
   ): ZIO[Resolve & LockedTools & RemoteCache, ProgramError, Path] =
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
@@ -191,7 +203,7 @@ object Program:
           histos.toolchain.PlatformToolError.Native(error),
         )
       )
-      placed <- place(program, ClientBinary.destination(repo))
+      placed <- place(program, destination)
     yield placed
 
   private def place(binary: Path, dest: Path): IO[ProgramError, Path] =

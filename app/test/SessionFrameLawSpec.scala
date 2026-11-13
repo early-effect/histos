@@ -85,11 +85,15 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
           said        <- TestConsole.outputErr
         yield assertTrue(
           result == Left(
-            Session.TransportError.Remote(ServerError.Restart(repo.resolve("server.sock"), None, None))
+            Session.TransportError.Remote(
+              ServerError.Restart(repo.resolve("server.sock"), "histos 9.8.7", "9.8.7")
+            )
           ),
           held.isEmpty,
           gone,
-          said == Vector(s"rebooting server onto none (was none) at ${repo.resolve("server.sock")}\n"),
+          said == Vector(
+            s"rebooting server onto histos 9.8.7 (was 9.8.7) at ${repo.resolve("server.sock")}\n"
+          ),
         ),
     ).provideSomeLayerShared[TestEnvironment & Scope](
       LawDir.layer ++ stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++

@@ -146,7 +146,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
           s"launcher pin is absent: $absent\nfix  histos help",
           Playback.Held,
         )
-      val shown    = "histos 9.9.9\nserver 9.9.9\nno local assembly"
+      val shown    = "histos 9.9.9\nserver 9.9.9"
       val retired  = fix("launcher was removed\nuse update")
       val latest   = Law(List("launcher", "--latest"), CliExit.Usage, "", retired, Playback.Held)
       val updating = Law(List("launcher", "--update"), CliExit.Usage, "", retired, Playback.Held)
@@ -268,7 +268,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     Law(
       List("help", "version"),
       CliExit.Success,
-      "histos version\nPrint the launcher pin, the assembly checksum, and the snapshot id.\n",
+      "histos version\nPrint the toolchain this command runs and, with a server up, that server's version.\n",
       "",
       Playback.Held,
     ),
@@ -289,6 +289,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     "clang.source",
     "runner-tools.cover",
     "runner-tools.agree",
+    "toolchain.local",
   )
 
   /** `ToolchainExplain.known` is map-key order, so the sentence is a set of ids. */

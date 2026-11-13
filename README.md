@@ -40,6 +40,8 @@ The script installs itself as `~/.histos/bin/histos` and does not edit a shell r
 
 A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest, `histos.jar`, and, when the manifest names one for this platform, the native client `histos-client`. Prebuilt clients exist for `linux-x86_64` and `macos-aarch64`. Before a command runs, the shim fetches whatever that directory is missing and checks it against the manifest. Once the directory is complete, a command does not touch the network. Without a client, the shim runs `java -jar`.
 
+A checkout may name a local toolchain in `.histos/toolchain`. The file is one path segment, the id `publish local` installed under `~/.histos/toolchains/<id>` with its jar, this platform's client, and a manifest. The shim uses that directory and does not fetch. A missing jar fails. Delete the file to return to the pin. The tracked pin does not change.
+
 A project pins its toolchain in `build.properties`:
 
 ```text
@@ -160,7 +162,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Information
 
-`histos version` prints the toolchain this command runs: the pin as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos observe` prints the stored compile tally. The JDK, Node, and clang lines are on `histos doctor` (below).
+`histos version` prints the toolchain this command runs, then the server's version when a server is up. The pin prints as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. A checkout with `.histos/toolchain` prints that local id instead. A local toolchain built from another commit, or from a dirty tree, prints one warning on stderr and the command runs. The line is `local toolchain built from <commit> (dirty); this checkout is <head>`, and the dirty word is omitted when the pack was clean. `histos doctor` reports that same line as `toolchain.local`, a warning, so the exit stays 0. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos observe` prints the stored compile tally. The JDK, Node, and clang lines are on `histos doctor` (below).
 
 ### Dependencies
 
@@ -205,6 +207,8 @@ The decision is [publishing.md](docs/publishing.md). A ship is a catalog row, `S
 | `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. |
 
 `publish local` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publish local` moves it only on the default branch.
+
+A ship that names `.toolchain` makes `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before they write anything. The new client runs `version`, then `graph`, against the new jar, in a copy of HEAD. A broken handshake refuses the upload. `publish local` then installs that pair under `~/.histos/toolchains/<id>` and writes `.histos/toolchain`. A ship without `.toolchain` publishes coordinates only.
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 - A release also needs `PGP_SECRET`. `PGP_PASSPHRASE` unlocks it (empty by default), and `PGP_KEY_HEX` selects a fingerprint. `HISTOS_SIGNER=gpg` signs with `gpg` instead, and then `PGP_KEY_HEX` is required and `PGP_SECRET` is not read.
@@ -294,7 +298,7 @@ These are true today and tracked:
 
 ## Building Histos
 
-Histos builds itself. `histos assembly app` writes the launcher jar, and `histos portal` rehearses a release. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
+Histos builds itself. `histos publish local` installs this ship's toolchain and writes `.histos/toolchain`, which the shim prefers over `build.properties`. `histos assembly app` writes the launcher jar to its asset path and does not install that toolchain. `histos portal` rehearses a release. How the pin, the local toolchain, and the snapshot channel fit together is [self-host.md](docs/self-host.md).
 
 ## License
 
