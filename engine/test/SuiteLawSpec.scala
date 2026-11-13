@@ -313,6 +313,32 @@ object SuiteLawSpec extends ZIOSpecDefault:
               many.get("demo.A") == first.map(Some(_)),
               broken == Left(StampError.Class(bad)),
             )
+      ,
+      test("in one walk of two suites, a class only one suite reaches moves only that suite's stamp"):
+        Workspace
+          .work("histos-stamp-two")
+          .flatMap: root =>
+            val classes = root.resolve("classes")
+            val cover   = SuiteStamp.Cover(Nil, Nil, "21", Nil, Nil)
+            val only    = classes.resolve("demo/Only.class")
+            val both    = List("demo.A", "demo.B")
+            val fromB   = List("demo/Used", "demo/Only")
+            for
+              _      <- writeBytes(classes.resolve("demo/A.class"), referenced("demo/A", List("demo/Used"), 1, 1))
+              _      <- writeBytes(classes.resolve("demo/B.class"), referenced("demo/B", fromB, 1, 1))
+              _      <- writeBytes(classes.resolve("demo/Used.class"), referenced("demo/Used", Nil, 1, 1))
+              _      <- writeBytes(only, referenced("demo/Only", Nil, 1, 1))
+              alone  <- SuiteStamp.digest("demo.A", List(classes), cover)
+              before <- SuiteStamp.digests(both, List(classes), cover)
+              _      <- writeBytes(only, referenced("demo/Only", Nil, 1, 7))
+              after  <- SuiteStamp.digests(both, List(classes), cover)
+            yield assertTrue(
+              alone.isDefined,
+              before.get("demo.A") == Some(alone),
+              after.get("demo.A") == before.get("demo.A"),
+              after.get("demo.B").flatten.isDefined,
+              after.get("demo.B") != before.get("demo.B"),
+            ),
     ),
   )
 

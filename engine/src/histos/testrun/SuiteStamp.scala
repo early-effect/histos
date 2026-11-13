@@ -13,16 +13,16 @@ import histos.zinc.ProductDigest
 import zio.{Chunk, IO, ZIO}
 
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, the scalac flags, and
-  * each upstream API digest. Each class is the fingerprint of [[ProductDigest.positionFree]] bytes and the names it
-  * points at, so a comment in a referenced class keeps the stamp and a body change moves it. The bytes are not kept. A
-  * class this suite does not reference is not part of that closure. The API digest still is: a public signature outside
-  * the closure moves the stamp, and a comment does not. Tool fingerprints and runtime-token hashes from [[SuiteCover]]
-  * are jar lines.
+  * each upstream API digest. Each class in that closure is the fingerprint of its [[ProductDigest.positionFree]] bytes,
+  * so a comment in a referenced class keeps the stamp and a body change moves it. The bytes are not kept. A class this
+  * suite does not reference is not part of that closure, and a class no suite reaches is not fingerprinted. The API
+  * digest still is: a public signature outside the closure moves the stamp, and a comment does not. Tool fingerprints
+  * and runtime-token hashes from [[SuiteCover]] are jar lines.
   */
 object SuiteStamp:
-  /** Fingerprint of one class file without its positions, and the binary names it mentions. */
-  private[testrun] final case class Print(
-      fingerprint: String,
+  /** One class file, and the binary names it mentions. */
+  private final case class Print(
+      path: Path,
       refs: Set[String],
   )
 
@@ -43,29 +43,23 @@ object SuiteStamp:
       directories: List[Path],
       cover: Cover,
   ): IO[StampError, Option[Sha256]] =
-    index(directories).flatMap(tree => ZIO.fromEither(digest(suite, tree, cover)))
+    digests(List(suite), directories, cover).map(_.get(suite).flatten)
 
-  /** One class walk, then a digest per named suite. A missing suite class is `None`, not an error. */
+  /** One class walk, then a digest per named suite. A missing suite class is `None`, not an error. A class no named
+    * suite reaches is not read again.
+    */
   def digests(
       suites: List[String],
       directories: List[Path],
       cover: Cover,
   ): IO[StampError, Map[String, Option[Sha256]]] =
-    index(directories).flatMap(tree => ZIO.fromEither(foldDigests(suites, tree, cover)))
+    index(directories).flatMap: tree =>
+      val reached = suites.map(suite => suite -> reach(suite, tree)).toMap
+      fingerprinted(reached.values.flatten.flatten.toSet, tree).flatMap: prints =>
+        ZIO.fromEither(stamped(reached, prints, cover))
 
-  private def foldDigests(
-      suites: List[String],
-      indexed: Map[String, Print],
-      cover: Cover,
-  ): Either[StampError, Map[String, Option[Sha256]]] =
-    suites.foldLeft[Either[StampError, Map[String, Option[Sha256]]]](Right(Map.empty)):
-      case (Left(error), _)     => Left(error)
-      case (Right(seen), suite) =>
-        digest(suite, indexed, cover).map(found => seen.updated(suite, found))
-
-  /** One walk of the class directories. `remember` stamps every suite from this.
-    */
-  private[testrun] def index(
+  /** One walk of the class directories. */
+  private def index(
       directories: List[Path]
   ): IO[StampError, Map[String, Print]] =
     ZIO
@@ -74,17 +68,41 @@ object SuiteStamp:
         groups.flatten.foldLeft(Map.empty[String, Print]):
           case (acc, (name, print)) => acc.updated(name, print)
 
-  private[testrun] def digest(
-      suite: String,
-      indexed: Map[String, Print],
-      cover: Cover,
-  ): Either[StampError, Option[Sha256]] =
+  /** The suite's closure, or `None` when neither the suite class nor its module class is in the tree. */
+  private def reach(suite: String, indexed: Map[String, Print]): Option[Set[String]] =
     val start = List(suite, s"$suite$$").filter(indexed.contains)
-    if start.isEmpty then Right(None)
-    else
-      val used = closure(start, indexed).toList.sorted
-      fingerprints(used, indexed).map: lines =>
-        Some(hash((lines ++ covered(cover)).mkString("\n")))
+    if start.isEmpty then None else Some(closure(start, indexed))
+
+  /** Each reached class read again, without its positions. */
+  private def fingerprinted(
+      names: Set[String],
+      indexed: Map[String, Print],
+  ): IO[StampError, Map[String, String]] =
+    ZIO
+      .blocking:
+        ZIO.foreach(names.toList.flatMap(name => indexed.get(name).map(print => name -> print.path))): (name, path) =>
+          ZIO.fromEither(fingerprint(path)).map(name -> _)
+      .map(_.toMap)
+
+  private def fingerprint(path: Path): Either[StampError, String] =
+    readBytes(path).flatMap: bytes =>
+      ProductDigest
+        .positionFree(bytes)
+        .left
+        .map(_ => StampError.Class(path))
+        .map(clean => Sha256Digest.of(Chunk.fromArray(clean)).value)
+
+  private def stamped(
+      reached: Map[String, Option[Set[String]]],
+      prints: Map[String, String],
+      cover: Cover,
+  ): Either[StampError, Map[String, Option[Sha256]]] =
+    reached.foldLeft[Either[StampError, Map[String, Option[Sha256]]]](Right(Map.empty)):
+      case (Left(error), _)                   => Left(error)
+      case (Right(seen), (suite, None))       => Right(seen.updated(suite, None))
+      case (Right(seen), (suite, Some(used))) =>
+        fingerprints(used.toList.sorted, prints).map: lines =>
+          seen.updated(suite, Some(hash((lines ++ covered(cover)).mkString("\n"))))
 
   private def readDirectory(root: Path): IO[StampError, List[(String, Print)]] =
     attributes(root).flatMap: attrs =>
@@ -111,7 +129,9 @@ object SuiteStamp:
     ZIO
       .attemptBlocking(walk.iterator)
       .foldZIO(failIo(root, IoFault.Walk), step(root, _, Nil))
+      .map(_.reverse)
 
+  /** `rows` is newest first. */
   private def step(
       root: Path,
       paths: java.util.Iterator[Path],
@@ -132,7 +152,7 @@ object SuiteStamp:
                   ZIO
                     .fromEither(readClass(root, path))
                     .flatMap:
-                      case Some(row) => step(root, paths, rows :+ row)
+                      case Some(row) => step(root, paths, row :: rows)
                       case None      => step(root, paths, rows),
               ),
       )
@@ -150,12 +170,7 @@ object SuiteStamp:
         if binary.isEmpty then Right(None)
         else
           readBytes(path).flatMap: bytes =>
-            references(path, bytes).flatMap: refs =>
-              ProductDigest
-                .positionFree(bytes)
-                .left
-                .map(_ => StampError.Class(path))
-                .map(clean => Some(binary -> Print(Sha256Digest.of(Chunk.fromArray(clean)).value, refs)))
+            references(path, bytes).map(refs => Some(binary -> Print(path, refs)))
 
   private def readBytes(path: Path): Either[StampError, Array[Byte]] =
     try Right(Files.readAllBytes(path))
@@ -181,14 +196,16 @@ object SuiteStamp:
 
   private def fingerprints(
       names: List[String],
-      index: Map[String, Print],
+      prints: Map[String, String],
   ): Either[StampError, List[String]] =
-    names.foldLeft[Either[StampError, List[String]]](Right(Nil)):
-      case (Left(error), _)     => Left(error)
-      case (Right(lines), name) =>
-        index.get(name) match
-          case Some(print) => Right(lines :+ s"$name ${print.fingerprint}")
-          case None        => Left(StampError.Missing(name))
+    names
+      .foldLeft[Either[StampError, List[String]]](Right(Nil)):
+        case (Left(error), _)     => Left(error)
+        case (Right(lines), name) =>
+          prints.get(name) match
+            case Some(print) => Right(s"$name $print" :: lines)
+            case None        => Left(StampError.Missing(name))
+      .map(_.reverse)
 
   private def covered(cover: Cover): List[String] =
     cover.jars.sorted.map(jar => s"jar $jar") ++
@@ -202,25 +219,24 @@ object SuiteStamp:
       Chunk.fromArray(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))
     )
 
+  /** Every class reachable from `start`. The walk is depth first, and the set does not depend on the order. */
   private def closure(
       start: List[String],
       index: Map[String, Print],
   ): Set[String] =
-    def step(seen: Set[String], queue: List[String]): Set[String] =
-      queue match
-        case Nil                                 => seen
-        case name :: rest if seen.contains(name) => step(seen, rest)
+    val seen                              = scala.collection.mutable.HashSet.empty[String]
+    def step(pending: List[String]): Unit =
+      pending match
+        case Nil                                 => ()
+        case name :: rest if seen.contains(name) => step(rest)
         case name :: rest                        =>
           index.get(name) match
-            case None        => step(seen, rest)
+            case None        => step(rest)
             case Some(print) =>
-              val next =
-                print.refs
-                  .flatMap(alias)
-                  .filter(index.contains)
-                  .filterNot(seen.contains)
-              step(seen + name, rest ++ next)
-    step(Set.empty, start.distinct)
+              seen += name
+              step(print.refs.foldLeft(rest)((stack, ref) => alias(ref).filter(index.contains) ++ stack))
+    step(start.distinct)
+    seen.toSet
 
   private def alias(name: String): List[String] =
     if name.endsWith("$") && !name.endsWith("$$") then List(name, name.dropRight(1))

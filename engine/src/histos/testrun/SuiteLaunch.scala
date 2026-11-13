@@ -575,7 +575,7 @@ private[testrun] object SuiteLaunch:
 
   /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] and [[TestStore.Local]] skip a suite whose
     * stored fingerprint still matches. [[TestMode.Run]] on [[TestStore.Off]] or [[TestStore.Remote]] receives every
-    * suite. The class tree is read once and reused for every suite. The digest is [[SuiteCover.stored]].
+    * suite. The class tree is walked once for every suite. The digest is [[SuiteCover.stored]].
     */
   private[testrun] def remember[R](
       repo: Path,
@@ -596,17 +596,12 @@ private[testrun] object SuiteLaunch:
       .mapError(refused(cell, _))
       .flatMap: cover =>
         SuiteStamp
-          .index(directories)
+          .digests(suites, directories, cover)
           .mapError(ModuleTestError.Stamp(_))
-          .flatMap: tree =>
+          .flatMap: found =>
             ZIO
               .foreach(suites): name =>
-                for
-                  suite <- suiteOf(name)
-                  found <- ZIO
-                    .fromEither(SuiteStamp.digest(name, tree, cover))
-                    .mapError(ModuleTestError.Stamp(_))
-                yield Stamped(name, suite, found)
+                suiteOf(name).map(suite => Stamped(name, suite, found.get(name).flatten))
               .flatMap: stamped =>
                 if mode == TestMode.Quick || store == TestStore.Local then
                   ZIO
