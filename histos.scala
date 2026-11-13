@@ -4,18 +4,20 @@ import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
   def graph =
-    val scala3     = scala"3.10.0"
-    val zio        = dep"dev.zio::zio:2.1.27"
-    val zioTest    = zio.module("zio-test")
-    val zioTestSbt = zio.module("zio-test-sbt")
-    val zioStreams = zio.module("zio-streams")
-    val zioJson    = dep"dev.zio::zio-json:1.1.1"
-    val api        = module("api", Jvm, Native)(scala3)
+    val scala3 = scala"3.10.1"
+    // Scala Native publishes no 3.10.1 standard library or compiler plugin yet, so the Native modules stay on 3.10.0.
+    val nativeScala = scala"3.10.0"
+    val zio         = dep"dev.zio::zio:2.1.27"
+    val zioTest     = zio.module("zio-test")
+    val zioTestSbt  = zio.module("zio-test-sbt")
+    val zioStreams  = zio.module("zio-streams")
+    val zioJson     = dep"dev.zio::zio-json:1.1.1"
+    val api         = module("api", Jvm, Native)(nativeScala)
       .clang(ClangMajor(21))
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
-    val wire = module("wire", Jvm, Native)(scala3)
+    val wire = module("wire", Jvm, Native)(nativeScala)
       .clang(ClangMajor(21))
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
@@ -26,13 +28,10 @@ object build extends HistosBuild:
       .dependsOn(api, wire)
       .libraryDependencies(zio, heddle)
       .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.2.0")
-    val scalaCompiler   = dep"org.scala-lang::scala3-compiler:3.10.0"
+    val scalaCompiler   = dep"org.scala-lang::scala3-compiler:3.10.1"
     val scaladoc        = scalaCompiler.module("scaladoc")
     val asm             = dep"org.ow2.asm:asm:9.11.1"
     val asmTree         = asm.module("asm-tree")
-    val asmCommons      = asm.module("asm-commons")
-    val asmUtil         = asm.module("asm-util")
-    val asmAnalysis     = asm.module("asm-analysis")
     val grpc            = dep"io.grpc:grpc-api:1.85.1"
     val grpcNetty       = grpc.module("grpc-netty-shaded")
     val grpcStub        = grpc.module("grpc-stub")
@@ -55,10 +54,6 @@ object build extends HistosBuild:
         dep"io.get-coursier::coursier:2.1.26",
         asm,
         asmTree,
-        // scala3-compiler 3.10.0 still requests the rest of ASM at 9.10.1.
-        asmCommons,
-        asmUtil,
-        asmAnalysis,
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
         // The stable Java API `histos fmt` loads scalafmt-dynamic-core through. The rest of scalafmt is a locked tool.
         dep"org.scalameta:scalafmt-interfaces:3.11.5",
@@ -85,7 +80,7 @@ object build extends HistosBuild:
         dep"rocks.earlyeffect::slayer:0.2.0",
         grpcStub,
       )
-    val client = module("client", Native)(scala3)
+    val client = module("client", Native)(nativeScala)
       .clang(ClangMajor(21))
       .dependsOn(wire)
       .libraryDependencies(zio, zioJson)

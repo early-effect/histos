@@ -85,7 +85,7 @@ import histos.*
 object build extends HistosBuild:
   def graph =
     val zio = dep"dev.zio::zio:2.1.27"
-    val app = module("app", Jvm)(scala"3.10.0")
+    val app = module("app", Jvm)(scala"3.10.1")
       .libraryDependencies(zio)
       .testDependencies(zio.module("zio-test"), zio.module("zio-test-sbt"))
       .main(MainClass("demo.Main"))
