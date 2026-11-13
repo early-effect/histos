@@ -43,7 +43,7 @@ object CallSamples:
       Call.Assembly(List("app")),
       Call.Clean(names, CleanExtent.Products),
       Call.Reload,
-      Call.Reboot(Successor(Some("histos 0.3.1"), Some(java.nio.file.Path.of("/tmp/next.jar")))),
+      Call.Reboot(Successor(Some("histos 0.3.1"))),
       Call.Version,
       Call.CachePath,
       Call.CacheList,
@@ -110,7 +110,7 @@ object CallSamples:
         case Call.PreviewRun(id, _) =>
           List(call, Call.PreviewRun(id, Some(Platform.Native)))
         case Call.Reboot(_) =>
-          List(call, Call.Reboot(Successor(None, None)))
+          List(call, Call.Reboot(Successor(None)))
         case other =>
           List(other)
 end CallSamples

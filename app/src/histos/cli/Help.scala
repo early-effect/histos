@@ -19,7 +19,7 @@ object Help:
       "version",
       "info",
       "histos version",
-      "Print the launcher pin, the assembly checksum, and the snapshot id.",
+      "Print the toolchain this command runs and, with a server up, that server's version.",
     ),
     Entry("help", "info", "histos help [command]", "List commands, or show one command."),
     Entry("--explain", "info", "histos --explain <check-id>", "Print one check."),

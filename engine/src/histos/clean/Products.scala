@@ -9,9 +9,7 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** Build products under `.histos/`. The pin and the launcher file live at the repo root. The assembly checksum and the
-  * server stay.
-  */
+/** Build products under `.histos/`. The pin and the launcher file live at the repo root. The server stays. */
 object Products:
   val moduleRoots: List[String] = List(
     "classes",

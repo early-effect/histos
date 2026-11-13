@@ -40,14 +40,21 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
       val ci      = text(rendered, Workflow.fileName)
       val missing = List(
         "  client:",
+        "    runs-on: macos-26",
         "  install:",
         "    needs: client",
-        "    needs: [release-demo]",
-        """- run: "./histos client"""",
+        "    needs: [client, release-demo]",
+        """- run: "./histos publish local"""",
+        "          name: client-macos-aarch64",
+        "          path: dist/clients/client-macos-aarch64/histos-client",
+        "          name: client-linux-x86_64",
+        "          path: dist/clients/client-linux-x86_64/histos-client",
         "gh release upload dist",
         "version=1.2.3",
-        s"sha256: $linux",
-        s"sha256: $mac",
+        s"expected=\"$linux\"",
+        s"expected=\"$mac\"",
+        "LLVM-21.1.8-Linux-X64.tar.xz",
+        "LLVM-21.1.8-macOS-ARM64.tar.xz",
         "llvm checksum mismatch",
         "LD_LIBRARY_PATH=$dir/lib",
         "clang-sdk",
@@ -58,8 +65,6 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         """- run: "./histos assembly app"""",
         "path: dist/app.jar",
         "jar=dist-in/histos-jar/app.jar",
-        "- runner: ubuntu-26.04",
-        "- runner: macos-26",
       ).filterNot(release.contains)
       val ciMissing = List(
         """node-version: "25"""",
@@ -77,6 +82,8 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         !ci.contains("\n  toolchain:"),
         !ci.contains("dist/histos.jar"),
         !ci.contains("./histos client"),
+        !release.contains("./histos client"),
+        !release.contains("matrix."),
         !release.contains("dist/histos.jar"),
       )
     ,
@@ -147,7 +154,7 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
       assertTrue(
         fault(rendered) == "",
         release.contains("\n  install:"),
-        release.contains("""- run: "./histos client""""),
+        release.contains("""- run: "./histos publish local""""),
         !release.contains("histos-bootstrap"),
         !ci.contains("\n  toolchain:"),
       )
@@ -189,35 +196,37 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         case Array(head, tail) => (head, tail)
         case _                 => ("", "")
       val missing = List(
-        "          - runner: ubuntu-26.04",
-        "            platform: linux-x86_64",
-        "            archive: LLVM-21.1.8-Linux-X64.tar.xz",
-        s"            sha256: $linux",
-        "          - runner: macos-26",
-        "            platform: macos-aarch64",
-        "            archive: LLVM-21.1.8-macOS-ARM64.tar.xz",
-        s"            sha256: $mac",
+        "    runs-on: macos-26",
+        "LLVM-21.1.8-macOS-ARM64.tar.xz",
+        s"expected=\"$mac\"",
         """            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }""",
-        """      - run: "./histos client"""",
-        "          name: client-${{ matrix.platform }}",
-        "          path: dist/histos-client",
+        """      - run: "./histos publish local"""",
+        "          name: client-macos-aarch64",
+        "          path: dist/clients/client-macos-aarch64/histos-client",
       ).filterNot(matrix.contains)
-      val steps = List(
+      val linuxAt = publish.indexOf("LLVM-21.1.8-Linux-X64.tar.xz")
+      val steps   = List(
         """      - run: "./histos assembly app"""",
         "          pattern: client-*",
         "          path: dist/clients",
+        s"expected=\"$linux\"",
         """      - run: "./histos publish snapshots"""",
       ).map(publish.indexOf)
       assertTrue(
         fault(opted) == "",
-        matrix.contains("\n  client:\n    runs-on: ${{ matrix.runner }}\n"),
+        matrix.contains("\n  client:\n    runs-on: macos-26\n"),
         !matrix.contains("needs:"),
+        !matrix.contains("matrix."),
         !matrix.contains("histos-bootstrap"),
+        !matrix.contains("LLVM-21.1.8-Linux-X64"),
         missing == Nil,
         publish.startsWith("    needs: client\n"),
         publish.contains("      actions: read\n      contents: write\n"),
+        linuxAt >= 0,
         steps.forall(_ >= 0),
         steps == steps.sorted,
+        linuxAt > steps(2),
+        linuxAt < steps(4),
         DistPlatform.values.toList.map(DistLayout.builtClient) == List(
           "dist/clients/client-linux-x86_64/histos-client",
           "dist/clients/client-macos-aarch64/histos-client",
@@ -254,8 +263,46 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
       assertTrue(
         two == Left(CiError.SnapshotClients(ShipName("demo"))),
         quiet == Left(CiError.SnapshotClients(ShipName("demo"))),
+      )
+    ,
+    test("a plain ship beside a toolchain ship publishes with no client need"):
+      val app      = demoApp
+      val extra    = extraApp
+      val client   = linkedClient
+      val rendered = assemble(
+        ToolRevision("21.1.8"),
+        None,
+        ships(
+          Ship("demo").next(1, 2, 3)(app).toolchain(launcher = app, client = client),
+          Ship("other").next(1, 2, 3)(extra),
+        ),
+        app,
+        extra,
+        client,
+      ).flatMap(Workflow.renderAll(_, finished))
+      val release = text(rendered, Workflow.releaseName)
+      val other   = job(release, "release-other")
+      val demo    = job(release, "release-demo")
+      val install = job(release, "install")
+      assertTrue(
+        fault(rendered) == "",
+        demo.contains("    needs: client"),
+        !other.contains("needs:"),
+        other.contains("""- run: "./histos publish release other""""),
+        install.contains("    needs: [client, release-demo, release-other]"),
+        job(release, "client").startsWith("  client:\n    runs-on: macos-26"),
       ),
   )
+
+  /** The lines of one job, from its header through the line before the next job. */
+  private def job(body: String, name: String): String =
+    val lines = body.linesIterator.toList
+    val start = lines.indexWhere(_ == s"  $name:")
+    if start < 0 then ""
+    else
+      val end   = lines.indexWhere(line => line.startsWith("  ") && !line.startsWith("   "), start + 1)
+      val slice = if end < 0 then lines.drop(start) else lines.slice(start, end)
+      slice.mkString("\n")
 
   private def demoApp =
     module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")

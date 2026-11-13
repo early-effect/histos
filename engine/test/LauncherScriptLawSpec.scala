@@ -37,8 +37,11 @@ object LauncherScriptLawSpec extends ZIOSpecDefault:
         occurrences(script, version) == 1,
         !script.contains("__VERSION__"),
         script.contains("Histos runs on macOS and Linux. On Windows, use WSL."),
-        script.contains("[ \"$java_major\" -ge 21 ]"),
-        script.contains("jvm option selects the program"),
+        script.contains("home=${HISTOS_HOME:-$HOME/.histos}"),
+        script.contains("exec \"$shim\" \"$@\""),
+        !script.contains("HISTOS_ASSEMBLY"),
+        !script.contains("assembly.sha256"),
+        !script.contains("java_major"),
       )
     ,
     test("no assembly is a no-op, a split catalog is a revision, and the pin is read before the script"):

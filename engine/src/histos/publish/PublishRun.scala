@@ -34,7 +34,9 @@ object PublishRun:
         root   <- ZIO.service[IvyRoot]
         names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
+        placed <- toolchain(repo, graph, staged, jdk, build, note)
         lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
+        _      <- installToolchain(repo, placed)
       yield Report(show(staged, lines))
 
   def snapshots(
@@ -57,6 +59,7 @@ object PublishRun:
           ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
         )
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, api, report, note)
+        _      <- toolchain(repo, graph, staged, jdk, build, note)
         plans  <- ZIO
           .fromEither(DistChannel.plan(graph, staged.output.modules))
           .tapError(error => note(error.message))
@@ -91,6 +94,7 @@ object PublishRun:
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, api, report, note).mapError(
           ReleaseError.Stage(_)
         )
+        _      <- toolchain(repo, graph, staged, jdk, build, note).mapError(ReleaseError.Stage(_))
         pieces <- releasePieces(repo, staged, automatic, layer)
       yield ReleaseReport(
         staged.output.refused ++ pieces.refused,
@@ -120,6 +124,32 @@ object PublishRun:
       env: Map[String, String],
   ): IO[AssetError, AssetReport] =
     AssetRun.publish(repo, graph, tokens, env)
+
+  /** Pack, link, and prove each staged toolchain ship. A ship with no `.toolchain` is skipped. */
+  private def toolchain(
+      repo: Path,
+      graph: ProjectGraph,
+      staged: StagedTree,
+      jdk: JdkRuntime,
+      build: histos.HistosBuild,
+      note: String => UIO[Unit],
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, LocalPublishError, List[DistStock.Placed]] =
+    DistStock
+      .prove(repo, graph, DistStock.asked(graph, staged.output.modules), jdk, build, note)
+      .mapError(error => LocalPublishError.Stock(error.message))
+
+  /** Install after the maven publish. An empty proof installs nothing and does not read a home. */
+  private def installToolchain(repo: Path, placed: List[DistStock.Placed]): IO[LocalPublishError, Unit] =
+    placed match
+      case Nil => ZIO.unit
+      case _   =>
+        histos.jdk.Machine
+          .load(repo)
+          .mapError(error => LocalPublishError.Stock(error.message))
+          .flatMap: machine =>
+            ZIO
+              .foreachDiscard(placed)(item => DistStock.install(Path.of(machine.userHome), repo, item))
+              .mapError(error => LocalPublishError.Stock(error.message))
 
   private def show(staged: StagedTree, lines: List[String]): List[String] =
     staged.output.skipped ++ staged.output.refused ++ staged.output.held ++ lines

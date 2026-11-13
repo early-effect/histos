@@ -37,12 +37,12 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
   git worktree add -b histos/<item> ~/.grok/worktrees/early-effect-histos/<item> origin/main
   ```
 
-  In the worktree, link the main checkout's `dist/histos.jar` and `dist/histos-client` as symlinks, copy `.histos/assembly.sha256` and `AGENTS.md`, and touch `.histos/allow-drift`. Drop the client link if the pinned client misbehaves; `./histos` then runs `java -jar`.
+  Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
 - **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D19.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
 - **Format once.** Run bare `./histos fmt` after the edits (its ledger skips unchanged files), then `./histos fmt --check`. Do not format file by file.
-- **The proof for any pull request.** `./histos test api wire central engine app`, green on JVM and Native, with no `not advancing the test clock` in the output. `./histos workflow --check` and `./histos run doc` clean, because CI runs both, and the docs task fails on any scaladoc warning. `./histos client` links if `client` changed.
+- **The proof for any pull request.** `./histos test api wire central engine app`, green on JVM and Native, with no `not advancing the test clock` in the output. `./histos workflow --check` and `./histos run doc` clean, because CI runs both, and the docs task fails on any scaladoc warning.
 - **After CI.** Read the test job's log for `not advancing the test clock`, and fix any hit in the next pull request.
 - **Docs teach the truth.** README, AGENTS.md, the plan, and scaladoc are corrected in the same pull request as the code they describe. `app/test/ReadmeLawSpec.scala` gates the README.
 - **Known hazards.**
@@ -97,14 +97,11 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 ### Ship row
 
-- **Closed.** The row is `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)`. The miniature held: a Native module is accepted as `client` with no call-site ascription, and a JVM-only module is refused with `the toolchain client builds Native, and this module does not`. Laws: `ToolchainLawSpec`, `WorkflowInstallLawSpec`, `CompileIdentityLawSpec`, `CallsAssemblyLawSpec`, `AssembleLawSpec`. The red and the counts are on the Ship row in [cli-work-plan.md](cli-work-plan.md). This brief does not pin.
+- **Closed.** The row is `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)`. The miniature held: a Native module is accepted as `client` with no call-site ascription, and a JVM-only module is refused with `the toolchain client builds Native, and this module does not`. Laws: `ToolchainLawSpec`, `WorkflowInstallLawSpec`, `CompileIdentityLawSpec`, `CallsAssemblyLawSpec`, `AssembleLawSpec`. The red and the counts are on the Ship row in [cli-work-plan.md](cli-work-plan.md). The pin is `c5d402f`, channel `0.3.0-c7d1b280cc0a-SNAPSHOT`.
 
 ### Dist layer
 
-- **Goal.** `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair (the new client runs `version`, then `graph`, against the new jar in a copy of HEAD). A failed proof refuses the upload with a typed error. `publish local` installs the toolchain under `~/.histos/toolchains/<id>` and writes `.histos/toolchain`, and the shim prefers it over `build.properties`. A stale local toolchain prints one warning line, and `doctor` reports it. `HISTOS_ASSEMBLY`, `dist/histos.jar` as a launcher, `.histos/assembly.sha256`, `AssemblyMark`, the `ApiClock` stop, and `allow-drift` are deleted.
-- **Closes.** Ledger rows 10, 11, and 30. Row 30 is the startup race: the client reads `server.json` when the socket accepts, before the new server rewrites it, and the restart error names only the assembly even when the version differs.
-- **Binds.** The plan's "The ship's pair is proved at publish", "A dist publisher layer", "Dogfood is a local toolchain", and "A stale local toolchain warns". The publisher is a layer like `sona`.
-- **Proof.** The pair proof against a loopback fixture, where a broken handshake refuses the upload with `PairError.Handshake`; the local install layout and the override; the skew warning text; and the workflow renders. Pin move.
+- **Closed.** `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before Maven and before the `dist` upload. The new client runs `version`, then `graph`, against the new jar, in a copy of HEAD. A broken handshake is `PairError.Handshake` and refuses both. `publish local` installs the toolchain under `~/.histos/toolchains/<id>` and writes `.histos/toolchain`. The shim prefers that file over `build.properties`. A stale local toolchain prints one warning line, and `doctor` reports `toolchain.local` as a warning, so the exit stays 0. `HISTOS_ASSEMBLY`, `dist/histos.jar` as a launcher, `.histos/assembly.sha256`, `AssemblyMark`, the `ApiClock` stop, and `allow-drift` are deleted from the product. The identity resource stays. The client accepts `server.json` only when its stamp is strictly newer than the stamp noted before spawn, and the restart error names the version. Laws: `PairProofLawSpec`, `ShimLaunchLawSpec`, `ToolchainLocalLawSpec`, `ApiClockLawSpec`, `ServerStampLawSpec`, `WorkflowInstallLawSpec`, `LauncherScriptLawSpec`. The red and the counts are on the Dist row in [cli-work-plan.md](cli-work-plan.md). The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. `workflow --update` rewrote `./histos`, `histos-snapshots.yml`, and `histos-release.yml`. `ci.yml` was already what this jar renders.
 
 ### Container
 
@@ -164,8 +161,9 @@ Each is one pull request with its red law. They touch different code, so they ca
 This is the sequence that worked twice. It needs Russ's yes in that session.
 
 1. Commit the layer. The snapshot coordinate is HEAD.
-2. Run `./histos assembly`. Then stop the checkout's `histos.jar server` processes, without a reboot, and run any command to start a fresh server.
-3. Run `./histos client`, then copy `dist/histos-client` to `dist/clients/client-macos-aarch64/histos-client`.
-4. Run `./histos publish snapshots`, and check that the uploaded `<timestamp>-manifest.json` names the local jar's sha256 and the client's.
-5. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server again, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
-6. Commit the pin on top of the layer, then stack the next layer on it.
+2. Run `./histos publish snapshots`. That command packs the launcher, links the host client, and proves the pair before the Maven publish and before the `dist` upload. A failed proof is `PairError.Handshake` and nothing uploads.
+3. Check that the uploaded `<timestamp>-manifest.json` names the jar's sha256 and the host client's. A platform that was not linked is omitted. None at all is refused.
+4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
+5. Commit the pin on top of the layer, then stack the next layer on it.
+
+The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. That toolchain packs the launcher, links the host client, and proves the pair before it uploads. `workflow --check` compares the committed workflows and `./histos` to the jar this channel names.

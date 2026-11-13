@@ -4,7 +4,18 @@ import histos.jdk.{JdkRead, Machine, Toolchain}
 import histos.native.{ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.NodeToolchain
 import histos.toolchain.Survey
-import histos.{ClangMajor, ClangPin, Module, NodeFloor, Platform, ProjectGraph, RunnerTools, ToolRevision}
+import histos.{
+  ApiClock,
+  ClangMajor,
+  ClangPin,
+  Module,
+  NodeFloor,
+  Platform,
+  ProjectGraph,
+  RunnerTools,
+  ToolRevision,
+  ToolchainIdentity,
+}
 
 import java.nio.file.Path
 
@@ -18,6 +29,7 @@ object ToolchainChecks:
   val clangId: CheckId     = CheckId.trusted("clang.source")
   val coverId: CheckId     = CheckId.trusted("runner-tools.cover")
   val agreeId: CheckId     = CheckId.trusted("runner-tools.agree")
+  val localId: CheckId     = CheckId.trusted("toolchain.local")
 
   def checks(machine: Machine, graph: ProjectGraph, launch: List[Module]): List[DoctorCheck] =
     List(
@@ -27,7 +39,22 @@ object ToolchainChecks:
       check(clangId)(clang(machine, launch)),
       check(coverId)(ZIO.succeed(List(cover(graph)))),
       check(agreeId)(ZIO.succeed(agree(graph))),
+      check(localId)(local(machine.repo)),
     )
+
+  /** The warning `doctor` reports for a stale local toolchain. The same sentence `ApiClock` prints. */
+  def reported(pointed: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Outcome =
+    ApiClock.decide(pointed, identity, head) match
+      case ApiClock.Admit.Warn(line) => Outcome.Found(ToolchainDiagnostic.Local(line))
+      case ApiClock.Admit.Go         =>
+        Outcome.Ok(localId, "the local toolchain matches this checkout, or this command runs the pin")
+
+  def local(repo: Path): UIO[List[Outcome]] =
+    ApiClock
+      .admit(repo)
+      .map:
+        case ApiClock.Admit.Warn(line) => List(Outcome.Found(ToolchainDiagnostic.Local(line)))
+        case ApiClock.Admit.Go         => List(reported(false, None, None))
 
   def jdk(machine: Machine): UIO[List[Outcome]] =
     Toolchain

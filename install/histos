@@ -311,7 +311,7 @@ no_default() {
 find_repo() {
   dir=$PWD
   while :; do
-    if [ -f "$dir/build.properties" ] || [ -f "$dir/.histos/assembly.sha256" ]; then
+    if [ -f "$dir/build.properties" ] || [ -f "$dir/.histos/toolchain" ]; then
       printf '%s' "$dir"
       return 0
     fi
@@ -319,6 +319,12 @@ find_repo() {
     [ "$parent" = "$dir" ] && return 1
     dir=$parent
   done
+}
+# The id, or nothing when the file is absent. A bad id is rejected by the caller so `exit` is not trapped in `$()`.
+read_toolchain() {
+  file=$1/.histos/toolchain
+  [ -f "$file" ] || return 1
+  tr -d '[:space:]' < "$file"
 }
 read_pin() {
   props=$1/build.properties
@@ -350,24 +356,6 @@ write_pin() {
   else
     printf 'histos.version=%s\n' "$1" > "$props"
   fi
-}
-local_jar() {
-  repo=$1
-  if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
-    printf '%s' "$HISTOS_ASSEMBLY"
-    return 0
-  fi
-  if [ -f "$repo/dist/histos.jar" ]; then
-    printf '%s' "$repo/dist/histos.jar"
-    return 0
-  fi
-  return 1
-}
-assembly_ok() {
-  repo=$1
-  jar=$2
-  expected=$(tr -d '[:space:]' < "$repo/.histos/assembly.sha256")
-  verify_sha "$jar" "$expected"
 }
 # The client sha the manifest names for this platform. Fails when it names none.
 platform_client() {
@@ -430,12 +418,9 @@ exec_jar() {
   repo=$2
   shift 2
   check_java
-  client=
-  if [ -n "$repo" ] && [ -x "$repo/dist/histos-client" ] && [ "$jar" = "$repo/dist/histos.jar" ]; then
-    client=$repo/dist/histos-client
-  fi
   tool=$(dirname "$jar")
-  if [ -z "$client" ] && [ -x "$tool/histos-client" ]; then client=$tool/histos-client; fi
+  client=
+  if [ -x "$tool/histos-client" ]; then client=$tool/histos-client; fi
   use_jar=1
   if [ "$#" -ge 1 ]; then
     case $1 in
@@ -586,9 +571,13 @@ histos help toolchain" ;;
     ;;
 esac
 repo=$(find_repo || true)
-if [ -n "$repo" ] && jar=$(local_jar "$repo"); then
-  assembly_ok "$repo" "$jar"
-  version=$(read_pin "$repo" || printf '%s' local)
+if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then
+  case $id in
+    ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
+  esac
+  jar=$home/toolchains/$id/histos.jar
+  [ -f "$jar" ] || fail "local toolchain $id is not installed"
+  version=$id
   exec_jar "$jar" "$repo" "$@"
 fi
 if [ -n "$repo" ] && pin=$(read_pin "$repo"); then

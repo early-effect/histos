@@ -4,7 +4,7 @@ import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{CliExit, CompileConsole, Show}
-import histos.server.{AssemblyMark, Call, Message, ServerError, ServerFile, Successor}
+import histos.server.{Call, Message, ServerError, ServerFile, ServerStamp, Successor}
 import histos.report.CallResult
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -50,16 +50,11 @@ object Main extends ZIOAppDefault:
 
   private def batch(call: Call): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
-    ApiClock.admit(repo, call).flatMap {
-      case ApiClock.Admit.Stop(fault) =>
-        ZIO.succeed(leave(CliExit.from(CallResult.Fault(fault)).code, Some(fault.message)))
-      case ApiClock.Admit.Warn(line) =>
-        ZIO.succeed(java.lang.System.err.println(line)) *>
-          talk(repo, call).foldZIO(
-            error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
-            code => ZIO.succeed(leave(code, None)),
-          )
-      case ApiClock.Admit.Go =>
+    ApiClock.admit(repo).flatMap { admitted =>
+      val noted = admitted match
+        case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
+        case ApiClock.Admit.Go         => ZIO.unit
+      noted *>
         talk(repo, call).foldZIO(
           error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
           code => ZIO.succeed(leave(code, None)),
@@ -81,16 +76,13 @@ object Main extends ZIOAppDefault:
     readRecord(repo).flatMap:
       case None         => boot(repo).flatMap(socket => exchange(repo, socket, call))
       case Some(record) =>
-        agrees(repo, record)
-          .zip(ApiClock.drifted(repo))
-          .flatMap: (ok, stale) =>
-            val socket = Path.of(record.socket)
-            val hold   = stale && ApiClock.skipsReboot(call)
-            if ok || hold then
-              exchange(repo, socket, call).catchSome:
-                case ServerError.Unreachable(_) =>
-                  boot(repo).flatMap(fresh => exchange(repo, fresh, call))
-            else replace(repo, socket, call)
+        agrees(record).flatMap: ok =>
+          val socket = Path.of(record.socket)
+          if ok then
+            exchange(repo, socket, call).catchSome:
+              case ServerError.Unreachable(_) =>
+                boot(repo).flatMap(fresh => exchange(repo, fresh, call))
+          else replace(repo, socket, record.version, call)
 
   private def exchange(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
     ZIO
@@ -156,36 +148,38 @@ object Main extends ZIOAppDefault:
   /** The server that heard the reboot starts its successor, so this client waits for it and starts none. A server that
     * did not answer is gone, so this client starts one, as on a cold start.
     */
-  private def replace(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
-    ApiClock.rebootLine(repo).zip(Successor.here).flatMap { (line, onto) =>
+  private def replace(repo: Path, socket: Path, was: String, call: Call): ZIO[Scope, ServerError, Int] =
+    Successor.here.flatMap { onto =>
+      val next = onto.version.getOrElse(was)
+      val line = ApiClock.rebootText(next, was, socket.toString)
       ZIO.succeed(java.lang.System.err.println(line)) *>
         exchange(repo, socket, Call.Reboot(onto)).either.flatMap {
-          case Right(_) => successor(repo, socket).flatMap(fresh => exchange(repo, fresh, call))
+          case Right(_) => successor(repo, socket, next, was).flatMap(fresh => exchange(repo, fresh, call))
           case Left(_)  =>
             boot(repo).flatMap { fresh =>
               readRecord(repo).flatMap {
                 case Some(record) =>
-                  agrees(repo, record).flatMap: ok =>
+                  agrees(record).flatMap: ok =>
                     if ok then exchange(repo, fresh, call)
-                    else ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
+                    else ZIO.fail(ApiClock.restart(socket, next, record.version))
                 case None =>
-                  exchange(repo, fresh, call)
+                  ZIO.fail(ApiClock.restart(socket, next, was))
               }
             }
         }
     }
 
   /** The socket a record that agrees with this client names, once the successor writes it. */
-  private def successor(repo: Path, socket: Path): IO[ServerError, Path] =
+  private def successor(repo: Path, socket: Path, wanted: String, was: String): IO[ServerError, Path] =
     def poll(left: Int): IO[ServerError, Path] =
       readRecord(repo)
         .flatMap:
-          case Some(record) => agrees(repo, record).map(ok => Option.when(ok)(Path.of(record.socket)))
+          case Some(record) => agrees(record).map(ok => Option.when(ok)(Path.of(record.socket)))
           case None         => ZIO.none
         .flatMap:
           case Some(fresh)      => ZIO.succeed(fresh)
           case None if left > 0 => ZIO.sleep(50.millis) *> poll(left - 1)
-          case None             => ApiClock.restart(repo, socket).flatMap(ZIO.fail(_))
+          case None             => ZIO.fail(ApiClock.restart(socket, wanted, was))
     poll(1200)
 
   private def readRecord(repo: Path): IO[ServerError, Option[ServerFile]] =
@@ -198,14 +192,13 @@ object Main extends ZIOAppDefault:
       .mapError(_ => ServerError.Io(histos.server.ServerIo.Read(file)))
 
   /** Unset `HISTOS_VERSION` is a client the wrapper did not launch. It does not judge the server. */
-  private def agrees(repo: Path, record: ServerFile): IO[ServerError, Boolean] =
+  private def agrees(record: ServerFile): IO[ServerError, Boolean] =
     ZIO
       .attempt(Option(System.getenv("HISTOS_VERSION")).filter(_.nonEmpty))
       .mapError(_ => ServerError.Protocol)
-      .flatMap:
-        case None        => ZIO.succeed(true)
-        case Some(found) =>
-          AssemblyMark.read(repo).map(mark => found == record.version && mark == record.assembly)
+      .map:
+        case None        => true
+        case Some(found) => found == record.version
 
   /** One starter holds the gate. Everyone waits until the checkout's socket accepts. */
   private def boot(repo: Path): IO[ServerError, Path] =
@@ -215,42 +208,64 @@ object Main extends ZIOAppDefault:
     val home = repo.resolve(".histos")
     val gate = home.resolve("server.starting")
     val log  = home.resolve("server.log")
-    ZIO.acquireReleaseWith(
-      ZIO
-        .attemptBlocking {
-          Files.createDirectories(home)
-          java.nio.channels.FileChannel.open(gate, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        }
-        .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
-    )(channel => ZIO.attemptBlocking(channel.close()).ignore): channel =>
-      ZIO
-        .attemptBlocking(Option(channel.tryLock()))
-        .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
-        .flatMap:
-          case None    => untilUp(socket)
-          case Some(_) => spawn(repo, log) *> untilUp(socket)
+    ServerStamp
+      .note(repo)
+      .flatMap: before =>
+        ZIO.acquireReleaseWith(
+          ZIO
+            .attemptBlocking {
+              Files.createDirectories(home)
+              java.nio.channels.FileChannel.open(gate, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+            }
+            .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
+        )(channel => ZIO.attemptBlocking(channel.close()).ignore): channel =>
+          ZIO
+            .attemptBlocking(Option(channel.tryLock()))
+            .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
+            .flatMap:
+              case None    => untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)
+              case Some(_) => spawn(repo, log) *> untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)
 
   private def spawn(repo: Path, log: Path): IO[ServerError, Unit] =
+    val missing = ServerError.Io(histos.server.ServerIo.Bind(log))
     ZIO
-      .attemptBlocking {
-        Option(log.getParent).foreach(dir => Files.createDirectories(dir))
-        if !Files.exists(log) then Files.createFile(log)
-        val java = Option(System.getenv("HISTOS_JAVA")).filter(_.nonEmpty).getOrElse("java")
-        val jar  = Option(System.getenv("HISTOS_JAR"))
-          .filter(_.nonEmpty)
-          .getOrElse(
-            repo.resolve("dist").resolve("histos.jar").toString
-          )
-        val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: jar :: "server" :: Nil
-        new ProcessBuilder(command*)
-          .directory(repo.toFile)
-          .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
-          .redirectErrorStream(true)
-          .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
-          .start()
-        ()
-      }
-      .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(log)))
+      .attempt(Option(System.getenv("HISTOS_JAR")).filter(_.nonEmpty))
+      .mapError(_ => missing)
+      .flatMap:
+        case None      => ZIO.fail(missing)
+        case Some(jar) =>
+          ZIO
+            .attemptBlocking {
+              Option(log.getParent).foreach(dir => Files.createDirectories(dir))
+              if !Files.exists(log) then Files.createFile(log)
+              val java    = Option(System.getenv("HISTOS_JAVA")).filter(_.nonEmpty).getOrElse("java")
+              val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: jar :: "server" :: Nil
+              new ProcessBuilder(command*)
+                .directory(repo.toFile)
+                .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
+                .start()
+              ()
+            }
+            .mapError(_ => missing)
+
+  /** The socket can accept before the new server rewrites `server.json`. A record from before `before` is the previous
+    * server.
+    */
+  private def awaitWritten(
+      repo: Path,
+      socket: Path,
+      before: Option[java.nio.file.attribute.FileTime],
+  ): IO[ServerError, Unit] =
+    def poll(left: Int): IO[ServerError, Unit] =
+      ServerStamp
+        .note(repo)
+        .flatMap: now =>
+          if ServerStamp.writtenAfter(before, now) then ZIO.unit
+          else if left > 0 then ZIO.sleep(50.millis) *> poll(left - 1)
+          else ZIO.fail(ServerError.Unreachable(socket))
+    poll(1200)
 
   private def untilUp(socket: Path): IO[ServerError, Path] =
     def poll(left: Int): IO[ServerError, Path] =
@@ -270,13 +285,12 @@ object Main extends ZIOAppDefault:
     ZIO
       .attemptBlocking {
         val java = Option(System.getenv("HISTOS_JAVA")).filter(_.nonEmpty).getOrElse("java")
-        val jar  = Option(System.getenv("HISTOS_JAR"))
-          .filter(_.nonEmpty)
-          .getOrElse(
-            Path.of("").toAbsolutePath.normalize.resolve("dist").resolve("histos.jar").toString
-          )
-        val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: jar :: args
-        new ProcessBuilder(command*).inheritIO().start().waitFor()
+        val jar  = Option(System.getenv("HISTOS_JAR")).filter(_.nonEmpty)
+        jar match
+          case None       => 1
+          case Some(path) =>
+            val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: path :: args
+            new ProcessBuilder(command*).inheritIO().start().waitFor()
       }
       .orElseSucceed(1)
       .map(halt)

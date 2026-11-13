@@ -241,6 +241,10 @@ trait HistosBuild:
   def local: ZLayer[LocalPublish, Nothing, Publishing] = Local.layer
   def sona: ZLayer[SonaPublish, Nothing, Publishing]   = Sona.layer(ReleaseMode.Automatic)
 
+  /** The engine supplies [[PairProof]]. An override that needs nothing ignores it. */
+  def dist: ZLayer[PairProof, Nothing, PairProof] = ZLayer.service[PairProof]
+end HistosBuild
+
 object HistosBuild:
   /** A build whose graph is already known. `local` and `sona` stay the trait defaults. */
   def fixed(graph: ProjectGraph): HistosBuild =
