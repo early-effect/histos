@@ -286,6 +286,8 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("cache list", Call.CacheList, false),
     ("cache clean", Call.CacheClean(CacheCleanMode.Remove), false),
     ("cache promote", Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main), false),
+    ("cache forget", Call.CacheForget(ForgetTarget.Namespace(CacheNamespace.Main)), false),
+    ("cache verify", Call.CacheVerify(Nil), true),
     ("watch", Call.Watch(Call.Version, WatchPolicy.After), false),
     ("bsp", Call.Bsp, false),
     ("preview clean full", Call.PreviewClean(Nil, CleanExtent.Full), false),

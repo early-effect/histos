@@ -36,7 +36,7 @@ The action index is namespaced. The namespace is a prefix, not part of the diges
 - `pr/<n>/` is what later pushes of that pull request read and write.
 - `dev/<name>` is a laptop that opted in. CI does not read it.
 
-A pull request reads `pr/<n>/`, then `main/`, and writes `pr/<n>/` only. A push to `main` reads and writes `main/`. A laptop reads `main/` and does not write unless a `dev/<name>` namespace is set.
+A pull request reads `pr/<n>/`, then `main/`, and writes `pr/<n>/` only. A push to `main` reads and writes `main/`. A laptop reads and does not write, even when `HISTOS_CACHE_NAMESPACE` names `dev/<name>`. Only CI stores. `HISTOS_CACHE_MODE=write` on a laptop opens as read.
 
 The index path is `/{namespace}/ac/{digest}`, where the namespace is `main`, `pr/<n>`, or `dev/<name>`. On gRPC that same token is the instance name. The blob path stays `/cas/{digest}`. A miss tries the next prefix. HTTP reports that as 404. gRPC reports it as `NOT_FOUND`. A hit, a bad entry, or any other status stops the walk.
 
@@ -82,7 +82,7 @@ The existing CI planner already limits a pull request to the changed modules and
 
 [Workflow](../engine/src/histos/workflow/Workflow.scala) generates one test job until a split pays for a second tool restore. Tool caches use an exact key and no prefix fallback. `setup-node` does not set `cache: npm`. Playwright keys its directory and the browser directory by revision, OS, and arch. LLVM keys the pinned revision. Coursier keys the lock digest. A JDK the workflow fetches keys the locked revision.
 
-The remote mode and the namespace come from the event. `CopyIndex` adds a sibling job on `main`. That job does not precede docs or deploy. The proof command is `test`.
+The test job sets `HISTOS_CACHE_MODE` to `write` and the namespace from the event, so a pull request writes `pr/<n>` and a push writes `main`. The cache-seed job is that push. `Rebuild` compiles there. `CopyIndex` runs `histos cache promote` from the pull-request namespace onto `main` and does not compile. It is not a sibling job, and it does not precede docs or deploy. The proof command is `test`.
 
 ## Bench
 

@@ -107,7 +107,8 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
             ran.provideSomeLayer[TestEnvironment & Scope & Resolve & CompilerClosure & Compilers](
               ZLayer.fromFunction((resolve: Resolve, closure: CompilerClosure) =>
                 LockedTools(closure.lock, ToolCatalog.default, Repositories.central, resolve, None)
-              ) ++ CompilerStarts.live ++ ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+              ) ++ CompilerStarts.live ++ ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+                histos.schedule.RemoteCache.off
             )
     ,
     test("a module with no dependencies compiles to that class file"):
@@ -213,7 +214,7 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
               ran.provideSomeLayer[TestEnvironment & Scope & Resolve & CompilerClosure & Compilers](
                 ZLayer.fromFunction((resolve: Resolve, closure: CompilerClosure) =>
                   LockedTools(closure.lock, ToolCatalog.default, Repositories.central, resolve, None)
-                ) ++ CompilerStarts.live ++ ZLayer.succeed(store)
+                ) ++ CompilerStarts.live ++ ZLayer.succeed(store) ++ histos.schedule.RemoteCache.off
               ),
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer ++ Compilers.live(1))
 
@@ -238,6 +239,7 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
         ),
         Nil,
         _ => (),
+        ZIO.unit,
       )
 
   private def graph(scala3: ScalaVersion): ProjectGraph =
@@ -274,5 +276,6 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
   private def graphEnv(closure: CompilerClosure, dir: Path) =
     ResolutionService.pinned(closure.pinning(lawName)) ++
       CompileMemo.live ++
-      ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+      ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+      histos.schedule.RemoteCache.off
 end ZincCompileLawSpec

@@ -82,7 +82,7 @@ private[load] object PluginCells:
   def link(
       session: histos.zinc.CompileSession,
       cell: Cell,
-  ): ZIO[Resolve & histos.resolve.ResolutionService & ContentStore, PluginFault, String] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService & ContentStore & histos.schedule.RemoteCache, PluginFault, String] =
     val histos.zinc.CompileSession(repo, graph, jdk, _, lock, _) = session
     val asked                                                    =
       cell.module.application match
@@ -141,7 +141,7 @@ private[load] object PluginCells:
                 initialize = initialize,
               )
             )
-            .provideSome[Resolve & ContentStore](tools ++ LinkerStarts.live)
+            .provideSome[Resolve & ContentStore & histos.schedule.RemoteCache](tools ++ LinkerStarts.live)
             .mapError(error => PluginFault.Task(failed(error.message)))
           _ <- Workspace
             .writeString(scriptRecord(repo, cell.module.name, cell.version), linked.script.toString)
@@ -197,7 +197,11 @@ private[load] object PluginCells:
   private[load] def compile(
       session: histos.zinc.CompileSession,
       cell: Cell,
-  ): ZIO[Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService, PluginFault, Unit] =
+  ): ZIO[
+    Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.schedule.RemoteCache,
+    PluginFault,
+    Unit,
+  ] =
     val histos.zinc.CompileSession(repo, graph, jdk, origin, lock, _) = session
     ZIO.scoped:
       (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.flatMap { env =>
@@ -210,7 +214,9 @@ private[load] object PluginCells:
               List(cell.module.name -> cell.version),
               cell.platform,
             )
-            .provideSomeLayer(compilers ++ memo)
+            .provideSomeLayer[
+              Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.schedule.RemoteCache
+            ](compilers ++ memo)
             .runCollect
             .mapError(error => PluginFault.Compiled(error))
           _ <- chunk.toList.collect { case CompileFeed.Failed(error) => error } match
@@ -219,7 +225,7 @@ private[load] object PluginCells:
           sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
           _       <- ZIO.unless(sources.isEmpty)(
             compileTests(repo, graph, cell, sources, jdk, origin, lock)
-              .provideSomeLayer[Resolve & histos.cache.ContentStore](compilers)
+              .provideSomeLayer[Resolve & histos.cache.ContentStore & histos.schedule.RemoteCache](compilers)
               .mapError(PluginFault.Tested(_))
           )
         yield ()
@@ -233,7 +239,11 @@ private[load] object PluginCells:
       jdk: JdkRuntime,
       origin: NativeOrigin,
       lock: DependencyLock,
-  ): ZIO[Resolve & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, Unit] =
+  ): ZIO[
+    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
+    ModuleTestError,
+    Unit,
+  ] =
     val modules  = modulesOf(graph)
     val compiled = CompiledCell(
       cell.module.name,
@@ -258,7 +268,9 @@ private[load] object PluginCells:
           lock,
           BuildResolvers(graph.resolvers),
         )
-        .provideSome[Resolve & histos.cache.ContentStore & histos.zinc.Compilers](
+        .provideSome[
+          Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache
+        ](
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
     yield ()

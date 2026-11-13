@@ -6,7 +6,7 @@ import histos.central.DeploymentId
 import histos.plugin.{CommandName, PluginTaskId}
 import histos.publish.PublishToken
 import histos.schedule.CacheNamespace
-import histos.server.{CleanExtent, ResolveAction}
+import histos.server.{CleanExtent, ForgetFault, ForgetTarget, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
@@ -57,6 +57,8 @@ object Grammar:
     case PublishAssets(tokens: List[String])
     case CacheClean(mode: CacheCleanMode)
     case CachePromote(from: String, to: String)
+    case CacheForget(target: String)
+    case CacheVerify(projects: List[String])
     case Resolve(action: ResolveAction)
     case Workflow(action: WorkflowAction)
     case Fmt(check: Boolean, files: Boolean, args: List[String])
@@ -160,7 +162,9 @@ object Grammar:
     CliCommand("promote", Options.text("from") ++ Options.text("to")).map { (from, to) =>
       Wire.CachePromote(from, to)
     }
-  private val cache         = CliCommand("cache").subcommands(path | list | clean | promote)
+  private val forget        = CliCommand("forget", Args.text("target")).map(Wire.CacheForget(_))
+  private val verify        = CliCommand("verify", Args.text("module").*).map(names => Wire.CacheVerify(names.toList))
+  private val cache         = CliCommand("cache").subcommands(path | list | clean | promote | forget | verify)
   private val resolveAction =
     (Options.boolean("update") ++ Options.boolean("check")).mapOrFail:
       case (false, false) => Right(ResolveAction.Verify)
@@ -337,6 +341,10 @@ object Grammar:
         ZIO.fromEither(namespaces(from, to)).map { (source, dest) =>
           Command.CachePromote(source, dest)
         }
+      case Wire.CacheForget(target) =>
+        ZIO.fromEither(forgotten(target)).map(Command.CacheForget(_))
+      case Wire.CacheVerify(projects) =>
+        projectList("cache verify", projects).map(Command.CacheVerify(_))
       case Wire.Resolve(action)         => ZIO.succeed(Command.Resolve(action))
       case Wire.Workflow(action)        => ZIO.succeed(Command.Workflow(action))
       case Wire.Fmt(check, files, args) => ZIO.fromEither(fmtOf(check, files, args))
@@ -730,6 +738,14 @@ object Grammar:
                   platform => NamedRun.Module(id, Some(platform)),
                 )
 
+  private def forgotten(raw: String): Either[CliParseError, ForgetTarget] =
+    ForgetTarget
+      .from(raw)
+      .left
+      .map:
+        case ForgetFault.Namespace(error) => CliParseError.Namespace(error)
+        case ForgetFault.Project(error)   => CliParseError.ProjectName(error)
+
   private def namespaces(from: String, to: String): Either[CliParseError, (CacheNamespace, CacheNamespace)] =
     for
       source <- CacheNamespace.from(from).left.map(CliParseError.Namespace(_))
@@ -782,7 +798,10 @@ object Grammar:
   private def mismatched(args: List[String]): CliParseError =
     args match
       case "cache" :: token :: _ =>
-        CliParseError.UnknownCommand(token, Suggest.near(token, List("path", "list", "clean", "promote")))
+        CliParseError.UnknownCommand(
+          token,
+          Suggest.near(token, List("path", "list", "clean", "promote", "forget", "verify")),
+        )
       case "deps" :: token :: _ =>
         CliParseError.UnknownCommand(
           token,

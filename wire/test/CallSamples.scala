@@ -49,6 +49,8 @@ object CallSamples:
       Call.CacheList,
       Call.CacheClean(CacheCleanMode.Remove),
       Call.CachePromote(CacheNamespace.Main, CacheNamespace.Dev(dev)),
+      Call.CacheForget(ForgetTarget.Namespace(CacheNamespace.Main)),
+      Call.CacheVerify(Nil),
       Call.Watch(Call.Compile(names), WatchPolicy.After),
       Call.Bsp,
       Call.PreviewCompile(names),
@@ -94,6 +96,10 @@ object CallSamples:
           List(call, Call.PreviewClean(Nil, CleanExtent.Full))
         case Call.PreviewTest(_, _, _) =>
           List(call, Call.PreviewTest(Nil, Nil, TestMode.Quick))
+        case Call.CacheForget(_) =>
+          List(call, Call.CacheForget(ForgetTarget.Module(core)))
+        case Call.CacheVerify(_) =>
+          List(call, Call.CacheVerify(List(core)))
         case Call.Watch(_, _) =>
           List(
             call,

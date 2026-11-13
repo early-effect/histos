@@ -15,7 +15,7 @@ private[histos] trait Compilers:
       extra: List[String],
       hear: CompileProblem => Unit,
       digest: Sha256,
-      admitted: UIO[Unit] = ZIO.unit,
+      admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput]
 
   def openings: UIO[Int]

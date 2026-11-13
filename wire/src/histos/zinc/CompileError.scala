@@ -3,7 +3,7 @@ package histos.zinc
 import histos.jdk.Sha256
 import histos.native.{NativeFetch, NativeToolchainError}
 import histos.resolve.ResolveError
-import histos.schedule.CacheError
+import histos.schedule.{CacheError, RemoteError}
 import histos.workspace.IoFailure
 import histos.{Platform, ScalaVersion}
 
@@ -87,6 +87,7 @@ enum CompileError:
   case NativeOrigin(error: histos.native.NativeToolchainError)
   case NativeLibrary(text: String)
   case Stored(error: CacheError)
+  case Remote(error: RemoteError)
 
   /** A Native source produced class files and no NIR beside them. The store does not keep that product. */
   case NoNir(source: Path)
@@ -108,6 +109,7 @@ enum CompileError:
     case NativeOrigin(error) => error.message
     case NativeLibrary(text) => text
     case Stored(error)       => error.message
+    case Remote(error)       => error.message
     case NoNir(source)       => s"$source produced no NIR"
 end CompileError
 

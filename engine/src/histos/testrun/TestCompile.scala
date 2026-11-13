@@ -269,7 +269,11 @@ private[histos] object TestCompile:
       hear: CompileProblem => Unit = _ => (),
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
-  ): ZIO[Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, Linked] =
+  ): ZIO[
+    Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
+    ModuleTestError,
+    Linked,
+  ] =
     val classes  = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
     for
@@ -388,9 +392,14 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, CompileFacts] =
+  ): ZIO[
+    LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
+    ModuleTestError,
+    CompileFacts,
+  ] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
-      type Keep = LockedTools & histos.cache.ContentStore & histos.zinc.Compilers
+      type Keep =
+        LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache
       def keep(
           effect: ZIO[Keep & histos.zinc.CompilerStarts, CompileError, histos.zinc.CompileOutput]
       ): ZIO[Keep, CompileError, histos.zinc.CompileOutput] =
@@ -399,7 +408,7 @@ private[histos] object TestCompile:
         ZIO
           .fromEither(CellPlatform.of(module, request.toolchain.platform, tools.catalog, native))
           .flatMap:
-            case CellPlatform.Jvm            => keep(JvmCompile.compilePooled(request, extra, hear))
+            case CellPlatform.Jvm            => keep(JvmCompile.compilePooled(request, extra, hear, ZIO.unit))
             case js: CellPlatform.Js         => keep(ScalaJs.compile(request, js, extra, hear))
             case native: CellPlatform.Native => keep(NativeCompile.compile(request, native, extra, hear))
       compiled

@@ -12,6 +12,7 @@ import histos.server.{
   Attach,
   Call,
   Calls,
+  ForgetTarget,
   Client,
   Daemon,
   Decision,
@@ -88,6 +89,8 @@ enum Command:
   case CacheList
   case CacheClean(mode: CacheCleanMode)
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
+  case CacheForget(target: ForgetTarget)
+  case CacheVerify(projects: List[ProjectName])
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case Fmt(targets: histos.format.FormatTargets, mode: histos.format.FormatMode)
@@ -266,7 +269,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly [path] | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly [path] | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -676,6 +679,12 @@ object Cli:
         attach(repo, Call.CacheClean(mode), cacheClean(mode))
       case Command.CachePromote(from, to) =>
         attach(repo, Call.CachePromote(from, to), cachePromote(from, to))
+      case Command.CacheForget(target) =>
+        val call = Call.CacheForget(target)
+        attach(repo, call, locally(repo, apiJar, call))
+      case Command.CacheVerify(projects) =>
+        val call = Call.CacheVerify(projects)
+        attach(repo, call, locally(repo, apiJar, call))
       case Command.Resolve(action)    => resolve(repo, apiJar, action)
       case Command.Workflow(action)   => workflow(repo, apiJar, action)
       case Command.Fmt(targets, mode) =>
@@ -2333,6 +2342,10 @@ object Cli:
         attach(repo, Call.CacheClean(mode), machineReady(repo)(machine => storeOf(machine)(cacheClean(mode))))
       case Command.CachePromote(from, to) =>
         cachePromote(from, to)
+      case Command.CacheForget(target) =>
+        served(repo, Call.CacheForget(target))
+      case Command.CacheVerify(projects) =>
+        served(repo, Call.CacheVerify(projects))
       case Command.Resolve(action) =>
         attach(
           repo,

@@ -632,7 +632,7 @@ object Plan:
           CompileError.NoSources | CompileError.Outside(_, _) | CompileError.Banned(_, _) | CompileError.Failed(_) |
           CompileError.Toolchain(_) | CompileError.JsLibrary(_) | CompileError.NativeFetch(_) |
           CompileError.NativeOrigin(_) | CompileError.NativeLibrary(_) | CompileError.Stored(_) |
-          CompileError.NoNir(_) =>
+          CompileError.Remote(_) | CompileError.NoNir(_) =>
         PreviewError.Sources(IoFailure(root, IoFault.Walk))
 
   private def testFault(repo: Path, error: ModuleTestError): PreviewError =
@@ -657,6 +657,6 @@ object Plan:
           ModuleTestError.Process(_, _, _) | ModuleTestError.Main(_) | ModuleTestError.Absent(_) |
           ModuleTestError.MissingUpstream(_, _, _) | ModuleTestError.Work(_) | ModuleTestError.Runner(_) |
           ModuleTestError.LinkFailed(_, _, _, _) | ModuleTestError.NoNode(_, _, _) | ModuleTestError.Stamp(_) |
-          ModuleTestError.Record(_) | ModuleTestError.Api(_, _, _) =>
+          ModuleTestError.Record(_) | ModuleTestError.Api(_, _, _) | ModuleTestError.Remote(_) =>
         PreviewError.Sources(IoFailure(repo, IoFault.Stat))
 end Plan

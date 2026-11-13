@@ -63,6 +63,7 @@ object JsLawSpec extends ZIOSpecDefault:
         stubbed[ContentStore],
         CompilerStarts.live,
         ZLayer.succeed(dyingCompilers),
+        histos.schedule.RemoteCache.off,
       )
 
   private def failedWith(exit: Exit[CompileError, CompileOutput], error: CompileError): Boolean =

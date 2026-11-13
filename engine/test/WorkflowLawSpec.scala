@@ -318,6 +318,24 @@ object WorkflowLawSpec extends ZIOSpecDefault:
                 }
           }
     ,
+    test("cache-seed compiles on rebuild and promotes on copy-index, and the suite writes"):
+      val rebuilt    = Projects.promote(Promote.Rebuild)(module("core", Jvm)(scala3)).flatMap(Workflow.render)
+      val copied     = Projects.promote(Promote.CopyIndex)(module("core", Jvm)(scala3)).flatMap(Workflow.render)
+      val promote    = "./histos cache promote --from pr/${{ github.event.pull_request.number }} --to main"
+      val seed       = job(rebuilt.fold(_ => "", identity), "cache-seed")
+      val copiedSeed = job(copied.fold(_ => "", identity), "cache-seed")
+      val suite      = job(rebuilt.fold(_ => "", identity), "test")
+      assertTrue(
+        rebuilt.isRight,
+        copied.isRight,
+        seed.contains("./histos compile"),
+        seed.contains("HISTOS_CACHE_NAMESPACE: \"main\""),
+        seed.contains("HISTOS_CACHE_MODE: \"write\""),
+        copiedSeed.contains(promote),
+        !copiedSeed.contains("./histos compile"),
+        suite.contains("HISTOS_CACHE_MODE: \"write\""),
+      )
+    ,
     test("lookup prefers an exact action, then the longest prefix"):
       val restore = ActionPin(CommitSha("0123456789abcdef0123456789abcdef01234567"), "v9")
       val catalog = ActionPins.catalog(Map(ActionName("actions/cache/restore") -> restore))

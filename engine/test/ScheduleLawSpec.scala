@@ -192,7 +192,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
             Some(
               CacheConfig.Selected(
                 CacheConfig.Target.Grpc("cache.example", 443, tls = true),
-                RemoteMode.Write,
+                RemoteMode.Read,
                 namespace,
               )
             )
@@ -225,7 +225,26 @@ object ScheduleLawSpec extends ZIOSpecDefault:
             case _ => None
         }
         val rendered = List("https://cache.example/objects", "http://cache.example/")
-        assertTrue(shown == rendered.map(url => Some((url, RemoteMode.Write, CacheNamespace.Main))))
+        assertTrue(shown == rendered.map(url => Some((url, RemoteMode.Read, CacheNamespace.Main))))
+      ,
+      test("a laptop write opens as read, and CI write stays write"):
+        val uri     = Map(CacheConfig.UriKey -> "grpc://localhost:2020", CacheConfig.ModeKey -> "write")
+        val laptop  = CacheConfig.decide(uri)
+        val actions = CacheConfig.decide(uri + ("GITHUB_ACTIONS" -> "true"))
+        val ci      = CacheConfig.decide(uri + ("CI" -> "true"))
+        def mode(decided: Either[RemoteError, Option[CacheConfig.Selected]]): Option[RemoteMode] =
+          decided match
+            case Right(Some(CacheConfig.Selected(_, found, _))) => Some(found)
+            case _                                              => None
+        assertTrue(
+          mode(laptop) == Some(RemoteMode.Read),
+          mode(actions) == Some(RemoteMode.Write),
+          mode(ci) == Some(RemoteMode.Write),
+        )
+      ,
+      test("an unset uri does not open a writer"):
+        for opened <- CacheConfig.openWriter(Map.empty, CacheNamespace.Main).either
+        yield assertTrue(opened == Left(RemoteError.Off))
       ,
       test("main, a pull request, and a dev name read themselves and then main"):
         assertTrue(

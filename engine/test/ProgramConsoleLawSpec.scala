@@ -100,7 +100,8 @@ object ProgramConsoleLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment](services),
   )
 
-  private val services = stubbed[ResolutionService] ++ stubbed[Resolve] ++ stubbed[ContentStore]
+  private val services =
+    stubbed[ResolutionService] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++ histos.schedule.RemoteCache.off
 
   private def console(
       graph: ProjectGraph,

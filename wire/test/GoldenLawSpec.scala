@@ -210,6 +210,8 @@ object GoldenLawSpec extends ZIOSpecDefault:
       """{"TestMode":{"error":{"Unknown":{"raw":"nope"}}}}""",
     Rejection.CacheClean(histos.cache.CacheCleanModeError.Unknown("nope")) ->
       """{"CacheClean":{"error":{"Unknown":{"raw":"nope"}}}}""",
+    Rejection.Namespace(histos.schedule.NamespaceError.Shape("nope")) ->
+      """{"Namespace":{"error":{"Shape":{"raw":"nope"}}}}""",
     Rejection.Flag(histos.plugin.FlagNameError.Bad("1flag")) -> """{"Flag":{"error":{"Bad":{"raw":"1flag"}}}}""",
     Rejection.TaskPlatform("inspect")                        -> """{"TaskPlatform":{"name":"inspect"}}""",
     Rejection.CommandHelp(List("nope"))                      -> """{"CommandHelp":{"names":["nope"]}}""",

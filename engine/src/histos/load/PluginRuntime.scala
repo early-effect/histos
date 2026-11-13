@@ -170,13 +170,15 @@ object PluginRuntime:
                     PluginCells
                       .compile(compiled, cell)
                       .provideSome[Resolve & histos.cache.ContentStore](
-                        zio.ZLayer.succeed(report)
+                        zio.ZLayer.succeed(report) ++ zio.ZLayer.succeed(remote)
                       ),
                 cell =>
                   session.flatMap: compiled =>
                     PluginCells
                       .link(compiled, cell)
-                      .provideSome[Resolve & histos.cache.ContentStore](zio.ZLayer.succeed(report)),
+                      .provideSome[Resolve & histos.cache.ContentStore](
+                        zio.ZLayer.succeed(report) ++ zio.ZLayer.succeed(remote)
+                      ),
                 (taskId, task, upstream) =>
                   remembered(
                     id,

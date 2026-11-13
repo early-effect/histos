@@ -17,7 +17,11 @@ object NativeCompile:
       native: CellPlatform.Native,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts, CompileError, CompileOutput] =
+  ): ZIO[
+    LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.schedule.RemoteCache,
+    CompileError,
+    CompileOutput,
+  ] =
     if request.toolchain.platform != Platform.Native then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else

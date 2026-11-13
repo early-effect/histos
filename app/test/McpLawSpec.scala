@@ -13,7 +13,8 @@ import histos.load.{LoadedBuild, Loader}
 import histos.publish.{IvyRoot, PublishToken}
 import histos.report.{ObserveError, Rejection}
 import histos.resolve.Resolve
-import histos.server.{Call, CleanExtent}
+import histos.schedule.{CacheNamespace, NamespaceError}
+import histos.server.{Call, CleanExtent, ForgetTarget}
 import histos.supply.{GitRead, Net}
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
@@ -87,6 +88,14 @@ object McpLawSpec extends ZIOSpecDefault:
         HistosMcp.cacheCall(Some("nope")) == Left(Rejection.CacheClean(CacheCleanModeError.Unknown("nope"))),
         HistosMcp.cancelCall("") == Left(Rejection.RunId(TaskError.EmptyId)),
         HistosMcp.cancelCall("run-1") == Right(Call.Cancel(RunId("run-1"))),
+        HistosMcp.cacheForgetCall("main") == Right(
+          Call.CacheForget(ForgetTarget.Namespace(CacheNamespace.Main))
+        ),
+        HistosMcp.cacheForgetCall("core") == Right(Call.CacheForget(ForgetTarget.Module(ProjectName("core")))),
+        HistosMcp.cacheForgetCall("nope/x") == Left(Rejection.Namespace(NamespaceError.Shape("nope/x"))),
+        HistosMcp.cacheForgetCall("") == Left(Rejection.ProjectName(ProjectNameError.Empty)),
+        HistosMcp.cacheVerifyCall(Nil) == Right(Call.CacheVerify(Nil)),
+        HistosMcp.cacheVerifyCall(List("1api")) == Left(badName),
       )
     ,
     test("preview parses the operation and a full clean rejects a project"):

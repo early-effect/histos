@@ -219,6 +219,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "HISTOS_NATIVE is empty",
           "missing",
           read,
+          "remote cache is not configured",
           "/work/repo produced no NIR",
         ),
       )
@@ -893,6 +894,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           sources,
           "'core' 3.10.0 jvm failed to assemble\nan assembly needs a classes directory",
           "histos builds clients on snapshots, and /work/repo is not a file. The snapshots workflow downloads each client there.",
+          "remote cache is not configured",
         ),
         localPublishes.map(error => noted(error.diagnose)) == List(
           ("publish.failed", "histos help publish"),
@@ -918,6 +920,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("resolve.not-found", "histos resolve --update"),
+          ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
@@ -1414,12 +1417,14 @@ object MessageLawSpec extends ZIOSpecDefault:
           "quick record /work/repo is not a stored success",
           "a test pattern is not empty",
           "'core' 3.10.0 native has no readable API digest",
+          "remote cache is not configured",
         ),
         samples.map(error => noted(error.diagnose)) == List(
           ("test.failed", "histos help test"),
           ("project.duplicate", "histos graph"),
           ("compile.failed", "histos help compile"),
           ("resolve.not-found", "histos resolve --update"),
+          ("test.failed", "histos help test"),
           ("test.failed", "histos help test"),
           ("test.failed", "histos help test"),
           ("test.failed", "histos help test"),

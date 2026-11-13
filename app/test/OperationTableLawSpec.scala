@@ -4,7 +4,7 @@ import histos.cache.CacheCleanMode
 import histos.central.DeploymentId
 import histos.publish.PublishToken
 import histos.schedule.{CacheNamespace, DevName}
-import histos.server.{Call, CleanExtent, ResolveAction}
+import histos.server.{Call, CleanExtent, ForgetTarget, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.TestMode
 import histos.workflow.WorkflowAction
@@ -41,12 +41,15 @@ object OperationTableLawSpec extends ZIOSpecDefault:
             Command.CacheList                                 -> Right(Call.CacheList),
             Command.CacheClean(CacheCleanMode.DryRun)         -> Right(Call.CacheClean(CacheCleanMode.DryRun)),
             Command.CachePromote(dev, main)                   -> Right(Call.CachePromote(dev, main)),
-            Command.Resolve(ResolveAction.Update)             -> Right(Call.Resolve(ResolveAction.Update)),
-            Command.Workflow(WorkflowAction.Check)            -> Right(Call.Workflow(WorkflowAction.Check)),
-            Command.Reload                                    -> Right(Call.Reload),
-            Command.Reboot                                    -> Left(CliParseError.Rejected),
-            Command.Cancel(id)                                -> Right(Call.Cancel(id)),
-            Command.PreviewCompile(List(ProjectName("api")))  ->
+            Command.CacheForget(ForgetTarget.Module(ProjectName("api"))) ->
+              Right(Call.CacheForget(ForgetTarget.Module(ProjectName("api")))),
+            Command.CacheVerify(List(ProjectName("api")))    -> Right(Call.CacheVerify(List(ProjectName("api")))),
+            Command.Resolve(ResolveAction.Update)            -> Right(Call.Resolve(ResolveAction.Update)),
+            Command.Workflow(WorkflowAction.Check)           -> Right(Call.Workflow(WorkflowAction.Check)),
+            Command.Reload                                   -> Right(Call.Reload),
+            Command.Reboot                                   -> Left(CliParseError.Rejected),
+            Command.Cancel(id)                               -> Right(Call.Cancel(id)),
+            Command.PreviewCompile(List(ProjectName("api"))) ->
               Right(Call.PreviewCompile(List(ProjectName("api")))),
             Command.PreviewTest(Nil, AffectedChoice.Unset, TestMode.Run, Nil) -> Right(
               Call.PreviewTest(Nil, Nil, TestMode.Run)

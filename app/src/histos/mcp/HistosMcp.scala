@@ -15,7 +15,7 @@ import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.publish.{IvyRoot, PublishToken}
 import histos.resolve.Resolve
-import histos.server.{Call, CleanExtent, ResolveAction, Successor}
+import histos.server.{Call, CleanExtent, ForgetFault, ForgetTarget, ResolveAction, Successor}
 import histos.supply.DoctorSurface
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
@@ -140,6 +140,8 @@ object HistosMcp:
   ) derives Schema,
         JsonCodec
   final case class CacheCleanArgs(mode: Option[String] = None) derives Schema, JsonCodec
+  final case class CacheForgetArgs(target: String) derives Schema, JsonCodec
+  final case class CacheVerifyArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
   final case class PreviewArgs(
       operation: PreviewOp,
@@ -195,27 +197,29 @@ object HistosMcp:
   val toolNames: Set[ToolName] = Names.all
 
   private object Names:
-    inline val graph      = "graph"
-    inline val run        = "run"
-    inline val cancel     = "cancel"
-    inline val compile    = "compile"
-    inline val test       = "test"
-    inline val publish    = "publish"
-    inline val version    = "version"
-    inline val assembly   = "assembly"
-    inline val clean      = "clean"
-    inline val resolve    = "resolve"
-    inline val workflow   = "workflow"
-    inline val fmt        = "fmt"
-    inline val reload     = "reload"
-    inline val reboot     = "reboot"
-    inline val cachePath  = "cachePath"
-    inline val cacheList  = "cacheList"
-    inline val cacheClean = "cacheClean"
-    inline val watch      = "watch"
-    inline val preview    = "preview"
-    inline val observe    = "observe"
-    inline val doctor     = "doctor"
+    inline val graph       = "graph"
+    inline val run         = "run"
+    inline val cancel      = "cancel"
+    inline val compile     = "compile"
+    inline val test        = "test"
+    inline val publish     = "publish"
+    inline val version     = "version"
+    inline val assembly    = "assembly"
+    inline val clean       = "clean"
+    inline val resolve     = "resolve"
+    inline val workflow    = "workflow"
+    inline val fmt         = "fmt"
+    inline val reload      = "reload"
+    inline val reboot      = "reboot"
+    inline val cachePath   = "cachePath"
+    inline val cacheList   = "cacheList"
+    inline val cacheClean  = "cacheClean"
+    inline val cacheForget = "cacheForget"
+    inline val cacheVerify = "cacheVerify"
+    inline val watch       = "watch"
+    inline val preview     = "preview"
+    inline val observe     = "observe"
+    inline val doctor      = "doctor"
 
     val all: Set[ToolName] =
       Set(
@@ -236,6 +240,8 @@ object HistosMcp:
         ToolName(cachePath),
         ToolName(cacheList),
         ToolName(cacheClean),
+        ToolName(cacheForget),
+        ToolName(cacheVerify),
         ToolName(watch),
         ToolName(preview),
         ToolName(observe),
@@ -326,7 +332,15 @@ object HistosMcp:
         Names.cacheClean,
         "Remove old content store entries. mode is remove or dry-run. An absent mode removes them. dry-run lists them and deletes nothing.",
       )(args => ZIO.fromEither(cacheCall(args.mode)).mapError(refused).flatMap(ask))
-      ready <- cacheClean.tool[WatchArgs](
+      cacheForget <- cacheClean.tool[CacheForgetArgs](
+        Names.cacheForget,
+        "Forget a remote namespace, or one module's local compile hit. A namespace is main, pr/<n>, or dev/<name>. Anything else is a module.",
+      )(args => ZIO.fromEither(cacheForgetCall(args.target)).mapError(refused).flatMap(ask))
+      cacheVerify <- cacheForget.tool[CacheVerifyArgs](
+        Names.cacheVerify,
+        "Recompile stored compile hits in a scratch checkout and name a module whose classes differ. An empty list verifies every marked module.",
+      )(args => ZIO.fromEither(cacheVerifyCall(args.projects)).mapError(refused).flatMap(ask))
+      ready <- cacheVerify.tool[WatchArgs](
         Names.watch,
         "Run a command again after a source save. args are the histos command, without the tilde.",
       )(args => Cli.watchCall(args.args, repo, apiJar).mapError(Session.CallProblem.Fault(_)).flatMap(ask))
@@ -447,6 +461,17 @@ object HistosMcp:
       .left
       .map(Rejection.CacheClean(_))
       .map(Call.CacheClean(_))
+
+  def cacheForgetCall(target: String): Either[Rejection, Call] =
+    ForgetTarget.from(target).left.map(forgotten).map(Call.CacheForget(_))
+
+  def cacheVerifyCall(projects: List[String]): Either[Rejection, Call] =
+    names(projects).map(Call.CacheVerify(_))
+
+  private def forgotten(fault: ForgetFault): Rejection =
+    fault match
+      case ForgetFault.Namespace(error) => Rejection.Namespace(error)
+      case ForgetFault.Project(error)   => Rejection.ProjectName(error)
 
   def cancelCall(id: String): Either[Rejection, Call] =
     RunId.from(id).left.map(Rejection.RunId(_)).map(Call.Cancel(_))
