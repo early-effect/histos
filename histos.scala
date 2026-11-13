@@ -22,12 +22,12 @@ object build extends HistosBuild:
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
       .testDependencies(zioTest, zioTestSbt)
-    val heddle    = dep"rocks.earlyeffect::heddle:0.14.2"
+    val heddle    = dep"rocks.earlyeffect::heddle:0.15.0"
     val heddleMcp = heddle.module("heddle-mcp")
     val central   = module("central", Jvm)(scala3)
       .dependsOn(api, wire)
       .libraryDependencies(zio, heddle)
-      .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.2.0")
+      .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.3.0")
     val scalaCompiler   = dep"org.scala-lang::scala3-compiler:3.10.1"
     val scaladoc        = scalaCompiler.module("scaladoc")
     val asm             = dep"org.ow2.asm:asm:9.11.1"
@@ -77,7 +77,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
-        dep"rocks.earlyeffect::slayer:0.2.0",
+        dep"rocks.earlyeffect::slayer:0.3.0",
         grpcStub,
       )
     val client = module("client", Native)(nativeScala)
@@ -101,7 +101,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
-        dep"rocks.earlyeffect::slayer:0.2.0",
+        dep"rocks.earlyeffect::slayer:0.3.0",
         asm,
         asmTree,
       )
