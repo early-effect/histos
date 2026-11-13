@@ -8,6 +8,7 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.schedule.Digest
 import histos.{Module, Platform, ProjectName, ScalaVersion, ScalacFlag, ScalacFlags, SourcePos, ToolCatalog}
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.time.Instant
 
@@ -474,6 +475,27 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
               hidden._2 == 0 && waived._2 == 0 && passed._2 == 0 && marked._2 == 0,
             ),
     ) @@ TestAspect.sequential).provideSomeLayerShared[TestEnvironment & Scope](gate),
+    test("wire's inputs are unchanged across two commits that differ only in identity"):
+      Workspace
+        .work("histos-wire-identity")
+        .flatMap: repo =>
+          val source =
+            repo.resolve("wire").resolve("src").resolve("main").resolve("scala").resolve("histos").resolve("Wire.scala")
+          val stamp = Sources.unmanagedRoot(repo, "wire").resolve("histos").resolve("Toolchain.scala")
+          for
+            _      <- Workspace.writeString(source, "package histos\nobject Wire\n")
+            _      <- commitGit(repo, "init")
+            _      <- commitGit(repo, "config", "user.email", "law@histos.test")
+            _      <- commitGit(repo, "config", "user.name", "Law")
+            _      <- commitGit(repo, "add", "wire")
+            _      <- commitGit(repo, "commit", "--no-gpg-sign", "-m", "first")
+            first  <- wireDigest(repo)
+            head   <- commitGit(repo, "rev-parse", "HEAD")
+            _      <- commitGit(repo, "commit", "--allow-empty", "--no-gpg-sign", "-m", "second")
+            second <- wireDigest(repo)
+            later  <- commitGit(repo, "rev-parse", "HEAD")
+            gone   <- ZIO.attempt(Files.exists(stamp)).orDie
+          yield assertTrue(head != later, first == second, !gone),
   )
 
   private val scala3     = ScalaVersion.trusted("3.10.0")
@@ -614,4 +636,31 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
       error  <- JvmCompile.compilePooled(request, Nil, _ => (), ZIO.unit).either
       after  <- ZIO.serviceWithZIO[CompilerStarts](_.get)
     yield (error, after - before)
+
+  /** The same inputs `GraphCompile` hashes for `wire`: its sources, then an unmanaged file at the same relative path.
+    */
+  private def wireDigest(repo: Path): ZIO[Any, CompileError, Sha256] =
+    val base      = repo.resolve("wire").resolve("src")
+    val extraRoot = Sources.unmanagedRoot(repo, "wire")
+    for
+      listed <- Sources.select(base, scala3, Platform.Jvm)
+      extra  <- Sources.select(extraRoot, scala3, Platform.Jvm)
+      hashed <- JvmCompile.sourceDigest(repo, Sources.prefer(base, listed, extraRoot, extra))
+    yield hashed
+
+  private def commitGit(repo: Path, args: String*): UIO[String] =
+    ZIO
+      .attemptBlocking:
+        val command = List("git", "-C", repo.toString) ++ args.toList
+        val process = new ProcessBuilder(command*)
+          .redirectError(ProcessBuilder.Redirect.PIPE)
+          .start()
+        val out  = String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
+        val err  = String(process.getErrorStream.readAllBytes, StandardCharsets.UTF_8)
+        val code = process.waitFor()
+        (code, out.trim, err.trim)
+      .orDie
+      .flatMap:
+        case (0, out, _)    => ZIO.succeed(out)
+        case (code, _, err) => ZIO.dieMessage(s"git ${args.mkString(" ")} ($code): $err")
 end CompileIdentityLawSpec

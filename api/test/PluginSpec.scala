@@ -119,7 +119,7 @@ object PluginSpec extends ZIOSpecDefault:
       val row    = Ship("histos").next(1, 4, 2)(core)
       val built  = Projects.docCheck.coverage().scalafmt(ships(row), core, client)
       assertTrue(
-        built.map(JobCheck.generated(_).size) == Right(9),
+        built.map(JobCheck.generated(_).size) == Right(8),
         built.map(JobCheck.generated(_) -- JobName.reserved) == Right(Set.empty[JobName]),
         JobName("docs").isReserved == false,
         JobName("doc").isReserved == false,

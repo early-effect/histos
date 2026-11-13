@@ -28,8 +28,8 @@ object OperationTableLawSpec extends ZIOSpecDefault:
               Call.Clean(List(ProjectName("api")), CleanExtent.Products)
             ),
             Command.Clean(Nil, CleanExtent.Full)             -> Right(Call.Clean(Nil, CleanExtent.Full)),
-            Command.Assembly(None)                           -> Right(Call.Assembly(None)),
-            Command.Assembly(Some("dist/app.jar"))           -> Right(Call.Assembly(Some("dist/app.jar"))),
+            Command.Assembly(Nil)                            -> Right(Call.Assembly(Nil)),
+            Command.Assembly(List("app"))                    -> Right(Call.Assembly(List("app"))),
             Command.PublishLocal(List(PublishToken("core"))) -> Right(Call.PublishLocal(List(PublishToken("core")))),
             Command.PublishSnapshots(Nil)                    -> Right(Call.PublishSnapshots(Nil)),
             Command.PublishPromote(DeploymentId("deployment-1")) -> Right(

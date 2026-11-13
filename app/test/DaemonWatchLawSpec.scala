@@ -205,7 +205,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("publish snapshots", Call.PublishSnapshots(Nil), true),
     ("publish release", Call.PublishRelease(Nil, false), true),
     ("run", Call.Run("api", None), true),
-    ("assembly", Call.Assembly(None), true),
+    ("assembly", Call.Assembly(Nil), true),
     ("clean empty", Call.Clean(Nil, CleanExtent.Products), true),
     ("clean named", Call.Clean(List(api), CleanExtent.Products), true),
     ("clean full", Call.Clean(Nil, CleanExtent.Full), true),

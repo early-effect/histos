@@ -193,7 +193,7 @@ object GoldenLawSpec extends ZIOSpecDefault:
     Rejection.ResolveAction("nope")                            -> """{"ResolveAction":{"raw":"nope"}}""",
     Rejection.WorkflowAction("nope")                           -> """{"WorkflowAction":{"raw":"nope"}}""",
     Rejection.LauncherAction("nope")                           -> """{"LauncherAction":{"raw":"nope"}}""",
-    Rejection.AssemblyDestination("nope")                      -> """{"AssemblyDestination":{"raw":"nope"}}""",
+    Rejection.AssemblyModules(List("app"))                     -> """{"AssemblyModules":{"names":["app"]}}""",
     Rejection.TaskArguments("inspect")                         -> """{"TaskArguments":{"id":"inspect"}}""",
     Rejection.NotATool                                         -> """{"NotATool":{}}""",
     Rejection.Watch("stopped")                                 -> """{"Watch":{"detail":"stopped"}}""",

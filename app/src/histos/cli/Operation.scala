@@ -56,8 +56,8 @@ object Operation:
         if extent == CleanExtent.Full && projects.nonEmpty then
           Left(CliParseError.Pattern("clean --full does not take a project"))
         else Right(Call.Clean(projects, extent))
-      case Command.Assembly(destination) =>
-        Right(Call.Assembly(destination))
+      case Command.Assembly(modules) =>
+        Right(Call.Assembly(modules))
       case Command.PublishLocal(tokens) =>
         Right(Call.PublishLocal(tokens))
       case Command.PublishSnapshots(tokens) =>

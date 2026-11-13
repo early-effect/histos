@@ -40,7 +40,7 @@ object CallSamples:
       Call.Resolve(ResolveAction.Verify),
       Call.Workflow(WorkflowAction.Check),
       Call.Format(FormatTargets.Build, FormatMode.Check),
-      Call.Assembly(Some("dist/app.jar")),
+      Call.Assembly(List("app")),
       Call.Clean(names, CleanExtent.Products),
       Call.Reload,
       Call.Reboot(Successor(Some("histos 0.3.1"), Some(java.nio.file.Path.of("/tmp/next.jar")))),
@@ -85,7 +85,7 @@ object CallSamples:
             Call.Format(FormatTargets.Files(NonEmptyChunk(java.nio.file.Path.of("core/src/A.scala"))), FormatMode.Write),
           )
         case Call.Assembly(_) =>
-          List(call, Call.Assembly(None))
+          List(call, Call.Assembly(Nil))
         case Call.CacheClean(_) =>
           List(call, Call.CacheClean(CacheCleanMode.DryRun))
         case Call.CachePromote(_, _) =>

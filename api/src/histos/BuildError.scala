@@ -3,6 +3,18 @@ package histos
 import histos.plugin.Need
 import histos.version.ShipName
 
+/** Why a toolchain launcher was refused. */
+enum ToolchainLauncherFault:
+  case Missing
+  case NotMember
+  case NotAssembly
+
+/** Why a toolchain client was refused. */
+enum ToolchainClientFault:
+  case Missing
+  case NotNative
+  case NoMain
+
 enum BuildError:
   case EmptyName(position: SourcePos)
   case BadName(raw: String, position: SourcePos)
@@ -87,6 +99,18 @@ enum BuildError:
   case TwoAssets(name: ProjectName, position: SourcePos)
   case DuplicateResource(name: ProjectName, resource: ResourceName, position: SourcePos)
   case RemoteNeeds(name: ProjectName, needs: Set[Need], position: SourcePos)
+  case ToolchainLauncher(
+      ship: ShipName,
+      module: ProjectName,
+      fault: ToolchainLauncherFault,
+      position: SourcePos,
+  )
+  case ToolchainClient(
+      ship: ShipName,
+      module: ProjectName,
+      fault: ToolchainClientFault,
+      position: SourcePos,
+  )
 
   def message: String = this match
     case EmptyName(position) =>
@@ -152,6 +176,20 @@ enum BuildError:
     case RemoteNeeds(name, needs, position) =>
       val listed = needs.toList.map(needWord).sorted.mkString(", ")
       s"'${name.value}' stores remote test results and needs $listed (${position.line}:${position.column})"
+    case ToolchainLauncher(ship, module, fault, position) =>
+      val why = fault match
+        case ToolchainLauncherFault.Missing   => "that module is not in the build"
+        case ToolchainLauncherFault.NotMember =>
+          s"'${module.value}' is not a member of that ship"
+        case ToolchainLauncherFault.NotAssembly =>
+          s"'${module.value}' does not publish an assembly"
+      s"ship '${ship.value}' names launcher '${module.value}', and $why (${position.line}:${position.column})"
+    case ToolchainClient(ship, module, fault, position) =>
+      val why = fault match
+        case ToolchainClientFault.Missing   => "that module is not in the build"
+        case ToolchainClientFault.NotNative => s"'${module.value}' does not build Native"
+        case ToolchainClientFault.NoMain    => s"'${module.value}' does not name a main"
+      s"ship '${ship.value}' names client '${module.value}', and $why (${position.line}:${position.column})"
 
   private def needWord(need: Need): String = need match
     case Need.Network => "network"

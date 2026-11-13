@@ -23,18 +23,10 @@ import zio.test.*
 
 object ProgramLawSpec extends ZIOSpecDefault:
   def spec = suite("program laws")(
-    test("a client is a native module named client that has a main, and it lands in dist"):
-      val client = module("client", Platform.Native, Some(MainClass.trusted("demo.Exit")))
-      val noMain = module("client", Platform.Native, None)
-      val jvm    = module("client", Platform.Jvm, Some(MainClass.trusted("demo.Exit")))
-      val other  = module("core", Platform.Native, Some(MainClass.trusted("demo.Exit")))
-      val repo   = Path.of("/repo")
+    test("the linked client lands in dist"):
+      val repo = Path.of("/repo")
       assertTrue(
-        ClientBinary.present(ProjectGraph.trusted(List(client))),
-        !ClientBinary.present(ProjectGraph.trusted(List(noMain))),
-        !ClientBinary.present(ProjectGraph.trusted(List(jvm))),
-        !ClientBinary.present(ProjectGraph.trusted(List(other))),
-        ClientBinary.destination(repo) == repo.resolve("dist").resolve("histos-client"),
+        ClientBinary.destination(repo) == repo.resolve("dist").resolve("histos-client")
       )
     ,
     test("a native run gets its module's thread stack over the server's, or 8m when the module names none"):

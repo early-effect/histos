@@ -125,7 +125,7 @@ object HistosMcp:
   ) derives Schema,
         JsonCodec
   final case class PublishArgs(place: PublishPlace, tokens: List[String] = Nil) derives Schema, JsonCodec
-  final case class AssemblyArgs(destination: Option[String] = None) derives Schema, JsonCodec
+  final case class AssemblyArgs(modules: List[String] = Nil) derives Schema, JsonCodec
   final case class CleanArgs(
       projects: List[String] = Nil,
       extent: CleanExtent = CleanExtent.Products,
@@ -294,8 +294,8 @@ object HistosMcp:
       version  <- publishing.tool[NoArgs](Names.version, "Show the histos version")(_ => ask(Call.Version))
       assembly <- version.tool[AssemblyArgs](
         Names.assembly,
-        "Build the assembly jar. destination is optional.",
-      )(args => ask(Call.Assembly(args.destination)))
+        "Write each named assembly module to its asset path, or to a build output path, and print the path.",
+      )(args => ask(Call.Assembly(args.modules)))
       cleaning <- assembly.tool[CleanArgs](
         Names.clean,
         "Delete build products. An empty list wipes every product root and does not load the graph. extent full also forgets this repo in the content store and takes no project.",

@@ -768,7 +768,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         "AssembleError",
         (
           "Toolchain(error) | Compile(error) | Resolve(error) | Jar(error) | " +
-            "Pack(error) | NoModule(name) | NoClasses(module,version) | Io(path)"
+            "Pack(error) | NoModule(name) | NotAssembly(module) | NoClasses(module,version) | Io(path)"
         ),
         """{"Io":{"path":"/work/repo"}}""",
         histos.assembly.AssembleError.Io(home),
@@ -817,7 +817,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "Ci(fault) | TwoPublications(name,position) | " +
               "AssemblyShape(name,position) | AssetWithoutAssembly(name,position) | " +
               "TwoAssets(name,position) | DuplicateResource(name,resource,position) | " +
-              "RemoteNeeds(name,needs,position)"
+              "RemoteNeeds(name,needs,position) | " +
+              "ToolchainLauncher(ship,module,fault,position) | ToolchainClient(ship,module,fault,position)"
           ),
           """{"DuplicateResolver":{"token":"central"}}""",
           histos.BuildError.DuplicateResolver("central"),
@@ -1421,7 +1422,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           "Rejection",
           (
             "ResolveAction(raw) | WorkflowAction(raw) | LauncherAction(raw) | " +
-              "AssemblyDestination(raw) | TaskArguments(id) | NotATool() | " +
+              "AssemblyModules(names) | TaskArguments(id) | NotATool() | " +
               "Watch(detail) | RunFailed() | WatchStopped() | PreviewProjects() | " +
               "PreviewOperation(raw) | MissingRunName() | Parameter(error) | " +
               "ProjectName(error) | SuitePattern(error) | RunId(error) | " +

@@ -300,6 +300,8 @@ object CodecSamples:
     BuildError.TwoAssets(core, pos),
     BuildError.DuplicateResource(core, ResourceName.trusted("note.txt"), pos),
     BuildError.RemoteNeeds(core, Set(Need.Network, Need.Docker), pos),
+    BuildError.ToolchainLauncher(ship, core, ToolchainLauncherFault.NotMember, pos),
+    BuildError.ToolchainClient(ship, core, ToolchainClientFault.NotNative, pos),
   )
 
   val pluginGraphFaults: List[PluginGraphFault] = List(
@@ -821,6 +823,7 @@ object CodecSamples:
     AssembleError.Jar(JarError.Empty(path)),
     AssembleError.Pack(AssemblyError.NoClasses),
     AssembleError.NoModule("nope"),
+    AssembleError.NotAssembly(core),
     AssembleError.NoClasses(core, scala3),
     AssembleError.Io(path),
   )

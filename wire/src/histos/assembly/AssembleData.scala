@@ -13,6 +13,7 @@ enum AssembleError:
   case Jar(error: JarError)
   case Pack(error: AssemblyError)
   case NoModule(name: String)
+  case NotAssembly(module: ProjectName)
   case NoClasses(module: ProjectName, version: ScalaVersion)
   case Io(path: Path)
 
@@ -23,6 +24,7 @@ enum AssembleError:
     case Jar(error)                 => error.message
     case Pack(error)                => error.message
     case NoModule(name)             => s"'$name' is not a module"
+    case NotAssembly(module)        => s"'${module.value}' does not publish an assembly"
     case NoClasses(module, version) =>
       s"'${module.value}' has no ${version.value} classes"
     case Io(path) => s"could not write $path"

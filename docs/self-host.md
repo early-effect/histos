@@ -1,6 +1,6 @@
 # How Histos builds Histos
 
-This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is the plan that replaces most of it. The toolchain moves onto the ship row, and `publish local` installs a local toolchain. `assembly` stays the fat-jar verb. The Ship row changes what that verb does. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
+This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is the plan that replaces most of it. The toolchain is on the ship row. `publish local` still installs nothing, and that install is the Dist layer. `assembly` is the fat-jar verb and takes module names. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
 
 ## The pin is the builder
 
@@ -19,7 +19,7 @@ The engine laws read compilers and other locked tools from the Coursier cache of
 
 ## A local assembly
 
-`./histos assembly` compiles `app` and its upstream modules with the running jar and writes `dist/histos.jar`, with the api packed at `bootstrap/histos-api.jar`. The default path also writes `.histos/assembly.sha256`. The same run writes the ship's snapshot id into `target/unmanaged/wire/src/histos/Toolchain.scala` and compiles it in.
+`./histos assembly app` compiles that module and the modules it depends on, and writes the module's asset. For this repository that path is `dist/histos.jar`. When `app` is the ship's launcher, the jar packs the ship's library members at `bootstrap/histos-api.jar` and writes `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. No source file carries the commit. The command does not write `.histos/assembly.sha256`. An empty argument list is an error that names the assembly modules.
 
 The repository `./histos` is rendered by `workflow --update` from the ship number. It uses `HISTOS_ASSEMBLY` or `dist/histos.jar` when that jar's checksum matches `.histos/assembly.sha256`, and fails on a mismatch. With no local jar, it runs the installed shim. With a local jar and an executable `dist/histos-client`, it runs that client.
 
@@ -44,13 +44,13 @@ toolchain is 0.2.10-7230ba21293f-SNAPSHOT; this checkout would publish 0.3.0-1b8
 - `<timestamp>-histos.jar`
 - `<timestamp>-client-<platform>` for each file under `dist/clients/client-<platform>/histos-client`
 
-The ship asks for clients with `.clients(ClientBuilds.ReleasesAndSnapshots)`, so the publish refuses when no client file is present. A Mac links only `macos-aarch64`, so copy `dist/histos-client` to `dist/clients/client-macos-aarch64/histos-client` first. A laptop publish then has no Linux client, and CI on that pin runs `java -jar`. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
+The ship names `.toolchain(launcher = app, client = client)`, so a publish of this ship expects a client for every dist platform. A platform with no file is omitted from the manifest, and none at all is refused before a token. A Mac links only `macos-aarch64` until the container item, so copy `dist/histos-client` to `dist/clients/client-macos-aarch64/histos-client` first. A laptop publish then has no Linux client, and CI on that pin runs `java -jar`. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
 
-`histos-snapshots.yml` is the same publish on GitHub runners. It is dispatch only. It links both clients on their own runners, assembles, and publishes with `HISTOS_BRANCH=default`. A laptop publish also moves the shared pointer.
+`histos-snapshots.yml` is the same publish on GitHub runners. It is dispatch only. A toolchain ship links both clients on their own runners, assembles the launcher, and publishes with `HISTOS_BRANCH=default`. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
 
 ## Releases
 
-`gh workflow run histos-release.yml --ref main` publishes the ship to Central. Then it assembles the jar, links both clients on Ubuntu and macOS with Temurin 25, and uploads the jar, the clients, the manifest, and the shim to `dist`. After the release is on Central, `histos bump` moves `.next`.
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. A toolchain ship then assembles the launcher, links both clients on Ubuntu and macOS with Temurin 25, and uploads the jar, the clients, the manifest, and the shim to `dist`. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
 
 ## The other self-host commands
 

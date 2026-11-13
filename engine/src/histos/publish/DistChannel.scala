@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.plugin.RepoPath
 import histos.version.{Revision, ShipName}
-import histos.{ClientBuilds, Module, ProjectGraph, ProjectName}
+import histos.{Module, ProjectGraph, ProjectName}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -22,9 +22,9 @@ final case class ChannelPlan(
 
 /** The shim reads `channel-<version>` from the existing `dist` release for a pin that ends in `-SNAPSHOT`. The body is
   * the timestamp Maven stored for that coordinate. The manifest, the jar, and any clients use that same timestamp. A
-  * stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel. A ship whose
-  * snapshots build clients reads each linked binary from [[DistLayout.builtClient]]. A platform this publish did not
-  * link is omitted. None at all is refused before a token.
+  * stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel. A ship that
+  * names `.toolchain` reads each linked binary from [[DistLayout.builtClient]]. A platform this publish did not link is
+  * omitted. None at all is refused before a token.
   */
 object DistChannel:
   val Tag: String = "dist"
@@ -143,9 +143,9 @@ object DistChannel:
             case _                    => Nil
 
   private def snapshotClients(graph: ProjectGraph, ship: ShipName): List[DistPlatform] =
-    graph.catalog.get(ship).map(_.clients) match
-      case Some(ClientBuilds.ReleasesAndSnapshots) => DistPlatform.values.toList
-      case Some(ClientBuilds.Releases) | None      => Nil
+    graph.catalog.get(ship).flatMap(_.toolchain) match
+      case Some(_) => DistPlatform.values.toList
+      case None    => Nil
 
   private def channel(revision: String): Boolean =
     Revision.parse(revision) match

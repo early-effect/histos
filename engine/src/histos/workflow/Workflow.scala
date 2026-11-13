@@ -2,7 +2,7 @@ package histos.workflow
 
 import histos.doctor.Suggest
 import histos.plugin.{CiExtra, CiHeader}
-import histos.program.ClientBinary
+import histos.assembly.AssemblyPath
 import histos.publish.{DistLayout, DistPlatform}
 import histos.resolve.PlatformToken
 import histos.schedule.{CacheConfig, CacheNamespace}
@@ -13,7 +13,6 @@ import histos.{
   Aggregate,
   Axis,
   BuildError,
-  ClientBuilds,
   CoverageFloors,
   CoverageJob,
   Formatting,
@@ -196,9 +195,10 @@ object Workflow:
           module.platforms.all.contains(Platform.Native)
       val linux =
         if native then List(s"LLVM-$version-Linux-X64.tar.xz") else Nil
-      val client = installShip(graph, graph.catalog.ships) match
-        case None    => Nil
-        case Some(_) => DistPlatform.values.toList.map(platform => llvmArchive(version, clientHost(platform)))
+      val client =
+        if graph.catalog.ships.exists(_.toolchain.isDefined) then
+          DistPlatform.values.toList.map(platform => llvmArchive(version, clientHost(platform)))
+        else Nil
       (linux ++ client).distinct
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
@@ -339,8 +339,8 @@ object Workflow:
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. The publish step sets `HISTOS_SESSION` to `release`, then lists
-    * `secretNames` in that order. A release ship that has a native client then links that client and uploads the
-    * install files to the existing `dist` release.
+    * `secretNames` in that order. A ship that names `.toolchain` then links that client and uploads the install files
+    * to the existing `dist` release.
     */
   private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Either[CiError, Option[RenderedWorkflow]] =
     graph.catalog.ships match
@@ -348,8 +348,8 @@ object Workflow:
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
   /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
-    * list emits nothing, so update deletes a stale copy. A ship that asks for snapshot clients and is not the install
-    * ship fails the render, because no job would link them.
+    * list emits nothing, so update deletes a stale copy. A toolchain ship links every dist platform. Two toolchain
+    * ships, or one toolchain ship with no LLVM pin, fail the render.
     */
   private def snapshotWorkflow(graph: ProjectGraph): Either[CiError, Option[RenderedWorkflow]] =
     snapshotLink(graph).map: link =>
@@ -358,24 +358,15 @@ object Workflow:
       else None
 
   private def snapshotLink(graph: ProjectGraph): Either[CiError, SnapshotLink] =
-    val install = installShip(graph, graph.catalog.ships)
-    graph.catalog.ships.filter(asksSnapshotClients).filterNot(ship => install.exists(_.ship.name == ship.name)) match
-      case ship :: _ => Left(CiError.SnapshotClients(ship.name))
-      case Nil       =>
-        install.filter(found => asksSnapshotClients(found.ship)) match
-          case None        => Right(SnapshotLink.JarOnly)
-          case Some(found) =>
-            clientHosts(found.llvm.value).map: hosts =>
-              SnapshotLink.WithClients(clientJob(graph, Nil, found.llvm.value, hosts))
+    toolchain(graph).flatMap:
+      case None        => Right(SnapshotLink.JarOnly)
+      case Some(found) =>
+        clientHosts(found.llvm.value).map: hosts =>
+          SnapshotLink.WithClients(clientJob(graph, Nil, found.llvm.value, hosts))
 
-  private def asksSnapshotClients(ship: Ship): Boolean =
-    ship.clients match
-      case ClientBuilds.Releases             => false
-      case ClientBuilds.ReleasesAndSnapshots => true
-
-  /** Assembly always runs. The channel reads the asset file, and `./histos assembly` writes it. `HISTOS_BRANCH` is
-    * `default` so the pointer moves from any ref. With clients, the publish job waits for the client matrix and
-    * downloads each artifact where `publish snapshots` reads it.
+  /** Assembly writes each asset, and the launcher when the ship names one. The channel reads the asset file.
+    * `HISTOS_BRANCH` is `default` so the pointer moves from any ref. With clients, the publish job waits for the client
+    * matrix and downloads each artifact where `publish snapshots` reads it.
     */
   private def snapshotDocument(graph: ProjectGraph, link: SnapshotLink): String =
     val (clients, needs, grant, fetch) = link match
@@ -399,9 +390,7 @@ object Workflow:
       "      contents: write",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "snapshots") ++ List(
-      s"      - run: ${quote("./histos assembly")}"
-    ) ++ fetch ++ List(
+    ) ++ coursierCli(graph, "snapshots") ++ assemblyStep(graph) ++ fetch ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
       "        env:",
       "          HISTOS_SESSION: snapshot",
@@ -430,26 +419,26 @@ object Workflow:
       case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument(graph)))
 
   private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): Either[CiError, String] =
-    val install = installShip(graph, ships)
-    val lines   = List(
-      "name: release",
-      "on:",
-      "  workflow_dispatch:",
-      "permissions:",
-      "  contents: read",
-      "jobs:",
-    ) ++ ships.flatMap(ship =>
-      releaseJob(
-        graph,
-        ship,
-        sona,
-        if install.exists(_.ship.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
+    toolchain(graph).flatMap: install =>
+      val lines = List(
+        "name: release",
+        "on:",
+        "  workflow_dispatch:",
+        "permissions:",
+        "  contents: read",
+        "jobs:",
+      ) ++ ships.flatMap(ship =>
+        releaseJob(
+          graph,
+          ship,
+          sona,
+          if install.exists(_.ship.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
+        )
       )
-    )
-    install match
-      case None        => Right(lines.mkString("\n") + "\n")
-      case Some(found) =>
-        installJobs(graph, ships, found).map(extra => (lines ++ extra).mkString("\n") + "\n")
+      install match
+        case None        => Right(lines.mkString("\n") + "\n")
+        case Some(found) =>
+          installJobs(graph, ships, found).map(extra => (lines ++ extra).mkString("\n") + "\n")
 
   private def releaseJob(graph: ProjectGraph, ship: Ship, sona: Publishing, shape: ReleaseShape): List[String] =
     val name      = ship.name.value
@@ -468,7 +457,7 @@ object Workflow:
     ) ++ sona.secretNames.map(secret)
     shape match
       case ReleaseShape.Publish     => published
-      case ReleaseShape.WithInstall => published ++ jarArtifact ++ shimArtifact
+      case ReleaseShape.WithInstall => published ++ jarArtifact(graph, ship) ++ shimArtifact
 
   /** `upload-artifact` writes through the Actions API. A permissions block that omits `actions` sets it to none. */
   private def releasePermissions(shape: ReleaseShape): List[String] =
@@ -480,33 +469,60 @@ object Workflow:
           "      contents: read",
         )
 
-  /** The assembly the install manifest names. It is built after the portal upload, on the warm workspace. */
-  private def jarArtifact: List[String] =
-    List(
-      s"      - run: ${quote("./histos assembly")}",
-      s"      - uses: ${ActionPins.uploadArtifact.line}",
-      "        with:",
-      "          name: histos-jar",
-      "          path: dist/histos.jar",
-      "          if-no-files-found: error",
-    )
+  /** The launcher jar. Built after the portal upload, on the warm workspace. */
+  private def jarArtifact(graph: ProjectGraph, ship: Ship): List[String] =
+    ship.toolchain match
+      case None         => Nil
+      case Some(linked) =>
+        val shown = modulePath(graph, linked.launcher)
+        List(
+          s"      - run: ${quote(s"./histos assembly ${linked.launcher.value}")}",
+          s"      - uses: ${ActionPins.uploadArtifact.line}",
+          "        with:",
+          "          name: histos-jar",
+          s"          path: $shown",
+          "          if-no-files-found: error",
+        )
 
-  /** The ship whose publishes link the native client, and the LLVM revision that links it. */
+  /** The one toolchain ship, and the LLVM revision that links its client. */
   private final case class Install(ship: Ship, llvm: ToolRevision)
 
-  /** One non-snapshot ship that names an asset, a native client the launcher can exec, and an LLVM pin. */
-  private def installShip(graph: ProjectGraph, ships: List[Ship]): Option[Install] =
-    graph.runnerTools.llvm match
-      case Some(llvm) if ClientBinary.present(graph) =>
-        ships.filter(ship => releaseVersion(ship) && assetMember(graph, ship)) match
-          case ship :: Nil => Some(Install(ship, llvm))
-          case _           => None
-      case _ => None
+  /** One ship with `.toolchain` and an LLVM pin. None when no ship names a toolchain. Two ships, or a ship with no LLVM
+    * pin, fail.
+    */
+  private def toolchain(graph: ProjectGraph): Either[CiError, Option[Install]] =
+    graph.catalog.ships.filter(_.toolchain.isDefined) match
+      case Nil         => Right(None)
+      case ship :: Nil =>
+        graph.runnerTools.llvm match
+          case None       => Left(CiError.SnapshotClients(ship.name))
+          case Some(llvm) => Right(Some(Install(ship, llvm)))
+      case ship :: _ => Left(CiError.SnapshotClients(ship.name))
 
-  /** The catalog number is the next release. A snapshot is a session, not a catalog row. */
-  private def releaseVersion(ship: Ship): Boolean =
-    ship match
-      case _: Ship.Line => true
+  private def assemblyStep(graph: ProjectGraph): List[String] =
+    assemblyModules(graph) match
+      case Nil   => Nil
+      case names =>
+        List(s"      - run: ${quote(s"./histos assembly ${names.mkString(" ")}")}")
+
+  private def assemblyModules(graph: ProjectGraph): List[String] =
+    val assets = graph.catalog.ships.flatMap: ship =>
+      ship.members.toList.flatMap: name =>
+        graph.get(name) match
+          case Some(module: Module) if module.asset.isDefined => List(name.value)
+          case _                                              => Nil
+    val launchers = graph.catalog.ships.flatMap(_.toolchain.toList.map(_.launcher.value))
+    (assets ++ launchers).distinct
+
+  private def modulePath(graph: ProjectGraph, name: ProjectName): String =
+    graph.get(name) match
+      case Some(module: Module) => AssemblyPath.relative(module)
+      case _                    => s"target/assembly/${name.value}.jar"
+
+  private def jarBase(shown: String): String =
+    shown.split('/').toList.reverse match
+      case name :: _ => name
+      case Nil       => shown
 
   private def shipVersion(ship: Ship): String =
     ship match
@@ -521,9 +537,13 @@ object Workflow:
   private def installJobs(graph: ProjectGraph, ships: List[Ship], install: Install): Either[CiError, List[String]] =
     val revision = install.llvm.value
     val needed   = ships.map(row => s"release-${row.name.value}")
-    clientHosts(revision).map: hosts =>
-      clientJob(graph, needed, revision, hosts) ++
-        distJob(graph, shipVersion(install.ship))
+    install.ship.toolchain match
+      case None         => Left(CiError.SnapshotClients(install.ship.name))
+      case Some(linked) =>
+        val jarName = jarBase(modulePath(graph, linked.launcher))
+        clientHosts(revision).map: hosts =>
+          clientJob(graph, needed, revision, hosts) ++
+            distJob(graph, shipVersion(install.ship), jarName)
 
   /** The runner that links one platform's client, and the LLVM release name for that runner. */
   private final case class ClientHost(runner: String, archive: String)
@@ -653,7 +673,7 @@ object Workflow:
       "          fi",
     )
 
-  private def distJob(graph: ProjectGraph, version: String): List[String] =
+  private def distJob(graph: ProjectGraph, version: String, jarName: String): List[String] =
     List(
       "  install:",
       "    needs: client",
@@ -672,7 +692,7 @@ object Workflow:
       "      - run: |",
       "          set -eu",
       s"          version=$version",
-      "          jar=dist-in/histos-jar/histos.jar",
+      s"          jar=dist-in/histos-jar/$jarName",
       "          linux=dist-in/client-linux-x86_64/histos-client",
       "          mac=dist-in/client-macos-aarch64/histos-client",
       "          sha() { sha256sum \"$1\" | awk '{print $1}'; }",

@@ -154,7 +154,7 @@ enum Call derives JsonCodec:
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case Format(targets: FormatTargets, mode: FormatMode)
-  case Assembly(destination: Option[String])
+  case Assembly(modules: List[String])
   case Clean(projects: List[ProjectName], extent: CleanExtent)
   case Reload
 

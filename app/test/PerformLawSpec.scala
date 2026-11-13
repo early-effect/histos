@@ -264,7 +264,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("run", Call.Run("api", None), true),
     ("task", Call.Task("demo/pack", PluginArgs.empty), true),
     ("workflow", Call.Workflow(WorkflowAction.Check), true),
-    ("assembly", Call.Assembly(None), true),
+    ("assembly", Call.Assembly(Nil), true),
     ("format", Call.Format(FormatTargets.Build, FormatMode.Write), true),
     ("preview compile", Call.PreviewCompile(Nil), true),
     ("preview test", Call.PreviewTest(Nil, Nil, TestMode.Run), true),

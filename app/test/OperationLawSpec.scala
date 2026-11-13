@@ -111,7 +111,7 @@ object OperationLawSpec extends ZIOSpecDefault:
           Command.Clean(Nil, CleanExtent.Full)     -> Some(Call.Clean(Nil, CleanExtent.Full)),
           Command.Plugin(plugin, PluginArgs.empty) -> None,
           Command.Version                          -> None,
-          Command.Assembly(None)                   -> None,
+          Command.Assembly(Nil)                    -> None,
           Command.Cancel(RunId("run-1"))           -> None,
           Command.Graph                            -> None,
         )

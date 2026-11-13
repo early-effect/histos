@@ -294,7 +294,7 @@ These are true today and tracked:
 
 ## Building Histos
 
-Histos builds itself. `histos assembly` writes the local jar, and `histos portal` rehearses a release. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
+Histos builds itself. `histos assembly app` writes the launcher jar, and `histos portal` rehearses a release. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
 
 ## License
 

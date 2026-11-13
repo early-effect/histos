@@ -171,8 +171,8 @@ object Perform:
             held(build => follow(Calls.drop(repo, build.graph, machine, id.value, say)))
           case Call.PublishAssets(tokens) =>
             held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
-          case Call.Assembly(destination) =>
-            held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
+          case Call.Assembly(modules) =>
+            held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
           case Call.Run(id, platform) =>
             held(build =>
               follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say, edges.compiled)))

@@ -3,7 +3,7 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.{BuildError, ClientBuilds, HttpUrl, PomText, ProjectName, SourcePos}
+import histos.{BuildError, HttpUrl, PomText, ProjectName, SourcePos}
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
 opaque type ShipName = String
@@ -52,6 +52,9 @@ private object ShipNameMacro:
             quotes.reflect.report.errorAndAbort(error.message, raw)
           case Right(_) => '{ ShipName.trusted(${ Expr(value) }) }
 
+/** The launcher and the native client one ship publishes. Absent means this ship publishes no client. */
+final case class ShipToolchain(launcher: ProjectName, client: ProjectName)
+
 /** One catalog row. The number is the next release. Sessions derive `-ci`, the snapshot, and the release. Description
   * and url replace the organization's when this ship sets them.
   */
@@ -62,7 +65,7 @@ enum Ship:
       modules: ::[ProjectName],
       described: Option[PomText] = None,
       located: Option[HttpUrl] = None,
-      builds: ClientBuilds = ClientBuilds.Releases,
+      linked: Option[ShipToolchain] = None,
   )
 
   def name: ShipName = this match
@@ -77,8 +80,8 @@ enum Ship:
   def url: Option[HttpUrl] = this match
     case line: Line => line.located
 
-  def clients: ClientBuilds = this match
-    case line: Line => line.builds
+  def toolchain: Option[ShipToolchain] = this match
+    case line: Line => line.linked
 end Ship
 
 /** How a build versions its ships. Empty is an application. SNAPSHOT never appears here. */

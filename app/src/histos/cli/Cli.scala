@@ -74,7 +74,7 @@ enum Command:
   case Watch(command: Command, args: List[String])
   case Compile(projects: List[ProjectName])
   case Clean(projects: List[ProjectName], extent: histos.server.CleanExtent)
-  case Assembly(destination: Option[String])
+  case Assembly(modules: List[String])
   case PublishLocal(tokens: List[histos.publish.PublishToken])
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(automatic: Boolean, tokens: List[String])
@@ -269,7 +269,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly [path] | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly <module> ... | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -656,8 +656,8 @@ object Cli:
       case Command.Compile(projects)       => compile(repo, apiJar, projects)
       case Command.Clean(projects, extent) =>
         clean(repo, apiJar, projects, extent)
-      case Command.Assembly(destination) => assembly(repo, apiJar, destination)
-      case Command.PublishLocal(tokens)  =>
+      case Command.Assembly(modules)    => assembly(repo, apiJar, modules)
+      case Command.PublishLocal(tokens) =>
         publishLocal(repo, apiJar, tokens)
       case Command.PublishSnapshots(tokens) =>
         publishSnapshots(repo, apiJar, tokens)
@@ -1340,9 +1340,9 @@ object Cli:
   private def assembly(
       repo: Path,
       apiJar: Path,
-      destination: Option[String],
+      modules: List[String],
   ): URIO[Local, Completed] =
-    val call = Call.Assembly(destination)
+    val call = Call.Assembly(modules)
     attach(repo, call, locally(repo, apiJar, call))
 
   /** Diagnostics are already on the console. A compile failure keeps the one-line summary here.
@@ -2312,8 +2312,8 @@ object Cli:
                   ),
               )
         )
-      case Command.Assembly(destination) =>
-        served(repo, Call.Assembly(destination))
+      case Command.Assembly(modules) =>
+        served(repo, Call.Assembly(modules))
       case Command.PublishLocal(tokens) =>
         served(repo, Call.PublishLocal(tokens))
       case Command.PublishSnapshots(tokens) =>
