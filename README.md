@@ -252,7 +252,7 @@ Compile and package are content-addressed. The content store is `~/.cache/histos
 
 - The API digest is a compiled module's public signature. A comment or a method body does not change it, so a downstream compile hits. A public signature change runs that compile.
 - The product digest is the class bytes with jar timestamps, line numbers, and the `TASTY` attribute taken out. Packaging keys on it.
-- `testQuick` stamps include the upstream API digest.
+- `testQuick` stamps include the upstream API digest, and hash each class a suite uses without its line numbers or its `TASTY` attribute, so a comment does not run the suite again.
 - `histos cache path` prints the store, `cache list` prints each digest and its size, and `cache clean` removes entries older than 30 days that no project keeps. `--dry-run` names them and keeps them.
 
 A remote cache speaks the Bazel remote cache protocol (bazel-remote or anything compatible). Today it serves plugin tasks only. `HISTOS_CACHE_URI` selects it: `http` and `https` use HTTP, `grpc` is plaintext gRPC, and `grpcs` is TLS. Unset or blank is off. A bad value fails and does not fall back to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`, and `HISTOS_CACHE_NAMESPACE` is `main` unless it names `pr/<n>` or `dev/<name>`. A lookup tries this namespace, then `main`, then the local store, and then runs the action. A remote that times out is a miss: the action runs, and a store the remote did not take is skipped. A gRPC call times out after 30 seconds with nothing moving, and HTTP uses its client's connect and read timeouts. Any other remote failure stops the action. `histos cache promote --from pr/12 --to main` copies an index over HTTP, and reports `remote cache is not configured` when the URI is unset.

@@ -263,7 +263,7 @@ object SuiteLawSpec extends ZIOSpecDefault:
             ),
     ),
     suite("a suite stamp is the referenced closure")(
-      test("a line number moves the stamp, an unreferenced class does not, and a missing suite is none"):
+      test("a line number keeps the stamp, closure code moves it, other code does not, and a missing suite is none"):
         Workspace
           .work("histos-stamp")
           .flatMap: root =>
@@ -276,22 +276,22 @@ object SuiteLawSpec extends ZIOSpecDefault:
             val other   = classes.resolve("demo/Other.class")
             val bad     = classes.resolve("demo/Bad.class")
             for
-              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 1))
-              _       <- writeBytes(used, referenced("demo/Used", Nil, 1))
-              _       <- writeBytes(alias, referenced("demo/Alias", Nil, 1))
-              _       <- writeBytes(module, referenced("demo/Alias$", Nil, 1))
-              _       <- writeBytes(other, referenced("demo/Other", Nil, 1))
+              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 1, 1))
+              _       <- writeBytes(used, referenced("demo/Used", Nil, 1, 1))
+              _       <- writeBytes(alias, referenced("demo/Alias", Nil, 1, 1))
+              _       <- writeBytes(module, referenced("demo/Alias$", Nil, 1, 1))
+              _       <- writeBytes(other, referenced("demo/Other", Nil, 1, 1))
               first   <- SuiteStamp.digest("demo.A", List(classes), cover)
               many    <- SuiteStamp.digests(List("demo.A", "missing"), List(classes), cover)
-              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 9))
+              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 9, 1))
               lines   <- SuiteStamp.digest("demo.A", List(classes), cover)
-              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 1))
-              _       <- writeBytes(other, referenced("demo/Other", Nil, 40))
+              _       <- writeBytes(suite, referenced("demo/A", List("demo/Used", "demo/Alias$"), 1, 1))
+              _       <- writeBytes(other, referenced("demo/Other", Nil, 1, 40))
               idle    <- SuiteStamp.digest("demo.A", List(classes), cover)
-              _       <- writeBytes(used, referenced("demo/Used", Nil, 4))
+              _       <- writeBytes(used, referenced("demo/Used", Nil, 1, 4))
               called  <- SuiteStamp.digest("demo.A", List(classes), cover)
-              _       <- writeBytes(used, referenced("demo/Used", Nil, 1))
-              _       <- writeBytes(alias, referenced("demo/Alias", Nil, 5))
+              _       <- writeBytes(used, referenced("demo/Used", Nil, 1, 1))
+              _       <- writeBytes(alias, referenced("demo/Alias", Nil, 1, 5))
               pulled  <- SuiteStamp.digest("demo.A", List(classes), cover)
               flags   <- SuiteStamp.digest("demo.A", List(classes), cover.copy(flags = List("b", "a")))
               flipped <- SuiteStamp.digest("demo.A", List(classes), cover.copy(flags = List("a", "b")))
@@ -302,7 +302,7 @@ object SuiteLawSpec extends ZIOSpecDefault:
               broken  <- SuiteStamp.digest("demo.A", List(classes), cover).either
             yield assertTrue(
               first.isDefined,
-              lines != first,
+              lines == first,
               idle == first,
               called != first,
               pulled != first,
@@ -313,6 +313,32 @@ object SuiteLawSpec extends ZIOSpecDefault:
               many.get("demo.A") == first.map(Some(_)),
               broken == Left(StampError.Class(bad)),
             )
+      ,
+      test("in one walk of two suites, a class only one suite reaches moves only that suite's stamp"):
+        Workspace
+          .work("histos-stamp-two")
+          .flatMap: root =>
+            val classes = root.resolve("classes")
+            val cover   = SuiteStamp.Cover(Nil, Nil, "21", Nil, Nil)
+            val only    = classes.resolve("demo/Only.class")
+            val both    = List("demo.A", "demo.B")
+            val fromB   = List("demo/Used", "demo/Only")
+            for
+              _      <- writeBytes(classes.resolve("demo/A.class"), referenced("demo/A", List("demo/Used"), 1, 1))
+              _      <- writeBytes(classes.resolve("demo/B.class"), referenced("demo/B", fromB, 1, 1))
+              _      <- writeBytes(classes.resolve("demo/Used.class"), referenced("demo/Used", Nil, 1, 1))
+              _      <- writeBytes(only, referenced("demo/Only", Nil, 1, 1))
+              alone  <- SuiteStamp.digest("demo.A", List(classes), cover)
+              before <- SuiteStamp.digests(both, List(classes), cover)
+              _      <- writeBytes(only, referenced("demo/Only", Nil, 1, 7))
+              after  <- SuiteStamp.digests(both, List(classes), cover)
+            yield assertTrue(
+              alone.isDefined,
+              before.get("demo.A") == Some(alone),
+              after.get("demo.A") == before.get("demo.A"),
+              after.get("demo.B").flatten.isDefined,
+              after.get("demo.B") != before.get("demo.B"),
+            ),
     ),
   )
 
@@ -327,7 +353,8 @@ object SuiteLawSpec extends ZIOSpecDefault:
       testDependencies = tests,
     )
 
-  private def referenced(name: String, owners: List[String], line: Int): Array[Byte] =
+  /** `n` sits at `line`, pushes `value`, and calls each owner's `n`. */
+  private def referenced(name: String, owners: List[String], line: Int, value: Int): Array[Byte] =
     val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
     writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null)
     val method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "n", "()V", null, null)
@@ -335,6 +362,8 @@ object SuiteLawSpec extends ZIOSpecDefault:
     val start = new Label
     method.visitLabel(start)
     method.visitLineNumber(line, start)
+    method.visitIntInsn(Opcodes.BIPUSH, value)
+    method.visitInsn(Opcodes.POP)
     owners.foreach(owner => method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "n", "()V", false))
     method.visitInsn(Opcodes.RETURN)
     method.visitMaxs(0, 0)

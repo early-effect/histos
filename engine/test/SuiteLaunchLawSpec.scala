@@ -115,6 +115,31 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
             api == Left(ModuleTestError.Api(core, scala3, Platform.Jvm)),
           )
     ,
+    test("the stamp sorts its api lines, so two upstreams named in either order are one stamp"):
+      Workspace
+        .work("histos-launch-order")
+        .flatMap: repo =>
+          val alpha   = ProjectName.trusted("alpha")
+          val zeta    = ProjectName.trusted("zeta")
+          val classes = repo.resolve("classes")
+          for
+            _          <- writeApi(repo, alpha, "a" * 64)
+            _          <- writeApi(repo, zeta, "b" * 64)
+            _          <- writeBytes(classes.resolve("demo").resolve("A.class"), classBytes("demo/A"))
+            zetaFirst  <- ZIO.fromEither(SuiteCover.stored(repo, naming(zeta, alpha)))
+            alphaFirst <- ZIO.fromEither(SuiteCover.stored(repo, naming(alpha, zeta)))
+            one        <- digestOf("demo.A", classes, zetaFirst)
+            two        <- digestOf("demo.A", classes, alphaFirst)
+            _          <- writeApi(repo, zeta, "c" * 64)
+            changed    <- ZIO.fromEither(SuiteCover.stored(repo, naming(alpha, zeta)))
+            three      <- digestOf("demo.A", classes, changed)
+          yield assertTrue(
+            zetaFirst.apis == List(s"zeta ${"b" * 64}", s"alpha ${"a" * 64}"),
+            alphaFirst.apis == List(s"alpha ${"a" * 64}", s"zeta ${"b" * 64}"),
+            one == two,
+            three != one,
+          )
+    ,
     test("an empty suite name is a record error and a blank name is launched"):
       Workspace
         .work("histos-launch-name")
@@ -218,6 +243,17 @@ object SuiteLaunchLawSpec extends ZIOSpecDefault:
               run,
             )
             .either
+
+  /** `app` over the upstreams `alpha` and `zeta`, named in the order given. */
+  private def naming(first: ProjectName, second: ProjectName): SuiteAsk =
+    val app = bare(ProjectName.trusted("app")).copy(dependsOn = List(ProjectDep(first, None), ProjectDep(second, None)))
+    val ups = List(ProjectName.trusted("alpha"), ProjectName.trusted("zeta")).map(bare)
+    ask(app, ups :+ app, Platform.Jvm, toolLock, None)
+
+  /** The `api.sha256` a compile of `name` would leave. */
+  private def writeApi(repo: Path, name: ProjectName, sha: String): ZIO[Any, IoFailure, Unit] =
+    ZIO.foreachDiscard(GraphCompile.analysisDirOf(GraphCompile.classesDir(repo, name, scala3, Platform.Jvm))): dir =>
+      Workspace.writeString(dir.resolve(ApiDigest.fileName), sha + "\n")
 
   private def recording(
       seen: Ref[List[String]]

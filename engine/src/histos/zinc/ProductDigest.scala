@@ -38,7 +38,16 @@ object ProductDigest:
   val fileName: String = "product.sha256"
 
   def normalize(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
-    stripLines(bytes).flatMap(rewritePool)
+    rewrite(bytes): node =>
+      dropPositions(node)
+      dropPaths(node)
+    .flatMap(rewritePool)
+
+  /** The class without its positions: line-number tables, the source debug extension, and the `TASTY` attribute. A
+    * comment moves only these. A path constant stays as written, so a changed directory in it is a changed class.
+    */
+  def positionFree(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
+    rewrite(bytes)(dropPositions)
 
   def ofDirectory(root: Path): Either[CompileError, Sha256] =
     classFiles(root).flatMap: found =>
@@ -135,31 +144,39 @@ object ProductDigest:
     )
     head ++ len ++ bytes
 
-  private def stripLines(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
+  private def rewrite(bytes: Array[Byte])(edit: ClassNode => Unit): Either[ClassBytesError, Array[Byte]] =
     try
       val node = new ClassNode()
       new ClassReader(bytes).accept(node, 0)
-      node.sourceDebug = null
-      if node.sourceFile != null then node.sourceFile = leaf(node.sourceFile)
-      if node.attrs != null then
-        val kept = node.attrs.asScala.filterNot(_.`type` == "TASTY").asJava
-        node.attrs.clear()
-        node.attrs.addAll(kept)
-      node.methods.asScala.foreach: method =>
-        val insns = method.instructions
-        insns.toArray.foreach:
-          case line: LineNumberNode => insns.remove(line)
-          case ldc: LdcInsnNode     =>
-            ldc.cst match
-              case text: String => ldc.cst = scrubUtf8(text)
-              case _            => ()
-          case _ => ()
+      edit(node)
       val writer = new ClassWriter(0)
       node.accept(writer)
       Right(writer.toByteArray)
     catch
       case _: IllegalArgumentException | _: IndexOutOfBoundsException =>
         Left(ClassBytesError.Unreadable)
+
+  private def dropPositions(node: ClassNode): Unit =
+    node.sourceDebug = null
+    if node.attrs != null then
+      val kept = node.attrs.asScala.filterNot(_.`type` == "TASTY").asJava
+      node.attrs.clear()
+      node.attrs.addAll(kept)
+    node.methods.asScala.foreach: method =>
+      val insns = method.instructions
+      insns.toArray.foreach:
+        case line: LineNumberNode => insns.remove(line)
+        case _                    => ()
+
+  private def dropPaths(node: ClassNode): Unit =
+    if node.sourceFile != null then node.sourceFile = leaf(node.sourceFile)
+    node.methods.asScala.foreach: method =>
+      method.instructions.toArray.foreach:
+        case ldc: LdcInsnNode =>
+          ldc.cst match
+            case text: String => ldc.cst = scrubUtf8(text)
+            case _            => ()
+        case _ => ()
 
   private enum PoolEntry:
     case Utf8(raw: Array[Byte], text: String)
