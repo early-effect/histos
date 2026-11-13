@@ -99,6 +99,17 @@ object build extends HistosBuild:
 
 A Native module names the clang major it must find on `PATH` with `.clang(ClangMajor(21))`, and may name its Scala Native with `.nativeVersion(...)`. `.threadStack(ThreadStack("16m"))` is the stack every thread of its binary gets when Histos runs or tests it: a byte count, or a count of `k` or `m`, from `64k` to `1024m`. A module that names none gets `8m`. A Js or JVM module that names a Native setting does not compile.
 
+### Scala versions
+
+Each module names its own Scala versions in the second argument list: `module("lib", Jvm)(scala"3.10.0")`, or `module("lib", Jvm)(scala"3.10.1", scala"2.13.18")` to cross-build. A cell is one module, one Scala version, and one platform, and it compiles, caches, tests, and publishes on its own. Modules in one build may differ. A module reads each upstream at one cell, by the [Scala compatibility rules](https://docs.scala-lang.org/overviews/core/binary-compatibility-of-scala-releases.html):
+
+- The upstream's cell at the module's exact version, when it declares one.
+- Otherwise, for Scala 3, the newest Scala 3 cell whose TASTy the module's compiler accepts: any patch of its own minor, or an older minor. A module older than every upstream cell is `MissingUpstream`. Before the first compile, when no TASTy exists yet, it reads the newest declared cell no newer than itself.
+- For 2.13, the newest 2.13 patch the upstream declares.
+- Scala 3 and 2.13 cells never read each other, and a cell reads only the upstream's cell on its own platform.
+
+`UpstreamCells.read` is that choice. Compile, test, the quick stamp, run, assembly, publish, scaladoc, and BSP all use it.
+
 `Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`.
 
 ## Commands
