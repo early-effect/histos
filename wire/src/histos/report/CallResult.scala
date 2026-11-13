@@ -11,7 +11,7 @@ import histos.preview.PreviewError
 import histos.program.ProgramError
 import histos.publish.{LauncherError, LocalPublishError, ScriptError}
 import histos.resolve.ResolveError
-import histos.schedule.{CacheError, RemoteError}
+import histos.schedule.{CacheError, NamespaceError, RemoteError}
 import histos.select.SelectError
 import histos.task.TaskError
 import histos.testrun.{ModuleTestError, SuitePatternError, TestModeError, TestedCell}
@@ -158,6 +158,7 @@ enum Rejection:
   case RunId(error: TaskError)
   case TestMode(error: TestModeError)
   case CacheClean(error: CacheCleanModeError)
+  case Namespace(error: NamespaceError)
   case Flag(error: FlagNameError)
   case TaskPlatform(name: String)
   case CommandHelp(names: List[String])
@@ -186,6 +187,7 @@ enum Rejection:
     case RunId(error)           => error.message
     case TestMode(error)        => error.message
     case CacheClean(error)      => error.message
+    case Namespace(error)       => error.message
     case Flag(error)            => error.message
     case TaskPlatform(name)     => s"run $name does not take a platform"
     case FormatMode(raw)        => s"'$raw' is not a fmt mode. It is write or check"

@@ -114,6 +114,25 @@ private object CallJson:
 
 import CallJson.given
 
+/** `main`, `pr/<n>`, and `dev/<name>` are namespaces. Any other token is a module, and a slash that is neither reports
+  * the namespace error.
+  */
+enum ForgetFault:
+  case Namespace(error: histos.schedule.NamespaceError)
+  case Project(error: histos.ProjectNameError)
+
+enum ForgetTarget derives JsonCodec:
+  case Namespace(namespace: CacheNamespace)
+  case Module(module: histos.ProjectName)
+
+object ForgetTarget:
+  def from(raw: String): Either[ForgetFault, ForgetTarget] =
+    CacheNamespace.from(raw) match
+      case Right(namespace) => Right(ForgetTarget.Namespace(namespace))
+      case Left(namespace)  =>
+        if raw.contains('/') then Left(ForgetFault.Namespace(namespace))
+        else histos.ProjectName.from(raw).left.map(ForgetFault.Project(_)).map(ForgetTarget.Module(_))
+
 /** How a watch repeats. `After` runs the call and then polls. `Restart` polls while a program runs and replaces it. */
 enum WatchPolicy derives JsonCodec:
   case After
@@ -146,6 +165,8 @@ enum Call derives JsonCodec:
   case CacheList
   case CacheClean(mode: CacheCleanMode)
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
+  case CacheForget(target: ForgetTarget)
+  case CacheVerify(projects: List[ProjectName])
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
   case PreviewCompile(projects: List[ProjectName])

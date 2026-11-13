@@ -3,7 +3,7 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
 import histos.resolve.{DependencyLock, LockedArtifact, LockedTools, Repositories, Resolve}
-import histos.schedule.Digest
+import histos.schedule.{Digest, RemoteCache}
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.{Platform, ScalaVersion, ScalacFlags, ToolCatalog}
@@ -62,7 +62,8 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
               _     <- Workspace.writeString(source, "class A")
               _     <- Workspace.writeString(plain, "not a zip")
               found <- counted(
-                JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), List(plain), dir), Nil, _ => ())
+                JvmCompile
+                  .compilePooled(request(scala3, Platform.Jvm, List(source), List(plain), dir), Nil, _ => (), ZIO.unit)
               )
             yield assertTrue(
               found.result == Left(CompileError.Io(IoFailure(plain, IoFault.Stat))),
@@ -76,12 +77,13 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
         .flatMap: dir =>
           val source  = dir.resolve("Gone.scala")
           val program =
-            counted(JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), Nil, dir), Nil, _ => ())).map:
-              found =>
-                assertTrue(
-                  found.result == Left(CompileError.Io(IoFailure(source, IoFault.Read))),
-                  found.idle,
-                )
+            counted(
+              JvmCompile.compilePooled(request(scala3, Platform.Jvm, List(source), Nil, dir), Nil, _ => (), ZIO.unit)
+            ).map: found =>
+              assertTrue(
+                found.result == Left(CompileError.Io(IoFailure(source, IoFault.Read))),
+                found.idle,
+              )
           program.provideSomeLayer[TestEnvironment & Scope](gate)
     ,
     test("scala versions besides 3 and 2.13 refuse before a compiler fetch"):
@@ -105,7 +107,7 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
   )
 
   private val opened =
-    stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ CompilerStarts.live
+    stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ CompilerStarts.live ++ RemoteCache.off
 
   private val gate =
     opened >+> (
@@ -114,18 +116,18 @@ object JvmCompileLawSpec extends ZIOSpecDefault:
       ) ++
         ZLayer.environment[
           Resolve & Stubbed[Resolve] & ContentStore & Stubbed[ContentStore] & Compilers & Stubbed[Compilers] &
-            CompilerStarts
+            CompilerStarts & RemoteCache
         ]
     )
 
   private final case class Counted(result: Either[CompileError, CompileOutput], idle: Boolean)
 
   private type Ready =
-    LockedTools & ContentStore & CompilerStarts & Compilers & Resolve & Stubbed[Resolve] & Stubbed[ContentStore] &
-      Stubbed[Compilers]
+    LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache & Resolve & Stubbed[Resolve] &
+      Stubbed[ContentStore] & Stubbed[Compilers]
 
   private def counted(
-      effect: ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput]
+      effect: ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput]
   ): ZIO[Ready, Nothing, Counted] =
     for
       _ <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.die(new IllegalStateException("fetched")))

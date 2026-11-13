@@ -962,7 +962,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "UnsupportedScala(version) | NoSources() | Outside(source,checkout) | Banned(path,ban) | " +
               "Failed(diagnostics) | Toolchain(miss) | Io(failure) | JsLibrary(miss) | " +
               "NativeFetch(error) | NativeOrigin(error) | NativeLibrary(text) | " +
-              "Stored(error) | NoNir(source)"
+              "Stored(error) | Remote(error) | NoNir(source)"
           ),
           """{"NoSources":{}}""",
           histos.zinc.CompileError.NoSources,
@@ -1124,7 +1124,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "BadDependency(organization,name,revision) | Credentials() | Io(path) | " +
               "Stock(message) | Classpath(error) | Runtime(error) | " +
               "Pack(module,version,platform,error) | " +
-              "MissingClient(ship,path)"
+              "MissingClient(ship,path) | Remote(error)"
           ),
           """{"NoOrganization":{}}""",
           histos.publish.LocalPublishError.NoOrganization,
@@ -1158,7 +1158,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "MissingUpstream(module,dependency,version) | Work(path) | Root(path) | " +
               "Runner(path) | LinkFailed(module,version,platform,detail) | " +
               "NoNode(module,version,miss) | Stamp(error) | Record(error) | " +
-              "Pattern(error) | Api(module,version,platform)"
+              "Pattern(error) | Api(module,version,platform) | Remote(error)"
           ),
           """{"Absent":{"module":"core"}}""",
           histos.testrun.ModuleTestError.Absent(core),
@@ -1425,7 +1425,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "Watch(detail) | RunFailed() | WatchStopped() | PreviewProjects() | " +
               "PreviewOperation(raw) | MissingRunName() | Parameter(error) | " +
               "ProjectName(error) | SuitePattern(error) | RunId(error) | " +
-              "TestMode(error) | CacheClean(error) | Flag(error) | " +
+              "TestMode(error) | CacheClean(error) | Namespace(error) | Flag(error) | " +
               "TaskPlatform(name) | CommandHelp(names) | FormatMode(raw) | FormatTargets() | FormatPath(raw) | Retired(word,use) | PublishToken(error)"
           ),
           """{"NotATool":{}}""",

@@ -2,13 +2,14 @@ package histos.schedule
 
 import heddle.client.Client
 import heddle.http.Url
+import histos.publish.UpgradeNotice
 
 import zio.{Scope, System, UIO, ZEnvironment, ZIO, ZLayer}
 
 /** `HISTOS_CACHE_URI` picks the client. Unset or blank is [[RemoteCache.unconfigured]] and opens nothing. `http` and
   * `https` are the heddle cache. `grpc` is plaintext and `grpcs` is TLS. `HISTOS_CACHE_MODE` is `read` unless it is
-  * `write`. `HISTOS_CACHE_NAMESPACE` is the existing namespace, and unset means `main`. A bad scheme, mode, namespace,
-  * or address fails. It does not fall through to off.
+  * `write`, and a laptop's `write` opens as `read`. Only CI stores. `HISTOS_CACHE_NAMESPACE` is the existing namespace,
+  * and unset means `main`. A bad scheme, mode, namespace, or address fails. It does not fall through to off.
   */
 object CacheConfig:
   val UriKey: String  = "HISTOS_CACHE_URI"
@@ -39,14 +40,17 @@ object CacheConfig:
         yield Some(Selected(target, mode, namespace))
 
   def open(env: Map[String, String]): ZIO[Scope, RemoteError, RemoteCache] =
+    ZIO.fromEither(decide(env)).flatMap(openSelected)
+
+  /** A purge client. The mode is write even on a laptop, and the namespace is the one named, not the process default.
+    * An unset URI fails [[RemoteError.Off]].
+    */
+  def openWriter(env: Map[String, String], namespace: CacheNamespace): ZIO[Scope, RemoteError, RemoteCache] =
     ZIO
-      .fromEither(decide(env))
+      .fromEither(locate(env))
       .flatMap:
-        case None                                              => ZIO.succeed(RemoteCache.unconfigured)
-        case Some(Selected(Target.Http(url), mode, namespace)) =>
-          client.flatMap(http => HttpCache.make(url, mode, namespace).provideEnvironment(ZEnvironment(http)))
-        case Some(Selected(grpc: Target.Grpc, mode, namespace)) =>
-          GrpcCache.open(grpc, GrpcChannel.Idle, mode, namespace)
+        case None         => ZIO.fail(RemoteError.Off)
+        case Some(target) => openSelected(Some(Selected(target, RemoteMode.Write, namespace)))
 
   /** Copy one HTTP index onto another. gRPC has no action-cache list, so promote names that limit and does not open a
     * second port. Unset stays off.
@@ -65,12 +69,27 @@ object CacheConfig:
       .mapError(error => RemoteError.Exchange(HttpCache.exchange(error)))
       .map(_.get[Client])
 
+  private def openSelected(selected: Option[Selected]): ZIO[Scope, RemoteError, RemoteCache] =
+    selected match
+      case None                                              => ZIO.succeed(RemoteCache.unconfigured)
+      case Some(Selected(Target.Http(url), mode, namespace)) =>
+        client.flatMap(http => HttpCache.make(url, mode, namespace).provideEnvironment(ZEnvironment(http)))
+      case Some(Selected(grpc: Target.Grpc, mode, namespace)) =>
+        GrpcCache.open(grpc, GrpcChannel.Idle, mode, namespace)
+
+  private def locate(env: Map[String, String]): Either[RemoteError, Option[Target]] =
+    blank(env.get(UriKey)) match
+      case None      => Right(None)
+      case Some(uri) => target(uri).map(Some(_))
+
+  /** `write` outside CI is `read`. A laptop stores only in its local cache. */
   private def modeOf(env: Map[String, String]): Either[RemoteError, RemoteMode] =
     blank(env.get(ModeKey)) match
       case None          => Right(RemoteMode.Read)
       case Some("read")  => Right(RemoteMode.Read)
-      case Some("write") => Right(RemoteMode.Write)
-      case Some(raw)     => Left(RemoteError.Mode(raw))
+      case Some("write") =>
+        Right(if UpgradeNotice.inCi(env) then RemoteMode.Write else RemoteMode.Read)
+      case Some(raw) => Left(RemoteError.Mode(raw))
 
   private def namespaceOf(env: Map[String, String]): Either[RemoteError, CacheNamespace] =
     blank(env.get(CacheNamespace.Key)) match

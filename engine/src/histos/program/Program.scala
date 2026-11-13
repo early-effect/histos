@@ -22,7 +22,7 @@ import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile, UpstreamCells}
-import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
+import histos.schedule.{Histos, Outcome, Parallelism, RemoteCache, StepFailure}
 import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
 import histos.{Aggregate, ClangPin, Dep, MainClass, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -47,7 +47,7 @@ object Program:
       choice: Option[Platform],
       report: CompileFeed => UIO[Unit],
       afterCompile: UIO[Unit],
-  ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, ProgramFeed] =
     ZStream.unwrap:
       for
         module <- ZIO.fromEither(locate(graph, name))
@@ -94,7 +94,7 @@ object Program:
       jdk: JdkRuntime,
       runtimes: Runtimes,
       report: CompileFeed => UIO[Unit],
-  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService, ProgramError, Path] =
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
     for
       module   <- ZIO.fromEither(locate(graph, ClientBinary.moduleName))
       main     <- ZIO.fromEither(module.application.toRight(ProgramError.NoMain(module.name)))
@@ -116,7 +116,7 @@ object Program:
       linked <- cells match
         case cell :: Nil =>
           linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes, store)
-            .provideSomeLayer[Resolve](zio.ZLayer.succeed(tools))
+            .provideSomeLayer[Resolve & RemoteCache](zio.ZLayer.succeed(tools))
         case _ =>
           module.versions.all match
             case version :: _ =>
@@ -141,7 +141,7 @@ object Program:
       binary: Binary,
       runtimes: Runtimes,
       store: ContentStore,
-  ): ZIO[Resolve & LockedTools, ProgramError, Path] =
+  ): ZIO[Resolve & LockedTools & RemoteCache, ProgramError, Path] =
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
     for
@@ -209,7 +209,7 @@ object Program:
   /** One cell's feeds as the program produces them. The run is a step, so it stays scheduled, and it hands each feed to
     * the stream as it happens. The run belongs to the stream's scope: ending the stream stops the program.
     */
-  private def live(run: CellRun): ZStream[Resolve & ResolutionService, ProgramError, ProgramFeed] =
+  private def live(run: CellRun): ZStream[Resolve & ResolutionService & RemoteCache, ProgramError, ProgramFeed] =
     ZStream.unwrapScoped:
       for
         queue <- Queue.unbounded[Take[ProgramError, ProgramFeed]]
@@ -221,7 +221,7 @@ object Program:
   private def runCell(
       run: CellRun,
       emit: ProgramFeed => UIO[Unit],
-  ): ZIO[Resolve & ResolutionService, ProgramError, Unit] =
+  ): ZIO[Resolve & ResolutionService & RemoteCache, ProgramError, Unit] =
     (for
       report   <- ZIO.service[ResolutionService]
       fresh    <- report.current
@@ -266,20 +266,20 @@ object Program:
         Step.local[Unit](info)(
           one(run)
             .runForeach(emit)
-            .provideSome[Resolve](
+            .provideSome[Resolve & RemoteCache](
               zio.ZLayer.succeed(tools)
             )
         )
       )
 
   private def execute[A](
-      goal: Step[Resolve, ProgramError, A]
-  ): ZIO[Resolve, ProgramError, A] =
+      goal: Step[Resolve & RemoteCache, ProgramError, A]
+  ): ZIO[Resolve & RemoteCache, ProgramError, A] =
     ZIO.scoped:
       ZIO
         .serviceWithZIO[Histos](_.start(goal))
         .flatMap(_.outcome)
-        .provideSome[Resolve & zio.Scope](Parallelism.live >>> Histos.live)
+        .provideSome[Resolve & RemoteCache & zio.Scope](Parallelism.live >>> Histos.live)
         .flatMap:
           case Outcome.Done(value)      => ZIO.succeed(value)
           case Outcome.Failed(failures) =>
@@ -331,7 +331,7 @@ object Program:
 
   private def one(
       run: CellRun
-  ): ZStream[Resolve & LockedTools, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & LockedTools & RemoteCache, ProgramError, ProgramFeed] =
     val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store) = run
     val env                                                                    = runtimes.env
     val modules      = graph.projects.collect { case item: Module => item }

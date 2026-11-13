@@ -1,9 +1,9 @@
 package histos.zinc
 
-import histos.cache.ContentStore
+import histos.cache.{ContentStore, ProductCache}
 import histos.jdk.JdkRuntime
 import histos.jdk.{Sha256, Sha256Digest}
-import histos.schedule.CacheError
+import histos.schedule.{CacheError, RemoteCache, RemoteError}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
 import histos.resolve.{LockedTools, ResolveError}
@@ -30,7 +30,7 @@ import xsbti.compile.{
   PreviousResult,
 }
 
-import zio.{Chunk, IO, UIO, ZIO}
+import zio.{Chunk, IO, UIO, ZIO, ZLayer}
 
 export histos.ScalacFlag
 export histos.ScalacFlags
@@ -176,15 +176,19 @@ object JvmCompile:
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else CompileReplay.isolated(compilePrepared(request, CellPlatform.Jvm, Nil, extra, hear))
+    else
+      CompileReplay.isolated(
+        compilePrepared(request, CellPlatform.Jvm, Nil, extra, hear)
+          .provideSomeLayer[LockedTools & ContentStore & CompilerStarts](RemoteCache.off)
+      )
 
   /** Uses the compiler service and the content store in the environment. The service keeps the pool. */
   private[histos] def compilePooled(
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-      admitted: UIO[Unit] = ZIO.unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+      admitted: UIO[Unit],
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
@@ -202,7 +206,7 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & RemoteCache, CompileError, CompileOutput] =
     ZIO.scoped(prepared(request, platform, plugins, extra, hear).provideSomeLayer(Compilers.live(1)))
 
   private def prepared(
@@ -211,10 +215,10 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, None))
+       else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, None, ZIO.unit))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -350,12 +354,12 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned(request)) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-         else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, Some(stdlib)))
+         else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, Some(stdlib), ZIO.unit))
 
   /** The key is [[CellTools.compile]]'s, the one recall checks. The request the compiler sees is that key's request. */
   private def invoke(
@@ -364,8 +368,8 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
-      admitted: UIO[Unit] = ZIO.unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+      admitted: UIO[Unit],
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     hashSources(request.checkout, request.sources)
       .flatMap(digest => CellTools.compile(platform, request, digest))
       .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted))
@@ -377,7 +381,7 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       admitted: UIO[Unit],
-  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val request = keyed.request
     val version = request.toolchain.version
     cell.series match
@@ -424,7 +428,10 @@ object JvmCompile:
           )
         yield compiled
 
-  /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores. */
+  /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores when the sources
+    * still match the key. A remote hit is installed first. A timeout is a miss. A download that does not match its
+    * digest fails.
+    */
   private def cached(
       request: CompileRequest,
       artifacts: CompilerArtifacts,
@@ -433,9 +440,11 @@ object JvmCompile:
       rows: List[CompileRow],
       key: Sha256,
       admitted: UIO[Unit],
-  ): ZIO[ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+  ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     for
       store  <- ZIO.service[ContentStore]
+      remote <- ZIO.service[RemoteCache]
+      _      <- ProductCache.stage(remote, store, key).mapError(carried)
       hit    <- CompileReplay.load(store, key, request)
       output <- hit match
         case Some(found) =>
@@ -444,13 +453,27 @@ object JvmCompile:
           for
             change  <- CompileInputs.explain(store, request.analysis, rows)
             written <- CompilerStarts.tick *>
-              ZIO
-                .serviceWithZIO[Compilers](_.compile(request, artifacts, extra, hear, key, admitted))
-                .tap: done =>
-                  CompileReplay.save(store, done.key, request) *>
-                    CompileInputs.remember(store, request.analysis, rows)
+              ZIO.serviceWithZIO[Compilers](_.compile(request, artifacts, extra, hear, key, admitted))
+            keep <- stable(request, rows)
+            _    <- ZIO.when(keep)(
+              CompileReplay.save(store, written.key, request) *>
+                ProductCache.publish(remote, store, written.key).mapError(carried) *>
+                CompileInputs.remember(store, request.analysis, rows)
+            )
           yield written.copy(miss = Some(change))
     yield output
+
+  /** The sources row, hashed again after the compiler returns. A missing row or a different digest is not stored. */
+  private def stable(request: CompileRequest, rows: List[CompileRow]): IO[CompileError, Boolean] =
+    rows.collectFirst { case CompileRow(CompileInput.Sources, value) => value } match
+      case None           => ZIO.succeed(false)
+      case Some(recorded) =>
+        sourceDigest(request.checkout, request.sources).map(_.value == recorded)
+
+  private def carried(error: RemoteError | CacheError): CompileError =
+    error match
+      case found: RemoteError => CompileError.Remote(found)
+      case found: CacheError  => CompileError.Stored(found)
 
   /** One compile against a pooled compiler. The analysis file is the previous result and the next one.
     */

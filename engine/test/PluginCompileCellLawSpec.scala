@@ -74,7 +74,8 @@ object PluginCompileCellLawSpec extends ZIOSpecDefault:
                 )
             program.provideSomeLayer[Resolve & Scope](
               ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
-                ResolutionService.pinned(closure.pinning(lawName))
+                ResolutionService.pinned(closure.pinning(lawName)) ++
+                histos.schedule.RemoteCache.off
             )
     ,
     test("a cell over an older upstream compiles, and its classpath names that upstream's own classes"):
@@ -106,7 +107,8 @@ object PluginCompileCellLawSpec extends ZIOSpecDefault:
                   .compile(session, PluginCells.Cell(law, newest, Platform.Jvm))
                   .either
                   .provideSomeLayer[Resolve & Scope](
-                    ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ResolutionService.pinned(pin)
+                    ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ResolutionService.pinned(pin) ++
+                      histos.schedule.RemoteCache.off
                   )
                 read <- PluginCells
                   .classpath(

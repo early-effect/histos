@@ -56,7 +56,9 @@ object GraphCellLawSpec extends ZIOSpecDefault:
               unknown <- GraphCompile
                 .cellFeed(dir, graph(scala3), List(missing -> scala3), Platform.Jvm, jdk, machine.native)
                 .runCollect
-                .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+                .provideSomeLayer[Resolve](
+                  ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ histos.schedule.RemoteCache.off
+                )
                 .either
               _     <- Workspace.createDirectories(parentOf(coreSrc))
               _     <- Workspace.createDirectories(parentOf(appSrc))
@@ -67,7 +69,9 @@ object GraphCellLawSpec extends ZIOSpecDefault:
                   GraphCompile.cellFeed(dir, graph(scala3), List(appName -> scala3), Platform.Jvm, jdk, machine.native)
                 )
                 .runCollect
-                .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+                .provideSomeLayer[Resolve](
+                  ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ histos.schedule.RemoteCache.off
+                )
                 .either
               coreClass = GraphCompile.classesDir(dir, coreName, scala3, Platform.Jvm).resolve("Core.class")
               appClass  = GraphCompile.classesDir(dir, appName, scala3, Platform.Jvm).resolve("App.class")

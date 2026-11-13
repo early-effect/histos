@@ -14,7 +14,7 @@ import histos.resolve.{
   Resolve,
   ResolveError,
 }
-import histos.schedule.{CacheError, Parallelism}
+import histos.schedule.{CacheError, Parallelism, RemoteCache}
 import histos.testrun.{ModuleTest, ModuleTestError, SessionFeed, TestFeed, TestMode, TestRun}
 import histos.toolchain.Runtimes
 import histos.workspace.{IoFailure, IoFault, Workspace}
@@ -32,12 +32,19 @@ final class Scenario private (
     env: ZEnvironment[Resolve & ContentStore & CompilerStarts],
     tools: DependencyLock,
     linker: LinkerStarts,
+    cache: Ref[RemoteCache],
 ):
+  /** The cache the next compile, test, run, or link reads. A laptop test leaves this unconfigured. */
+  def use(remote: RemoteCache): UIO[Unit] = cache.set(remote)
+
   /** Compiler starts that [[Checkout.compile]] counted. A test run's compiles keep their own count. */
   def starts: UIO[Int] = env.get[CompilerStarts].get
 
   /** Linker starts that [[Checkout.link]] counted. A restored binary does not tick. */
   def linkerStarts: UIO[Int] = linker.get
+
+  /** The store this scenario's compiles read. */
+  def store: ContentStore = env.get[ContentStore]
 
   /** Whether the scenario store holds a blob under `sha`. */
   def holds(sha: Sha256): IO[CacheError, Boolean] =
@@ -56,7 +63,7 @@ final class Scenario private (
       root <- Workspace.work("histos-scenario")
       _    <- Workspace.writeString(ResolutionService.file(root, build.resolution), DependencyLock.render(pin(build)))
       resident <- (Compilers.live(Parallelism.default.cpu) ++ CompileMemo.live).build
-    yield Checkout(root, build, env ++ resident, linker)
+    yield Checkout(root, build, env ++ resident, linker, cache)
 
   private def pin(build: ProjectGraph): DependencyLock =
     val cells = Resolve
@@ -74,10 +81,12 @@ object Scenario:
       linked  <- Ref.make(0)
       resolve <- ZIO.service[Resolve]
       closure <- ZIO.service[CompilerClosure]
+      cache   <- Ref.make[RemoteCache](RemoteCache.unconfigured)
     yield Scenario(
       ZEnvironment[Resolve, ContentStore, CompilerStarts](resolve, ContentStore.in(dir), CompilerStarts(count)),
       closure.lock,
       LinkerStarts(linked),
+      cache,
     )
 
 /** One work tree of one build. `compile` and `test` run it against the scenario store. `link` restores a stored native
@@ -88,7 +97,11 @@ final class Checkout private[histos] (
     build: ProjectGraph,
     env: ZEnvironment[Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo],
     linker: LinkerStarts,
+    cache: Ref[RemoteCache],
 ):
+  /** The build this checkout compiles. */
+  def graph: ProjectGraph = build
+
   def write(relative: String, text: String): IO[IoFailure, Unit] =
     Workspace.writeString(root.resolve(relative), text)
 
@@ -106,13 +119,18 @@ final class Checkout private[histos] (
 
   /** Every module of the build. Starts count toward [[Scenario.starts]]. */
   def compile: IO[GraphCompileError, Chunk[CompileFeed]] =
+    compileDuring(_ => ZIO.unit)
+
+  /** Compile, and run `inside` after the key is fixed and before the compiler sees the sources. */
+  def compileDuring(inside: ProjectName => UIO[Unit]): IO[GraphCompileError, Chunk[CompileFeed]] =
     for
       machine <- here
       jdk     <- GraphCompile.jdk(machine)
+      remote  <- cache.get
       feeds   <- GraphCompile
-        .consoleCounted(root, build, Nil, jdk, machine.native, None)
+        .consoleCounted(root, build, Nil, jdk, machine.native, None, inside)
         .runCollect
-        .provideEnvironment(env)
+        .provideEnvironment(env.add[RemoteCache](remote))
     yield feeds
 
   /** Every module's tests, on this checkout's compilers and memo, as the server's `test` runs them. A quick record is
@@ -124,11 +142,14 @@ final class Checkout private[histos] (
       jdk      <- GraphCompile.jdk(machine)
       runtimes <- Runtimes.read(machine, None)
       lock     <- Resolve.readLock(root)
+      remote   <- cache.get
       feeds    <- ModuleTest
         .sessionOn(TestRun(root, build, Nil, jdk, runtimes, mode))
         .collect { case SessionFeed.Test(feed) => feed }
         .runCollect
-        .provideLayer(ZLayer.succeedEnvironment(env) >+> ResolutionService.pinned(lock))
+        .provideLayer(
+          ZLayer.succeedEnvironment(env) ++ ZLayer.succeed(remote) >+> ResolutionService.pinned(lock)
+        )
     yield feeds
 
   /** The module's main, compiled and started, with each feed as the program produces it. */
@@ -139,9 +160,12 @@ final class Checkout private[histos] (
         jdk      <- GraphCompile.jdk(machine)
         runtimes <- Runtimes.read(machine, None)
         lock     <- Resolve.readLock(root)
+        remote   <- cache.get
       yield Program
         .console(root, build, name, jdk, runtimes, None, _ => ZIO.unit, ZIO.unit)
-        .provideLayer(ZLayer.succeedEnvironment(env) >+> ResolutionService.pinned(lock))
+        .provideLayer(
+          ZLayer.succeedEnvironment(env) ++ ZLayer.succeed(remote) >+> ResolutionService.pinned(lock)
+        )
 
   /** Needs `TestAspect.withLiveSystem`. */
   private def here: IO[GraphCompileError, Machine] =
@@ -177,14 +201,20 @@ final class Checkout private[histos] (
           NativeToolchain.of(module.nativeVersion.getOrElse(tools.catalog.native.revision), runtimes.native)
         )
         .mapError(LinkFault.Toolchain(_))
-      _    <- Workspace.recreate(work).mapError(LinkFault.Work(_))
-      path <- NativeLink
+      _      <- Workspace.recreate(work).mapError(LinkFault.Work(_))
+      remote <- cache.get
+      path   <- NativeLink
         .linkClasspath(
           NativeLinkRequest(major, toolchain, runtimes.env, work, jdk, binary, version),
           List(classes),
         )
         .provideEnvironment(
-          ZEnvironment[LockedTools, ContentStore, LinkerStarts](tools, env.get[ContentStore], linker)
+          ZEnvironment[LockedTools, ContentStore, LinkerStarts, RemoteCache](
+            tools,
+            env.get[ContentStore],
+            linker,
+            remote,
+          )
         )
         .mapError(LinkFault.Native(_))
       bytes <- ZIO

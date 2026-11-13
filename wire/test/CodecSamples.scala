@@ -228,6 +228,7 @@ object CodecSamples:
     CompileError.NativeOrigin(NativeToolchainError.Empty),
     CompileError.NativeLibrary("missing"),
     CompileError.Stored(CacheError.Io(io)),
+    CompileError.Remote(RemoteError.Off),
     CompileError.NoNir(path),
   )
 
@@ -586,6 +587,7 @@ object CodecSamples:
     ModuleTestError.Record(QuickError.Shape(path)),
     ModuleTestError.Pattern(SuitePatternError.Empty),
     ModuleTestError.Api(core, scala3, Platform.Native),
+    ModuleTestError.Remote(RemoteError.Off),
   )
 
   val programErrors: List[ProgramError] = List(
@@ -708,6 +710,7 @@ object CodecSamples:
     LocalPublishError.Runtime(noSources),
     LocalPublishError.Pack(core, scala3, Platform.Jvm, AssemblyError.NoClasses),
     LocalPublishError.MissingClient(ship, path),
+    LocalPublishError.Remote(RemoteError.Off),
   )
 
   val runMisses: List[RunMiss] = List(

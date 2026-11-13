@@ -36,7 +36,7 @@ object Perform:
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
           Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_) |
           Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewRun(_, _) =>
+          Call.PreviewRun(_, _) | Call.CacheVerify(_) =>
         true
       case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
         false
@@ -45,8 +45,8 @@ object Perform:
       case Call.Clean(_, _) | Call.PreviewClean(_, _) =>
         true
       case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.Reload | Call.Reboot(_) | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.Watch(_, _) |
-          Call.Bsp =>
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.CacheForget(_) |
+          Call.Watch(_, _) | Call.Bsp =>
         false
 
   /** Publish keeps the compile fault. Every other call reports a cell that ran, and a compile that never started is its
@@ -225,6 +225,10 @@ object Perform:
             Calls.cacheClean(mode, say)
           case Call.CachePromote(from, to) =>
             Calls.cachePromote(from, to, say)
+          case Call.CacheForget(target) =>
+            Calls.cacheForget(repo, target, say)
+          case Call.CacheVerify(projects) =>
+            held(build => follow(withJdk(jdk => Calls.cacheVerify(repo, build.graph, projects, jdk, machine, say))))
           case Call.Watch(inner, policy) =>
             edges.watch(inner, policy, say)
           case Call.Reload =>

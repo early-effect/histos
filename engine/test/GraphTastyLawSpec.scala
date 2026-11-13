@@ -69,7 +69,8 @@ object GraphTastyLawSpec extends ZIOSpecDefault:
                 )
                 .either
                 .provideSomeLayer[Resolve & Scope](
-                  ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ResolutionService.pinned(pinned)
+                  ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++ ResolutionService.pinned(pinned) ++
+                    histos.schedule.RemoteCache.off
                 )
               wrote <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
             yield

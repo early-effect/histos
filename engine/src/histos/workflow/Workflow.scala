@@ -5,7 +5,8 @@ import histos.plugin.{CiExtra, CiHeader}
 import histos.program.ClientBinary
 import histos.publish.{DistLayout, DistPlatform}
 import histos.resolve.PlatformToken
-import histos.schedule.CacheNamespace
+import histos.schedule.{CacheConfig, CacheNamespace}
+import histos.Promote
 import histos.version.{Catalog, Ship}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{
@@ -1021,7 +1022,9 @@ object Workflow:
       script,
     )).mkString("\n")
 
-  /** A push to the default branch compiles and saves the store. The suite does not run on that push. */
+  /** A push to the default branch fills `main` and saves the store. Rebuild compiles. CopyIndex copies the pull-request
+    * index. The suite does not run on that push.
+    */
   private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph): String =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
@@ -1038,8 +1041,9 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "cache-seed") ++ prepare ++ storeRestore ++ List(
-      "      - run: \"./histos compile\""
+    ) ++ coursierCli(graph, "cache-seed") ++ prepare ++ storeRestore ++ cacheWrite(
+      "main",
+      seedCommand(graph.promote),
     ) ++ storeSave).mkString("\n")
 
   private def testJob(jobs: List[TestJob], graph: ProjectGraph): List[String] =
@@ -1205,13 +1209,27 @@ object Workflow:
   private val cacheNamespace: String =
     "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
 
+  /** `Rebuild` compiles into `main`. `CopyIndex` copies the pull-request index and does not compile. */
+  private def seedCommand(promote: Promote): String =
+    promote match
+      case Promote.Rebuild   => "./histos compile"
+      case Promote.CopyIndex =>
+        "./histos cache promote --from pr/${{ github.event.pull_request.number }} --to main"
+
+  /** A writing step. The namespace is the caller's. The mode is write, and a laptop that copies this file still opens
+    * as read.
+    */
+  private def cacheWrite(namespace: String, command: String): List[String] =
+    List(
+      s"      - run: ${quote(command)}",
+      "        env:",
+      s"          ${CacheNamespace.Key}: ${quote(namespace)}",
+      s"          ${CacheConfig.ModeKey}: ${quote("write")}",
+    )
+
   private def testRun(command: String): List[String] =
     val narrowed = s"$command --affected '$${{ needs.affected.outputs.modules }}'"
-    List(
-      s"      - run: ${quote(narrowed)}",
-      "        env:",
-      s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
-    )
+    cacheWrite(cacheNamespace, narrowed)
 
   /** Pinned image. `ubuntu-latest` moves, and this render should not move with it. */
   private val Runner = "ubuntu-26.04"

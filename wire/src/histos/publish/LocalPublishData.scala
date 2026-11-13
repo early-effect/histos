@@ -6,6 +6,7 @@ import histos.pack.{AssemblyError, JarError}
 import histos.resolve.ResolveError
 import histos.version.{CiVersion, ShipName, VersionError}
 import histos.select.SelectError
+import histos.schedule.RemoteError
 import histos.zinc.{CompileError, GraphCompileError}
 import histos.{Platform, PomFact, ProjectName, ScalaVersion}
 import java.nio.file.Path
@@ -52,6 +53,7 @@ enum LocalPublishError:
       error: AssemblyError,
   )
   case MissingClient(ship: ShipName, path: Path)
+  case Remote(error: RemoteError)
 
   def message: String = this match
     case Version(error)                        => error.message
@@ -92,6 +94,7 @@ enum LocalPublishError:
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
     case MissingClient(ship, path) =>
       s"${ship.value} builds clients on snapshots, and $path is not a file. The snapshots workflow downloads each client there."
+    case Remote(error) => error.message
 
   def diagnose: Diagnostic = this match
     case Publish(error)   => error.diagnose

@@ -48,7 +48,8 @@ object ScalaJs:
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
   ): ZIO[
-    LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.zinc.Compilers,
+    LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.zinc.Compilers &
+      histos.schedule.RemoteCache,
     CompileError,
     CompileOutput,
   ] =

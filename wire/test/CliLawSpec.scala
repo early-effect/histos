@@ -325,6 +325,7 @@ object CliLawSpec extends ZIOSpecDefault:
       Rejection.RunId(histos.task.TaskError.EmptyId)                         -> 2,
       Rejection.TestMode(histos.testrun.TestModeError.Unknown("nope"))       -> 2,
       Rejection.CacheClean(histos.cache.CacheCleanModeError.Unknown("nope")) -> 2,
+      Rejection.Namespace(histos.schedule.NamespaceError.Shape("nope"))      -> 2,
       Rejection.Flag(histos.plugin.FlagNameError.Empty)                      -> 2,
       Rejection.TaskPlatform("inspect")                                      -> 2,
       Rejection.CommandHelp(List("nope"))                                    -> 2,

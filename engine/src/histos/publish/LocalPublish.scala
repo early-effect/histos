@@ -14,6 +14,7 @@ import histos.central.{
 }
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
+import histos.cache.{ContentStore, ProductCache}
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarIo, JavadocJar, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
@@ -39,7 +40,7 @@ import histos.{
 
 import java.nio.file.{Files, Path}
 
-import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
+import histos.schedule.{CacheConfig, CacheError, Histos, Outcome, Parallelism, RemoteCache, RemoteError, StepFailure}
 import histos.step.{Need, Phase, Step, StepId, StepInfo}
 
 import zio.{Chunk, ZIO, ZLayer}
@@ -99,7 +100,24 @@ object LocalPublish:
       write: PublishWrite,
       api: ApiDigest,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
-  ): ZIO[histos.resolve.Resolve & Publisher & histos.cache.ContentStore, LocalPublishError, PublishOutput] =
+  ): ZIO[histos.resolve.Resolve & Publisher & ContentStore, LocalPublishError, PublishOutput] =
+    ZIO.scoped:
+      for
+        process <- CacheConfig.processEnv
+        remote  <- CacheConfig.open(process).mapError(LocalPublishError.Remote(_))
+        written <- go(repo, graph, names, jdk, env, write, api, report).provideSomeLayer(ZLayer.succeed(remote))
+      yield written
+
+  private def go(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[PublishName],
+      jdk: JdkRuntime,
+      env: Map[String, String],
+      write: PublishWrite,
+      api: ApiDigest,
+      report: histos.zinc.CompileFeed => zio.UIO[Unit],
+  ): ZIO[histos.resolve.Resolve & Publisher & ContentStore & RemoteCache, LocalPublishError, PublishOutput] =
     for
       prepared <- SessionSettle.prepare(repo, graph.catalog, env, write)
       decision <- VersionTask
@@ -163,7 +181,7 @@ object LocalPublish:
                   )
     yield written
 
-  private type PublishEnv = Publisher & Resolve
+  private type PublishEnv = Publisher & Resolve & ContentStore & RemoteCache
 
   private def publishJobs(
       repo: Path,
@@ -428,15 +446,26 @@ object LocalPublish:
       module   <- ZIO.fromEither(moduleOf(graph, cell.module))
       packed   <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- versionStamp(repo, graph, cell, api)
-      classes <- ClassJar
-        .write(cell.classes, Nil, jarPath, stamp)
-        .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
+      stamp  <- versionStamp(repo, graph, cell, api)
+      store  <- ZIO.service[ContentStore]
+      remote <- ZIO.service[RemoteCache]
+      key = PackageKey.of(products)
+      bytes <- ProductCache
+        .materialize(
+          remote,
+          store,
+          key,
+          jarPath,
+          ClassJar
+            .write(cell.classes, Nil, jarPath, stamp)
+            .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
+            .flatMap(_ => bytesOf(jarPath)),
+        )
+        .mapError(cached)
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
       javadoc     <- documented(repo, graph, cell, job.revision, write)
-      bytes       <- bytesOf(classes.path)
       sourceBytes <- bytesOf(sources.path)
       published   <- publishOne(
         group,
@@ -450,7 +479,7 @@ object LocalPublish:
         artifact,
         cell.module,
         job.ship,
-        PackageKey.of(products),
+        key,
       )
     yield published
 
@@ -480,21 +509,32 @@ object LocalPublish:
       )
       packed <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp   <- versionStamp(repo, graph, cell, api)
-      classes <- Assembly
-        .write(
-          dirs,
-          jars,
-          histos.pack.MainClass.trusted(main.value),
+      stamp  <- versionStamp(repo, graph, cell, api)
+      store  <- ZIO.service[ContentStore]
+      remote <- ZIO.service[RemoteCache]
+      key = PackageKey.of(products)
+      bytes <- ProductCache
+        .materialize(
+          remote,
+          store,
+          key,
           jarPath,
-          replacing = stamp.map((entry, file) => AssemblyFile(entry, file)),
+          Assembly
+            .write(
+              dirs,
+              jars,
+              histos.pack.MainClass.trusted(main.value),
+              jarPath,
+              replacing = stamp.map((entry, file) => AssemblyFile(entry, file)),
+            )
+            .mapError(error => LocalPublishError.Pack(cell.module, cell.version, cell.platform, error))
+            .flatMap(_ => bytesOf(jarPath)),
         )
-        .mapError(error => LocalPublishError.Pack(cell.module, cell.version, cell.platform, error))
+        .mapError(cached)
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
       javadoc     <- documented(repo, graph, cell, job.revision, write)
-      bytes       <- bytesOf(classes.path)
       sourceBytes <- bytesOf(sources.path)
       published   <- publishOne(
         group,
@@ -508,7 +548,7 @@ object LocalPublish:
         artifact,
         cell.module,
         job.ship,
-        PackageKey.of(products),
+        key,
       )
     yield published
 
@@ -765,6 +805,12 @@ object LocalPublish:
 
   private def modulesOf(graph: ProjectGraph): List[Module] =
     graph.projects.collect { case module: Module => module }
+
+  private def cached(error: LocalPublishError | RemoteError | CacheError): LocalPublishError =
+    error match
+      case found: LocalPublishError => found
+      case found: RemoteError       => LocalPublishError.Remote(found)
+      case found: CacheError        => LocalPublishError.Runtime(CompileError.Stored(found))
 
   private def bytesOf(path: Path): ZIO[Any, LocalPublishError, Chunk[Byte]] =
     ZIO

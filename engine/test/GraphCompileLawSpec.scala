@@ -278,7 +278,8 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       stubbed[ContentStore] ++
       stubbed[Compilers] ++
       stubbed[ResolutionService] ++
-      CompilerStarts.live
+      CompilerStarts.live ++
+      histos.schedule.RemoteCache.off
 
   private val remembered = drivers ++ CompileMemo.live
   private val scripted   = drivers ++ stubbed[CompileMemo]
@@ -287,7 +288,8 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       stubbed[ContentStore] ++
       stubbed[Compilers] ++
       stubbed[CompileMemo] ++
-      stubbed[ResolutionService]
+      stubbed[ResolutionService] ++
+      histos.schedule.RemoteCache.off
 
   private def silence: ZIO[
     Stubbed[Resolve] & Stubbed[ContentStore] & Stubbed[Compilers] & Stubbed[ResolutionService],
@@ -370,6 +372,7 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
       Repositories.central,
       tools,
       LockStamp("law"),
+      _ => ZIO.unit,
     )
     CellRun(plan, mod, version, platform, Map.empty, _ => ZIO.unit, log.offer, ZIO.unit)
 

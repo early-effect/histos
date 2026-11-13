@@ -150,6 +150,7 @@ object ScheduleCellsLawSpec extends ZIOSpecDefault:
         Repositories.central,
         LockedTools(DependencyLock(Nil), ToolCatalog.default, Repositories.central, resolve),
         LockStamp("t"),
+        _ => ZIO.unit,
       )
 
   private def module(

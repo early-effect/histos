@@ -56,7 +56,8 @@ object ProviderLawSpec extends ZIOSpecDefault:
                   ResolutionService.pinned(pinned(closure, held)) ++
                     CompileMemo.live ++
                     Compilers.live(1) ++
-                    ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+                    ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+                    histos.schedule.RemoteCache.off
                 )
             yield
               val statuses = collected.collect { case SessionFeed.Test(TestFeed.Done(cell)) => cell.status }.toList

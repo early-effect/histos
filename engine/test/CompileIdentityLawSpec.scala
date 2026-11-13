@@ -488,7 +488,8 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
   private val sourceHash = Sha256.trusted("src")
 
   private val gate =
-    (stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ CompilerStarts.live) >+>
+    (stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ CompilerStarts.live ++
+      histos.schedule.RemoteCache.off) >+>
       ZLayer.fromFunction: (resolve: Resolve) =>
         LockedTools(DependencyLock(Nil), ToolCatalog.default, Repositories.central, resolve)
 
@@ -610,7 +611,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
         )
       )(ZIO.die(new IllegalStateException("compiled")))
       before <- ZIO.serviceWithZIO[CompilerStarts](_.get)
-      error  <- JvmCompile.compilePooled(request, Nil, _ => ()).either
+      error  <- JvmCompile.compilePooled(request, Nil, _ => (), ZIO.unit).either
       after  <- ZIO.serviceWithZIO[CompilerStarts](_.get)
     yield (error, after - before)
 end CompileIdentityLawSpec

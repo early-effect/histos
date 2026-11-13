@@ -1,10 +1,10 @@
 package histos.js
 
-import histos.cache.{ContentStore, LinkReplay, LinkerStarts}
+import histos.cache.{ContentStore, LinkReplay, LinkerStarts, ProductCache}
 import histos.jdk.{JdkRuntime, Sha256}
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
-import histos.schedule.CacheError
+import histos.schedule.{CacheError, RemoteCache, RemoteError}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -45,7 +45,7 @@ object JsLink:
 
   def link(
       request: JsLinkRequest
-  ): ZIO[LockedTools & ContentStore & LinkerStarts, JsLinkError, JsLinked] =
+  ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, JsLinkError, JsLinked] =
     val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize) =
       request
     for
@@ -54,15 +54,24 @@ object JsLink:
       digests <- productsOf(classpath)
       key = JsKey.of(version, selected, kind, main, digests, initialize)
       store  <- ZIO.service[ContentStore]
+      remote <- ZIO.service[RemoteCache]
+      _      <- ProductCache.stage(remote, store, key).mapError(carried)
       hit    <- LinkReplay.load(store, key, request.work).mapError(stored)
       script <- hit match
         case Some(path) => ZIO.succeed(path)
         case None       =>
-          produce(request, selected).tap(path => LinkReplay.save(store, key, path).mapError(stored))
+          produce(request, selected).tap: path =>
+            LinkReplay.save(store, key, path).mapError(stored) *>
+              ProductCache.publish(remote, store, key).mapError(carried)
     yield JsLinked(script, key)
 
   private def stored(error: CacheError): JsLinkError =
     JsLinkError.Product(CompileError.Stored(error))
+
+  private def carried(error: RemoteError | CacheError): JsLinkError =
+    error match
+      case found: RemoteError => JsLinkError.Product(CompileError.Remote(found))
+      case found: CacheError  => JsLinkError.Product(CompileError.Stored(found))
 
   private def produce(
       request: JsLinkRequest,

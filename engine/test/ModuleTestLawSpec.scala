@@ -71,7 +71,8 @@ object ModuleTestLawSpec extends ZIOSpecDefault:
               ResolutionService.pinned(closure.pinning(lawName)) ++
                 CompileMemo.live ++
                 Compilers.live(1) ++
-                ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+                ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+                histos.schedule.RemoteCache.off
             )
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 

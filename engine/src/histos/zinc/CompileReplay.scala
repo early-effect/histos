@@ -42,9 +42,16 @@ end CompilerStarts
   * classes directory. The prefix keeps one from being read as the other.
   */
 object CompileReplay:
-  private val Magic        = "HC1\n".getBytes(StandardCharsets.US_ASCII)
-  private val AnalysisName = "inc.zip"
-  private val Marker       = "replay.key"
+  private val Magic          = "HC1\n".getBytes(StandardCharsets.US_ASCII)
+  private val AnalysisName   = "inc.zip"
+  private[histos] val Marker = "replay.key"
+
+  /** Class files in a stored archive. A bad archive is corrupt. */
+  private[histos] def classBytes(
+      id: Digest,
+      bytes: Chunk[Byte],
+  ): Either[CacheError, List[(String, Array[Byte])]] =
+    decode(bytes).left.map(_ => CacheError.Corrupt(id)).map(_.classes)
 
   /** A store that dies with this process. A layer that took `Scope` would change every resolver input. */
   def processStore: ZLayer[Any, Nothing, ContentStore] =

@@ -76,7 +76,7 @@ private[zinc] final class CompilerPool(
       extra: List[String],
       hear: CompileProblem => Unit,
       digest: histos.jdk.Sha256,
-      admitted: UIO[Unit] = ZIO.unit,
+      admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput] =
     val id = CompilerKey(
       request.toolchain.version,

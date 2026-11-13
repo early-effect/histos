@@ -74,6 +74,8 @@ object Operation:
       case Command.CacheList                => Right(Call.CacheList)
       case Command.CacheClean(mode)         => Right(Call.CacheClean(mode))
       case Command.CachePromote(from, to)   => Right(Call.CachePromote(from, to))
+      case Command.CacheForget(target)      => Right(Call.CacheForget(target))
+      case Command.CacheVerify(projects)    => Right(Call.CacheVerify(projects))
       case Command.Resolve(action)          => Right(Call.Resolve(action))
       case Command.Workflow(action)         => Right(Call.Workflow(action))
       case Command.Fmt(targets, mode)       => Right(Call.Format(targets, mode))

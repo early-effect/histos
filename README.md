@@ -125,7 +125,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 | Publish | `publish local`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, `publish drop`, `bump` |
 | Dependencies | `resolve`, `deps` |
 | CI | `workflow`, `doctor`, `setup supply-chain`, `--explain` |
-| Cache | `cache path`, `cache list`, `cache clean`, `cache promote` |
+| Cache | `cache path`, `cache list`, `cache clean`, `cache promote`, `cache forget`, `cache verify` |
 | Server | `server`, `bsp`, `mcp`, `reload`, `reboot`, `cancel` |
 | Preview | `preview compile`, `preview test`, `preview publish local`, `preview publish snapshots`, `preview clean`, `preview run` |
 | Building Histos | `assembly`, `portal` ([self-host](docs/self-host.md)) |
@@ -266,7 +266,7 @@ Compile and package are content-addressed. The content store is `~/.cache/histos
 - A `test --quick` stamp includes the upstream API digest, and hashes each class a suite uses without its line numbers or its `TASTY` attribute, so a comment does not run the suite again.
 - `histos cache path` prints the store, `cache list` prints each digest and its size, and `cache clean` removes entries older than 30 days that no project keeps. `--dry-run` names them and keeps them.
 
-A remote cache speaks the Bazel remote cache protocol (bazel-remote or anything compatible). Today it serves plugin tasks only. `HISTOS_CACHE_URI` selects it: `http` and `https` use HTTP, `grpc` is plaintext gRPC, and `grpcs` is TLS. Unset or blank is off. A bad value fails and does not fall back to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`, and `HISTOS_CACHE_NAMESPACE` is `main` unless it names `pr/<n>` or `dev/<name>`. A lookup tries this namespace, then `main`, then the local store, and then runs the action. A remote that times out is a miss: the action runs, and a store the remote did not take is skipped. A gRPC call times out after 30 seconds with nothing moving, and HTTP uses its client's connect and read timeouts. Any other remote failure stops the action. `histos cache promote --from pr/12 --to main` copies an index over HTTP, and reports `remote cache is not configured` when the URI is unset.
+A remote cache speaks the Bazel remote cache protocol (bazel-remote or anything compatible). Module compile, package, and link read and write it through the same namespace walk a plugin task uses. `HISTOS_CACHE_URI` selects it: `http` and `https` use HTTP, `grpc` is plaintext gRPC, and `grpcs` is TLS. Unset or blank is off. A bad value fails and does not fall back to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`, and a laptop's `write` opens as read: only CI stores. `HISTOS_CACHE_NAMESPACE` is `main` unless it names `pr/<n>` or `dev/<name>`. A lookup tries this namespace, then `main`, then the local store, and then runs the action. Every download is checked against its digest. A compile whose sources change while it runs is not stored. A remote that times out is a miss: the action runs, and a store the remote did not take is skipped. A gRPC call times out after 30 seconds with nothing moving, and HTTP uses its client's connect and read timeouts. Any other remote failure stops the action. `histos cache promote --from pr/12 --to main` copies an HTTP index. The push job writes `main` by compiling when the build's promote setting is `rebuild`, and by that copy when it is `copy-index`. `histos cache forget <namespace|module>` drops a remote namespace or one module's local compile hit. `histos cache verify [module ...]` recompiles stored hits in a scratch checkout and names a module whose classes differ. `clean --full` remains the local wipe.
 
 CI restores the content store, the Coursier cache, and the toolchains with exact keys. That copy is not the compile key. A compile still hits or misses inside the store.
 
@@ -291,7 +291,6 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 These are true today and tracked:
 
 - Generated workflows use `./.github/actions/setup`, which only this repository has. [cli-work-plan.md](docs/cli-work-plan.md)
-- No native or JavaScript link is skipped, and the remote cache does not serve compile, package, or link. The `promote` setting is not read yet. [cache-work-plan.md](docs/cache-work-plan.md)
 
 ## Building Histos
 

@@ -21,7 +21,7 @@ final case class CompilePlan(
     repositories: histos.resolve.Repositories,
     tools: histos.resolve.LockedTools,
     stamp: LockStamp,
-    admitted: ProjectName => UIO[Unit] = _ => ZIO.unit,
+    admitted: ProjectName => UIO[Unit],
     coverage: Option[histos.coverage.CoverageCompile] = None,
 )
 

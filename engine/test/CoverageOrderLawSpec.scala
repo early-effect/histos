@@ -148,5 +148,6 @@ object CoverageOrderLawSpec extends ZIOSpecDefault:
     ResolutionService.pinned(lock) ++
       CompileMemo.live ++
       Compilers.live(1) ++
-      ZLayer.succeed(ContentStore.in(store))
+      ZLayer.succeed(ContentStore.in(store)) ++
+      histos.schedule.RemoteCache.off
 end CoverageOrderLawSpec

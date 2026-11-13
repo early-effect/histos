@@ -5,6 +5,7 @@ import histos.node.NodeMiss
 import histos.resolve.ResolveError
 import histos.select.SelectError
 import histos.process.ChildError
+import histos.schedule.RemoteError
 import histos.zinc.{CompileError, GraphCompileError}
 import histos.pack.MainClassError
 import histos.{Platform, ProjectName, ScalaVersion, TestMain, TestProvider}
@@ -49,6 +50,7 @@ enum ModuleTestError:
   case Record(error: QuickError)
   case Pattern(error: SuitePatternError)
   case Api(module: ProjectName, version: ScalaVersion, platform: Platform)
+  case Remote(error: RemoteError)
 
   def message: String = this match
     case Tool(_, _, error)               => error.message
@@ -94,6 +96,7 @@ enum ModuleTestError:
     case Pattern(error)                 => error.message
     case Api(module, version, platform) =>
       s"'${module.value}' ${version.value} ${platform.token} has no readable API digest"
+    case Remote(error) => error.message
 
   def diagnose: Diagnostic = this match
     case Target(error)  => error.diagnose

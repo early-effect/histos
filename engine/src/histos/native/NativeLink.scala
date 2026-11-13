@@ -1,12 +1,12 @@
 package histos.native
 
-import histos.cache.{ContentStore, LinkReplay, LinkerStarts}
+import histos.cache.{ContentStore, LinkReplay, LinkerStarts, ProductCache}
+import histos.schedule.{CacheError, RemoteCache, RemoteError}
 import histos.jdk.JdkRuntime
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.resolve.LockedTools
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
-import histos.schedule.CacheError
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -95,7 +95,7 @@ object NativeLink:
   def link(
       request: NativeLinkRequest,
       sourcesRoot: Path,
-  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Linked] =
+  ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Linked] =
     val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
       request
     for
@@ -138,7 +138,7 @@ object NativeLink:
   def linkClasspath(
       request: NativeLinkRequest,
       classpath: List[Path],
-  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Path] =
+  ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Path] =
     val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
       request
     for
@@ -171,17 +171,27 @@ object NativeLink:
       key: Sha256,
       work: Path,
       link: ZIO[LockedTools & LinkerStarts, NativeError, Path],
-  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Path] =
+  ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Path] =
     for
       store  <- ZIO.service[ContentStore]
+      remote <- ZIO.service[RemoteCache]
+      _      <- ProductCache.stage(remote, store, key).mapError(carried)
       hit    <- LinkReplay.load(store, key, work).mapError(stored)
       binary <- hit match
         case Some(path) => ZIO.succeed(path)
-        case None       => link.tap(path => LinkReplay.save(store, key, path).mapError(stored))
+        case None       =>
+          link.tap: path =>
+            LinkReplay.save(store, key, path).mapError(stored) *>
+              ProductCache.publish(remote, store, key).mapError(carried)
     yield binary
 
   private def stored(error: CacheError): NativeError =
     NativeError.Compile(CompileError.Stored(error))
+
+  private def carried(error: RemoteError | CacheError): NativeError =
+    error match
+      case found: RemoteError => NativeError.Compile(CompileError.Remote(found))
+      case found: CacheError  => NativeError.Compile(CompileError.Stored(found))
 
   private def toolchainPrints(
       view: LockedTools,
@@ -212,7 +222,7 @@ object NativeLink:
       sources: List[Path],
       libs: NativeClasspath,
       checkout: Path,
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & RemoteCache, CompileError, CompileOutput] =
     val request = CompileRequest(
       CompileToolchain(
         link.version,

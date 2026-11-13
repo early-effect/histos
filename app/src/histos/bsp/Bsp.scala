@@ -1,6 +1,7 @@
 package histos.bsp
 
 import histos.cache.ContentStore
+import histos.schedule.{CacheConfig, RemoteCache}
 import histos.jdk.JdkRuntime
 import zio.stream.ZStream
 
@@ -45,7 +46,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{Chunk, IO, Ref, UIO, ZIO}
+import zio.{Chunk, IO, Ref, UIO, ZIO, ZLayer}
 
 /** BSP 2.2 for Metals. One target per cell the module builds, a build-file target, and diagnostics.
   */
@@ -569,6 +570,14 @@ object Bsp:
     private def worst(codes: List[Int]): Int =
       if codes.contains(2) then 2 else 1
 
+    private def opened[R, A](body: RemoteCache => ZIO[R, BspError, A]): ZIO[R, BspError, A] =
+      ZIO.scoped:
+        CacheConfig.processEnv.flatMap: env =>
+          CacheConfig
+            .open(env)
+            .mapError(error => BspError.Toolchain(CompileError.Remote(error)))
+            .flatMap(body)
+
     private def compileMains(
         platform: Platform,
         group: List[Id.Main],
@@ -581,43 +590,47 @@ object Bsp:
       request.get.flatMap { graph =>
         Ref.make(false).flatMap { failed =>
           val ran =
-            ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
-              ZStream
-                .unwrap(
-                  readLock.map(lock =>
-                    GraphCompile.cellFeed(
-                      histos.zinc.CompileSession(
-                        repo,
-                        graph,
-                        jdk,
-                        runtimes.native,
-                        lock,
-                      ),
-                      cells,
-                      platform,
+            opened { remote =>
+              ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
+                ZStream
+                  .unwrap(
+                    readLock.map(lock =>
+                      GraphCompile
+                        .cellFeed(
+                          histos.zinc.CompileSession(
+                            repo,
+                            graph,
+                            jdk,
+                            runtimes.native,
+                            lock,
+                          ),
+                          cells,
+                          platform,
+                        )
+                        .provideSomeLayer(ZLayer.succeed(remote))
                     )
                   )
-                )
-                .mapError {
-                  case error: GraphCompileError => BspError.Sources(error)
-                  case error: BspError          => error
-                }
-                .foreach {
-                  case histos.zinc.CompileFeed.Diagnostic(
-                        module,
-                        version,
-                        chosen,
+                  .mapError {
+                    case error: GraphCompileError => BspError.Sources(error)
+                    case error: BspError          => error
+                  }
+                  .foreach {
+                    case histos.zinc.CompileFeed.Diagnostic(
+                          module,
+                          version,
+                          chosen,
+                          problem,
+                        ) =>
+                      publish(
+                        mainUri(repo, module.value, version, chosen),
                         problem,
-                      ) =>
-                    publish(
-                      mainUri(repo, module.value, version, chosen),
-                      problem,
-                    )
-                  case histos.zinc.CompileFeed.Began(_, _, _)   => ZIO.unit
-                  case histos.zinc.CompileFeed.Miss(_, _, _, _) => ZIO.unit
-                  case histos.zinc.CompileFeed.Done(_)          => ZIO.unit
-                  case histos.zinc.CompileFeed.Failed(_)        => failed.set(true)
-                } *> failed.get
+                      )
+                    case histos.zinc.CompileFeed.Began(_, _, _)   => ZIO.unit
+                    case histos.zinc.CompileFeed.Miss(_, _, _, _) => ZIO.unit
+                    case histos.zinc.CompileFeed.Done(_)          => ZIO.unit
+                    case histos.zinc.CompileFeed.Failed(_)        => failed.set(true)
+                  } *> failed.get
+            }
           ran.either.flatMap {
             case Left(error)  => statusOf(Left(error))
             case Right(true)  => ZIO.succeed(2)
@@ -650,27 +663,30 @@ object Bsp:
         )
         problems { hear =>
           withTools(
-            clear(uri) *>
-              (for
-                lock    <- readLock
-                sources <- TestCompile
-                  .testSources(repo, id.module, modules, id.version, id.platform)
-                  .mapError(BspError.Tests(_))
-                _ <- TestCompile
-                  .compiledTests(
-                    repo,
-                    modules,
-                    id.module,
-                    cell,
-                    sources,
-                    jdk,
-                    runtimes.native,
-                    lock,
-                    BuildResolvers(graph.resolvers),
-                    hear,
-                  )
-                  .mapError(BspError.Tests(_))
-              yield ())
+            opened { remote =>
+              clear(uri) *>
+                (for
+                  lock    <- readLock
+                  sources <- TestCompile
+                    .testSources(repo, id.module, modules, id.version, id.platform)
+                    .mapError(BspError.Tests(_))
+                  _ <- TestCompile
+                    .compiledTests(
+                      repo,
+                      modules,
+                      id.module,
+                      cell,
+                      sources,
+                      jdk,
+                      runtimes.native,
+                      lock,
+                      BuildResolvers(graph.resolvers),
+                      hear,
+                    )
+                    .provideSomeLayer(ZLayer.succeed(remote))
+                    .mapError(BspError.Tests(_))
+                yield ())
+            }
           )
         }.flatMap { (result, found) =>
           ZIO.foreachDiscard(found)(problem => publish(uri, problem)) *> statusOf(result)

@@ -109,7 +109,7 @@ object Help:
       "Run the repository checks. The text lists errors and warnings. --verbose lists every check. Named projects are the modules that launch. With no --json and no --preflight, the whole doctor and --area toolchain also print the JDK, Node, and clang lines.",
     ),
     Entry("setup", "ci", "histos setup supply-chain [--from zipx] [--fix] [--yes]", "Write the supply-chain files."),
-    Entry("cache", "cache", "histos cache path", "Print, list, clean, or promote the cache."),
+    Entry("cache", "cache", "histos cache path", "Print, list, clean, promote, forget, or verify the cache."),
     Entry(
       "toolchain install",
       "toolchain",

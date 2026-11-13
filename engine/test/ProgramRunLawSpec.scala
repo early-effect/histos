@@ -72,7 +72,8 @@ object ProgramRunLawSpec extends ZIOSpecDefault:
                 )
             ran.provideSomeLayer[TestEnvironment & Scope & Resolve](
               ResolutionService.pinned(closure.pinning(lawName)) ++
-                ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+                ZLayer.succeed(ContentStore.in(dir.resolve("store"))) ++
+                histos.schedule.RemoteCache.off
             )
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
 

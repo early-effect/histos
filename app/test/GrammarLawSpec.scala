@@ -7,7 +7,7 @@ import histos.plugin.{CommandName, JobName, PluginArgs, PluginId, PluginIdError,
 import histos.publish.PublishToken
 import histos.scaffold.ImportSource
 import histos.schedule.{CacheNamespace, NamespaceError}
-import histos.server.{CleanExtent, ResolveAction}
+import histos.server.{CleanExtent, ForgetTarget, ResolveAction}
 import histos.supply.{PolicyWrite, SetupSource, ZipxConfirm}
 import histos.task.{RunId, TaskError, TaskId}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
@@ -144,6 +144,22 @@ object GrammarLawSpec extends ZIOSpecDefault:
           List("cache", "clean")              -> Right(Command.CacheClean(CacheCleanMode.Remove)),
           List("cache", "clean", "--dry-run") -> Right(Command.CacheClean(CacheCleanMode.DryRun)),
         )
+    ,
+    test("cache forget is a namespace or a module, and verify names modules"):
+      val pr = CacheNamespace.PullRequest(histos.version.PullRequestNumber("7"))
+      held(
+        List("cache", "forget")           -> Left(CliParseError.MissingArgument),
+        List("cache", "forget", "main")   -> Right(Command.CacheForget(ForgetTarget.Namespace(CacheNamespace.Main))),
+        List("cache", "forget", "pr/7")   -> Right(Command.CacheForget(ForgetTarget.Namespace(pr))),
+        List("cache", "forget", "core")   -> Right(Command.CacheForget(ForgetTarget.Module(ProjectName("core")))),
+        List("cache", "forget", "nope/x") -> Left(CliParseError.Namespace(NamespaceError.Shape("nope/x"))),
+        List("cache", "forget", "")       -> Left(CliParseError.ProjectName(ProjectNameError.Empty)),
+        List("cache", "verify")           -> Right(Command.CacheVerify(Nil)),
+        List("cache", "verify", "core", "api") -> Right(
+          Command.CacheVerify(List(ProjectName("core"), ProjectName("api")))
+        ),
+        List("cache", "verify", "1api") -> Left(CliParseError.ProjectName(ProjectNameError.Bad("1api"))),
+      )
     ,
     test("resolve and workflow refuse both flags and accept one, and launcher names update"):
       held(

@@ -17,15 +17,24 @@ import histos.resolve.{
   ResolveCell,
   ResolveError,
 }
+import histos.schedule.CacheConfig
 import histos.workspace.Workspace
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError, UpstreamCell, UpstreamCells}
+import histos.zinc.{
+  CompileError,
+  CompileFeed,
+  CompiledCell,
+  GraphCompile,
+  GraphCompileError,
+  UpstreamCell,
+  UpstreamCells,
+}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, Scope, UIO, ZIO}
+import zio.{IO, Scope, UIO, ZIO, ZLayer}
 
 object Assemble:
   val ApiEntry: String = BuildClasspath.Entry
@@ -41,48 +50,54 @@ object Assemble:
       destination: Path,
       report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService, AssembleError, Assembled] =
-    for
-      app      <- module(graph, "app")
-      api      <- module(graph, "api")
-      ordered  <- ZIO.fromEither(closure(app, index(graph)))
-      resolved <- ZIO.service[ResolutionService]
-      lock     <- resolved.current
-      _        <- ToolchainStamp.write(repo)
-      compiled <- GraphCompile
-        .run(
-          histos.zinc.CompileSession(repo, graph, jdk, native, lock),
-          List(app.name),
-          None,
-          report,
+    ZIO.scoped:
+      for
+        process <- CacheConfig.processEnv
+        remote  <- CacheConfig
+          .open(process)
+          .mapError(error => AssembleError.Toolchain(CompileError.Remote(error)))
+        app      <- module(graph, "app")
+        api      <- module(graph, "api")
+        ordered  <- ZIO.fromEither(closure(app, index(graph)))
+        resolved <- ZIO.service[ResolutionService]
+        lock     <- resolved.current
+        _        <- ToolchainStamp.write(repo)
+        compiled <- GraphCompile
+          .run(
+            histos.zinc.CompileSession(repo, graph, jdk, native, lock),
+            List(app.name),
+            None,
+            report,
+          )
+          .provideSomeLayer(ZLayer.succeed(remote))
+          .mapError(AssembleError.Compile(_))
+        version = app.versions.first
+        tools   = zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
+        upstream <- UpstreamCells
+          .read(
+            app,
+            Module.chain(app, graph.projects.collect { case found: Module => found }, Platform.Jvm),
+            version,
+            Platform.Jvm,
+            UpstreamCells.compiled(compiled),
+          )
+          .mapError(AssembleError.Compile(_))
+          .provideSome[Resolve](tools)
+        cells <- ZIO.fromEither(placed(app, ordered, upstream, compiled, version))
+        classes = cells.map(_.classes)
+        jars    <- artifacts(cells, BuildResolvers(graph.resolvers))
+        library <- JvmCompile
+          .runtime(version)
+          .mapError(error => AssembleError.Toolchain(error))
+          .provideSome[Resolve](tools)
+        apiClasses <- ZIO.fromEither(apiDirectory(api.name, cells, version))
+        assembled  <- pack(
+          classes,
+          library ++ jars.filterNot(library.contains),
+          apiClasses,
+          destination,
         )
-        .mapError(AssembleError.Compile(_))
-      version = app.versions.first
-      tools   = zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
-      upstream <- UpstreamCells
-        .read(
-          app,
-          Module.chain(app, graph.projects.collect { case found: Module => found }, Platform.Jvm),
-          version,
-          Platform.Jvm,
-          UpstreamCells.compiled(compiled),
-        )
-        .mapError(AssembleError.Compile(_))
-        .provideSome[Resolve](tools)
-      cells <- ZIO.fromEither(placed(app, ordered, upstream, compiled, version))
-      classes = cells.map(_.classes)
-      jars    <- artifacts(cells, BuildResolvers(graph.resolvers))
-      library <- JvmCompile
-        .runtime(version)
-        .mapError(error => AssembleError.Toolchain(error))
-        .provideSome[Resolve](tools)
-      apiClasses <- ZIO.fromEither(apiDirectory(api.name, cells, version))
-      assembled  <- pack(
-        classes,
-        library ++ jars.filterNot(library.contains),
-        apiClasses,
-        destination,
-      )
-    yield assembled
+      yield assembled
 
   private def module(
       graph: ProjectGraph,
