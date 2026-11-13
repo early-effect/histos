@@ -59,7 +59,7 @@ Three tracks can run side by side. Within a track, one brief at a time, because 
 | Cache | Repo-relative sources, then Link cache, then Remote cache | no |
 | Toolchain | Ship row, then Dist layer, then Container, then CI setup | each one |
 | Command line | Grammar | only if the rendered workflow changes |
-| Small fixes | B40, B41, B42, row 50 | no |
+| Small fixes | B41, B42, row 50. B40 closes with Link cache | no |
 
 Read-through is last, after every other brief.
 
@@ -75,7 +75,7 @@ Read-through is last, after every other brief.
 ### Link cache
 
 - **Goal.** A Native or Scala.js link whose key (`NativeKey`, `JsKey`, built on product digests) is in the store restores the linked output and does not start the linker.
-- **First.** Apply D10. Russ: `ProductDigest.normalize` strips only the checkout root and leaves every other string intact. Today it cuts every rooted string constant to its last segment (ledger row 54), and a link that skips on that digest would restore an old bundle after `/api/v1` became `/api/v2`. Write that law first: two digests that differ only in such a constant differ. Then check D10.
+- **First.** Apply D10. Russ: `ProductDigest.normalize` strips only the checkout root and leaves every other string intact. It used to cut every rooted string constant to its last segment (ledger row 54), and a link that skipped on that digest would restore an old bundle after `/api/v1` became `/api/v2`. The law is two digests that differ only in such a constant differ. Closed with the Link cache item.
 - **Also closes.** B40: a Native compile whose `nscplugin` did not load succeeds and is stored without NIR, and later links fail until `cleanFull`. A Native compile that produced no NIR for a source fails with a typed error and stores nothing.
 - **Start at.** `engine/src/histos/zinc/ProductDigest.scala`, `NativeKey` in `engine/src/histos/native/NativeLink.scala`, and `engine/src/histos/js/JsKey.scala`.
 - **Proof.** A scenario that counts linker starts: a trailing comment keeps the link, a method body relinks, a changed path constant relinks, and a wiped checkout restores without a link.

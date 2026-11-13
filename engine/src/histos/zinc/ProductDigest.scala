@@ -18,6 +18,7 @@ import java.util.zip.ZipFile
 import org.objectweb.asm.tree.{ClassNode, LdcInsnNode, LineNumberNode}
 import org.objectweb.asm.{ClassReader, ClassWriter}
 
+import scala.annotation.tailrec
 import scala.jdk.CollectionConverters.*
 
 import zio.Chunk
@@ -31,17 +32,19 @@ enum ClassBytesError:
     case Unreadable => "class bytes are not a class file"
 end ClassBytesError
 
-/** Line-number tables, the `TASTY` attribute, and absolute paths are not part of a product. `TASTY` is a hash of
-  * positions and comments. A jar entry's timestamp is not part of a product either.
+/** Line-number tables and the `TASTY` attribute are not part of a product. `TASTY` is a hash of positions and comments.
+  * A jar entry's timestamp is not part of a product either. The only path removed is `checkout`, and only where that
+  * absolute root sits on a path boundary. Every other string stays as written.
   */
 object ProductDigest:
   val fileName: String = "product.sha256"
 
-  def normalize(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
+  def normalize(bytes: Array[Byte], checkout: Path): Either[ClassBytesError, Array[Byte]] =
+    val root = checkoutRoot(checkout)
     rewrite(bytes): node =>
       dropPositions(node)
-      dropPaths(node)
-    .flatMap(rewritePool)
+      dropPaths(node, root)
+    .flatMap(rewritten => rewritePool(rewritten, root))
 
   /** The class without its positions: line-number tables, the source debug extension, and the `TASTY` attribute. A
     * comment moves only these. A path constant stays as written, so a changed directory in it is a changed class.
@@ -49,19 +52,19 @@ object ProductDigest:
   def positionFree(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
     rewrite(bytes)(dropPositions)
 
-  def ofDirectory(root: Path): Either[CompileError, Sha256] =
+  def ofDirectory(root: Path, checkout: Path): Either[CompileError, Sha256] =
     classFiles(root).flatMap: found =>
       found
         .foldLeft[Either[CompileError, List[Array[Byte]]]](Right(Nil)):
           case (Left(error), _)           => Left(error)
           case (Right(acc), (name, path)) =>
             readBytes(path).flatMap: bytes =>
-              normalize(bytes) match
+              normalize(bytes, checkout) match
                 case Right(clean) => Right(acc :+ piece(name, clean))
                 case Left(_)      => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
         .map(parts => Sha256Digest.of(Chunk.fromArray(parts.flatten.toArray)))
 
-  def ofJar(path: Path): Either[CompileError, Sha256] =
+  def ofJar(path: Path, checkout: Path): Either[CompileError, Sha256] =
     try
       val zip = new ZipFile(path.toFile)
       try
@@ -71,7 +74,7 @@ object ProductDigest:
             val stream = zip.getInputStream(entry)
             try Option(entry.getName).map(name => name -> stream.readAllBytes())
             finally stream.close()
-        hashed(rows.sortBy(_._1))
+        hashed(rows.sortBy(_._1), checkout)
       finally zip.close()
     catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
 
@@ -85,8 +88,8 @@ object ProductDigest:
           CompileError.Io(IoFailure(path, IoFault.Read))
     catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
 
-  def write(dir: Path, classes: Path): Either[CompileError, Sha256] =
-    ofDirectory(classes).flatMap: digest =>
+  def write(dir: Path, classes: Path, checkout: Path): Either[CompileError, Sha256] =
+    ofDirectory(classes, checkout).flatMap: digest =>
       val path = dir.resolve(fileName)
       try
         Files.createDirectories(dir)
@@ -94,18 +97,19 @@ object ProductDigest:
         Right(digest)
       catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Write)))
 
-  private def hashed(rows: List[(String, Array[Byte])]): Either[CompileError, Sha256] =
+  private def hashed(rows: List[(String, Array[Byte])], checkout: Path): Either[CompileError, Sha256] =
+    val root = checkoutRoot(checkout)
     rows
       .foldLeft[Either[CompileError, List[Array[Byte]]]](Right(Nil)):
         case (Left(error), _)          => Left(error)
         case (Right(acc), (name, raw)) =>
           val body =
             if name.endsWith(".class") then
-              normalize(raw) match
+              normalize(raw, checkout) match
                 case Right(clean) => Right(clean)
                 case Left(_)      => Left(CompileError.Io(IoFailure(Path.of(name), IoFault.Read)))
-            else Right(scrubBytes(raw))
-          body.map(clean => acc :+ piece(scrubUtf8(name), clean))
+            else Right(scrubBytes(raw, root))
+          body.map(clean => acc :+ piece(stripRoot(name, root), clean))
       .map(parts => Sha256Digest.of(Chunk.fromArray(parts.flatten.toArray)))
 
   private def classFiles(root: Path): Either[CompileError, List[(String, Path)]] =
@@ -168,13 +172,13 @@ object ProductDigest:
         case line: LineNumberNode => insns.remove(line)
         case _                    => ()
 
-  private def dropPaths(node: ClassNode): Unit =
-    if node.sourceFile != null then node.sourceFile = leaf(node.sourceFile)
+  private def dropPaths(node: ClassNode, root: String): Unit =
+    if node.sourceFile != null then node.sourceFile = stripRoot(node.sourceFile, root)
     node.methods.asScala.foreach: method =>
       method.instructions.toArray.foreach:
         case ldc: LdcInsnNode =>
           ldc.cst match
-            case text: String => ldc.cst = scrubUtf8(text)
+            case text: String => ldc.cst = stripRoot(text, root)
             case _            => ()
         case _ => ()
 
@@ -182,7 +186,7 @@ object ProductDigest:
     case Utf8(raw: Array[Byte], text: String)
     case Copied(raw: Array[Byte], slots: Int)
 
-  private def rewritePool(bytes: Array[Byte]): Either[ClassBytesError, Array[Byte]] =
+  private def rewritePool(bytes: Array[Byte], root: String): Either[ClassBytesError, Array[Byte]] =
     if bytes.length < 10 || !magic(bytes) then Left(ClassBytesError.Unreadable)
     else
       val count = u2(bytes, 8)
@@ -191,7 +195,7 @@ object ProductDigest:
         out.write(bytes, 0, 10)
         entries.foreach:
           case PoolEntry.Utf8(raw, text) =>
-            val cleaned = scrubUtf8(text)
+            val cleaned = stripRoot(text, root)
             if cleaned == text then out.write(raw)
             else out.write(encodeUtf8(cleaned))
           case PoolEntry.Copied(raw, _) => out.write(raw)
@@ -266,21 +270,47 @@ object ProductDigest:
     val length = body.length
     Array[Byte](1, ((length >> 8) & 0xff).toByte, (length & 0xff).toByte) ++ body
 
-  private val rooted =
-    """(?<![A-Za-z0-9_$.])(?:[A-Za-z]:[\\/]|/)(?:[^\\/\s\u0000"]+[\\/])+[^\\/\s\u0000"]*""".r
+  /** The absolute checkout, with no trailing separator. A filesystem root is empty: stripping `/` would rewrite every
+    * absolute path.
+    */
+  private def checkoutRoot(checkout: Path): String =
+    val trimmed = trimSeparators(checkout.toAbsolutePath.normalize.toString)
+    if isFilesystemRoot(trimmed) then "" else trimmed
 
-  /** `replaceAllIn` reads `$` in the replacement as a group. A leaf is literal text. */
-  private def scrubUtf8(text: String): String =
-    rooted.replaceAllIn(text, matched => scala.util.matching.Regex.quoteReplacement(leaf(matched.matched)))
+  private def isFilesystemRoot(text: String): Boolean =
+    text.length <= 1 || (text.length == 2 && text.charAt(1) == ':' && text.charAt(0).isLetter)
 
-  private def scrubBytes(bytes: Array[Byte]): Array[Byte] =
+  private def trimSeparators(text: String): String =
+    val end = text.lastIndexWhere(char => !isSep(char))
+    if end < 0 then "" else text.substring(0, end + 1)
+
+  private def stripRoot(text: String, root: String): String =
+    if root.isEmpty then text
+    else stripFrom(text, root, 0, new StringBuilder(text.length))
+
+  @tailrec
+  private def stripFrom(text: String, root: String, at: Int, out: StringBuilder): String =
+    if at >= text.length then out.toString
+    else if rootedAt(text, root, at) then
+      val next = at + root.length
+      val skip = if next < text.length && isSep(text.charAt(next)) then next + 1 else next
+      stripFrom(text, root, skip, out)
+    else stripFrom(text, root, at + 1, out.append(text.charAt(at)))
+
+  private def rootedAt(text: String, root: String, at: Int): Boolean =
+    val end = at + root.length
+    end <= text.length &&
+    text.regionMatches(at, root, 0, root.length) &&
+    (at == 0 || !isPathChar(text.charAt(at - 1))) &&
+    (end == text.length || isSep(text.charAt(end)))
+
+  private def isPathChar(char: Char): Boolean =
+    char != '/' && char != '\\' && char != '"' && char != '\u0000' && !char.isWhitespace
+
+  private def isSep(char: Char): Boolean =
+    char == '/' || char == '\\'
+
+  private def scrubBytes(bytes: Array[Byte], root: String): Array[Byte] =
     val text = new String(bytes, StandardCharsets.ISO_8859_1)
-    scrubUtf8(text).getBytes(StandardCharsets.ISO_8859_1)
-
-  private def leaf(path: String): String =
-    val cut = path.lastIndexWhere(char => char == '/' || char == '\\')
-    if cut < 0 then path
-    else
-      val name = path.substring(cut + 1)
-      if name.isEmpty then "path" else name
+    stripRoot(text, root).getBytes(StandardCharsets.ISO_8859_1)
 end ProductDigest

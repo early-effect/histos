@@ -88,6 +88,9 @@ enum CompileError:
   case NativeLibrary(text: String)
   case Stored(error: CacheError)
 
+  /** A Native source produced class files and no NIR beside them. The store does not keep that product. */
+  case NoNir(source: Path)
+
   def message: String = this match
     case Resolved(error)               => error.message
     case UnsupportedPlatform(platform) => s"compile does not support $platform"
@@ -105,6 +108,7 @@ enum CompileError:
     case NativeOrigin(error) => error.message
     case NativeLibrary(text) => text
     case Stored(error)       => error.message
+    case NoNir(source)       => s"$source produced no NIR"
 end CompileError
 
 /** Why the Scala.js standard library did not arrive. The compiler's `-scalajs` backend needs it instead of

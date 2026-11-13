@@ -262,7 +262,7 @@ The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `c
 Compile and package are content-addressed. The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's name is its digest.
 
 - The API digest is a compiled module's public signature. A comment or a method body does not change it, so a downstream compile hits. A public signature change runs that compile.
-- The product digest is the class bytes with jar timestamps, line numbers, and the `TASTY` attribute taken out. Packaging keys on it.
+- The product digest is the class bytes with jar timestamps, line numbers, and the `TASTY` attribute taken out, and with the checkout root removed from a path. Every other string stays. A link whose key is unchanged is restored, and the linker does not start. Packaging keys on the digest.
 - `testQuick` stamps include the upstream API digest, and hash each class a suite uses without its line numbers or its `TASTY` attribute, so a comment does not run the suite again.
 - `histos cache path` prints the store, `cache list` prints each digest and its size, and `cache clean` removes entries older than 30 days that no project keeps. `--dry-run` names them and keeps them.
 

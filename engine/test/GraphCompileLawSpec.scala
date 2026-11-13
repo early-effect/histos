@@ -144,7 +144,7 @@ object GraphCompileLawSpec extends ZIOSpecDefault:
               starts  <- ZIO.serviceWithZIO[CompilerStarts](_.get)
               api     <- ZIO.fromEither(ApiDigest.read(analysis))
               product <- ZIO.fromEither(ProductDigest.read(analysis))
-              hashed  <- ZIO.fromEither(ProductDigest.ofDirectory(classes))
+              hashed  <- ZIO.fromEither(ProductDigest.ofDirectory(classes, repo))
             yield assertTrue(
               text == ScheduleCells.render(Map((mod.name, scala3, Platform.Jvm) -> classes)),
               log.listed == List(

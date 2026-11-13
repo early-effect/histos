@@ -131,6 +131,63 @@ object ScenarioSpec extends ZIOSpecDefault:
           starts == 1,
         )
     ,
+    // The timer is clang and the Scala Native linker: three misses each compile the bridge and link.
+    test(
+      "a stored native link is restored: a comment keeps it, a body or a path constant relinks, and a wipe restores"
+    ):
+      ZIO.scoped:
+        for
+          _      <- ZIO.serviceWithZIO[CompilerClosure](_.held(ToolRole.NativeLinker))
+          native <- ZIO.serviceWithZIO[CompilerClosure](_.nativeScala)
+          built  <- ZIO.fromEither(
+            Projects.locked(module("core", Native)(native).clang(ClangMajor(21)).main(MainClass("demo.Run")))
+          )
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          source  = "core/src/main/scala/demo/Run.scala"
+          classes = GraphCompile
+            .classesDir(checkout.root, ProjectName("core"), native, Platform.Native)
+            .resolve("demo/Run.class")
+          _         <- checkout.write(source, linked(1, "/api/v1/users"))
+          first     <- checkout.compile
+          binary    <- checkout.link("core")
+          once      <- scenario.linkerStarts
+          _         <- checkout.write(source, linked(1, "/api/v1/users") + "\n// trailing note\n")
+          comment   <- checkout.compile
+          kept      <- checkout.link("core")
+          commented <- scenario.linkerStarts
+          _         <- checkout.write(source, linked(2, "/api/v1/users"))
+          body      <- checkout.compile
+          edited    <- checkout.link("core")
+          relinked  <- scenario.linkerStarts
+          _         <- checkout.write(source, linked(2, "/api/v2/users"))
+          path      <- checkout.compile
+          moved     <- checkout.link("core")
+          changed   <- scenario.linkerStarts
+          _         <- checkout.clean
+          gone      <- exists(classes)
+          again     <- checkout.compile
+          back      <- exists(classes)
+          brought   <- checkout.link("core")
+          after     <- scenario.linkerStarts
+        yield assertTrue(
+          failed(first ++ comment ++ body ++ path ++ again).isEmpty,
+          compiled(first),
+          restored(again),
+          binary.nonEmpty,
+          sha(kept) == sha(binary),
+          sha(edited) != sha(binary),
+          sha(moved) != sha(edited),
+          sha(brought) == sha(moved),
+          !gone,
+          back,
+          once == 1,
+          commented == 1,
+          relinked == 2,
+          changed == 3,
+          after == 3,
+        )
+    @@ TestAspect.timeout(15.minutes) @@ TestAspect.withLiveClock,
     test("a module over an older upstream compiles, hits, and documents against that upstream's own lock cell"):
       ZIO.scoped:
         for
@@ -602,6 +659,21 @@ object ScenarioSpec extends ZIOSpecDefault:
           .flatMap(peer => ZIO.attemptBlockingInterrupt(peer.write(ByteBuffer.wrap(Array[Byte](1)))))
       .orDie
       .unit
+
+  /** `Run` prints both, so the native link keeps the int and the path. */
+  private def linked(f: Int, home: String): String =
+    s"""package demo
+       |
+       |object Api:
+       |  def f: Int = $f
+       |  def home: String = "$home"
+       |
+       |object Run:
+       |  def main(args: Array[String]): Unit =
+       |    println(s"$${Api.f} $${Api.home}")
+       |""".stripMargin
+
+  private def sha(bytes: Chunk[Byte]): Sha256 = Sha256Digest.of(bytes)
 
   private val core =
     """object Core:

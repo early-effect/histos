@@ -227,6 +227,7 @@ object CodecSamples:
     CompileError.NativeOrigin(NativeToolchainError.Empty),
     CompileError.NativeLibrary("missing"),
     CompileError.Stored(CacheError.Io(io)),
+    CompileError.NoNir(path),
   )
 
   val graphErrors: List[GraphCompileError] = List(

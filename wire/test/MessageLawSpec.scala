@@ -215,6 +215,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "HISTOS_NATIVE is empty",
           "missing",
           read,
+          "/work/repo produced no NIR",
         ),
       )
     ,

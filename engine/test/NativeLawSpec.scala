@@ -1,6 +1,7 @@
 package histos.native
 
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.pack.MainClass
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.{
@@ -107,20 +108,24 @@ object NativeLawSpec extends ZIOSpecDefault:
           NativeOrigin.Refused(NativeToolchainError.Origin("central")),
       )
     ,
-    test("a native key changes with clang, target, sources, and artifacts"):
-      val clang = ClangVersion.trusted("21.0.0", ClangMajor(21))
-      val next  = ClangVersion.trusted("22.0.0", ClangMajor(22))
-      val arm   = ClangTarget.from("arm64-apple-darwin")
-      val linux = ClangTarget.from("x86_64-pc-linux")
+    test("a native key changes with clang, the target, the main class, the products, and the artifacts"):
+      val clang     = ClangVersion.trusted("21.0.0", ClangMajor(21))
+      val next      = ClangVersion.trusted("22.0.0", ClangMajor(22))
+      val arm       = ClangTarget.from("arm64-apple-darwin")
+      val linux     = ClangTarget.from("x86_64-pc-linux")
+      val main      = MainClass.trusted("demo.Run")
+      val otherMain = MainClass.trusted("demo.Other")
+      val product   = Sha256.trusted("ab")
       (arm, linux) match
         case (Right(target), Right(other)) =>
-          val base = NativeKey.of(version, clang, target, sources, List(jar))
+          val base = NativeKey.of(version, clang, target, main, List(product), List(jar))
           assertTrue(
-            NativeKey.of(version, next, target, sources, List(jar)) != base,
-            NativeKey.of(version, clang, other, sources, List(jar)) != base,
-            NativeKey.of(version, clang, target, Sha256.trusted("ef"), List(jar)) != base,
-            NativeKey.of(version, clang, target, sources, List(Sha256.trusted("11"))) != base,
-            NativeKey.of(version, clang, target, sources, List(jar)) == base,
+            NativeKey.of(version, next, target, main, List(product), List(jar)) != base,
+            NativeKey.of(version, clang, other, main, List(product), List(jar)) != base,
+            NativeKey.of(version, clang, target, otherMain, List(product), List(jar)) != base,
+            NativeKey.of(version, clang, target, main, List(Sha256.trusted("ef")), List(jar)) != base,
+            NativeKey.of(version, clang, target, main, List(product), List(Sha256.trusted("11"))) != base,
+            NativeKey.of(version, clang, target, main, List(product), List(jar)) == base,
           )
         case _ => assertTrue(false)
     ,

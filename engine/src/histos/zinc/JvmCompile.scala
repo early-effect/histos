@@ -520,10 +520,17 @@ object JvmCompile:
       else
         val recorded = result.analysis() match
           case found: sbt.internal.inc.Analysis =>
-            ApiDigest
-              .write(request.analysis, found)
-              .flatMap: _ =>
-                ProductDigest.write(request.analysis, request.classes).map(_ => sourceCount(prior, found))
+            NirGuard.missing(request, found) match
+              case Some(source) =>
+                Files.deleteIfExists(zip)
+                Left(CompileError.NoNir(source))
+              case None =>
+                ApiDigest
+                  .write(request.analysis, found)
+                  .flatMap: _ =>
+                    ProductDigest
+                      .write(request.analysis, request.classes, request.checkout)
+                      .map(_ => sourceCount(prior, found))
           case _ => Right(None)
         recorded.map: files =>
           (

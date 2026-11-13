@@ -694,7 +694,7 @@ object GraphCompile:
         .fromEither(ApiDigest.writeEmpty(analysisRoot(plan, module, version, platform)))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error)) *>
       ZIO
-        .fromEither(ProductDigest.write(analysisRoot(plan, module, version, platform), classes))
+        .fromEither(ProductDigest.write(analysisRoot(plan, module, version, platform), classes, plan.repo))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error))
         .as(
           CellResult(

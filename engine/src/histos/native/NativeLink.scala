@@ -1,10 +1,12 @@
 package histos.native
 
+import histos.cache.{ContentStore, LinkReplay, LinkerStarts}
 import histos.jdk.JdkRuntime
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.resolve.LockedTools
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
+import histos.schedule.CacheError
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -12,8 +14,9 @@ import histos.zinc.{
   CompileRequest,
   CompileReplay,
   CompileToolchain,
+  GraphCompile,
   JvmCompile,
-
+  ProductDigest,
   ScalacFlags,
 }
 import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -24,22 +27,27 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, ZIO}
 
 object NativeKey:
-  /** Identity of a native link. The binary path is not part of it. The clang version and target are.
+  /** Identity of a native link. The binary path is not part of it. The clang version, target, and main class are. Each
+    * classes directory contributes its product digest, so a comment keeps the key and a method body or a path constant
+    * moves it. `products` keeps that digest from colliding with another checksum of the same hex.
     */
   def of(
       version: ScalaVersion,
       clang: ClangVersion,
       target: ClangTarget,
-      sources: Sha256,
+      main: MainClass,
+      products: List[Sha256],
       artifacts: List[Sha256],
   ): Sha256 =
     val text =
       s"""${version.value}
          |${clang.value}
          |${target.value}
+         |${main.binary}
          |stubs
          |no-optimize
-         |${sources.value}
+         |products
+         |${products.map(_.value).mkString("\n")}
          |${artifacts.map(_.value).mkString("\n")}
          |""".stripMargin
     Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
@@ -87,7 +95,7 @@ object NativeLink:
   def link(
       request: NativeLinkRequest,
       sourcesRoot: Path,
-  ): ZIO[LockedTools, NativeError, Linked] =
+  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Linked] =
     val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
       request
     for
@@ -99,14 +107,90 @@ object NativeLink:
       sources <- histos.zinc.Sources
         .select(sourcesRoot, version, Platform.Native)
         .mapError(NativeError.Compile(_))
-      digest <- JvmCompile
-        .sourceDigest(sourcesRoot, sources)
-        .mapError(NativeError.Compile(_))
       compiled <- compile(request, sources, libs, sourcesRoot).mapError(NativeError.Compile(_))
-      linker   <- view
-        .selected(
-          NativeRequests.linker(toolchain, view.catalog, view.repositories)
-        )
+      prints   <- toolchainPrints(view, toolchain, libs)
+      products <- productDigests(List(compiled.classes))
+      key = NativeKey.of(
+        version,
+        clang.version,
+        clang.target,
+        main,
+        products,
+        prints,
+      )
+      binary <- restoreOr(
+        key,
+        work,
+        invoke(
+          clang,
+          main,
+          compiled.classes :: libs.libraries,
+          work,
+          jdk,
+          toolchain,
+          env,
+        ),
+      )
+    yield Linked(binary, key)
+
+  /** Link `.nir` that is already compiled. The native libraries are added after `classpath`.
+    */
+  def linkClasspath(
+      request: NativeLinkRequest,
+      classpath: List[Path],
+  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Path] =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+      request
+    for
+      view <- ZIO.service[LockedTools]
+      libs <- NativeClasspath
+        .fetch(toolchain, Some(version))
+        .mapError(NativeError.Fetch(_))
+      clang    <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
+      prints   <- toolchainPrints(view, toolchain, libs)
+      products <- productDigests(classpath)
+      key = NativeKey.of(version, clang.version, clang.target, main, products, prints)
+      binary <- restoreOr(
+        key,
+        work,
+        invoke(
+          clang,
+          main,
+          withoutLibraries(classpath, libs.libraries) ++ libs.libraries,
+          work,
+          jdk,
+          toolchain,
+          env,
+        ),
+      )
+    yield binary
+
+  /** A stored key is restored into `work` and the linker does not start. A miss ticks, links, then stores the binary.
+    */
+  private def restoreOr(
+      key: Sha256,
+      work: Path,
+      link: ZIO[LockedTools & LinkerStarts, NativeError, Path],
+  ): ZIO[LockedTools & ContentStore & LinkerStarts, NativeError, Path] =
+    for
+      store  <- ZIO.service[ContentStore]
+      hit    <- LinkReplay.load(store, key, work).mapError(stored)
+      binary <- hit match
+        case Some(path) => ZIO.succeed(path)
+        case None       => link.tap(path => LinkReplay.save(store, key, path).mapError(stored))
+    yield binary
+
+  private def stored(error: CacheError): NativeError =
+    NativeError.Compile(CompileError.Stored(error))
+
+  private def toolchainPrints(
+      view: LockedTools,
+      toolchain: NativeToolchain,
+      libs: NativeClasspath,
+  ): ZIO[LockedTools, NativeError, List[Sha256]] =
+    for
+      linker <- view
+        .selected(NativeRequests.linker(toolchain, view.catalog, view.repositories))
         .mapError(error => NativeError.Fetch(NativeFetch.Resolved(error)))
       bridges <- ZIO
         .foreach(
@@ -117,53 +201,11 @@ object NativeLink:
           )
         )(view.selected)
         .mapError(error => NativeError.Fetch(NativeFetch.Resolved(error)))
-      binary <- invoke(
-        clang,
-        main,
-        compiled.classes :: libs.libraries,
-        work,
-        jdk,
-        toolchain,
-        env,
-      )
-    yield Linked(
-      binary,
-      NativeKey.of(
-        version,
-        clang.version,
-        clang.target,
-        digest,
-        List(
-          compiled.key,
-          libs.input.fingerprint,
-          linker.fingerprint,
-        ) ++ bridges.map(_.fingerprint),
-      ),
-    )
+    yield List(libs.input.fingerprint, linker.fingerprint) ++ bridges.map(_.fingerprint)
 
-  /** Link `.nir` that is already compiled. The native libraries are added after `classpath`.
-    */
-  def linkClasspath(
-      request: NativeLinkRequest,
-      classpath: List[Path],
-  ): ZIO[LockedTools, NativeError, Path] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
-      request
-    for
-      libs <- NativeClasspath
-        .fetch(toolchain, Some(version))
-        .mapError(NativeError.Fetch(_))
-      clang  <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
-      binary <- invoke(
-        clang,
-        main,
-        withoutLibraries(classpath, libs.libraries) ++ libs.libraries,
-        work,
-        jdk,
-        toolchain,
-        env,
-      )
-    yield binary
+  private def productDigests(classpath: List[Path]): IO[NativeError, List[Sha256]] =
+    ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
+      ZIO.fromEither(ProductDigest.read(dir)).mapError(NativeError.Compile(_))
 
   private def compile(
       link: NativeLinkRequest,
@@ -229,7 +271,7 @@ object NativeLink:
       jdk: JdkRuntime,
       toolchain: NativeToolchain,
       env: Map[String, String],
-  ): ZIO[LockedTools, NativeError, Path] =
+  ): ZIO[LockedTools & LinkerStarts, NativeError, Path] =
     val bridgeRoot = work.resolve("bridge").resolve(toolchain.revision.value)
     val classes    = bridgeRoot.resolve("classes")
     val source     = bridgeRoot
@@ -275,6 +317,7 @@ object NativeLink:
       bridge <- ZIO
         .fromEither(MainClass.from(NativeBridge.MainName))
         .mapError(error => NativeError.Link(LinkError.Linker(error.message)))
+      _      <- LinkerStarts.tick
       binary <- ChildProcess
         .run(
           ChildRequest(

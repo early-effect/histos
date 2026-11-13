@@ -1,8 +1,10 @@
 package histos.js
 
+import histos.cache.{ContentStore, LinkReplay, LinkerStarts}
 import histos.jdk.{JdkRuntime, Sha256}
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
+import histos.schedule.CacheError
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -11,12 +13,11 @@ import histos.zinc.{
   GraphCompile,
   JvmCompile,
   ProductDigest,
-
   ScalacFlags,
 }
 import histos.ScalaVersion
 
-import histos.resolve.{LockedTools, ResolveError}
+import histos.resolve.LockedTools
 
 import java.nio.file.{Files, Path}
 
@@ -42,8 +43,32 @@ final case class JsLinked(script: Path, key: Sha256)
 object JsLink:
   private val BridgeMain: String = "subprocess.JsBridge"
 
-  def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, JsLinked] =
-    val JsLinkRequest(version, main, classpath, work, jdk, kind, revision, initialize) =
+  def link(
+      request: JsLinkRequest
+  ): ZIO[LockedTools & ContentStore & LinkerStarts, JsLinkError, JsLinked] =
+    val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize) =
+      request
+    for
+      view <- ZIO.service[LockedTools]
+      selected = revision.getOrElse(view.catalog.js.revision)
+      digests <- productsOf(classpath)
+      key = JsKey.of(version, selected, kind, main, digests, initialize)
+      store  <- ZIO.service[ContentStore]
+      hit    <- LinkReplay.load(store, key, request.work).mapError(stored)
+      script <- hit match
+        case Some(path) => ZIO.succeed(path)
+        case None       =>
+          produce(request, selected).tap(path => LinkReplay.save(store, key, path).mapError(stored))
+    yield JsLinked(script, key)
+
+  private def stored(error: CacheError): JsLinkError =
+    JsLinkError.Product(CompileError.Stored(error))
+
+  private def produce(
+      request: JsLinkRequest,
+      selected: histos.JsVersion,
+  ): ZIO[LockedTools & LinkerStarts, JsLinkError, Path] =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize) =
       request
     val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
@@ -53,9 +78,7 @@ object JsLink:
     val listed = work.resolve("classpath.txt")
     val child  = work.resolve("child")
     for
-      view <- ZIO.service[LockedTools]
-      selected = revision.getOrElse(view.catalog.js.revision)
-      digests   <- productsOf(classpath)
+      view      <- ZIO.service[LockedTools]
       libraries <- ScalaJs
         .libraries(version, Some(selected))
         .mapError(JsLinkError.Library(_))
@@ -92,6 +115,7 @@ object JsLink:
         .mapError(JsLinkError.Library(_))
       _   <- empty(output)
       _   <- empty(child)
+      _   <- LinkerStarts.tick
       ran <- ChildProcess
         .run(
           ChildRequest(
@@ -112,7 +136,7 @@ object JsLink:
         case 0 => readJs(child.resolve("js.path"))
         case _ =>
           ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
-    yield JsLinked(script, JsKey.of(version, selected, kind, main, digests, initialize))
+    yield script
 
   private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
     ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
