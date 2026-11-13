@@ -277,7 +277,7 @@ The open items are written as agent-ready briefs, with their order, bindings, an
   - `ModuleTest.heard` passes that listener. The compiler calls it on its own thread, and the callback offers `CompileFeed.Diagnostic` onto the session while the test compile is still running. A warning is not a failure.
   - Red: `shown` was `Chunk()`. The suite had passed, and the feed had no warning. That run was 738 passed and 1 failed.
   - Green: the same law. The line names the test file, `:5:`, and `: warn:`, and the message contains `deprecated`.
-  - `./histos test api wire central engine app`: api 196 on jvm and on native, wire 247 on jvm and on native, central 86, engine 739, app 214. No test-clock warning. `./histos fmt --check`, `./histos workflow --check`, and `./histos run doc` are clean.
+  - `./histos test api wire central engine app`: api 196 on jvm and on native, wire 247 on jvm and on native, central 86, engine 740, app 214. No test-clock warning. `./histos fmt --check`, `./histos workflow --check`, and `./histos run doc` are clean.
 - [x] **Program output.** `histos run` streams the program's output as it runs. Proof: a law with a real child that prints a line, then waits on a gate: the line arrives before the gate opens. Done:
   - `Program.runCell` ran each cell as a step that collected the whole feed with `runCollect`, so nothing printed until the program exited.
   - The step now hands each feed to a queue that the stream reads as it fills. The producer is forked into the stream's scope, so ending the stream stops the program.
