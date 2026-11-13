@@ -91,7 +91,7 @@ object Assemble:
           .mapError(error => AssembleError.Toolchain(error))
           .provideSome[Resolve](tools)
         dirs      <- ZIO.fromEither(directories(libs, cells))
-        extra     <- embedded(repo, dirs)
+        extra     <- embedded(repo, dirs, isLauncher(graph, target.name))
         assembled <- pack(
           classes,
           runtime ++ jars.filterNot(runtime.contains),
@@ -194,12 +194,19 @@ object Assemble:
             acc ++ fresh,
         )
 
-  /** The bootstrap jar of library classes, and the identity resource when git names a commit. */
-  private def embedded(repo: Path, dirs: List[Path]): ZIO[Scope, AssembleError, List[AssemblyFile]] =
+  /** The bootstrap jar of library classes. A launcher also carries the identity resource when git names a commit. */
+  private def embedded(
+      repo: Path,
+      dirs: List[Path],
+      launcher: Boolean,
+  ): ZIO[Scope, AssembleError, List[AssemblyFile]] =
     for
       nested <- nested(dirs)
-      ident  <- identityFile(repo)
+      ident  <- if launcher then identityFile(repo) else ZIO.succeed(None)
     yield nested.toList ++ ident.toList
+
+  private def isLauncher(graph: ProjectGraph, name: ProjectName): Boolean =
+    graph.catalog.ships.exists(_.toolchain.exists(_.launcher == name))
 
   private def nested(dirs: List[Path]): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
     dirs match
