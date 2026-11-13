@@ -100,9 +100,9 @@ object NativeLink:
         .select(sourcesRoot, version, Platform.Native)
         .mapError(NativeError.Compile(_))
       digest <- JvmCompile
-        .sourceDigest(sources)
+        .sourceDigest(sourcesRoot, sources)
         .mapError(NativeError.Compile(_))
-      compiled <- compile(request, sources, libs).mapError(NativeError.Compile(_))
+      compiled <- compile(request, sources, libs, sourcesRoot).mapError(NativeError.Compile(_))
       linker   <- view
         .selected(
           NativeRequests.linker(toolchain, view.catalog, view.repositories)
@@ -169,6 +169,7 @@ object NativeLink:
       link: NativeLinkRequest,
       sources: List[Path],
       libs: NativeClasspath,
+      checkout: Path,
   ): ZIO[LockedTools, CompileError, CompileOutput] =
     val request = CompileRequest(
       CompileToolchain(
@@ -183,6 +184,7 @@ object NativeLink:
       link.work.resolve("analysis"),
       Nil,
       Nil,
+      checkout = checkout,
     )
     CompileReplay.isolated(
       JvmCompile.compilePrepared(request, histos.zinc.CellPlatform.Native(link.toolchain), List(libs.plugin))
@@ -265,6 +267,7 @@ object NativeLink:
             bridgeRoot.resolve("analysis"),
             Nil,
             Nil,
+            checkout = bridgeRoot,
           )
         )
         .mapError(NativeError.Compile(_))

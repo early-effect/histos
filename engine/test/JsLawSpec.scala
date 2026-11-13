@@ -88,6 +88,7 @@ object JsLawSpec extends ZIOSpecDefault:
       Path.of("analysis"),
       Nil,
       Nil,
+      checkout = Path.of("checkout"),
     )
 
   private val dyingCompilers: Compilers = new Compilers:

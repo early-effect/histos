@@ -58,6 +58,8 @@ final case class CompileRequest(
     coverage: Option[String] = None,
     /** Scala 2 coverage jars on the compiler classloader. They are not part of the compile-cache key. */
     coverageTools: List[histos.resolve.ToolInput] = Nil,
+    /** The tree the source row is relative to. The path itself is not a key input. */
+    checkout: Path,
 )
 
 final case class CompileOutput(
@@ -151,7 +153,8 @@ object CompileKey:
 
   /** Identity of a compile, excluding compiler jars. An upstream classes directory contributes its API digest, not its
     * class bytes. The digest is named `apis`, so it cannot collide with a jar checksum. Artifact checksums are the
-    * jars.
+    * jars. The sources digest is each source's path relative to the checkout, then its bytes. The checkout path is not
+    * an input.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
     Sha256Digest.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
@@ -159,9 +162,11 @@ end CompileKey
 
 object JvmCompile:
 
-  def sourceDigest(sources: List[Path]): IO[CompileError, Sha256] = hashSources(
-    sources
-  )
+  /** The sources row. Each source contributes its path relative to `checkout`, then its bytes. The checkout path is not
+    * hashed. A source that is not inside `checkout` is [[CompileError.Outside]].
+    */
+  def sourceDigest(checkout: Path, sources: List[Path]): IO[CompileError, Sha256] =
+    hashSources(checkout, sources)
 
   def compile(
       request: CompileRequest,
@@ -255,18 +260,43 @@ object JvmCompile:
       else None
     finally zip.close()
 
-  private def hashSources(sources: List[Path]): IO[CompileError, Sha256] =
+  private final case class HashedSource(relative: String, bytes: Chunk[Byte])
+
+  /** Recall and compile both call this. The row is the relative path, a zero byte, then the file bytes, in relative
+    * path order. Sorting by the absolute path would put the checkout back into the key.
+    */
+  private def hashSources(checkout: Path, sources: List[Path]): IO[CompileError, Sha256] =
+    val root = checkout.toAbsolutePath.normalize
     ZIO
-      .foreach(sources.sortBy(_.toString)): path =>
+      .foreach(sources)(sourceRow(root, _))
+      .map: rows =>
+        Sha256Digest.of(rows.sortBy(_.relative).foldLeft(Chunk.empty[Byte])((acc, row) => acc ++ row.bytes))
+
+  private def sourceRow(root: Path, path: Path): IO[CompileError, HashedSource] =
+    val file = path.toAbsolutePath.normalize
+    relativeTo(root, file) match
+      case None           => ZIO.fail(CompileError.Outside(file, root))
+      case Some(relative) =>
         ZIO
-          .attemptBlocking {
-            val body = Files.readAllBytes(path)
-            Chunk.fromArray(
-              path.toString.getBytes(StandardCharsets.UTF_8)
-            ) ++ Chunk.single(0.toByte) ++ Chunk.fromArray(body)
-          }
-          .mapError(_ => CompileError.Io(IoFailure(path, IoFault.Read)))
-      .map(parts => Sha256Digest.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
+          .attemptBlocking(Files.readAllBytes(file))
+          .mapBoth(
+            _ => CompileError.Io(IoFailure(file, IoFault.Read)),
+            body =>
+              HashedSource(
+                relative,
+                Chunk.fromArray(relative.getBytes(StandardCharsets.UTF_8)) ++
+                  Chunk.single(0.toByte) ++
+                  Chunk.fromArray(body),
+              ),
+          )
+
+  /** Names under `root`, separated by `/`. Absent when `file` is not strictly inside `root`. */
+  private def relativeTo(root: Path, file: Path): Option[String] =
+    if file == root || !file.startsWith(root) then None
+    else
+      val parts = root.relativize(file).iterator.asScala.map(_.toString).toList
+      if parts.isEmpty || parts.exists(part => part.isEmpty || part == "." || part == "..") then None
+      else Some(parts.mkString("/"))
 
   /** Compiler jars plus the library they linked against. BSP names this Scala version with these jars.
     */
@@ -336,7 +366,7 @@ object JvmCompile:
       stdlib: Option[List[Path]],
       admitted: UIO[Unit] = ZIO.unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    hashSources(request.sources)
+    hashSources(request.checkout, request.sources)
       .flatMap(digest => CellTools.compile(platform, request, digest))
       .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted))
 

@@ -86,6 +86,7 @@ object JsLink:
             bridgeRoot.resolve("analysis"),
             Nil,
             Nil,
+            checkout = bridgeRoot,
           )
         )
         .mapError(JsLinkError.Library(_))

@@ -100,6 +100,7 @@ object NativeSuite:
             bridgeRoot.resolve("analysis"),
             Nil,
             Nil,
+            checkout = bridgeRoot,
           )
         )
         .mapError(NativeSuiteError.Compile(_))
