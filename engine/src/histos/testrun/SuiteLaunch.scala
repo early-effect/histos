@@ -1,5 +1,6 @@
 package histos.testrun
 
+import histos.cache.LinkerStarts
 import histos.jdk.{JdkRuntime, Sha256}
 import histos.js.{JsRun, JsRunRequest}
 
@@ -123,6 +124,7 @@ private[testrun] object SuiteLaunch:
                   revision = module.jsVersion,
                 )
               )
+              .provideSomeLayer(LinkerStarts.live)
               .mapError(error =>
                 ModuleTestError.Tool(
                   cell.module,
@@ -333,6 +335,7 @@ private[testrun] object SuiteLaunch:
                 ),
                 classes :: linked.paths,
               )
+              .provideSomeLayer(LinkerStarts.live)
               .mapError(error =>
                 ModuleTestError.Tool(
                   cell.module,
@@ -424,6 +427,7 @@ private[testrun] object SuiteLaunch:
                   ),
                   classpath,
                 )
+                .provideSomeLayer(LinkerStarts.live)
                 .mapError(error =>
                   ModuleTestError.Tool(
                     cell.module,

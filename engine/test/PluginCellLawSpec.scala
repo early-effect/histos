@@ -1,5 +1,6 @@
 package histos.load
 
+import histos.cache.ContentStore
 import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.plugin.{DeclaredTask, PluginDetail, PluginRunError, Seal, TaskDep, TaskName}
 import histos.resolve.{DependencyLock, ResolutionService, Resolve}
@@ -70,7 +71,9 @@ object PluginCellLawSpec extends ZIOSpecDefault:
           main == Left(PluginFault.Task(failed("'core' is not a JavaScript module"))),
           junk == Left(PluginFault.Task(failed(histos.MainClassError.Bad("not a class").message))),
         )
-      program.provideSomeLayer[TestEnvironment](stubbed[Resolve] ++ stubbed[ResolutionService])
+      program.provideSomeLayer[TestEnvironment](
+        stubbed[Resolve] ++ stubbed[ResolutionService] ++ stubbed[ContentStore]
+      )
     ,
     test("a missing script record is unread, and the record's text is the script path"):
       Workspace

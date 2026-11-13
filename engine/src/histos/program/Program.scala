@@ -1,5 +1,6 @@
 package histos.program
 
+import histos.cache.{ContentStore, LinkerStarts}
 import histos.doctor.Suggest
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
@@ -71,13 +72,14 @@ object Program:
           .filter(cell => cell.module == module.name && cell.platform == platform)
           .sortBy(_.version.value)
         continue <- Ref.make(true)
+        store    <- ZIO.service[ContentStore]
       yield ZStream
         .fromIterable(cells)
         .flatMap: cell =>
           ZStream.unwrap:
             continue.get.map: keep =>
               if keep then
-                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes))
+                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store))
                   .tap:
                     case ProgramFeed.Exited(_, _, _, code) if code != 0 =>
                       continue.set(false)
@@ -101,6 +103,7 @@ object Program:
       service  <- ZIO.service[ResolutionService]
       lock     <- service.current
       tools    <- LockedTools.make(lock, graph, service)
+      store    <- ZIO.service[ContentStore]
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
@@ -112,7 +115,7 @@ object Program:
       cells = compiled.filter(cell => cell.module == module.name && cell.platform == Platform.Native)
       linked <- cells match
         case cell :: Nil =>
-          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes)
+          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes, store)
             .provideSomeLayer[Resolve](zio.ZLayer.succeed(tools))
         case _ =>
           module.versions.all match
@@ -137,6 +140,7 @@ object Program:
       jdk: JdkRuntime,
       binary: Binary,
       runtimes: Runtimes,
+      store: ContentStore,
   ): ZIO[Resolve & LockedTools, ProgramError, Path] =
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
@@ -166,8 +170,9 @@ object Program:
             histos.toolchain.PlatformToolError.NativeOrigin(error),
           )
         )
-      program <- NativeLink
-        .linkClasspath(
+      program <- cachedLink(
+        store,
+        NativeLink.linkClasspath(
           NativeLinkRequest(
             major,
             toolchain,
@@ -178,14 +183,14 @@ object Program:
             cell.version,
           ),
           paths,
+        ),
+      ).mapError(error =>
+        ProgramError.Tool(
+          cell.module,
+          cell.version,
+          histos.toolchain.PlatformToolError.Native(error),
         )
-        .mapError(error =>
-          ProgramError.Tool(
-            cell.module,
-            cell.version,
-            histos.toolchain.PlatformToolError.Native(error),
-          )
-        )
+      )
       placed <- place(program, ClientBinary.destination(repo))
     yield placed
 
@@ -321,13 +326,14 @@ object Program:
       lock: DependencyLock,
       jdk: JdkRuntime,
       runtimes: Runtimes,
+      store: ContentStore,
   )
 
   private def one(
       run: CellRun
   ): ZStream[Resolve & LockedTools, ProgramError, ProgramFeed] =
-    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes) = run
-    val env                                                             = runtimes.env
+    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store) = run
+    val env                                                                    = runtimes.env
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
     val began        = ZStream.succeed(
@@ -372,8 +378,9 @@ object Program:
                 repositories,
               )
               _      <- fresh(linkDir)
-              linked <- JsLink
-                .link(
+              linked <- cachedLink(
+                store,
+                JsLink.link(
                   JsLinkRequest(
                     cell.version,
                     binary,
@@ -383,14 +390,14 @@ object Program:
                     module.jsModule,
                     revision = module.jsVersion,
                   )
+                ),
+              ).mapError(error =>
+                ProgramError.Tool(
+                  cell.module,
+                  cell.version,
+                  histos.toolchain.PlatformToolError.JsLink(error),
                 )
-                .mapError(error =>
-                  ProgramError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.JsLink(error),
-                  )
-                )
+              )
               asked <- JsRun
                 .start(
                   JsRunRequest(
@@ -441,8 +448,9 @@ object Program:
                     histos.toolchain.PlatformToolError.NativeOrigin(error),
                   )
                 )
-              program <- NativeLink
-                .linkClasspath(
+              program <- cachedLink(
+                store,
+                NativeLink.linkClasspath(
                   NativeLinkRequest(
                     major,
                     toolchain,
@@ -453,17 +461,23 @@ object Program:
                     cell.version,
                   ),
                   paths,
+                ),
+              ).mapError(error =>
+                ProgramError.Tool(
+                  cell.module,
+                  cell.version,
+                  histos.toolchain.PlatformToolError.Native(error),
                 )
-                .mapError(error =>
-                  ProgramError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.Native(error),
-                  )
-                )
+              )
               work <- fresh(linkDir.resolve("exec"))
             yield command(cell, List(program.toString), work, nativeEnvironment(env, module))
     began ++ ran
+
+  private def cachedLink[R, E, A](
+      store: ContentStore,
+      effect: ZIO[R & ContentStore & LinkerStarts, E, A],
+  ): ZIO[R, E, A] =
+    effect.provideSomeLayer(zio.ZLayer.succeed(store) ++ LinkerStarts.live)
 
   private def events(
       cell: histos.zinc.CompiledCell,

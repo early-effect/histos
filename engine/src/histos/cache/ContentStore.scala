@@ -29,6 +29,9 @@ trait ContentStore:
   def root: Path
   def put(digest: Digest, bytes: Chunk[Byte], at: Instant): IO[CacheError, Unit]
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]]
+
+  /** Delete one blob. A missing blob is already gone. */
+  def remove(digest: Digest): IO[CacheError, Unit]
   def list: IO[CacheError, List[CacheEntry]]
 
   /** Replace this project's keep set. Other projects are left alone. */
@@ -77,6 +80,9 @@ private final class DiskStore(val root: Path) extends ContentStore:
             _ <- move(tmp, dest)
             _ <- stamp(dest, at)
           yield ()
+
+  def remove(digest: Digest): IO[CacheError, Unit] =
+    delete(objectPath(digest))
 
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]] =
     val dest = objectPath(digest)

@@ -962,7 +962,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "UnsupportedScala(version) | NoSources() | Outside(source,checkout) | Banned(path,ban) | " +
               "Failed(diagnostics) | Toolchain(miss) | Io(failure) | JsLibrary(miss) | " +
               "NativeFetch(error) | NativeOrigin(error) | NativeLibrary(text) | " +
-              "Stored(error)"
+              "Stored(error) | NoNir(source)"
           ),
           """{"NoSources":{}}""",
           histos.zinc.CompileError.NoSources,

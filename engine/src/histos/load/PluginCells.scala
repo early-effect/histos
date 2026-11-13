@@ -1,5 +1,6 @@
 package histos.load
 
+import histos.cache.{ContentStore, LinkerStarts}
 import histos.jdk.{JdkRuntime, Sha256, Sha256Digest}
 import histos.js.{JsLink, JsLinkRequest}
 import histos.plugin.{CellClasspath, DeclaredTask, LinkedScript, PluginDetail, PluginRunError, TaskDep}
@@ -81,7 +82,7 @@ private[load] object PluginCells:
   def link(
       session: histos.zinc.CompileSession,
       cell: Cell,
-  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, String] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService & ContentStore, PluginFault, String] =
     val histos.zinc.CompileSession(repo, graph, jdk, _, lock, _) = session
     val asked                                                    =
       cell.module.application match
@@ -140,7 +141,7 @@ private[load] object PluginCells:
                 initialize = initialize,
               )
             )
-            .provideSome[Resolve](tools)
+            .provideSome[Resolve & ContentStore](tools ++ LinkerStarts.live)
             .mapError(error => PluginFault.Task(failed(error.message)))
           _ <- Workspace
             .writeString(scriptRecord(repo, cell.module.name, cell.version), linked.script.toString)

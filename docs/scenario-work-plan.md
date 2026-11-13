@@ -12,7 +12,7 @@ Scenarios live in this repository's tests. [Scenario](../engine/test/Scenario.sc
 
 ## What a scenario is
 
-A scenario is a ZIO test. It opens one content store, then one or more checkouts. Scala writes the tree. The test asserts values and files: `CompileFeed`, `TestFeed`, digests, compiler starts. A log line is not the oracle.
+A scenario is a ZIO test. It opens one content store, then one or more checkouts. Scala writes the tree. The test asserts values and files: `CompileFeed`, `TestFeed`, digests, compiler starts, linker starts. A log line is not the oracle.
 
 The store belongs to the scenario. It is not [CompileReplay.processStore](../engine/src/histos/zinc/CompileReplay.scala), which is one directory for the whole test JVM. Two scenarios do not share blobs. Two checkouts of one scenario do.
 
@@ -51,6 +51,8 @@ Finish one item and prove it before the next. The proof is the suite the item na
   - `ZincCompileLawSpec` "the source row is the path relative to the checkout, then the bytes": two directories with the same relative path and bytes hash equal, list order does not change the digest, a different relative path does, and a file outside the checkout is `CompileError.Outside`.
   - Recall and compile both call `JvmCompile.sourceDigest`. [CellTools.key](../engine/src/histos/zinc/CellTools.scala) is still the one key. The checkout path is not a row.
   - `./histos test api wire central engine app`: api 196 and wire 247 on JVM and Native, central 86, engine 720, app 213. No clock warning. `fmt --check`, `workflow --check`, and `run doc` are clean.
+
+- [x] **Link cache.** A native link whose key is in the scenario store is restored, and the linker child does not start. A trailing comment keeps the binary and the start count. A method body relinks. A path constant, `/api/v1/users` against `/api/v2/users`, relinks. A wiped checkout compiles back from the store and the next link restores the last binary with the start count unchanged. `Checkout.link` counts those starts. The clock on that one law is live because the timer is clang and the Scala Native linker. Proof: `./histos testOnly --module engine 'histos.ScenarioSpec'` (16 passed).
 
 ## Out of scope
 

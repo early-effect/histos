@@ -176,7 +176,7 @@ object PluginRuntime:
                   session.flatMap: compiled =>
                     PluginCells
                       .link(compiled, cell)
-                      .provideSome[Resolve](zio.ZLayer.succeed(report)),
+                      .provideSome[Resolve & histos.cache.ContentStore](zio.ZLayer.succeed(report)),
                 (taskId, task, upstream) =>
                   remembered(
                     id,

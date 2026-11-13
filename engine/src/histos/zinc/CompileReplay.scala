@@ -76,6 +76,20 @@ object CompileReplay:
     ZIO
       .attemptBlocking(installed(request, key))
       .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Stat)))
+      .flatMap:
+        case None                                                                 => ZIO.none
+        case Some(output) if request.toolchain.platform != histos.Platform.Native =>
+          ZIO.some(output)
+        case Some(output) =>
+          Digest.from(key.value) match
+            case None     => ZIO.some(output)
+            case Some(id) =>
+              readAnalysis(request.analysis, id) match
+                case Left(_)         => ZIO.some(output)
+                case Right(analysis) =>
+                  NirGuard.missing(request, analysis) match
+                    case None    => ZIO.some(output)
+                    case Some(_) => dropMarker(request).as(None)
 
   def load(
       store: ContentStore,
@@ -88,7 +102,11 @@ object CompileReplay:
         .mapError(CompileError.Stored(_))
         .flatMap:
           case None        => ZIO.none
-          case Some(bytes) => restore(id, bytes, key, request).tap(_ => stamp(request, key)).map(Some(_))
+          case Some(bytes) =>
+            restore(id, bytes, key, request).flatMap: output =>
+              withoutNir(store, id, request).flatMap:
+                case true  => ZIO.none
+                case false => stamp(request, key).as(Some(output))
 
   def save(
       store: ContentStore,
@@ -103,6 +121,36 @@ object CompileReplay:
       _   <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
       _   <- stamp(request, key)
     yield ()
+
+  /** A restored Native product with class files and no NIR is not a hit. The blob and the on-disk marker go, so the
+    * caller compiles again instead of linking the empty product until `cleanFull`.
+    */
+  private def withoutNir(
+      store: ContentStore,
+      id: Digest,
+      request: CompileRequest,
+  ): IO[CompileError, Boolean] =
+    if request.toolchain.platform != histos.Platform.Native then ZIO.succeed(false)
+    else
+      ZIO
+        .fromEither(readAnalysis(request.analysis, id))
+        .foldZIO(
+          _ => ZIO.succeed(false),
+          analysis =>
+            NirGuard.missing(request, analysis) match
+              case None    => ZIO.succeed(false)
+              case Some(_) =>
+                store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(true),
+        )
+
+  private def dropMarker(request: CompileRequest): IO[CompileError, Unit] =
+    ZIO
+      .attemptBlocking {
+        Files.deleteIfExists(request.analysis.resolve(Marker))
+        Files.deleteIfExists(request.analysis.resolve(AnalysisName))
+        ()
+      }
+      .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Delete)))
 
   private def installed(request: CompileRequest, key: Sha256): Option[CompileOutput] =
     val marker = request.analysis.resolve(Marker)
@@ -295,7 +343,7 @@ object CompileReplay:
         .write(request.analysis, analysis)
         .flatMap: _ =>
           ProductDigest
-            .write(request.analysis, request.classes)
+            .write(request.analysis, request.classes, request.checkout)
             .flatMap: _ =>
               countProducts(request.classes).map: count =>
                 CompileOutput(

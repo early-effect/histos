@@ -9,7 +9,8 @@ import java.nio.charset.StandardCharsets
 import zio.Chunk
 
 /** Identity of a Scala.js link. A classes directory contributes its product digest, not its class bytes. `products`
-  * keeps that digest from colliding with another checksum of the same hex.
+  * keeps that digest from colliding with another checksum of the same hex. A stored key restores the script and does
+  * not start the linker.
   */
 object JsKey:
   def of(

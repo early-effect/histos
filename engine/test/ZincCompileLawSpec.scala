@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.cache.ContentStore
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
-import histos.native.NativeOrigin
+import histos.native.{NativeOrigin, NativeToolchain}
 import histos.resolve.{LockedTools, Repositories, ResolutionService, Resolve}
 import histos.toolchain.RuntimeIdentity
 import histos.version.Catalog
@@ -174,8 +174,54 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
                 bytes.nonEmpty,
                 !bytes.sameElements("not a class".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
               )
-            ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](graphEnv(closure, dir)),
+            ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](graphEnv(closure, dir))
+    ,
+    test("a native compile that produced no nir for a source fails and stores nothing"):
+      ZIO.serviceWithZIO[CompilerClosure]: closure =>
+        closure.nativeScala.flatMap: version =>
+          Workspace
+            .work("histos-native-nir")
+            .flatMap: dir =>
+              val source = dir.resolve("A.scala")
+              val dummy  = dir.resolve("dummy.jar")
+              val store  = ContentStore.in(dir.resolve("store"))
+              val ran    =
+                for
+                  _        <- Workspace.writeString(source, "object A:\n  def x: Int = 1\n")
+                  _        <- emptyJar(dummy)
+                  compiled <- JvmCompile
+                    .compilePrepared(
+                      CompileRequest(
+                        CompileToolchain(version, Platform.Native, jdk, ScalacFlags.empty),
+                        List(source),
+                        Nil,
+                        dir.resolve("classes"),
+                        dir.resolve("analysis"),
+                        Nil,
+                        Nil,
+                        checkout = dir,
+                      ),
+                      CellPlatform.Native(NativeToolchain.Release),
+                      List(dummy),
+                    )
+                    .either
+                  entries <- store.list.mapError(CompileError.Stored(_))
+                yield assertTrue(
+                  compiled == Left(CompileError.NoNir(source.toAbsolutePath.normalize)),
+                  entries.isEmpty,
+                )
+              ran.provideSomeLayer[TestEnvironment & Scope & Resolve & CompilerClosure & Compilers](
+                ZLayer.fromFunction((resolve: Resolve, closure: CompilerClosure) =>
+                  LockedTools(closure.lock, ToolCatalog.default, Repositories.central, resolve, None)
+                ) ++ CompilerStarts.live ++ ZLayer.succeed(store)
+              ),
   ).provideSomeLayerShared[TestEnvironment & Scope](CompilerClosure.layer ++ Compilers.live(1))
+
+  private def emptyJar(path: Path): UIO[Unit] =
+    ZIO.attemptBlocking {
+      val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(path))
+      out.close()
+    }.orDie
 
   private def compile(scala3: ScalaVersion, source: Path, classes: Path, analysis: Path, checkout: Path) =
     JvmCompile
