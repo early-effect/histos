@@ -2,7 +2,7 @@ package histos
 
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.program.ProgramFeed
-import histos.resolve.{ResolveError, ToolRole}
+import histos.resolve.ResolveError
 import histos.testrun.{TestFeed, TestMode, TestStatus}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{ApiDigest, CompileFeed, CompileInput, CompiledCell, GraphCompile, GraphCompileError, KeyMiss}
@@ -108,9 +108,8 @@ object ScenarioSpec extends ZIOSpecDefault:
     test("an unchanged native cell is a hit that needs neither the store nor the compiler"):
       ZIO.scoped:
         for
-          scala3   <- locked
-          _        <- ZIO.serviceWithZIO[CompilerClosure](_.held(ToolRole.NativeLibraries))
-          built    <- ZIO.fromEither(Projects.locked(module("core", Native)(scala3).clang(ClangMajor(21))))
+          native   <- ZIO.serviceWithZIO[CompilerClosure](_.nativeScala)
+          built    <- ZIO.fromEither(Projects.locked(module("core", Native)(native).clang(ClangMajor(21))))
           scenario <- Scenario.open
           checkout <- scenario.checkout(built)
           _        <- checkout.write("core/src/main/scala/Core.scala", core)
