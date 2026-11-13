@@ -237,10 +237,17 @@ object DoctorSurface:
           Workspace
             .writeString(repo.resolve(name), body)
             .fold(failure => s"not applied: ${failure.message}", _ => s"wrote $name")
-        ran   <- ZIO.foreach(commands)(command => runner.run(repo, command).as(s"ran: ${command.line}"))
+        ran   <- ZIO.foreach(commands)(command => runner.run(repo, command).map(ranNotes(command, _)))
         asked <- ZIO.foreach(settings): fix =>
           confirmSetting(fix, request.yes, stdio.prompts, applySetting(net, token.map(_.value)))
-      yield unread ++ wrote ++ ran ++ asked
+      yield unread ++ wrote ++ ran.flatten ++ asked
+
+  /** The command, then what it printed when the runner kept that, indented under it. */
+  private def ranNotes(command: HistosCommand, ran: Ran): List[String] =
+    ran match
+      case Ran.Exited(0, output)      => s"ran: ${command.line}" :: output.map(line => s"  $line")
+      case Ran.Exited(status, output) => s"failed with status $status: ${command.line}" :: output.map(line => s"  $line")
+      case Ran.Unstarted              => List(s"not run (./histos did not start): ${command.line}")
 
   /** A page with no call is a person's to open. A call goes out only after a yes on a terminal, never on `--yes`. */
   private def confirmSetting(

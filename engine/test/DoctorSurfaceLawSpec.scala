@@ -13,6 +13,7 @@ import histos.supply.{
   GitRead,
   Net,
   PrAuthor,
+  Ran,
   Reply,
   SupplyChain,
   UpdatePolicy,
@@ -63,7 +64,9 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                       case Left(_)      => ZIO.succeed(assertTrue(Projects(module("core", Jvm)(scala3)).isRight))
                       case Right(graph) =>
                         def run(request: DoctorSurface.Request, net: Net) =
-                          DoctorSurface.run(repo, graph, request, machine).provideSomeLayer[ReleaseFeed & GitRead](host(net))
+                          DoctorSurface
+                            .run(repo, graph, request, machine)
+                            .provideSomeLayer[ReleaseFeed & GitRead](host(net))
                         for
                           preflight <- run(
                             DoctorSurface.Request(None, false, Some("nightly"), false, false, Nil, false),
@@ -230,7 +233,8 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                     ran   <- Ref.make(List.empty[(Path, String)])
                     hosts <- Ref.make(List.empty[Option[String]])
                     _     <- stub[CommandRunner](_.run(any[Path], any[HistosCommand])):
-                      (at: Path, command: HistosCommand) => ran.update(_ :+ (at -> command.line))
+                      (at: Path, command: HistosCommand) =>
+                        ran.update(_ :+ (at -> command.line)).as(Ran.Exited(0, List("updated")))
                     _ <- stub[GhAuth](_.token(any[Option[String]])): (host: Option[String]) =>
                       hosts.update(_ :+ host).as(None)
                     fixed <- DoctorSurface.run(
@@ -244,7 +248,7 @@ object DoctorSurfaceLawSpec extends ZIOSpecDefault:
                   yield assertTrue(
                     lines == List(repo -> "./histos workflow --update"),
                     asked == List(None),
-                    fixed._2.contains("ran: ./histos workflow --update"),
+                    fixed._2.contains("ran: ./histos workflow --update\n  updated"),
                   )
         .provideSomeLayer[TestEnvironment](
           stubbed[ReleaseFeed] ++ GitAnswers().layer ++ ZLayer.succeed(Stdio.redirected) ++ stubbed[Net] ++

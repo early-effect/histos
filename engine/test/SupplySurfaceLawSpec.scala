@@ -508,7 +508,7 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
       ran  <- Ref.make(List.empty[String])
       sent <- Ref.make(List.empty[String])
       runner = new CommandRunner:
-        def run(at: Path, command: HistosCommand): UIO[Unit] = ran.update(_ :+ command.line)
+        def run(at: Path, command: HistosCommand): UIO[Ran] = ran.update(_ :+ command.line).as(Ran.Exited(0, Nil))
       net = new Net:
         def send(method: String, url: String, body: String, headers: List[(String, String)]) =
           val bearer = headers.collectFirst { case ("Authorization", value) => value }.getOrElse("")

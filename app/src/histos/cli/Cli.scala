@@ -1681,6 +1681,7 @@ object Cli:
     ZIO.serviceWithZIO[Machine]: machine =>
       HistosMcp
         .serve(repo, apiJar, LinePipe.standard, machine)
+        .provideSomeLayer[Local](histos.supply.DoctorSurface.reads)
         .fold(
           err => Completed(CliExit.Failed, "", err.message, Playback.Held),
           _ => Completed(CliExit.Success, "", "", Playback.Held),
