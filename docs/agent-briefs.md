@@ -2,6 +2,30 @@
 
 The open work of [cli-work-plan.md](cli-work-plan.md), written so that each brief can be handed to one agent. Each brief names its goal, the decisions that bind it, the ledger rows and bugs it closes, where to start reading, what it waits on, and the proof that closes it. The plan's checklist is the source of truth for done. A brief is finished when its checklist box is checked with a "Done:" list, in the pull request that earned it.
 
+## The prompt
+
+Give this to the main agent:
+
+> Read `AGENTS.md`, then `docs/agent-briefs.md`, including "Russ's answers". You are the main agent. Run the briefs in the order the "Order" table gives. Spawn one zio-architect subagent per brief, each in its own short-path worktree, and run at most three at a time. Give each subagent its brief and the "Every brief" rules. Review its work, prove it on the tip, open its pull request (stacked where a track needs it), read the CI test log, and merge when green, as Russ's answers allow. Fold anything a subagent finds into the ledger with the next free number. Stop for Russ only where a brief or his answers say so.
+
+## Russ's answers
+
+These were given on 2026-11-13. They stand for every brief, and they replace the questions the briefs used to ask.
+
+- **D12, remote cache writes (row 52).** CI writes the remote cache and laptops only read it, as in sbt 2, Mill, Bazel, and Gradle.
+  - CI's push job writes by namespace and per the build's `promote` setting. A laptop writes only its local store.
+  - Every download is checked against its digest.
+  - A compile whose sources changed while it ran is not stored. This is Bazel's `--guard_against_concurrent_changes`.
+  - `histos cache forget <namespace|module>` purges a bad entry.
+  - `histos cache verify [module ...]` recompiles stored hits in a scratch directory and names any entry whose products differ.
+  - `clean --full` stays the local recovery.
+- **D13, publishing.** Standing approval for `publish snapshots` from a layer's commit and for pinning that commit channel in the same pull request, by the sequence in "Pin moves". It never covers `publish release`, a tag, or `sonaRelease`.
+- **D14, merging.** The main agent merges its pull requests once CI is green on the current head and the test log has no `not advancing the test clock`. Stacks merge in order.
+- **D15, Container.** Make linux-x86_64 work from the Mac. Linux can cross-build, so prefer a cross-compile inside the arm64 container (clang targeting x86_64 against an x86_64 sysroot) over emulating the whole container. Only if that cannot work, a laptop snapshot keeps naming macOS only, and the Linux client comes from the CI publish job on a Linux runner. Record which way row 12 closed.
+- **D16, Scala Native 3.10.1.** At the start of a session, check whether a Scala Native nightly publishes both `scala3lib` and `nscplugin` for 3.10.1. If one does, move `api`, `wire`, and `client` to 3.10.1, with that nightly's `ToolCatalog` change and a pin move, as one pull request.
+- **D17, library gaps.** File one issue on heddle (server shutdown polls the clock, B11) and one on slayer (`stub` forces lambda parameter types). Draft each with its evidence, show Russ the text, and file it after his yes.
+- **D18, finished plans.** Read-through deletes a work plan whose items are all done. The README or a reference doc keeps what users need, and git history is the archive. Live plans (`cli-work-plan.md`, `cache-work-plan.md`, `scenario-work-plan.md`, `test-audit.md`, and this file) are made true at the tip.
+
 ## Every brief
 
 These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
@@ -15,7 +39,7 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
 
   In the worktree, link the main checkout's `dist/histos.jar` and `dist/histos-client` as symlinks, copy `.histos/assembly.sha256` and `AGENTS.md`, and touch `.histos/allow-drift`. Drop the client link if the pinned client misbehaves; `./histos` then runs `java -jar`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
-- **Decisions are Russ's.** A change to what the product does is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D12.
+- **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D19.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
 - **Format once.** Run bare `./histos fmt` after the edits (its ledger skips unchanged files), then `./histos fmt --check`. Do not format file by file.
 - **The proof for any pull request.** `./histos test api wire central engine app`, green on JVM and Native, with no `not advancing the test clock` in the output. `./histos workflow --check` and `./histos run doc` clean, because CI runs both, and the docs task fails on any scaladoc warning. `./histos client` links if `client` changed.
@@ -24,7 +48,7 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
 - **Known hazards.**
   - After a `git checkout` across a commit that moved a source between modules, the old module keeps that source's `.tasty`, and the compile fails ([test-audit.md](test-audit.md) B42). `./histos clean <module>` clears it.
   - A child process a suite leaves behind keeps `./histos test` waiting on its output (B41). If a run stops making progress, look for the orphan.
-  - A pin move publishes. It needs Russ's yes in that session. The sequence is in "Pin moves" below.
+  - A pin move publishes a snapshot. D13 approves snapshots and pin moves. The sequence is in "Pin moves" below.
 
 ## Order
 
@@ -58,7 +82,12 @@ Read-through is last, after every other brief.
 
 ### Remote cache
 
-- **Ask Russ first.** Ledger row 52: nothing verifies a compile's output before it is stored, so a missed invalidation (B28 was one) is a permanent hit under its key, and `cleanFull` is the only recovery. Does the store verify what it keeps, and how? A remote cache makes this matter more, because a bad entry spreads to every checkout.
+- **Binds first.** D12 answers ledger row 52.
+  - Only CI writes the remote.
+  - Downloads are checked against their digest.
+  - A compile whose sources changed while it ran is not stored.
+  - `histos cache forget <namespace|module>` and `histos cache verify [module ...]` land with this brief, each with laws, and in MCP parity.
+  - A law shows that a laptop run never writes the remote.
 - **Goal.** Module compile, package, and link read and write the remote cache through the same namespace walk plugin tasks use. The push job writes `main` per the build's `promote` setting. `purge` is either reachable or deleted.
 - **Binds.** D6: a remote timeout or refusal is a miss, never a hang or a failure. `GrpcChannel.Idle` re-arms per frame.
 - **Start at.** `engine/src/histos/schedule` (`ScheduleAspects`, `GrpcCache`, `GrpcChannel`), and the plugin task namespace walk.
@@ -66,7 +95,7 @@ Read-through is last, after every other brief.
 
 ## Toolchain track
 
-Each brief here changes text the pin renders or build API the pin compiles, so each ends with a pin move. They change self-host machinery that today's local runs depend on. Run them on a worktree and keep the main checkout on the pin.
+Each brief here changes text the pin renders or build API the pin compiles, so each ends with a pin move, which D13 approves. They change self-host machinery that today's local runs depend on. Run them on a worktree and keep the main checkout on the pin.
 
 ### Ship row
 
@@ -86,7 +115,8 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 - **Goal.** A Mac links `linux-x86_64` in a container through `docker` or `podman`, held in a scope so the container is removed on interruption. The image is pinned by digest and has a JDK 25. The container gets a copy of HEAD and runs the Linux pair proof. A second main class in the launcher jar does the link, so the grammar gains no verb.
 - **Closes.** Ledger row 12: a laptop publish names only `macos-aarch64`.
-- **This machine.** Docker 29 through colima is installed, with a `linux/arm64` server. An `x86_64` link needs `--platform linux/amd64` emulation, so check it before designing around it.
+- **This machine.** Docker 29 through colima is installed, with a `linux/arm64` server.
+- **Binds.** D15: cross-compile `x86_64` from the arm64 container first (clang targeting x86_64 against an x86_64 sysroot). Emulating the whole container is the second choice. If neither works, the Linux client comes from the CI publish job, and the brief records that.
 - **Proof.** A fake runtime covers the commands it runs, cleanup on interruption, and the `ContainerError` mapping. Manual: a Mac `publish snapshots` whose manifest names both platforms, then pin it.
 
 ### CI setup
@@ -124,14 +154,15 @@ Each is one pull request with its red law. They touch different code, so they ca
 
 ## Read-through
 
-- **Goal.** README, AGENTS.md, `docs/self-host.md`, [next.md](next.md), [publishing.md](publishing.md), and [release-work-plan.md](release-work-plan.md) read against the code at the tip. Each work plan is groomed to match, or marked as history. Anything found is recorded in the ledger as a miss.
+- **Goal.** README, AGENTS.md, `docs/self-host.md`, [next.md](next.md), [publishing.md](publishing.md), and [release-work-plan.md](release-work-plan.md) read against the code at the tip. Anything found is recorded in the ledger as a miss.
+- **Binds.** D18: a work plan whose items are all done is deleted, after the README or a reference doc keeps what users need. Candidates are `coverage-work-plan.md`, `format-work-plan.md`, `plugins-plan.md`, `release-work-plan.md`, `source-work-plan.md`, `site-publish-modes.md`, and `next.md`. Check each for open items before deleting it. Live plans are made true, and links to a deleted plan are fixed.
 - **Closes.** Ledger row 44: `cache-work-plan.md` still checks "TestStore" with the deleted `ModuleTestQuickSpec` as its proof.
 
-## For Russ, outside the plan
+## Outside the plan
 
-- **Scala Native 3.10.1.** `api`, `wire`, and `client` stay on Scala 3.10.0 until a Scala Native nightly publishes `scala3lib` and `nscplugin` for 3.10.1. Moving them changes `ToolCatalog`'s Native revision, which needs a pin move.
-- **heddle.** Server shutdown polls a busy connection every 10 ms on the server's clock. A test that runs a real server on `TestClock` therefore hangs (B11). Waking on idle would remove the polling. Discuss before filing an issue.
-- **slayer.** `stub` makes laws spell out lambda parameter types, for example `(fingerprint: Fingerprint) =>`. That is a library ergonomics gap to discuss.
+- **Scala Native 3.10.1 (D16).** `api`, `wire`, and `client` stay on Scala 3.10.0 until a Scala Native nightly publishes `scala3lib` and `nscplugin` for 3.10.1. Check for one at the start of each session. When it ships, move them with the `ToolCatalog` change and a pin move.
+- **heddle issue (D17).** Server shutdown polls a busy connection every 10 ms on the server's clock, so a test that runs a real server on `TestClock` hangs (B11). Waking on idle would remove the polling. Draft the issue with B11's miniature, show Russ, and file it after his yes.
+- **slayer issue (D17).** `stub` makes laws spell out lambda parameter types, for example `(fingerprint: Fingerprint) =>`. Draft the issue with a call site, show Russ, and file it after his yes.
 
 ## Pin moves
 
