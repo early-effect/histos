@@ -70,6 +70,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -92,6 +93,7 @@ private[testrun] object SuiteLaunch:
         runtimes.native,
         lock,
         repositories,
+        hear,
         onCompiled = noted,
       )
       classes = TestCompile.testClasses(
@@ -170,6 +172,7 @@ private[testrun] object SuiteLaunch:
       patterns: List[SuitePattern],
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -242,6 +245,7 @@ private[testrun] object SuiteLaunch:
         runtimes.native,
         lock,
         repositories,
+        hear,
         onCompiled = noted,
       )
       stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
@@ -282,6 +286,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -305,6 +310,7 @@ private[testrun] object SuiteLaunch:
         runtimes.native,
         lock,
         repositories,
+        hear,
         onCompiled = noted,
       )
       classes = TestCompile.testClasses(
@@ -380,6 +386,7 @@ private[testrun] object SuiteLaunch:
       patterns: List[SuitePattern],
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -485,6 +492,7 @@ private[testrun] object SuiteLaunch:
         runtimes.native,
         lock,
         repositories,
+        hear,
         onCompiled = noted,
       )
       stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
@@ -757,6 +765,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -777,6 +786,7 @@ private[testrun] object SuiteLaunch:
         runtimes.native,
         lock,
         repositories,
+        hear,
         onCompiled = noted,
         coverage = coverage,
       )
@@ -836,6 +846,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -903,6 +914,7 @@ private[testrun] object SuiteLaunch:
             runtimes.native,
             lock,
             repositories,
+            hear,
             onCompiled = noted,
             coverage = coverage,
           )

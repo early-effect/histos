@@ -266,7 +266,7 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       lock: DependencyLock,
       repositories: Repositories,
-      hear: CompileProblem => Unit = _ => (),
+      hear: CompileProblem => Unit,
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
   ): ZIO[

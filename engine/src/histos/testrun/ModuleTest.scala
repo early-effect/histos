@@ -189,7 +189,7 @@ object ModuleTest:
         else
           ZStream
             .fromIterable(cells)
-            .flatMapPar(Parallelism.default.process)(cell => cellStream(asked, cell, lock, matched)) ++ gate
+            .flatMapPar(Parallelism.default.process)(cell => cellStream(asked, cell, lock, matched, _ => ())) ++ gate
 
   /** Compile feeds, and a test cell as soon as its own compile is done. At most `process` tests run at once.
     */
@@ -276,8 +276,8 @@ object ModuleTest:
                 case histos.zinc.CompileFeed.Done(cell) if wanted.contains(cell.module) =>
                   val ran =
                     gate.withPermit(
-                      cellStream(asked, cell, lock, matched)
-                        .runForeach(item => queue.offer(Take.single(SessionFeed.Test(item))).unit)
+                      heard(asked, cell, lock, matched)
+                        .runForeach(feed => queue.offer(Take.single(feed)).unit)
                         .foldCauseZIO(
                           cause => queue.offer(Take.failCause(cause)).unit,
                           _ => ZIO.unit,
@@ -304,11 +304,51 @@ object ModuleTest:
             },
       )
 
+  /** Test-compile problems join the compile feed the main compile already streams. The compiler calls the listener on
+    * its own thread, so the offer is the stream callback, not an effect.
+    */
+  private def heard(
+      asked: TestRun,
+      cell: CompiledCell,
+      lock: DependencyLock,
+      matched: Ref[Boolean],
+  ): ZStream[
+    Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.schedule.RemoteCache,
+    ModuleTestError,
+    SessionFeed,
+  ] =
+    ZStream.asyncScoped(
+      emit =>
+        val offer = (feed: SessionFeed) => emit(ZIO.succeed(Chunk.single(feed)))
+        val hear  = (problem: CompileProblem) =>
+          offer(
+            SessionFeed.Compile(
+              histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
+            )
+          )
+        def stop(cause: Option[zio.Cause[ModuleTestError]]): UIO[Unit] =
+          val ended = cause match
+            case Some(found) => ZIO.failCause(found.map(Some(_)))
+            case None        => ZIO.fail(None)
+          ZIO.attemptBlockingInterrupt(emit(ended)).orDie
+        cellStream(asked, cell, lock, matched, hear)
+          .runForeach(item => ZIO.attemptBlockingInterrupt(offer(SessionFeed.Test(item))).orDie)
+          .foldCauseZIO(
+            cause => stop(Some(cause)),
+            _ => stop(None),
+          )
+          .forkScoped
+      ,
+      1024,
+    )
+
   private def cellStream(
       asked: TestRun,
       cell: CompiledCell,
       lock: DependencyLock,
       matched: Ref[Boolean],
+      hear: CompileProblem => Unit,
   ): ZStream[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -330,6 +370,7 @@ object ModuleTest:
         mode,
         onTestCompile,
         coverage,
+        hear,
       ).map(stream => watch(matched, stream))
     )
 
@@ -381,6 +422,7 @@ object ModuleTest:
           histos.zinc.CompileFacts,
       ) => UIO[Unit],
       coverage: Option[histos.coverage.CoverageCompile],
+      hear: CompileProblem => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -429,6 +471,7 @@ object ModuleTest:
                         mode,
                         note,
                         coverage,
+                        hear,
                       )
                     case Platform.Js =>
                       SuiteLaunch.runJs(
@@ -444,6 +487,7 @@ object ModuleTest:
                         repositories,
                         mode,
                         note,
+                        hear,
                       )
                     case Platform.Native =>
                       SuiteLaunch.runNative(
@@ -459,6 +503,7 @@ object ModuleTest:
                         repositories,
                         mode,
                         note,
+                        hear,
                       )
               case (_, None, provider) =>
                 val framework = provider.getOrElse(TestProvider.Zio)
@@ -486,6 +531,7 @@ object ModuleTest:
                       mode,
                       note,
                       coverage,
+                      hear,
                     )
                   case Platform.Js =>
                     SuiteLaunch.runJsProvider(
@@ -502,6 +548,7 @@ object ModuleTest:
                       patterns,
                       mode,
                       note,
+                      hear,
                     )
                   case Platform.Native =>
                     SuiteLaunch.runNativeProvider(
@@ -518,6 +565,7 @@ object ModuleTest:
                       patterns,
                       mode,
                       note,
+                      hear,
                     )
             val executes = sources.nonEmpty && (module.test match
               case Some(main) => SuiteMatch.allows(patterns, main.value)
