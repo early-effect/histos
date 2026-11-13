@@ -28,7 +28,7 @@ end SkeletonError
   * and `zioVersion` are the versions this repository builds with.
   */
 object Skeleton:
-  val scalaVersion: String = "3.10.0"
+  val scalaVersion: String = "3.10.1"
   val zioVersion: String   = "2.1.27"
 
   val wrapper: String =
