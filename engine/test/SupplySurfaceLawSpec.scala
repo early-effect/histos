@@ -8,6 +8,7 @@ import histos.HttpUrl
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
 
 import slayer.{any, stub, stubbed}
 
@@ -118,9 +119,9 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           repo <- Workspace.work("surface-unread-fix")
           kept = repo.resolve("histos.scala")
           bad  = repo.resolve(".scalafmt.conf")
-          _     <- Workspace.writeString(kept, "before")
-          _     <- ZIO.attemptBlocking(Files.write(bad, notText)).orDie
-          done  <- fixed(
+          _    <- Workspace.writeString(kept, "before")
+          _    <- ZIO.attemptBlocking(Files.write(bad, notText)).orDie
+          done <- fixed(
             repo,
             List(
               Fix.Config(RepoPath.trusted(".scalafmt.conf"), Edit("before", "after")),
@@ -144,8 +145,8 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           repo <- Workspace.work("surface-unwritten-fix")
           kept = repo.resolve("histos.scala")
           held = repo.resolve(".scalafmt.conf")
-          _     <- Workspace.writeString(kept, "before")
-          _     <- Workspace.createDirectories(held)
+          _    <- Workspace.writeString(kept, "before")
+          _    <- Workspace.createDirectories(held)
           done <- fixed(
             repo,
             List(
@@ -222,6 +223,48 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment & Scope](
         stubbed[Net] ++ GitAnswers(remote = Some(RepoName.trusted("acme/demo")), diff = List("histos.scala")).layer
       )
+    ,
+    test("an update with --yes names a workflow file it cannot read, and writes nothing"):
+      val source  = "dep\"org.example::demo:1.0.0\"\n"
+      val page    = """{"response":{"docs":[{"v":"1.2.3","timestamp":1600000000000}]}}"""
+      val program =
+        for
+          repo <- Workspace.work("surface-update-unread")
+          workflow = repo.resolve(".github").resolve("workflows").resolve("ci.yml")
+          build    = repo.resolve("histos.scala")
+          _       <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
+          _       <- Workspace.writeString(build, source)
+          _       <- Workspace.writeString(workflow, "name: ci\n")
+          _       <- ZIO.attemptBlocking(Files.write(workflow, notText)).orDie
+          _       <- TestClock.setTime(java.time.Instant.parse("2026-01-10T00:00:00Z"))
+          updated <- DepsSurface.update(repo, SupplyChain(), reply(200, page), true, false)
+          text    <- Workspace.readString(build)
+        yield assertTrue(
+          updated == DepsSurface.DepsResult(1, s"could not read $workflow\n"),
+          text == source,
+        )
+      program
+    ,
+    test("an update with --yes names the build file it cannot write"):
+      val source  = "dep\"org.example::demo:1.0.0\"\n"
+      val page    = """{"response":{"docs":[{"v":"1.2.3","timestamp":1600000000000}]}}"""
+      val program =
+        for
+          repo <- Workspace.work("surface-update-unwritten")
+          build = repo.resolve("histos.scala")
+          _ <- Workspace.writeString(repo.resolve("dependencies.lock"), lock("1.0.0"))
+          _ <- Workspace.writeString(build, source)
+          _ <- ZIO
+            .attemptBlocking(Files.setPosixFilePermissions(build, PosixFilePermissions.fromString("r--r--r--")))
+            .orDie
+          _       <- TestClock.setTime(java.time.Instant.parse("2026-01-10T00:00:00Z"))
+          updated <- DepsSurface.update(repo, SupplyChain(), reply(200, page), true, false)
+          text    <- Workspace.readString(build)
+        yield assertTrue(
+          updated == DepsSurface.DepsResult(1, s"could not write $build\n"),
+          text == source,
+        )
+      program
     ,
     test("an empty token is not a pull request unless the run is dry, and Actions does not commit a workflow file"):
       val workflow = ".github/workflows/ci.yml"
@@ -340,9 +383,10 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
           action    = ActionChange("actions/checkout", "v4", "v5", "a" * 40, "b" * 40, false)
           rewritten = Plan.rewriteAction(s"uses: actions/checkout@${"a" * 40}\n# v4\n", action)
           proposal  = Proposal("deps plan\n", BumpPlan(List(bump), Nil), Nil)
-          _ <- Workspace.writeString(repo.resolve("histos.scala"), source)
-          wrote = Plan.write(repo, proposal, source, Nil)
-          again = Plan.write(repo, proposal, Files.readString(repo.resolve("histos.scala")), Nil)
+          _     <- Workspace.writeString(repo.resolve("histos.scala"), source)
+          wrote <- Plan.write(repo, proposal, source, Nil)
+          next  <- Workspace.readString(repo.resolve("histos.scala"))
+          again <- Plan.write(repo, proposal, next, Nil)
         yield assertTrue(
           directs.map(_.version) == List("1.0.0"),
           directs.map(_.testOnly) == List(false),

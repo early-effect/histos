@@ -246,8 +246,9 @@ object DoctorSurface:
   private def ranNotes(command: HistosCommand, ran: Ran): List[String] =
     ran match
       case Ran.Exited(0, output)      => s"ran: ${command.line}" :: output.map(line => s"  $line")
-      case Ran.Exited(status, output) => s"failed with status $status: ${command.line}" :: output.map(line => s"  $line")
-      case Ran.Unstarted              => List(s"not run (./histos did not start): ${command.line}")
+      case Ran.Exited(status, output) =>
+        s"failed with status $status: ${command.line}" :: output.map(line => s"  $line")
+      case Ran.Unstarted => List(s"not run (./histos did not start): ${command.line}")
 
   /** A page with no call is a person's to open. A call goes out only after a yes on a terminal, never on `--yes`. */
   private def confirmSetting(
@@ -258,10 +259,10 @@ object DoctorSurface:
   ): UIO[String] =
     val url = fix.url.value
     fix.call match
-      case None                => ZIO.succeed(s"not applied (open it in a browser): $url")
-      case Some(_) if !person  => ZIO.succeed(s"not applied (no terminal): $url")
-      case Some(_) if yes      => ZIO.succeed(s"not applied (--yes does not confirm GitHub settings): $url")
-      case Some(put)           =>
+      case None               => ZIO.succeed(s"not applied (open it in a browser): $url")
+      case Some(_) if !person => ZIO.succeed(s"not applied (no terminal): $url")
+      case Some(_) if yes     => ZIO.succeed(s"not applied (--yes does not confirm GitHub settings): $url")
+      case Some(put)          =>
         confirmed(url).flatMap: agreed =>
           if agreed then setting(put).as(s"applied: $url") else ZIO.succeed(s"skipped: $url")
 
@@ -353,13 +354,16 @@ object DepsSurface:
       (proposal, graph) =>
         if !yes then ZIO.succeed(DepsResult(0, proposal.text))
         else
-          ZIO
-            .attempt:
-              val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
-              val wrote = Plan.write(repo, proposal, graph, files)
-              proposal.text + wrote.map(name => s"wrote $name\n").mkString
-            .map(body => DepsResult(0, body))
-            .orElseSucceed(DepsResult(1, "could not write the plan\n")),
+          val wrote =
+            for
+              paths <- Plan.workflowFiles(repo)
+              files <- ZIO.foreach(paths)(path => Workspace.readString(path).map(path -> _))
+              names <- Plan.write(repo, proposal, graph, files)
+            yield names
+          wrote.fold(
+            failure => DepsResult(1, failure.message + "\n"),
+            names => DepsResult(0, proposal.text + names.map(name => s"wrote $name\n").mkString),
+          ),
     )
 
   def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =
