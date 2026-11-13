@@ -134,7 +134,7 @@ object ScenarioSpec extends ZIOSpecDefault:
           built    <- ZIO.fromEither(upstream(scala3))
           scenario <- Scenario.open
           checkout <- scenario.checkout(built)
-          otherClass = GraphCompile.classesDir(checkout.root, ProjectName("core"), scala3).resolve("demo/Other.class")
+          otherClass = upstreamClass(checkout, scala3, "Other")
           _         <- writeUpstream(checkout)
           first     <- checkout.test(TestMode.Quick)
           stamp     <- record(checkout, scala3)
@@ -165,6 +165,62 @@ object ScenarioSpec extends ZIOSpecDefault:
           out(signed).contains("alpha"),
           cached(signed).isEmpty,
           differs(stamp, moved),
+        )
+    ,
+    test("a trailing comment in a class the suite calls keeps the quick stamp, and the suite stays cached"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(upstream(scala3))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          libClass = upstreamClass(checkout, scala3, "Lib")
+          _         <- writeUpstream(checkout)
+          first     <- checkout.test(TestMode.Quick)
+          stamp     <- record(checkout, scala3)
+          bytes     <- digestOf(libClass)
+          _         <- checkout.write(libSource, libOf(1, "/api/v1/users") + "  // trailing note\n")
+          commented <- checkout.test(TestMode.Quick)
+          kept      <- record(checkout, scala3)
+          rebuilt   <- digestOf(libClass)
+        yield assertTrue(
+          statuses(first) == List(TestStatus.Passed),
+          out(first).contains("alpha 1 /api/v1/users"),
+          stamp.isDefined,
+          rebuilt != bytes,
+          cached(commented) == List("demo.Foo"),
+          !out(commented).contains("alpha"),
+          statuses(commented).isEmpty,
+          kept == stamp,
+        )
+    ,
+    test("a body change in a class the suite calls moves the quick stamp, a path constant's directory included"):
+      ZIO.scoped:
+        for
+          scala3   <- locked
+          built    <- ZIO.fromEither(upstream(scala3))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          _        <- writeUpstream(checkout)
+          first    <- checkout.test(TestMode.Quick)
+          stamp    <- record(checkout, scala3)
+          _        <- checkout.write(libSource, libOf(2, "/api/v1/users"))
+          body     <- checkout.test(TestMode.Quick)
+          bumped   <- record(checkout, scala3)
+          _        <- checkout.write(libSource, libOf(2, "/api/v2/users"))
+          path     <- checkout.test(TestMode.Quick)
+          moved    <- record(checkout, scala3)
+        yield assertTrue(
+          statuses(first) == List(TestStatus.Passed),
+          out(first).contains("alpha 1 /api/v1/users"),
+          statuses(body) == List(TestStatus.Passed),
+          out(body).contains("alpha 2 /api/v1/users"),
+          cached(body).isEmpty,
+          differs(stamp, bumped),
+          statuses(path) == List(TestStatus.Passed),
+          out(path).contains("alpha 2 /api/v2/users"),
+          cached(path).isEmpty,
+          differs(bumped, moved),
         )
     ,
     test("a second checkout of the same test is not cached by the first checkout's record, a file and not a blob"):
@@ -294,9 +350,14 @@ object ScenarioSpec extends ZIOSpecDefault:
 
   /** `Lib` and `Other` in `core`. `Foo` calls `Lib` and never names `Other`. */
   private def writeUpstream(checkout: Checkout): IO[IoFailure, Unit] =
-    checkout.write("core/src/main/scala/demo/Lib.scala", lib) *>
+    checkout.write(libSource, libOf(1, "/api/v1/users")) *>
       checkout.write("core/src/main/scala/demo/Other.scala", other) *>
-      checkout.write("app/src/test/scala/demo/Foo.scala", foo)
+      checkout.write("app/src/test/scala/demo/Foo.scala", calls)
+
+  private val libSource = "core/src/main/scala/demo/Lib.scala"
+
+  private def upstreamClass(checkout: Checkout, version: ScalaVersion, name: String): Path =
+    GraphCompile.classesDir(checkout.root, ProjectName("core"), version).resolve(s"demo/$name.class")
 
   /** `E` in main sources, its samples in tests, and `Check`, which inlines the mirror's size through two files. */
   private def writeMirror(checkout: Checkout, cases: String, values: String): IO[IoFailure, Unit] =
@@ -488,6 +549,24 @@ object ScenarioSpec extends ZIOSpecDefault:
       |
       |object Lib:
       |  def word: String = "alpha"
+      |""".stripMargin
+
+  /** `core`'s `Lib`. `home` looks like a path, so a scrub that cuts a path to its leaf reads `v1` and `v2` as one. */
+  private def libOf(f: Int, home: String): String =
+    s"""package demo
+       |
+       |object Lib:
+       |  def word: String = "alpha"
+       |  def f: Int = $f
+       |  def home: String = "$home"
+       |""".stripMargin
+
+  private val calls =
+    """package demo
+      |
+      |object Foo:
+      |  def main(args: Array[String]): Unit =
+      |    println(s"${Lib.word} ${Lib.f} ${Lib.home}")
       |""".stripMargin
 
   private val other =

@@ -8,17 +8,19 @@ import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes, Typ
 
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
+import histos.zinc.ProductDigest
 
 import zio.{Chunk, IO, ZIO}
 
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, the scalac flags, and
-  * each upstream API digest. Each class is a fingerprint and the names it points at. The bytes are not kept. A class
-  * this suite does not reference is not part of that closure. The API digest still is: a public signature outside the
-  * closure moves the stamp, and a comment does not. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are
-  * jar lines.
+  * each upstream API digest. Each class is the fingerprint of [[ProductDigest.positionFree]] bytes and the names it
+  * points at, so a comment in a referenced class keeps the stamp and a body change moves it. The bytes are not kept. A
+  * class this suite does not reference is not part of that closure. The API digest still is: a public signature outside
+  * the closure moves the stamp, and a comment does not. Tool fingerprints and runtime-token hashes from [[SuiteCover]]
+  * are jar lines.
   */
 object SuiteStamp:
-  /** Fingerprint of one class file, and the binary names it mentions. */
+  /** Fingerprint of one class file without its positions, and the binary names it mentions. */
   private[testrun] final case class Print(
       fingerprint: String,
       refs: Set[String],
@@ -148,10 +150,12 @@ object SuiteStamp:
         if binary.isEmpty then Right(None)
         else
           readBytes(path).flatMap: bytes =>
-            references(path, bytes).map: refs =>
-              Some(
-                binary -> Print(Sha256Digest.of(Chunk.fromArray(bytes)).value, refs)
-              )
+            references(path, bytes).flatMap: refs =>
+              ProductDigest
+                .positionFree(bytes)
+                .left
+                .map(_ => StampError.Class(path))
+                .map(clean => Some(binary -> Print(Sha256Digest.of(Chunk.fromArray(clean)).value, refs)))
 
   private def readBytes(path: Path): Either[StampError, Array[Byte]] =
     try Right(Files.readAllBytes(path))
