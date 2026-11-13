@@ -1,6 +1,6 @@
 # How Histos builds Histos
 
-This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is the plan that replaces most of it: the toolchain moves onto the ship row, `publish local` installs a local toolchain, and `assembly`, `client`, `launcher`, and `portal` leave the command line.
+This is how the machinery works today. [cli-work-plan.md](cli-work-plan.md) is the plan that replaces most of it. The toolchain moves onto the ship row, and `publish local` installs a local toolchain. `assembly` stays the fat-jar verb. The Ship row changes what that verb does. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
 
 ## The pin is the builder
 
@@ -23,7 +23,7 @@ The engine laws read compilers and other locked tools from the Coursier cache of
 
 The repository `./histos` is rendered by `workflow --update` from the ship number. It uses `HISTOS_ASSEMBLY` or `dist/histos.jar` when that jar's checksum matches `.histos/assembly.sha256`, and fails on a mismatch. With no local jar, it runs the installed shim. With a local jar and an executable `dist/histos-client`, it runs that client.
 
-`./histos client` links the `client` module and writes `dist/histos-client`.
+There is no `client` command. A removed `./histos client` names `publish`. `publish local`, `publish snapshots`, and `publish release` are the commands that link the client, and that link is the Dist layer, which has not landed. Until then the wrapper runs `dist/histos-client` only when that file is already there and executable.
 
 A running server keeps the jar it started with. The next command compares the version line and the assembly checksum, and a mismatch reboots the server first. The replacement starts with the command's `HISTOS_VERSION` and `HISTOS_ASSEMBLY`, or without one the command does not have, never with the old server's.
 
@@ -54,7 +54,7 @@ The ship asks for clients with `.clients(ClientBuilds.ReleasesAndSnapshots)`, so
 
 ## The other self-host commands
 
-- `histos launcher --update` writes the newest timestamp of the pin's snapshot channel. It resolves through Coursier against Sonatype snapshots (`HISTOS_LAUNCHER_REPO` overrides), which is a different path from `histos update`. `histos launcher --latest` writes the pointer. A release pin stays.
+- `histos launcher` is removed. The error names `update`, which moves the pin. Inside a project it rewrites `build.properties`. Outside one it rewrites `~/.histos/default`.
 - `histos portal` binds a loopback Central portal and prints its base url. Set `HISTOS_PORTAL` to that url to rehearse a release. It needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 
 `.bsp/histos.json` is tracked. Its `version` is the pin line, and a command rewrites it when the pin changes.

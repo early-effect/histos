@@ -35,9 +35,12 @@ object HelpLawSpec extends ZIOSpecDefault:
           "unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile",
         Help.unknown("compil", List("compile", "compiles")) ==
           "unknown command 'compil'\ndid you mean compile or compiles?\nhistos help\nhistos help compile",
-        Help.render(List("nope")) == Left("unknown command 'nope'\nhistos help\nhistos help <command>"),
-        Help.render(List("compil")) ==
-          Left("unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile"),
+        Help.render(List("nope")) == Left(HelpError.Unknown("nope")),
+        textOf(Help.render(List("nope"))) == "unknown command 'nope'\nhistos help\nhistos help <command>",
+        Help.render(List("compil")) == Left(HelpError.Unknown("compil")),
+        textOf(Help.render(List("compil"))) ==
+          "unknown command 'compil'\ndid you mean compile?\nhistos help\nhistos help compile",
+        Help.render(List("server")) == Left(HelpError.Unknown("server")),
       )
     ,
     test("a flag names the closest flag, and an exact name is not a suggestion"):
@@ -52,3 +55,7 @@ object HelpLawSpec extends ZIOSpecDefault:
         Suggest.closest("zzzz", List("compile")) == None,
       ),
   )
+
+  private def textOf(found: Either[HelpError, String]): String =
+    found.fold(_.message, identity)
+end HelpLawSpec

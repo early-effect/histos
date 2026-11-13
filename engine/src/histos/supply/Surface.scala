@@ -24,6 +24,7 @@ import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.workflow.PinScan
 import histos.workspace.{IoFailure, Workspace}
+import histos.toolchain.Survey
 import histos.ProjectGraph
 
 import java.nio.file.{Files, Path}
@@ -82,11 +83,22 @@ object DoctorSurface:
         checkLimit,
       )
       written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, token)
+      survey  <- toolchainLines(request, machine, graph)
     yield
       val body =
         if request.json then Render.json(report) else Render.text(repoName(repo), report, request.verbose)
       val note = if written.isEmpty then "" else written.mkString("\n", "\n", "")
-      (report.exit, body + note)
+      (report.exit, body + note + survey)
+
+  /** The toolchain lines, when the text report is the whole doctor or the toolchain area, and no preflight is set. */
+  private def toolchainLines(
+      request: Request,
+      machine: histos.jdk.Machine,
+      graph: ProjectGraph,
+  ): UIO[String] =
+    val shown = !request.json && request.preflight.isEmpty && request.area.forall(_ == "toolchain")
+    if shown then Survey.collect(machine, graph).map(found => s"\n${found.text}")
+    else ZIO.succeed("")
 
   private def probes(
       repo: Path,
@@ -604,9 +616,24 @@ object DepsSurface:
     DepsResult(1, "no GitHub repository: set GITHUB_REPOSITORY or add a github.com origin\n")
 end DepsSurface
 
+/** Where `setup supply-chain --from` reads a zipx tree. `Zipx` is this checkout. */
+enum SetupSource:
+  case Zipx
+  case Directory(raw: String)
+
+/** Whether `setup supply-chain` writes `histos.scala`. */
+enum PolicyWrite:
+  case Preview
+  case Write
+
+/** Whether a zipx import asks before the old workflows would be deleted. */
+enum ZipxConfirm:
+  case Ask
+  case Delete
+
 /** Inserts the default policy. A second run changes nothing. */
 object SetupSurface:
-  def run(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): (Int, String) =
+  def run(repo: Path, from: Option[SetupSource], write: PolicyWrite, confirm: ZipxConfirm): (Int, String) =
     val path = repo.resolve("histos.scala")
     if !Files.isRegularFile(path) then (2, "histos.scala is missing\n")
     else
@@ -614,17 +641,20 @@ object SetupSurface:
       val next   = SetupPlan.insert(source)
       val zip    = from.map(readZipx(repo, _))
       val wrote  =
-        if fix && next != source then
+        if write == PolicyWrite.Write && next != source then
           Files.writeString(path, next)
           "wrote histos.scala\n"
         else if next == source then "histos.scala already has .supplyChain\n"
         else "would write .supplyChain(SupplyChain())\n"
       val extra = zip.fold("")(identity)
-      val ask   = if from.isDefined && !yes then "\nconfirm before deleting the zipx workflows\n" else ""
+      val ask   =
+        if from.isDefined && confirm == ZipxConfirm.Ask then "\nconfirm before deleting the zipx workflows\n" else ""
       (0, wrote + extra + ask)
 
-  private def readZipx(repo: Path, raw: String): String =
-    val root                       = if raw == "zipx" then repo else repo.resolve(raw)
+  private def readZipx(repo: Path, source: SetupSource): String =
+    val root = source match
+      case SetupSource.Zipx           => repo
+      case SetupSource.Directory(raw) => repo.resolve(raw)
     def text(name: String): String =
       val path = root.resolve(name)
       if Files.isRegularFile(path) then Files.readString(path) else ""

@@ -1,9 +1,7 @@
 package histos.central
 
 import java.nio.charset.StandardCharsets
-import java.util.UUID
-
-import scala.annotation.{publicInBinary, tailrec}
+import scala.annotation.tailrec
 
 import heddle.client.Client
 import heddle.http.{Body, FormField, Method, Path, QueryParams, Request, Response, Scheme, Url}
@@ -18,40 +16,6 @@ enum ReleaseMode:
 /** One Central deployment state. The wire tokens stay in the client. */
 enum DeploymentState:
   case Pending, Validating, Validated, Publishing, Published, Failed
-
-/** The id an upload body named, or the one `publish promote` and `publish drop` take. The ends are trimmed. An empty id
-  * or whitespace inside it is refused.
-  */
-opaque type DeploymentId = String
-
-object DeploymentId:
-  given CanEqual[DeploymentId, DeploymentId] = CanEqual.derived
-
-  enum Error:
-    case Empty
-    case Spaced(text: String)
-
-    def message: String = this match
-      case Empty        => "a deployment id is empty"
-      case Spaced(text) => s"deployment id '$text' contains whitespace"
-  end Error
-
-  inline def apply(inline raw: String): DeploymentId = ${ DeploymentIdMacro.literal('raw) }
-
-  def from(raw: String): Either[Error, DeploymentId] =
-    val text = raw.trim
-    if text.isEmpty then Left(Error.Empty)
-    else if text.exists(_.isWhitespace) then Left(Error.Spaced(text))
-    else Right(trusted(text))
-
-  /** A UUID's text is never empty and has no whitespace. */
-  def of(uuid: UUID): DeploymentId = uuid.toString
-
-  extension (id: DeploymentId) def value: String = id
-
-  /** Spliced by the literal macro. Source code cannot call it. */
-  @publicInBinary private[central] def trusted(raw: String): DeploymentId = raw
-end DeploymentId
 
 /** Where a release deploy goes. `https` anywhere, `http` only on loopback. */
 opaque type PortalBase = Url

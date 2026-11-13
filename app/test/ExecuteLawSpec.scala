@@ -146,33 +146,26 @@ object ExecuteLawSpec extends ZIOSpecDefault:
           s"launcher pin is absent: $absent\nfix  histos help",
           Playback.Held,
         )
-      val shown   = "histos 9.9.9\nserver 9.9.9\nno local assembly"
-      val release =
-        "launcher --update follows snapshots, and 9.9.9 is a release pin. Run 'histos update'."
-      val moving   = "histos.version=0.1.0-SNAPSHOT"
-      val noLatest = Law(List("launcher", "--latest"), CliExit.Failed, "", missing.err, Playback.Held)
+      val shown    = "histos 9.9.9\nserver 9.9.9\nno local assembly"
+      val retired  = fix("launcher was removed\nuse update")
+      val latest   = Law(List("launcher", "--latest"), CliExit.Usage, "", retired, Playback.Held)
+      val updating = Law(List("launcher", "--update"), CliExit.Usage, "", retired, Playback.Held)
       for
-        _         <- failLoad
-        before    <- Cli.execute(missing.args, repo, apiJar)
-        unpinned  <- Cli.execute(noLatest.args, repo, apiJar)
-        _         <- ZIO.attemptBlocking(Files.writeString(absent, "histos.version=0.1.0-20260101.120000-1\n")).orDie
-        pointer   <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
-        rewritten <- ZIO.attemptBlocking(Files.readString(absent)).orDie
-        _         <- ZIO.attemptBlocking(Files.writeString(absent, pinText)).orDie
-        version   <- Cli.execute(List("version"), repo, apiJar)
-        latest    <- Cli.execute(List("launcher", "--latest"), repo, apiJar)
-        update    <- Cli.execute(List("launcher", "--update"), repo, apiJar)
-        kept      <- ZIO.attemptBlocking(Files.readString(absent)).orDie
-        latestLaw  = Law(List("launcher", "--latest"), CliExit.Success, "histos.version=9.9.9", "", Playback.Held)
-        pointerLaw = Law(List("launcher", "--latest"), CliExit.Success, moving, "", Playback.Held)
-        updateLaw  = Law(List("launcher", "--update"), CliExit.Failed, "", fix(release), Playback.Held)
+        _        <- failLoad
+        before   <- Cli.execute(missing.args, repo, apiJar)
+        unpinned <- Cli.execute(latest.args, repo, apiJar)
+        gone     <- ZIO.attemptBlocking(Files.exists(absent)).orDie
+        _        <- ZIO.attemptBlocking(Files.writeString(absent, pinText)).orDie
+        version  <- Cli.execute(List("version"), repo, apiJar)
+        moved    <- Cli.execute(latest.args, repo, apiJar)
+        updated  <- Cli.execute(updating.args, repo, apiJar)
+        kept     <- ZIO.attemptBlocking(Files.readString(absent)).orDie
       yield matches(missing, before) &&
-        matches(noLatest, unpinned) &&
-        matches(pointerLaw, pointer) &&
-        assertTrue(rewritten == s"$moving\n", kept == pinText) &&
+        matches(latest, unpinned) &&
+        assertTrue(!gone, kept == pinText) &&
         matches(Law(List("version"), CliExit.Success, shown, "", Playback.Held), version) &&
-        matches(latestLaw, latest) &&
-        matches(updateLaw, update)
+        matches(latest, moved) &&
+        matches(updating, updated)
     }
 
   private def setup: ZIO[Path & TestEnvironment & Scope, Nothing, TestResult] =
@@ -208,9 +201,9 @@ object ExecuteLawSpec extends ZIOSpecDefault:
         Law(List("cache", "clean", "--dry-run"), CliExit.Success, "would remove nothing", "", Playback.Held),
         Law(List("cache", "clean"), CliExit.Success, "removed nothing", "", Playback.Held),
         Law(List("clean"), CliExit.Success, "cleaned", "", Playback.Held),
-        Law(List("cleanFull"), CliExit.Success, "cleaned\nremoved nothing", "", Playback.Held),
+        Law(List("clean", "--full"), CliExit.Success, "cleaned\nremoved nothing", "", Playback.Held),
         Law(List("preview", "clean"), CliExit.Success, previewRoots, "", Playback.Held),
-        Law(List("preview", "cleanFull"), CliExit.Success, s"$previewRoots\n$forgotten", "", Playback.Held),
+        Law(List("preview", "clean", "--full"), CliExit.Success, s"$previewRoots\n$forgotten", "", Playback.Held),
         Law(List("setup", "supply-chain"), CliExit.Usage, "histos.scala is missing\n", "", Playback.Held),
         Law(List("observe"), CliExit.Failed, "", observe, Playback.Heard),
       )
@@ -238,7 +231,18 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     yield matches(initLaw, init) && matches(newLaw, made)
 
   private val parseLaws: List[Law] = List(
-    usage(List("publish"), fix("publish is snapshots, release, assets, promote, or drop")),
+    usage(List("publish"), fix("publish is local, snapshots, release, assets, promote, or drop")),
+    usage(List("testOnly"), fix("testOnly was removed\nuse test --only")),
+    usage(List("testQuick"), fix("testQuick was removed\nuse test --quick")),
+    usage(List("cleanFull"), fix("cleanFull was removed\nuse clean --full")),
+    usage(List("publishLocal"), fix("publishLocal was removed\nuse publish local")),
+    usage(List("client"), fix("client was removed\nuse publish")),
+    usage(List("launcher"), fix("launcher was removed\nuse update")),
+    usage(List("toolchain"), fix("toolchain was removed\nuse doctor")),
+    usage(List("preview", "testOnly"), fix("preview testOnly was removed\nuse preview test --only")),
+    usage(List("preview", "testQuick"), fix("preview testQuick was removed\nuse preview test --quick")),
+    usage(List("preview", "cleanFull"), fix("preview cleanFull was removed\nuse preview clean --full")),
+    usage(List("preview", "publishLocal"), fix("preview publishLocal was removed\nuse preview publish local")),
     usage(List("run"), fix("run needs one name")),
     usage(List("--explain"), fix("--explain needs a check id")),
     usage(List("--explain", "jdk.source", "node.floor"), fix("--explain takes one check id")),
@@ -326,14 +330,13 @@ object ExecuteLawSpec extends ZIOSpecDefault:
   private val heardLaws: List[Law] = List(
     heard("compile"),
     heard("test", "core"),
-    heard("testOnly", "demo.Spec"),
-    heard("testQuick"),
+    heard("test", "--only", "demo.Spec"),
+    heard("test", "--quick"),
     heard("run", "inspect"),
     heard("run", "demo"),
     heard("run", "demo/site"),
-    heard("client"),
     heard("assembly"),
-    heard("publishLocal"),
+    heard("publish", "local"),
     heard("publish", "snapshots"),
     heard("publish", "release"),
     heard("publish", "drop", "deploy"),
@@ -343,12 +346,11 @@ object ExecuteLawSpec extends ZIOSpecDefault:
   private val heldLaws: List[Law] = List(
     held("graph"),
     held("workflow"),
-    held("toolchain"),
     held("server"),
     held("resolve"),
     held("preview", "compile"),
     held("preview", "test"),
-    held("preview", "publishLocal"),
+    held("preview", "publish", "local"),
     held("preview", "publish", "snapshots"),
     held("preview", "run", "inspect"),
     held("preview", "run", "demo/site"),

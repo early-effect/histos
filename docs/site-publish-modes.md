@@ -485,7 +485,7 @@ Also assert:
 - `BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("pages")))`.
 - The specular fixture still contributes `JobName("docs")` / `TaskName("site")` and `site` is `None`.
 
-No new dependency. This repository has no `testFull` task. `testStore` defaults to `Off`, so `./histos test` runs every suite and `./histos testQuick` is the one that skips. The implementation runs `./histos test` on the suites the change touches.
+No new dependency. This repository has no `testFull` task. `testStore` defaults to `Off`, so `./histos test` runs every suite and `./histos test --quick` is the one that skips. The implementation runs `./histos test` on the suites the change touches.
 
 Goldens cover the three events by equality on the files those events run, plus the `if` each event evaluates. A pull request and a default-branch push share `ci.yml`. The `if` is what differs at runtime. `workflow_dispatch` is `histos-pages.yml` when the mode emits it, and absent when the mode is `Automatic`.
 

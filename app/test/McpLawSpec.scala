@@ -5,18 +5,18 @@ import heddle.mcp.{McpBuildError, ToolError}
 import heddle.mcp.protocol.{CallToolResult, ContentBlock, ListToolsResult, ProtocolVersion, RequestMeta, Tool, ToolName}
 import histos.cache.{CacheCleanMode, CacheCleanModeError, ContentStore}
 import histos.central.{KeyServer, ReleaseFeed}
-import histos.cli.{Grammar, Operation}
+import histos.cli.{CliParseError, Grammar, Operation}
 import histos.client.Session
 import histos.doctor.GhAuth
 import histos.format.{FormatMode, FormatTargets}
 import histos.load.{LoadedBuild, Loader}
-import histos.publish.IvyRoot
+import histos.publish.{IvyRoot, PublishToken}
 import histos.report.{ObserveError, Rejection}
 import histos.resolve.Resolve
-import histos.server.Call
+import histos.server.{Call, CleanExtent}
 import histos.supply.{GitRead, Net}
 import histos.task.{RunId, TaskError}
-import histos.testrun.{SuitePattern, SuitePatternError, TestMode, TestModeError}
+import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.select.SelectError
 import histos.workspace.Workspace
 import histos.{
@@ -51,21 +51,33 @@ object McpLawSpec extends ZIOSpecDefault:
       assertTrue(
         HistosMcp.compileCall(List("api")) == Right(Call.Compile(List(api))),
         HistosMcp.compileCall(Nil) == Right(Call.Compile(Nil)),
-        HistosMcp.cleanCall(List("api")) == Right(Call.Clean(List(api))),
+        HistosMcp.cleanCall(List("api"), CleanExtent.Products) == Right(Call.Clean(List(api), CleanExtent.Products)),
+        HistosMcp.cleanCall(List("api"), CleanExtent.Full) == Left(Rejection.PreviewProjects),
+        HistosMcp.cleanCall(Nil, CleanExtent.Full) == Right(Call.Clean(Nil, CleanExtent.Full)),
         HistosMcp.compileCall(List("1api")) == Left(badName),
-        HistosMcp.cleanCall(List("1api")) == Left(badName),
-        HistosMcp.publishLocalCall(List("1api")) == Right(Call.PublishLocal(List("1api"))),
-        HistosMcp.publishSnapshotsCall(List("1api")) == Right(Call.PublishSnapshots(List("1api"))),
+        HistosMcp.cleanCall(List("1api"), CleanExtent.Products) == Left(badName),
+        HistosMcp.publishCall(HistosMcp.PublishPlace.Local, List("1api")) == Right(
+          Call.PublishLocal(List(PublishToken("1api")))
+        ),
+        HistosMcp.publishCall(HistosMcp.PublishPlace.Local, List("")) == Left(
+          Rejection.PublishToken(PublishToken.Error.Empty)
+        ),
+        HistosMcp.publishCall(HistosMcp.PublishPlace.Local, List(" ")) == Left(
+          Rejection.PublishToken(PublishToken.Error.Spaced(" "))
+        ),
+        HistosMcp.publishCall(HistosMcp.PublishPlace.Snapshots, List("1api")) == Right(
+          Call.PublishSnapshots(List("1api"))
+        ),
       )
     ,
-    test("test defaults to run and rejects a bad mode or a bad pattern"):
+    test("test takes a mode and rejects a bad pattern"):
       assertTrue(
-        HistosMcp.testCall(List("api"), List("*"), None) == Right(
+        HistosMcp.testCall(List("api"), List("*"), TestMode.Run) == Right(
           Call.Test(List(api), List(SuitePattern("*")), TestMode.Run)
         ),
-        HistosMcp.testCall(Nil, Nil, Some("quick")) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
-        HistosMcp.testCall(Nil, Nil, Some("nope")) == Left(Rejection.TestMode(TestModeError.Unknown("nope"))),
-        HistosMcp.testCall(Nil, List(""), None) == Left(Rejection.SuitePattern(SuitePatternError.Empty)),
+        HistosMcp.testCall(Nil, Nil, TestMode.Quick) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
+        """"nope"""".fromJson[TestMode].isLeft,
+        HistosMcp.testCall(Nil, List(""), TestMode.Run) == Left(Rejection.SuitePattern(SuitePatternError.Empty)),
       )
     ,
     test("cache defaults to remove and cancel rejects an empty id"):
@@ -77,30 +89,81 @@ object McpLawSpec extends ZIOSpecDefault:
         HistosMcp.cancelCall("run-1") == Right(Call.Cancel(RunId("run-1"))),
       )
     ,
-    test("preview parses the operation and cleanFull rejects a project"):
+    test("preview parses the operation and a full clean rejects a project"):
       val rows: List[(HistosMcp.PreviewArgs, Either[Rejection, Call])] = List(
-        HistosMcp.PreviewArgs("compile", "api", List("api"))           -> Right(Call.PreviewCompile(List(api))),
-        HistosMcp.PreviewArgs("compile", "api", List("1api"))          -> Left(badName),
-        HistosMcp.PreviewArgs("test", "api", List("api"))              -> Right(Call.PreviewTest(List(api))),
-        HistosMcp.PreviewArgs("publishLocal", "api", List("1api"))     -> Right(Call.PreviewPublishLocal(List("1api"))),
-        HistosMcp.PreviewArgs("publishSnapshots", "api", List("1api")) -> Right(
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Compile, "api", List("api")) -> Right(
+          Call.PreviewCompile(List(api))
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Compile, "api", List("1api")) -> Left(badName),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Test, "api", List("api"))     -> Right(
+          Call.PreviewTest(List(api), Nil, TestMode.Run)
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Local, "api", List("1api")) -> Right(
+          Call.PreviewPublishLocal(List(PublishToken("1api")))
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Snapshots, "api", List("1api")) -> Right(
           Call.PreviewPublishSnapshots(List("1api"))
         ),
-        HistosMcp.PreviewArgs("clean", "api", Nil)             -> Right(Call.PreviewClean(Nil)),
-        HistosMcp.PreviewArgs("clean", "api", List("api"))     -> Right(Call.PreviewClean(List(api))),
-        HistosMcp.PreviewArgs("cleanFull", "api", List("api")) -> Left(Rejection.PreviewProjects),
-        HistosMcp.PreviewArgs("cleanFull", "api", Nil)         -> Right(Call.PreviewCleanFull),
-        HistosMcp.PreviewArgs("run", "", Nil)                  -> Left(Rejection.MissingRunName),
-        HistosMcp.PreviewArgs("run", "api", Nil)               -> Right(Call.PreviewRun("api", None)),
-        HistosMcp.PreviewArgs("ship", "api", Nil)              -> Left(Rejection.PreviewOperation("ship")),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Clean, "api", Nil) -> Right(
+          Call.PreviewClean(Nil, CleanExtent.Products)
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Clean, "api", List("api")) -> Right(
+          Call.PreviewClean(List(api), CleanExtent.Products)
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Clean, "api", List("api"), extent = CleanExtent.Full) -> Left(
+          Rejection.PreviewProjects
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Clean, "api", Nil, extent = CleanExtent.Full) -> Right(
+          Call.PreviewClean(Nil, CleanExtent.Full)
+        ),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Run, "", Nil)    -> Left(Rejection.MissingRunName),
+        HistosMcp.PreviewArgs(HistosMcp.PreviewOp.Run, "api", Nil) -> Right(Call.PreviewRun("api", None)),
       )
       val misses = rows.collect { case (args, want) if HistosMcp.previewCall(args) != want => args }
-      assertTrue(misses == Nil)
+      assertTrue(misses == Nil, """"ship"""".fromJson[HistosMcp.PreviewOp].isLeft)
     ,
-    test("fmt sends the same call as the command line, and refuses a bad mode, a bad path, a bad name, or two scopes"):
+    test("a removed word is the same refusal on the command line and on MCP"):
+      val shared = List(
+        "testOnly"     -> "test --only",
+        "testQuick"    -> "test --quick",
+        "cleanFull"    -> "clean --full",
+        "publishLocal" -> "publish local",
+        "client"       -> "publish",
+        "launcher"     -> "update",
+        "toolchain"    -> "doctor",
+      )
+      val preview = List(
+        List("preview", "testOnly")     -> ("preview testOnly", "preview test --only"),
+        List("preview", "testQuick")    -> ("preview testQuick", "preview test --quick"),
+        List("preview", "cleanFull")    -> ("preview cleanFull", "preview clean --full"),
+        List("preview", "publishLocal") -> ("preview publishLocal", "preview publish local"),
+      )
+      for
+        roots <- ZIO.foreach(shared): (word, use) =>
+          Grammar.parse(List(word)).either.map { parsed =>
+            val agree =
+              parsed == Left(CliParseError.Retired(word, use)) &&
+                HistosMcp.removed(word) == Some(Rejection.Retired(word, use))
+            Option.when(!agree)(word)
+          }
+        nested <- ZIO.foreach(preview):
+          case (args, (word, use)) =>
+            Grammar.parse(args).either.map { parsed =>
+              Option.when(parsed != Left(CliParseError.Retired(word, use)))(args.mkString(" "))
+            }
+      yield assertTrue(
+        roots.flatten == Nil,
+        nested.flatten == Nil,
+        HistosMcp.removed("launcherUpdate") == Some(Rejection.Retired("launcherUpdate", "update")),
+        HistosMcp.removed("assembly") == None,
+        HistosMcp.removed("portal") == None,
+        HistosMcp.removed("observe") == None,
+      )
+    ,
+    test("fmt sends the same call as the command line, and refuses a bad path, a bad name, or two scopes"):
       val file = Path.of("api/src/A.scala")
 
-      def fmt(projects: List[String], files: List[String], mode: Option[String]) =
+      def fmt(projects: List[String], files: List[String], mode: Option[FormatMode]) =
         HistosMcp.fmtCall(HistosMcp.FmtArgs(projects, files, mode))
       for
         build   <- Grammar.parse(List("fmt")).map(Operation.operation)
@@ -109,12 +172,12 @@ object McpLawSpec extends ZIOSpecDefault:
       yield assertTrue(
         fmt(Nil, Nil, None) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
         fmt(Nil, Nil, None) == build,
-        fmt(List("api"), Nil, Some("check")) == checked,
+        fmt(List("api"), Nil, Some(FormatMode.Check)) == checked,
         checked == Right(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)),
         fmt(Nil, List("api/src/A.scala"), None) == filed,
         filed == Right(Call.Format(FormatTargets.Files(NonEmptyChunk(file)), FormatMode.Write)),
-        fmt(Nil, Nil, Some("write")) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
-        fmt(Nil, Nil, Some("diff")) == Left(Rejection.FormatMode("diff")),
+        fmt(Nil, Nil, Some(FormatMode.Write)) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        """"diff"""".fromJson[FormatMode].isLeft,
         fmt(List("api"), List("api/src/A.scala"), None) == Left(Rejection.FormatTargets),
         fmt(Nil, List("/etc/passwd"), None) == Left(Rejection.FormatPath("/etc/passwd")),
         fmt(List("1api"), Nil, None) == Left(badName),

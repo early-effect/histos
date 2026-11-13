@@ -6,7 +6,7 @@ import histos.central.SnapshotRepository
 import histos.publish.{LocalPublishError, PublishName, PublishSelect, PublishWrite, SessionSettle, ShipWrite}
 import histos.select.{SelectError, Selection}
 import histos.task.TaskId
-import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
+import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestCompile}
 import histos.toolchain.VersionOrder
 import histos.version.{Decision, HoldReason, PublishAction, ShipName, VersionError, VersionTask}
 import histos.workspace.{IoFailure, IoFault}
@@ -62,8 +62,8 @@ enum PublishUnit:
 
 final case class PublishPlan(place: String, units: List[PublishUnit])
 
-/** What `clean` would delete. [[StoreFate.Forgotten]] is `cleanFull`: this repo's content-store entries, with no byte
-  * count.
+/** What `clean` would delete. [[StoreFate.Forgotten]] is `clean --full`: this repo's content-store entries, with no
+  * byte count.
   */
 enum StoreFate:
   case Kept
@@ -102,6 +102,17 @@ object Plan:
       projects: List[ProjectName],
   ): IO[PreviewError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
+
+  /** Drop quick-answer names `--only` would not run. The plan's modules stay. */
+  def narrow(plan: TestPlan, patterns: List[SuitePattern]): TestPlan =
+    if patterns.isEmpty then plan
+    else
+      TestPlan(
+        plan.units.map:
+          case chosen: PlanUnit.Chosen =>
+            chosen.copy(quick = chosen.quick.map(answer => QuickAnswer.limited(answer, patterns)))
+          case other => other
+      )
 
   /** Names the snapshot coordinate a local write would install. Writes no jar. The place is Coursier's `ivy2Local`. */
   def publishLocal(

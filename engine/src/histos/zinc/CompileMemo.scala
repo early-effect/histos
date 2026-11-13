@@ -28,7 +28,7 @@ final case class StampedLock(lock: DependencyLock, stamp: LockStamp)
 /** Remembered compile inputs that the lock's bytes key. A value is computed the first time something reads it.
   *
   * Nothing the source tree decides is remembered: a compile lists the tree and hashes the bytes every time. `clean` and
-  * `cleanFull` call [[CompileMemo.forget]].
+  * `clean --full` call [[CompileMemo.forget]].
   */
 trait CompileMemo:
   def lock(repo: Path): IO[GraphCompileError, StampedLock]

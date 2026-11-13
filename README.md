@@ -118,17 +118,17 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 | Group | Commands |
 | --- | --- |
-| Information | `version`, `graph`, `toolchain`, `observe`, `help` |
-| Build | `compile`, `run`, `clean`, `cleanFull`, `fmt` |
-| Test | `test`, `testOnly`, `testQuick`, `coverage`, `affected`, `~` |
+| Information | `version`, `graph`, `observe`, `help` |
+| Build | `compile`, `run`, `clean`, `fmt` |
+| Test | `test`, `coverage`, `affected`, `~` |
 | Project | `new`, `init` |
-| Publish | `publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, `publish drop`, `bump` |
+| Publish | `publish local`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, `publish drop`, `bump` |
 | Dependencies | `resolve`, `deps` |
 | CI | `workflow`, `doctor`, `setup supply-chain`, `--explain` |
 | Cache | `cache path`, `cache list`, `cache clean`, `cache promote` |
 | Server | `server`, `bsp`, `mcp`, `reload`, `reboot`, `cancel` |
-| Preview | `preview compile`, `preview test`, `preview publishLocal`, `preview publish snapshots`, `preview clean`, `preview cleanFull`, `preview run` |
-| Building Histos | `assembly`, `client`, `launcher`, `portal` ([self-host](docs/self-host.md)) |
+| Preview | `preview compile`, `preview test`, `preview publish local`, `preview publish snapshots`, `preview clean`, `preview run` |
+| Building Histos | `assembly`, `portal` ([self-host](docs/self-host.md)) |
 
 ### Build and run
 
@@ -136,7 +136,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `histos run <name> [jvm|js|native]` runs a module's main. `histos run inspect` prints the project names, `histos run versions` prints the version decision, `histos run doc` writes scaladoc, and `histos run <plugin>/<task>` runs a plugin task. `run` passes no program arguments.
 
-`histos clean [project ...]` deletes products. No name wipes every product root under `.histos`, including the scaladoc and coverage output, without reading the build. A name wipes that module, and an aggregate expands. `histos cleanFull` wipes the products, removes this project's keep file from the content store, and then deletes every store entry no remaining project keeps.
+`histos clean [project ...]` deletes products. No name wipes every product root under `.histos`, including the scaladoc and coverage output, without reading the build. A name wipes that module, and an aggregate expands. `histos clean --full` wipes the products, removes this project's keep file from the content store, and then deletes every store entry no remaining project keeps. It takes no project.
 
 `histos fmt` formats with the scalafmt the build declares (`.scalafmt` reads `.scalafmt.conf`, `.scalafmt(RepoPath("config/scalafmt.conf"))` another file). The `version` in that configuration is the scalafmt that runs, locked with its sha256 by `resolve --update`. No name formats every module's `src` and `test` trees and `histos.scala`. A name formats that module. `--file <path>` formats repository-relative files. The configuration's include and exclude filters apply, and `project.git` applies except with `--file`. `histos fmt --check` writes no source, names each unformatted file, and fails. It records known-formatted files in `.histos/format/ledger`. On a server, `fmt` holds the lock a compile holds, so a format and a compile in one checkout run one after the other.
 
@@ -144,7 +144,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `histos test [project ...]` runs the selected suites. `histos test --affected '["api"]'` runs only those modules, and `["all"]` runs everything. `histos affected --base <sha>` prints the modules that differ from that commit as that JSON list.
 
-`histos testOnly --module api '*Grammar*'` runs suites that match a pattern. `histos testQuick` skips a suite whose stored stamp still matches, and takes the same `--module` and patterns. The stamp includes the upstream API digest, so a signature change runs the suite.
+`histos test api --only '*Grammar*'` runs suites that match a pattern. `histos test --quick` skips a suite whose stored stamp still matches, and takes the same projects and patterns. The stamp includes the upstream API digest, so a signature change runs the suite.
 
 A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` lets `test` skip a suite whose stored digest still matches. `Remote` does not skip and does not upload.
 
@@ -152,15 +152,15 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Watch
 
-`histos ~ compile` runs a command again after a source save, on the server when one is up. A save is a file whose bytes changed, whatever its modified time says. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A `publishLocal` or `publish snapshots` watch covers the modules its tokens select, as `preview` does: a ship's modules, an aggregate's modules, or the module named. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program, compiles after each change, and restarts the program when that compile succeeds and the change is one of its sources. A failed compile prints its errors and leaves the program running. On a server, the program holds the compile lock only until it has compiled, so the next compile does not wait for the program to exit.
+`histos ~ compile` runs a command again after a source save, on the server when one is up. A save is a file whose bytes changed, whatever its modified time says. The watch covers `histos.scala` and the `src` and `test` trees of the modules the command names, or of every module when it names none. A `publish local` or `publish snapshots` watch covers the modules its tokens select, as `preview` does: a ship's modules, an aggregate's modules, or the module named. A change in an upstream module that is not named does not wake it. A plugin task watches the files it declared, or `histos.scala` when it declared none. `histos ~ --restart run app` starts the program, compiles after each change, and restarts the program when that compile succeeds and the change is one of its sources. A failed compile prints its errors and leaves the program running. On a server, the program holds the compile lock only until it has compiled, so the next compile does not wait for the program to exit.
 
 ### Preview
 
-`histos preview compile`, `preview test`, `preview publishLocal`, `preview publish snapshots`, `preview clean`, `preview cleanFull`, and `preview run` write nothing. A compile or test preview names the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. When the analysis cannot be read, the line says the staleness is unknown.
+`histos preview compile`, `histos preview test`, `histos preview publish local`, `histos preview publish snapshots`, `histos preview clean`, `histos preview clean --full`, and `histos preview run <name>` write nothing. A compile or test preview names the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. `histos preview test --only '*Grammar*'` limits that list to the pattern. When the analysis cannot be read, the line says the staleness is unknown.
 
 ### Information
 
-`histos version` prints the toolchain this command runs: the pin as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos toolchain` prints the JDK a compile would use, and Node or clang when a module needs them. `histos observe` prints the stored compile tally.
+`histos version` prints the toolchain this command runs: the pin as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. With a server up it adds the server's version, its assembly checksum, and its snapshot line. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos observe` prints the stored compile tally. The JDK, Node, and clang lines are on `histos doctor` (below).
 
 ### Dependencies
 
@@ -168,7 +168,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Doctor
 
-`histos doctor [project ...]` runs the repository checks and lists errors and warnings. `--verbose` lists every check, `--area <area>` limits them, `--json` prints JSON, `--preflight <job>` runs the offline checks for one CI job, and `--fix` applies local edits. Named projects are the modules this run launches, which decides whether Node and clang are probed. `histos --explain supply.pin` explains one check by its id.
+`histos doctor [project ...]` runs the repository checks and lists errors and warnings. `--verbose` lists every check, `--area <area>` limits them, `--json` prints JSON, `--preflight <job>` runs the offline checks for one CI job, and `--fix` applies local edits. Named projects are the modules this run launches, which decides whether Node and clang are probed. With no `--json` and no `--preflight`, the whole doctor and `--area toolchain` also print the JDK, Node, and clang lines, including `node not required` or `clang not required` when the graph does not need that tool. `histos --explain supply.pin` explains one check by its id.
 
 ## CI
 
@@ -200,11 +200,11 @@ The decision is [publishing.md](docs/publishing.md). A ship is a catalog row, `S
 
 | Command | Writes |
 | --- | --- |
-| `publishLocal` | The snapshot coordinate of HEAD into Coursier's `ivy2Local`, unsigned. A release when `HISTOS_SESSION=release`. |
+| `publish local` | The snapshot coordinate of HEAD into Coursier's `ivy2Local`, unsigned. A release when `HISTOS_SESSION=release`. |
 | `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. |
 | `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. |
 
-`publishLocal` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publishLocal` moves it only on the default branch.
+`publish local` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publish local` moves it only on the default branch.
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 - A release also needs `PGP_SECRET`. `PGP_PASSPHRASE` unlocks it (empty by default), and `PGP_KEY_HEX` selects a fingerprint. `HISTOS_SIGNER=gpg` signs with `gpg` instead, and then `PGP_KEY_HEX` is required and `PGP_SECRET` is not read.
@@ -247,7 +247,7 @@ An agent uses MCP. Point the client's stdio server at `histos` (or `./histos` in
 }
 ```
 
-The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `fmt`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, `observe`, and `doctor`. Each sends the same call the command sends and returns the report as data, with each line as it is printed. A compile or test that failed is a report. A request that never started fails the tool.
+The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publish`, `version`, `assembly`, `clean`, `resolve`, `workflow`, `fmt`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `watch`, `preview`, `observe`, and `doctor`. `publish` takes a place, `local` or `snapshots`. `test` takes a mode, `clean` takes an extent, `fmt` takes a mode, and `preview` takes an operation. Each sends the same call the command sends and returns the report as data, with each line as it is printed. A compile or test that failed is a report. A request that never started fails the tool.
 
 ## The server
 
@@ -255,7 +255,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publ
 
 `histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
-The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `cleanFull`, and `fmt` to the server itself, without starting a JVM to enter the tool. Every other command, and any of those with a flag the client does not read, runs `java -jar` on the toolchain jar.
+The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` to the server itself, without starting a JVM to enter the tool. `clean --full` is only that form with no project. Every other command, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
 
 ## Cache
 
@@ -263,7 +263,7 @@ Compile and package are content-addressed. The content store is `~/.cache/histos
 
 - The API digest is a compiled module's public signature. A comment or a method body does not change it, so a downstream compile hits. A public signature change runs that compile.
 - The product digest is the class bytes with jar timestamps, line numbers, and the `TASTY` attribute taken out, and with the checkout root removed from a path. Every other string stays. A link whose key is unchanged is restored, and the linker does not start. Packaging keys on the digest.
-- `testQuick` stamps include the upstream API digest, and hash each class a suite uses without its line numbers or its `TASTY` attribute, so a comment does not run the suite again.
+- A `test --quick` stamp includes the upstream API digest, and hashes each class a suite uses without its line numbers or its `TASTY` attribute, so a comment does not run the suite again.
 - `histos cache path` prints the store, `cache list` prints each digest and its size, and `cache clean` removes entries older than 30 days that no project keeps. `--dry-run` names them and keeps them.
 
 A remote cache speaks the Bazel remote cache protocol (bazel-remote or anything compatible). Today it serves plugin tasks only. `HISTOS_CACHE_URI` selects it: `http` and `https` use HTTP, `grpc` is plaintext gRPC, and `grpcs` is TLS. Unset or blank is off. A bad value fails and does not fall back to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`, and `HISTOS_CACHE_NAMESPACE` is `main` unless it names `pr/<n>` or `dev/<name>`. A lookup tries this namespace, then `main`, then the local store, and then runs the action. A remote that times out is a miss: the action runs, and a store the remote did not take is skipped. A gRPC call times out after 30 seconds with nothing moving, and HTTP uses its client's connect and read timeouts. Any other remote failure stops the action. `histos cache promote --from pr/12 --to main` copies an index over HTTP, and reports `remote cache is not configured` when the URI is unset.
@@ -295,7 +295,7 @@ These are true today and tracked:
 
 ## Building Histos
 
-Histos builds itself, and that needs commands no other build uses: `assembly`, `client`, `launcher`, and `portal`. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
+Histos builds itself. `histos assembly` writes the local jar, and `histos portal` rehearses a release. How the pin, the local assembly, the snapshot channel, and the native clients fit together is [self-host.md](docs/self-host.md).
 
 ## License
 

@@ -16,7 +16,9 @@ import histos.plugin.{
   Seal,
   TaskName,
 }
+import histos.central.DeploymentId
 import histos.format.{FormatMode, FormatTargets}
+import histos.publish.PublishToken
 import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.TestMode
@@ -59,9 +61,10 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ,
     test("a publish watch follows the selection the preview shows"):
       val bad = selections.flatMap: tokens =>
-        val local     = Watching.roots(repo, Call.PublishLocal(tokens), shipped)
+        val named     = tokens.map(PublishToken.trusted)
+        val local     = Watching.roots(repo, Call.PublishLocal(named), shipped)
         val snapshots = Watching.roots(repo, Call.PublishSnapshots(tokens), shipped)
-        val shown     = Watching.roots(repo, Call.PreviewPublishLocal(tokens), shipped)
+        val shown     = Watching.roots(repo, Call.PreviewPublishLocal(named), shipped)
         val shownSnap = Watching.roots(repo, Call.PreviewPublishSnapshots(tokens), shipped)
         List(
           Option.when(local != shown)(s"publishLocal ${tokens.mkString(" ")}"),
@@ -69,7 +72,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
         ).flatten
       assertTrue(
         bad == Nil,
-        Watching.roots(repo, Call.PublishLocal(List("api")), shipped) == onlyApi,
+        Watching.roots(repo, Call.PublishLocal(List(PublishToken("api"))), shipped) == onlyApi,
         Watching.roots(repo, Call.PublishSnapshots(List("lib")), shipped) == both,
       )
     ,
@@ -178,19 +181,19 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("test all", Call.Test(Nil, Nil, TestMode.Run), both),
     ("test one", Call.Test(List(api), Nil, TestMode.Quick), onlyApi),
     ("preview compile one", Call.PreviewCompile(List(api)), onlyApi),
-    ("preview test all", Call.PreviewTest(Nil), both),
+    ("preview test all", Call.PreviewTest(Nil, Nil, TestMode.Run), both),
     ("run one", Call.Run("api", None), onlyApi),
     ("run not a project", Call.Run("1api", None), fileOnly),
     ("run unknown", Call.Run("other", None), fileOnly),
     ("preview run unknown", Call.PreviewRun("other", Some(Platform.Jvm)), fileOnly),
-    ("publish local unknown", Call.PublishLocal(List("missing")), fileOnly),
+    ("publish local unknown", Call.PublishLocal(List(PublishToken("missing"))), fileOnly),
     ("publish local empty", Call.PublishLocal(Nil), both),
     ("preview publish empty", Call.PreviewPublishLocal(Nil), both),
-    ("preview publish unknown", Call.PreviewPublishLocal(List("missing")), fileOnly),
+    ("preview publish unknown", Call.PreviewPublishLocal(List(PublishToken("missing"))), fileOnly),
     ("preview snapshots unknown", Call.PreviewPublishSnapshots(List("missing")), fileOnly),
-    ("clean empty", Call.Clean(Nil), both),
-    ("clean one", Call.Clean(List(api)), onlyApi),
-    ("preview clean one", Call.PreviewClean(List(api)), onlyApi),
+    ("clean empty", Call.Clean(Nil, CleanExtent.Products), both),
+    ("clean one", Call.Clean(List(api), CleanExtent.Products), onlyApi),
+    ("preview clean one", Call.PreviewClean(List(api), CleanExtent.Products), onlyApi),
     ("graph", Call.Graph, both),
     ("version", Call.Version, both),
   )
@@ -202,19 +205,17 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("publish snapshots", Call.PublishSnapshots(Nil), true),
     ("publish release", Call.PublishRelease(Nil, false), true),
     ("run", Call.Run("api", None), true),
-    ("client", Call.Client, true),
     ("assembly", Call.Assembly(None), true),
-    ("clean empty", Call.Clean(Nil), true),
-    ("clean named", Call.Clean(List(api)), true),
-    ("clean full", Call.CleanFull, true),
+    ("clean empty", Call.Clean(Nil, CleanExtent.Products), true),
+    ("clean named", Call.Clean(List(api), CleanExtent.Products), true),
+    ("clean full", Call.Clean(Nil, CleanExtent.Full), true),
     ("format", Call.Format(FormatTargets.Build, FormatMode.Check), true),
-    ("publish promote", Call.PublishPromote("id"), false),
-    ("publish drop", Call.PublishDrop("drop"), false),
+    ("publish promote", Call.PublishPromote(DeploymentId("id")), false),
+    ("publish drop", Call.PublishDrop(DeploymentId("drop")), false),
     ("publish assets", Call.PublishAssets(Nil), false),
     ("graph", Call.Graph, false),
     ("task", Call.Task("demo/pack", PluginArgs.empty), false),
     ("cancel", Call.Cancel(runId), false),
-    ("toolchain", Call.Toolchain, false),
     ("resolve", Call.Resolve(ResolveAction.Verify), false),
     ("workflow", Call.Workflow(WorkflowAction.Check), false),
     ("reload", Call.Reload, false),
@@ -224,16 +225,15 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("cache list", Call.CacheList, false),
     ("cache clean", Call.CacheClean(CacheCleanMode.Remove), false),
     ("cache promote", Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main), false),
-    ("launcher", Call.Launcher(LauncherAction.Update), false),
     ("watch", Call.Watch(Call.Version, WatchPolicy.After), false),
     ("bsp", Call.Bsp, false),
     ("preview compile", Call.PreviewCompile(Nil), false),
-    ("preview test", Call.PreviewTest(Nil), false),
+    ("preview test", Call.PreviewTest(Nil, Nil, TestMode.Run), false),
     ("preview publish local", Call.PreviewPublishLocal(Nil), false),
     ("preview publish snapshots", Call.PreviewPublishSnapshots(Nil), false),
-    ("preview clean empty", Call.PreviewClean(Nil), false),
-    ("preview clean named", Call.PreviewClean(List(api)), false),
-    ("preview clean full", Call.PreviewCleanFull, false),
+    ("preview clean empty", Call.PreviewClean(Nil, CleanExtent.Products), false),
+    ("preview clean named", Call.PreviewClean(List(api), CleanExtent.Products), false),
+    ("preview clean full", Call.PreviewClean(Nil, CleanExtent.Full), false),
     ("preview run", Call.PreviewRun("api", None), false),
   )
 end DaemonWatchLawSpec

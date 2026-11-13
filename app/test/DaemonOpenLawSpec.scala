@@ -59,7 +59,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           cacheFeeds   <- Client.talk(socket, Call.CachePath).runCollect
           clazz = repo.resolve(".histos").resolve("classes").resolve(lawName.value).resolve("Kept.class")
           _          <- Workspace.writeString(clazz, "kept\n")
-          cleanFeeds <- Client.talk(socket, Call.Clean(Nil)).runCollect
+          cleanFeeds <- Client.talk(socket, Call.Clean(Nil, histos.server.CleanExtent.Products)).runCollect
           kept       <- ZIO.attempt(Files.exists(clazz)).orDie
           missed     <- Client.talk(socket, Call.PreviewCompile(List(lawName))).runCollect
           assembled  <- Client.talk(socket, Call.Assembly(None)).runCollect

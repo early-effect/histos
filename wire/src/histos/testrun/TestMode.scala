@@ -10,6 +10,14 @@ enum TestMode:
 end TestMode
 
 object TestMode:
+  import zio.json.*
+
+  given JsonCodec[TestMode] =
+    JsonCodec.string.transformOrFail(
+      raw => from(raw).left.map(_.message),
+      _.token,
+    )
+
   private val known: List[TestMode] = List(Run, Quick)
 
   def from(raw: String): Either[TestModeError, TestMode] =

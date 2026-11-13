@@ -27,7 +27,7 @@ object CliPromptLawSpec extends ZIOSpecDefault:
         Nil          -> ScaffoldKind.Full,
       )
       ZIO
-        .foreach(rows)((lines, want) => heard(lines)(Cli.kindOf(person, false, false)).map((lines, want, _)))
+        .foreach(rows)((lines, want) => heard(lines)(Cli.kindOf(person, ScaffoldChoice.Prompt)).map((lines, want, _)))
         .map: found =>
           val misses = found.collect {
             case (lines, want, (kind, shown, left)) if kind != want || shown != Vector(kindPrompt) || left.nonEmpty =>
@@ -37,11 +37,13 @@ object CliPromptLawSpec extends ZIOSpecDefault:
     ,
     test("nobody is asked the kind: a flag or a redirected stream is its default, and the answer stays unread"):
       val rows =
-        List((person, true, false) -> ScaffoldKind.Bare, (person, false, true) -> ScaffoldKind.Full) ++
-          unattended.map(stdio => (stdio, false, false) -> ScaffoldKind.Full)
+        List(
+          (person, ScaffoldChoice.Bare)      -> ScaffoldKind.Bare,
+          (person, ScaffoldChoice.Confirmed) -> ScaffoldKind.Full,
+        ) ++ unattended.map(stdio => (stdio, ScaffoldChoice.Prompt) -> ScaffoldKind.Full)
       ZIO
-        .foreach(rows) { case (row @ (stdio, bare, yes), want) =>
-          heard(List("n"))(Cli.kindOf(stdio, bare, yes)).map((row, want, _))
+        .foreach(rows) { case (row @ (stdio, choice), want) =>
+          heard(List("n"))(Cli.kindOf(stdio, choice)).map((row, want, _))
         }
         .map: found =>
           val misses = found.collect {
@@ -49,30 +51,36 @@ object CliPromptLawSpec extends ZIOSpecDefault:
           }
           assertTrue(misses == Nil)
     ,
-    test("a person names the CI branch, and a blank or missing answer is the default"):
+    test("a person names the CI branch for a prompt or a bare project, and a blank answer is the default"):
       val rows = List(
         List("trunk")     -> "trunk",
         List(" release ") -> "release",
         List("  ")        -> Provision.DefaultBranch,
         Nil               -> Provision.DefaultBranch,
       )
+      val choices = List(ScaffoldChoice.Prompt, ScaffoldChoice.Bare)
       ZIO
-        .foreach(rows)((lines, want) => heard(lines)(Cli.askBranch(person, false, None)).map((lines, want, _)))
+        .foreach(choices)(choice =>
+          ZIO.foreach(rows)((lines, want) => heard(lines)(Cli.askBranch(person, choice, None)).map((lines, want, _)))
+        )
         .map: found =>
-          val misses = found.collect {
+          val misses = found.flatten.collect {
             case (lines, want, (branch, shown, left))
                 if branch != want || shown != Vector(branchPrompt) || left.nonEmpty =>
               lines
           }
           assertTrue(misses == Nil)
     ,
-    test("nobody is asked the CI branch: a flag or a redirected stream is its default, and the answer stays unread"):
+    test("a confirmed choice and a redirected stream skip the branch prompt, and a named branch is kept"):
       val rows =
-        List((person, true, None) -> Provision.DefaultBranch, (person, false, Some("dev")) -> "dev") ++
-          unattended.map(stdio => (stdio, false, None) -> Provision.DefaultBranch)
+        List(
+          (person, ScaffoldChoice.Confirmed, None)     -> Provision.DefaultBranch,
+          (person, ScaffoldChoice.Prompt, Some("dev")) -> "dev",
+          (person, ScaffoldChoice.Bare, Some("dev"))   -> "dev",
+        ) ++ unattended.map(stdio => (stdio, ScaffoldChoice.Prompt, None) -> Provision.DefaultBranch)
       ZIO
-        .foreach(rows) { case (row @ (stdio, yes, branch), want) =>
-          heard(List("trunk"))(Cli.askBranch(stdio, yes, branch)).map((row, want, _))
+        .foreach(rows) { case (row @ (stdio, choice, branch), want) =>
+          heard(List("trunk"))(Cli.askBranch(stdio, choice, branch)).map((row, want, _))
         }
         .map: found =>
           val misses = found.collect {

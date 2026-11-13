@@ -1,14 +1,17 @@
 package histos.cli
 
-import histos.doctor.Suggest
+import histos.doctor.{FixMode, Suggest}
 import histos.cache.CacheCleanMode
+import histos.central.DeploymentId
 import histos.plugin.{CommandName, PluginTaskId}
+import histos.publish.PublishToken
 import histos.schedule.CacheNamespace
-import histos.server.{LauncherAction, ResolveAction}
+import histos.server.{CleanExtent, ResolveAction}
 import histos.task.{RunId, TaskId}
-import histos.testrun.SuitePattern
+import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
 import histos.format.{FormatMode, FormatTargets}
+import histos.supply.{PolicyWrite, SetupSource, ZipxConfirm}
 
 import java.nio.file.Path
 
@@ -35,20 +38,16 @@ import zio.cli.{
   */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Toolchain,
-      Reload, Reboot, Client
+    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Reload, Reboot
     case Cancel(id: String)
     case New(name: String, bare: Boolean, yes: Boolean, branch: Option[String])
     case Init(bare: Boolean, yes: Boolean, from: Option[String], branch: Option[String])
     case Run(name: String, platform: Option[String])
-    case Test(affected: Option[String], projects: List[String])
+    case Test(tokens: List[String])
     case Coverage(projects: List[String], floors: histos.FloorInput)
     case Affected(base: String)
-    case TestOnly(args: List[String])
-    case TestQuick(args: List[String])
     case Compile(projects: List[String])
-    case Clean(projects: List[String])
-    case CleanFull(projects: List[String])
+    case Clean(tokens: List[String])
     case Assembly(destination: Option[String])
     case PublishLocal(tokens: List[String])
     case PublishSnapshots(projects: List[String])
@@ -59,15 +58,13 @@ object Grammar:
     case CacheClean(mode: CacheCleanMode)
     case CachePromote(from: String, to: String)
     case Resolve(action: ResolveAction)
-    case Launcher(action: LauncherAction)
     case Workflow(action: WorkflowAction)
     case Fmt(check: Boolean, files: Boolean, args: List[String])
     case PreviewCompile(projects: List[String])
-    case PreviewTest(projects: List[String])
+    case PreviewTest(tokens: List[String])
     case PreviewPublishLocal(tokens: List[String])
     case PreviewPublishSnapshots(projects: List[String])
-    case PreviewClean(projects: List[String])
-    case PreviewCleanFull(projects: List[String])
+    case PreviewClean(tokens: List[String])
     case PreviewRun(name: String, platform: Option[String])
     case Observe
     case Doctor(
@@ -92,8 +89,7 @@ object Grammar:
         Wire.Run(name, platform.headOption)
       }
   private val test =
-    CliCommand("test", Options.text("affected").optional, Args.text("project").*)
-      .map { case (affected, names) => Wire.Test(affected, names.toList) }
+    CliCommand("test", Args.text("token").*).map(tokens => Wire.Test(tokens.toList))
   private val coverageFloors =
     Options.integer("min-stmt").optional ++
       Options.integer("min-branch").optional ++
@@ -120,15 +116,12 @@ object Grammar:
         )
     }
   private val affected   = CliCommand("affected", Options.text("base")).map(Wire.Affected(_))
-  private val testOnly   = CliCommand("testOnly", Args.text("pattern").*).map(args => Wire.TestOnly(args.toList))
-  private val testQuick  = CliCommand("testQuick", Args.text("pattern").*).map(args => Wire.TestQuick(args.toList))
   private val compile    = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
-  private val cleanBuild = CliCommand("clean", Args.text("project").*).map(names => Wire.Clean(names.toList))
-  private val cleanFull  = CliCommand("cleanFull", Args.text("project").*).map(names => Wire.CleanFull(names.toList))
+  private val cleanBuild = CliCommand("clean", Args.text("token").*).map(tokens => Wire.Clean(tokens.toList))
   private val assembly   =
     CliCommand("assembly", Args.text("destination").atMost(1)).map(paths => Wire.Assembly(paths.headOption))
   private val publishLocal =
-    CliCommand("publishLocal", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
+    CliCommand("local", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
   private val publishSnapshots =
     CliCommand("snapshots", Args.text("project").*).map(names => Wire.PublishSnapshots(names.toList))
   private val publishRelease =
@@ -146,16 +139,15 @@ object Grammar:
     CliCommand("assets", Args.text("token").*).map(tokens => Wire.PublishAssets(tokens.toList))
   private val publish =
     CliCommand("publish").subcommands(
-      publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
+      publishLocal | publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
     )
-  private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
-  private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
-  private val server    = CliCommand("server").map(_ => Wire.Server)
-  private val portal    = CliCommand("portal").map(_ => Wire.Portal)
-  private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
-  private val reload    = CliCommand("reload").map(_ => Wire.Reload)
-  private val reboot    = CliCommand("reboot").map(_ => Wire.Reboot)
-  private val cancel    =
+  private val mcp    = CliCommand("mcp").map(_ => Wire.Mcp)
+  private val bsp    = CliCommand("bsp").map(_ => Wire.Bsp)
+  private val server = CliCommand("server").map(_ => Wire.Server)
+  private val portal = CliCommand("portal").map(_ => Wire.Portal)
+  private val reload = CliCommand("reload").map(_ => Wire.Reload)
+  private val reboot = CliCommand("reboot").map(_ => Wire.Reboot)
+  private val cancel =
     CliCommand("cancel", Args.text("id")).map(Wire.Cancel(_))
   private val path    = CliCommand("path").map(_ => Wire.CachePath)
   private val list    = CliCommand("list").map(_ => Wire.CacheList)
@@ -188,27 +180,18 @@ object Grammar:
     CliCommand("fmt", Options.boolean("check") ++ Options.boolean("file"), Args.text("target").*).map {
       case ((check, files), args) => Wire.Fmt(check, files, args.toList)
     }
-  private val launcherFlag =
-    (Options.boolean("update") ++ Options.boolean("latest")).mapOrFail:
-      case (true, false) => Right(LauncherAction.Update)
-      case (false, true) => Right(LauncherAction.Latest)
-      case _             => refused
-  private val launcher =
-    CliCommand("launcher", launcherFlag).map(Wire.Launcher(_))
   private val previewCompile =
     CliCommand("compile", Args.text("project").*).map(names => Wire.PreviewCompile(names.toList))
   private val previewTest =
-    CliCommand("test", Args.text("project").*).map(names => Wire.PreviewTest(names.toList))
+    CliCommand("test", Args.text("token").*).map(tokens => Wire.PreviewTest(tokens.toList))
   private val previewPublishSnapshots =
     CliCommand("snapshots", Args.text("project").*).map(names => Wire.PreviewPublishSnapshots(names.toList))
-  private val previewPublish =
-    CliCommand("publish").subcommands(previewPublishSnapshots)
   private val previewPublishLocal =
-    CliCommand("publishLocal", Args.text("token").*).map(tokens => Wire.PreviewPublishLocal(tokens.toList))
+    CliCommand("local", Args.text("token").*).map(tokens => Wire.PreviewPublishLocal(tokens.toList))
+  private val previewPublish =
+    CliCommand("publish").subcommands(previewPublishLocal | previewPublishSnapshots)
   private val previewClean =
-    CliCommand("clean", Args.text("project").*).map(names => Wire.PreviewClean(names.toList))
-  private val previewCleanFull =
-    CliCommand("cleanFull", Args.text("project").*).map(names => Wire.PreviewCleanFull(names.toList))
+    CliCommand("clean", Args.text("token").*).map(tokens => Wire.PreviewClean(tokens.toList))
   private val previewRun =
     CliCommand("run", Args.text("name") ++ Args.text("platform").atMost(1))
       .map { case (name, platform) =>
@@ -245,7 +228,6 @@ object Grammar:
   private val setup   = CliCommand("setup").subcommands(supplyChain)
   private val helpCmd =
     CliCommand("help", Args.text("topic").*).map(words => Wire.Help(words.toList))
-  private val client     = CliCommand("client").map(_ => Wire.Client)
   private val freshFlags =
     Options.boolean("bare") ++ Options.boolean("yes") ++ Options.text("branch").optional
   private val fresh =
@@ -269,10 +251,10 @@ object Grammar:
       Wire.Bump(part, ships.toList)
     }
   private val preview = CliCommand("preview").subcommands(
-    previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
+    previewCompile | previewTest | previewPublish | previewClean | previewRun
   )
   private val commands =
-    version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
+    version | graph | run | test | coverage | affected | compile | fresh | init | cleanBuild | assembly | publish | mcp | bsp | server | portal | cache | resolve | workflow | fmt | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
   private val root = CliCommand("histos").subcommands(commands)
 
   /** The root commands. Each one's word is in `CommandName.reserved`, so no plugin command can take it. */
@@ -318,18 +300,21 @@ object Grammar:
             ZIO.fail(CliParseError.WatchCommand("--restart watches a program"))
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
-    root
-      .parse("histos" :: args, CliConfig.default)
-      .mapError(error => failure(error, args))
-      .flatMap:
-        case CommandDirective.UserDefined(Nil, wire) => command(wire)
-        case CommandDirective.UserDefined(_, _)      =>
-          ZIO.fail(shim(args).getOrElse(CliParseError.UnexpectedArguments))
-        case CommandDirective.BuiltIn(_) =>
-          args match
-            case "publish" :: Nil              => ZIO.fail(CliParseError.PublishForm)
-            case "preview" :: "publish" :: Nil => ZIO.fail(CliParseError.PublishForm)
-            case _                             => ZIO.fail(CliParseError.Help)
+    gate(args) match
+      case Some(error) => ZIO.fail(error)
+      case None        =>
+        root
+          .parse("histos" :: args, CliConfig.default)
+          .mapError(error => failure(error, args))
+          .flatMap:
+            case CommandDirective.UserDefined(Nil, wire) => command(wire)
+            case CommandDirective.UserDefined(_, _)      =>
+              ZIO.fail(shim(args).getOrElse(CliParseError.UnexpectedArguments))
+            case CommandDirective.BuiltIn(_) =>
+              args match
+                case "publish" :: Nil              => ZIO.fail(CliParseError.PublishForm)
+                case "preview" :: "publish" :: Nil => ZIO.fail(CliParseError.PublishForm)
+                case _                             => ZIO.fail(CliParseError.Help)
 
   private def command(wire: Wire): IO[CliParseError, Command] =
     wire match
@@ -341,7 +326,6 @@ object Grammar:
       case Wire.Portal     => ZIO.succeed(Command.Portal)
       case Wire.CachePath  => ZIO.succeed(Command.CachePath)
       case Wire.CacheList  => ZIO.succeed(Command.CacheList)
-      case Wire.Toolchain  => ZIO.succeed(Command.Toolchain)
       case Wire.Reload     => ZIO.succeed(Command.Reload)
       case Wire.Reboot     => ZIO.succeed(Command.Reboot)
       case Wire.Cancel(id) =>
@@ -353,12 +337,10 @@ object Grammar:
         ZIO.fromEither(namespaces(from, to)).map { (source, dest) =>
           Command.CachePromote(source, dest)
         }
-      case Wire.Resolve(action)          => ZIO.succeed(Command.Resolve(action))
-      case Wire.Launcher(action)         => ZIO.succeed(Command.Launcher(action))
-      case Wire.Workflow(action)         => ZIO.succeed(Command.Workflow(action))
-      case Wire.Fmt(check, files, args)  => ZIO.fromEither(fmtOf(check, files, args))
-      case Wire.Test(affected, projects) =>
-        choice(affected).flatMap(picked => projectList("test", projects).map(names => Command.Test(names, picked)))
+      case Wire.Resolve(action)         => ZIO.succeed(Command.Resolve(action))
+      case Wire.Workflow(action)        => ZIO.succeed(Command.Workflow(action))
+      case Wire.Fmt(check, files, args) => ZIO.fromEither(fmtOf(check, files, args))
+      case Wire.Test(tokens)            => tested("test", tokens, Command.Test.apply)
       case Wire.Coverage(projects, raw) =>
         ZIO
           .fromEither(histos.CoverageFloors.parse(raw))
@@ -368,29 +350,19 @@ object Grammar:
               Command.Coverage(names, floors, histos.coverage.Excludes(Nil, Nil))
       case Wire.Affected(base) =>
         ZIO.succeed(Command.Affected(base))
-      case Wire.TestOnly(args) =>
-        ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map { case (modules, patterns) =>
-          Command.TestOnly(modules, patterns)
-        }
-      case Wire.TestQuick(args) =>
-        ZIO
-          .fromEither(selection("testQuick", args, requirePattern = false))
-          .map { case (modules, patterns) =>
-            Command.TestQuick(modules, patterns)
-          }
-      case Wire.Client                       => ZIO.succeed(Command.Client)
       case Wire.New(name, bare, yes, branch) =>
-        ZIO.succeed(Command.New(name, bare, yes, branch))
+        ZIO.succeed(Command.New(name, ScaffoldChoice.from(bare, yes), branch))
       case Wire.Init(bare, yes, from, branch) =>
+        val choice = ScaffoldChoice.from(bare, yes)
         from match
-          case None      => ZIO.succeed(Command.Init(bare, yes, None, branch))
+          case None      => ZIO.succeed(Command.Init(choice, None, branch))
           case Some(raw) =>
             ImportSource.from(raw) match
-              case Some(source) => ZIO.succeed(Command.Init(bare, yes, Some(source), branch))
+              case Some(source) => ZIO.succeed(Command.Init(choice, Some(source), branch))
               case None         => ZIO.fail(CliParseError.Pattern("init --from is sbt or zipx"))
       case Wire.Observe                                                    => ZIO.succeed(Command.Observe)
       case Wire.Doctor(area, json, preflight, fix, yes, verbose, projects) =>
-        projectList("doctor", projects).map(names => Command.Doctor(area, json, preflight, fix, yes, verbose, names))
+        doctorOf(area, json, preflight, fix, yes, verbose, projects)
       case Wire.Deps(action)      => ZIO.succeed(Command.Deps(action))
       case Wire.Bump(part, ships) =>
         ZIO
@@ -399,43 +371,37 @@ object Grammar:
           )
           .map(names => Command.Bump(part, names))
       case Wire.Setup(from, fix, yes) =>
-        ZIO.succeed(Command.Setup(from, fix, yes))
+        setupOf(from, fix, yes)
       case Wire.Help(words) =>
         ZIO.succeed(Command.Help(words))
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))
-      case Wire.Clean(projects) =>
-        projectList("clean", projects).map(Command.Clean(_))
-      case Wire.CleanFull(Nil) => ZIO.succeed(Command.CleanFull)
-      case Wire.CleanFull(_)   =>
-        ZIO.fail(CliParseError.Pattern("cleanFull does not take a project"))
+      case Wire.Clean(tokens) =>
+        cleaned("clean", tokens, Command.Clean.apply)
       case Wire.Assembly(destination) =>
         ZIO.succeed(Command.Assembly(destination))
       case Wire.PublishLocal(tokens) =>
-        ZIO.succeed(Command.PublishLocal(tokens))
+        publishTokens(tokens).map(Command.PublishLocal(_))
       case Wire.PublishSnapshots(tokens) =>
         ZIO.succeed(Command.PublishSnapshots(tokens))
       case Wire.PublishRelease(automatic, tokens) =>
         ZIO.succeed(Command.PublishRelease(automatic, tokens))
       case Wire.PublishPromote(id) =>
-        ZIO.succeed(Command.PublishPromote(id))
+        deployment(id).map(Command.PublishPromote(_))
       case Wire.PublishDrop(id) =>
-        ZIO.succeed(Command.PublishDrop(id))
+        deployment(id).map(Command.PublishDrop(_))
       case Wire.PublishAssets(tokens) =>
         ZIO.succeed(Command.PublishAssets(tokens))
       case Wire.PreviewCompile(projects) =>
         projectList("preview compile", projects).map(Command.PreviewCompile(_))
-      case Wire.PreviewTest(projects) =>
-        projectList("preview test", projects).map(Command.PreviewTest(_))
+      case Wire.PreviewTest(tokens) =>
+        tested("preview test", tokens, Command.PreviewTest.apply)
       case Wire.PreviewPublishLocal(tokens) =>
-        ZIO.succeed(Command.PreviewPublishLocal(tokens))
+        publishTokens(tokens).map(Command.PreviewPublishLocal(_))
       case Wire.PreviewPublishSnapshots(tokens) =>
         ZIO.succeed(Command.PreviewPublishSnapshots(tokens))
-      case Wire.PreviewClean(projects) =>
-        projectList("preview clean", projects).map(Command.PreviewClean(_))
-      case Wire.PreviewCleanFull(Nil) => ZIO.succeed(Command.PreviewCleanFull)
-      case Wire.PreviewCleanFull(_)   =>
-        ZIO.fail(CliParseError.Pattern("cleanFull does not take a project"))
+      case Wire.PreviewClean(tokens) =>
+        cleaned("preview clean", tokens, Command.PreviewClean.apply)
       case Wire.PreviewRun(raw, token) =>
         namedRun(raw, token).map:
           case NamedRun.Module(id, platform) =>
@@ -494,44 +460,173 @@ object Grammar:
           )
       case other => ZIO.succeed(other)
 
-  private def selection(
-      command: String,
-      args: List[String],
-      requirePattern: Boolean,
-  ): Either[CliParseError, (List[ProjectName], List[SuitePattern])] =
-    walk(command, requirePattern, args, Nil, Nil)
+  /** Shim words win. A removed word fails before zio-cli and before a plugin can take it. */
+  private def gate(args: List[String]): Option[CliParseError] =
+    shim(args).orElse(retired(args))
 
-  private def walk(
-      command: String,
-      requirePattern: Boolean,
-      args: List[String],
-      modules: List[ProjectName],
-      patterns: List[SuitePattern],
-  ): Either[CliParseError, (List[ProjectName], List[SuitePattern])] =
+  private def retired(args: List[String]): Option[CliParseError] =
     args match
-      case Nil =>
-        if requirePattern && patterns.isEmpty then Left(CliParseError.MissingPattern)
-        else Right((modules.reverse, patterns.reverse))
-      case "--module" :: Nil =>
-        Left(CliParseError.Pattern(s"$command --module needs a project"))
-      case "--module" :: name :: rest =>
-        ProjectName.from(name) match
-          case Left(error)  => Left(CliParseError.ProjectName(error))
-          case Right(found) =>
-            walk(
-              command,
-              requirePattern,
-              rest,
-              found :: modules,
-              patterns,
-            )
-      case flag :: _ if flag.startsWith("-") =>
-        Left(CliParseError.Pattern(Help.flag(command, flag)))
-      case token :: rest =>
-        SuitePattern.from(token) match
-          case Left(error)    => Left(CliParseError.SuitePattern(error))
-          case Right(pattern) =>
-            walk(command, requirePattern, rest, modules, pattern :: patterns)
+      case "testOnly" :: _                  => Some(CliParseError.Retired("testOnly", "test --only"))
+      case "testQuick" :: _                 => Some(CliParseError.Retired("testQuick", "test --quick"))
+      case "cleanFull" :: _                 => Some(CliParseError.Retired("cleanFull", "clean --full"))
+      case "publishLocal" :: _              => Some(CliParseError.Retired("publishLocal", "publish local"))
+      case "client" :: _                    => Some(CliParseError.Retired("client", "publish"))
+      case "launcher" :: _                  => Some(CliParseError.Retired("launcher", "update"))
+      case "toolchain" :: _                 => Some(CliParseError.Retired("toolchain", "doctor"))
+      case "preview" :: "testOnly" :: _     => Some(CliParseError.Retired("preview testOnly", "preview test --only"))
+      case "preview" :: "testQuick" :: _    => Some(CliParseError.Retired("preview testQuick", "preview test --quick"))
+      case "preview" :: "cleanFull" :: _    => Some(CliParseError.Retired("preview cleanFull", "preview clean --full"))
+      case "preview" :: "publishLocal" :: _ =>
+        Some(CliParseError.Retired("preview publishLocal", "preview publish local"))
+      case _ => None
+
+  private def tested(
+      command: String,
+      tokens: List[String],
+      build: (List[ProjectName], AffectedChoice, TestMode, List[SuitePattern]) => Command,
+  ): IO[CliParseError, Command] =
+    ZIO.fromEither(splitTest(command, tokens)).flatMap { parts =>
+      for
+        names    <- projectList(command, parts.projects)
+        patterns <- ZIO.fromEither(suitePatterns(parts.patterns))
+        picked   <- choice(parts.affected)
+      yield build(names, picked, parts.mode, patterns)
+    }
+
+  private def cleaned(
+      command: String,
+      tokens: List[String],
+      build: (List[ProjectName], CleanExtent) => Command,
+  ): IO[CliParseError, Command] =
+    ZIO.fromEither(splitClean(command, tokens)).flatMap { (raw, extent) =>
+      if extent == CleanExtent.Full && raw.nonEmpty then
+        ZIO.fail(CliParseError.Pattern(s"$command --full does not take a project"))
+      else projectList(command, raw).map(names => build(names, extent))
+    }
+
+  private final case class TestParts(
+      projects: List[String],
+      affected: Option[String],
+      mode: TestMode,
+      patterns: List[String],
+  )
+
+  /** Projects are the words before `--only`. Patterns are the words after it. Flags may sit anywhere. */
+  private def splitTest(command: String, args: List[String]): Either[CliParseError, TestParts] =
+    def loop(
+        rest: List[String],
+        projects: List[String],
+        affected: Option[String],
+        quick: Boolean,
+        only: Boolean,
+        patterns: List[String],
+    ): Either[CliParseError, TestParts] =
+      rest match
+        case Nil =>
+          if only && patterns.isEmpty then Left(CliParseError.Pattern(s"$command --only needs a pattern"))
+          else
+            val mode = if quick then TestMode.Quick else TestMode.Run
+            Right(TestParts(projects.reverse, affected, mode, patterns.reverse))
+        case "--quick" :: tail =>
+          if quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
+          else loop(tail, projects, affected, true, only, patterns)
+        case "--only" :: Nil =>
+          Left(CliParseError.Pattern(s"$command --only needs a pattern"))
+        case "--only" :: tail =>
+          loop(tail, projects, affected, quick, true, patterns)
+        case "--affected" :: Nil =>
+          Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
+        case "--affected" :: value :: tail if value.startsWith("-") =>
+          Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
+        case "--affected" :: value :: tail =>
+          affected match
+            case Some(_) => Left(CliParseError.Pattern(s"$command --affected is already set"))
+            case None    => loop(tail, projects, Some(value), quick, only, patterns)
+        case flag :: _ if flag.startsWith("-") =>
+          Left(CliParseError.Pattern(Help.flag(command, flag)))
+        case token :: tail if only =>
+          loop(tail, projects, affected, quick, true, token :: patterns)
+        case token :: tail =>
+          loop(tail, token :: projects, affected, quick, only, patterns)
+    loop(args, Nil, None, false, false, Nil)
+
+  private def splitClean(
+      command: String,
+      args: List[String],
+  ): Either[CliParseError, (List[String], CleanExtent)] =
+    def loop(
+        rest: List[String],
+        projects: List[String],
+        full: Boolean,
+    ): Either[CliParseError, (List[String], CleanExtent)] =
+      rest match
+        case Nil =>
+          val extent = if full then CleanExtent.Full else CleanExtent.Products
+          Right((projects.reverse, extent))
+        case "--full" :: tail =>
+          if full then Left(CliParseError.Pattern(s"$command --full is already set"))
+          else loop(tail, projects, true)
+        case flag :: _ if flag.startsWith("-") =>
+          Left(CliParseError.Pattern(Help.flag(command, flag)))
+        case token :: tail =>
+          loop(tail, token :: projects, full)
+    loop(args, Nil, false)
+
+  private def suitePatterns(raw: List[String]): Either[CliParseError, List[SuitePattern]] =
+    raw.foldLeft[Either[CliParseError, List[SuitePattern]]](Right(Nil)): (acc, token) =>
+      for
+        have    <- acc
+        pattern <- SuitePattern.from(token).left.map(CliParseError.SuitePattern(_))
+      yield have :+ pattern
+
+  private def publishTokens(raw: List[String]): IO[CliParseError, List[PublishToken]] =
+    ZIO.foreach(raw): token =>
+      ZIO.fromEither(PublishToken.from(token).left.map(error => CliParseError.Pattern(error.message)))
+
+  private def deployment(raw: String): IO[CliParseError, DeploymentId] =
+    ZIO.fromEither(DeploymentId.from(raw).left.map(error => CliParseError.Pattern(error.message)))
+
+  private def doctorOf(
+      area: Option[String],
+      json: Boolean,
+      preflight: Option[String],
+      fix: Boolean,
+      yes: Boolean,
+      verbose: Boolean,
+      projects: List[String],
+  ): IO[CliParseError, Command] =
+    val form   = if json then ReportForm.Json else ReportForm.Text
+    val detail = if verbose then DoctorDetail.Verbose else DoctorDetail.Brief
+    val mode   = FixMode.from(fix, yes)
+    for
+      scope <- ZIO.foreach(area)(raw =>
+        ZIO.fromEither(DoctorScope.parse(raw).left.map(error => CliParseError.Pattern(error.message)))
+      )
+      job <- ZIO.foreach(preflight)(raw =>
+        ZIO.fromEither(DoctorScope.preflight(raw).left.map(error => CliParseError.Pattern(error.message)))
+      )
+      names <- projectList("doctor", projects)
+    yield Command.Doctor(scope, form, job, mode, detail, names)
+
+  private def setupOf(from: Option[String], fix: Boolean, yes: Boolean): IO[CliParseError, Command] =
+    val write   = if fix then PolicyWrite.Write else PolicyWrite.Preview
+    val confirm = if yes then ZipxConfirm.Delete else ZipxConfirm.Ask
+    setupSource(from).map(source => Command.Setup(source, write, confirm))
+
+  private def setupSource(raw: Option[String]): IO[CliParseError, Option[SetupSource]] =
+    raw match
+      case None         => ZIO.succeed(None)
+      case Some("zipx") => ZIO.succeed(Some(SetupSource.Zipx))
+      case Some(text)   =>
+        if text.isEmpty then ZIO.fail(CliParseError.Pattern("setup --from names zipx or a relative directory"))
+        else
+          scala.util.Try(Path.of(text)).toOption match
+            case None =>
+              ZIO.fail(CliParseError.Pattern("setup --from names zipx or a relative directory"))
+            case Some(path) if path.isAbsolute =>
+              ZIO.fail(CliParseError.Pattern("setup --from names zipx or a relative directory"))
+            case Some(_) =>
+              ZIO.succeed(Some(SetupSource.Directory(text)))
 
   private enum NamedRun:
     case Module(id: TaskId, platform: Option[Platform])
@@ -648,11 +743,12 @@ object Grammar:
           case ValidationErrorType.MissingValue | ValidationErrorType.InvalidArgument =>
             CliParseError.Pattern("cache promote needs --from and --to")
           case _ => reject(error, args)
-      case "publish" :: ("snapshots" | "release" | "assets" | "promote" | "drop") :: _ => reject(error, args)
-      case "publish" :: _                                                              => CliParseError.PublishForm
-      case "preview" :: "publish" :: "snapshots" :: _                                  => reject(error, args)
-      case "preview" :: "publish" :: _                                                 => CliParseError.PublishForm
-      case _                                                                           => reject(error, args)
+      case "publish" :: ("local" | "snapshots" | "release" | "assets" | "promote" | "drop") :: _ =>
+        reject(error, args)
+      case "publish" :: _                                         => CliParseError.PublishForm
+      case "preview" :: "publish" :: ("local" | "snapshots") :: _ => reject(error, args)
+      case "preview" :: "publish" :: _                            => CliParseError.PublishForm
+      case _                                                      => reject(error, args)
 
   private def shim(args: List[String]): Option[CliParseError] =
     args match
@@ -695,7 +791,7 @@ object Grammar:
       case "preview" :: token :: _ =>
         CliParseError.UnknownCommand(
           token,
-          Suggest.near(token, List("compile", "test", "publish", "publishLocal", "clean", "cleanFull", "run")),
+          Suggest.near(token, List("compile", "test", "publish", "clean", "run")),
         )
       case "setup" :: token :: _ =>
         CliParseError.UnknownCommand(token, Suggest.near(token, List("supply-chain")))

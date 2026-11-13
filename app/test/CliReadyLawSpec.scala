@@ -26,7 +26,7 @@ object CliReadyLawSpec extends ZIOSpecDefault:
       |""".stripMargin
 
   def spec = suite("cli ready laws")(
-    test("graph, affected, and toolchain run on a build with no plugins"):
+    test("graph, affected, and doctor run on a build with no plugins"):
       for
         dir      <- Workspace.work("histos-cli-ready")
         _        <- LawMachine.system(dir)
@@ -34,7 +34,7 @@ object CliReadyLawSpec extends ZIOSpecDefault:
         _        <- Workspace.writeString(dir.resolve("histos.scala"), build)
         graph    <- Cli.launch(List("graph"), dir)
         affected <- Cli.launch(List("affected", "--base", "all"), dir)
-        tools    <- Cli.launch(List("toolchain"), dir)
+        tools    <- Cli.launch(List("doctor", "--area", "toolchain"), dir)
       yield assertTrue(
         graph.exit == CliExit.Success,
         graph.err == "",

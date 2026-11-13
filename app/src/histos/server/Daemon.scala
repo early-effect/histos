@@ -918,15 +918,13 @@ object Daemon:
   private[server] def writesOutputs(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Client | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull |
-          Call.Format(_, _) =>
+          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_, _) | Call.Format(_, _) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
-          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
-          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
-          Call.PreviewRun(_, _) =>
+          Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) | Call.Version |
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.Watch(_, _) | Call.Bsp |
+          Call.PreviewCompile(_) | Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) |
+          Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_, _) | Call.PreviewRun(_, _) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

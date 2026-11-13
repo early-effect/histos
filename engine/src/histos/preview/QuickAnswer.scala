@@ -3,7 +3,7 @@ package histos.preview
 import histos.jdk.{Machine, Toolchain}
 import histos.node.NodeToolchain
 import histos.resolve.{BuildResolvers, DependencyLock, LockedTools, Resolve}
-import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp}
+import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteMatch, SuiteName, SuitePattern, SuiteStamp}
 import histos.toolchain.RuntimeIdentity
 import histos.zinc.{GraphCompile, UpstreamCell, UpstreamCells}
 import histos.{Module, NodePath, Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -35,6 +35,17 @@ enum QuickAnswer:
 end QuickAnswer
 
 object QuickAnswer:
+  /** Keep the suite names `--only` would run. An empty pattern list keeps every name. */
+  def limited(answer: QuickAnswer, patterns: List[SuitePattern]): QuickAnswer =
+    if patterns.isEmpty then answer
+    else
+      def keep(names: List[String]): List[String] =
+        names.filter(name => SuiteMatch.allows(patterns, name))
+      answer match
+        case QuickAnswer.Uncompiled                => QuickAnswer.Uncompiled
+        case QuickAnswer.Named(skip, run, unknown) => QuickAnswer.Named(keep(skip), keep(run), keep(unknown))
+        case QuickAnswer.Partial(skip)             => QuickAnswer.Partial(keep(skip))
+
   def read(
       repo: Path,
       module: Module,

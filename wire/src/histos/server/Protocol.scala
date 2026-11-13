@@ -2,8 +2,10 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.cache.CacheCleanMode
+import histos.central.DeploymentId
 import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.publish.PublishToken
 import histos.report.{BuildFault, CallResult}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
@@ -82,18 +84,8 @@ private object CallJson:
     raw => FlagName.from(raw).left.map(_.message),
     _.value,
   )
-  given JsonCodec[NamedText]     = JsonCodec.derived
-  given JsonCodec[PluginArgs]    = JsonCodec.derived
-  given JsonCodec[ResolveAction] =
-    JsonCodec.string.transformOrFail(
-      raw => ResolveAction.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[WorkflowAction] =
-    JsonCodec.string.transformOrFail(
-      raw => WorkflowAction.from(raw).left.map(_.message),
-      _.token,
-    )
+  given JsonCodec[NamedText]      = JsonCodec.derived
+  given JsonCodec[PluginArgs]     = JsonCodec.derived
   given JsonCodec[LauncherAction] =
     JsonCodec.string.transformOrFail(
       raw => LauncherAction.from(raw).left.map(_.message),
@@ -108,11 +100,6 @@ private object CallJson:
     JsonCodec.string.transformOrFail(
       raw => RunId.from(raw).left.map(_.message),
       _.value,
-    )
-  given JsonCodec[TestMode] =
-    JsonCodec.string.transformOrFail(
-      raw => TestMode.from(raw).left.map(_.message),
-      _.token,
     )
   given JsonCodec[CacheCleanMode] =
     JsonCodec.string.transformOrFail(
@@ -135,26 +122,21 @@ enum WatchPolicy derives JsonCodec:
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
-  case PublishLocal(tokens: List[String])
+  case PublishLocal(tokens: List[PublishToken])
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(tokens: List[String], automatic: Boolean)
-  case PublishPromote(id: String)
-  case PublishDrop(id: String)
+  case PublishPromote(id: DeploymentId)
+  case PublishDrop(id: DeploymentId)
   case PublishAssets(tokens: List[String])
   case Graph
   case Run(id: String, platform: Option[Platform])
-
-  /** Link the native client and write `dist/histos-client`. Does not start it. */
-  case Client
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
-  case Toolchain
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case Format(targets: FormatTargets, mode: FormatMode)
   case Assembly(destination: Option[String])
-  case Clean(projects: List[ProjectName])
-  case CleanFull
+  case Clean(projects: List[ProjectName], extent: CleanExtent)
   case Reload
 
   /** Replace the server. The successor starts as `successor` names, never as the server it replaces. */
@@ -164,15 +146,13 @@ enum Call derives JsonCodec:
   case CacheList
   case CacheClean(mode: CacheCleanMode)
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
-  case Launcher(action: LauncherAction)
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
   case PreviewCompile(projects: List[ProjectName])
-  case PreviewTest(projects: List[ProjectName])
-  case PreviewPublishLocal(tokens: List[String])
+  case PreviewTest(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
+  case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
-  case PreviewClean(projects: List[ProjectName])
-  case PreviewCleanFull
+  case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
   case PreviewRun(id: String, platform: Option[Platform])
 end Call
 
