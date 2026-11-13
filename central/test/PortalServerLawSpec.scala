@@ -20,9 +20,8 @@ object PortalServerLawSpec extends ZIOSpecDefault:
   private val jar = Chunk[Byte](0x50.toByte, 0x4b.toByte, 3.toByte, 4.toByte)
   private val asc = Chunk.single(1.toByte)
 
-  // Each law opens a heddle server, which shuts down on the Clock it was installed under: closing the scope polls a
-  // connection that is still writing its last response every 10 ms, up to `gracefulShutdownTimeout`. On TestClock that
-  // poll never wakes.
+  // Each law opens a heddle server. heddle 0.15.0 completes halt when the in-flight set empties. A connection still
+  // writing at shutdown starts the grace sleep, which is a real timer, so the suite stays on the live clock.
   def spec = suite("rehearsal portal")(
     test("a file is not a portal root, and each open error keeps its sentence"):
       val credentials   = PortalOpenError.Credentials.diagnose

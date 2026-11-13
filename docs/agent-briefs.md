@@ -161,8 +161,8 @@ Each is one pull request with its red law. They touch different code, so they ca
 ## Outside the plan
 
 - **Scala Native 3.10.1 (D16).** `api`, `wire`, and `client` stay on Scala 3.10.0 until a Scala Native nightly publishes `scala3lib` and `nscplugin` for 3.10.1. Check for one at the start of each session. When it ships, move them with the `ToolCatalog` change and a pin move.
-- **heddle issue (D17).** Server shutdown polls a busy connection every 10 ms on the server's clock, so a test that runs a real server on `TestClock` hangs (B11). Waking on idle would remove the polling. Draft the issue with B11's miniature, show Russ, and file it after his yes.
-- **slayer issue (D17).** `stub` makes laws spell out lambda parameter types, for example `(fingerprint: Fingerprint) =>`. Draft the issue with a call site, show Russ, and file it after his yes.
+- **heddle issue (D17).** Filed as early-effect/heddle#109 and released in 0.15.0. Halt completes when the in-flight set empties. Histos depends on that release.
+- **slayer issue (D17).** Filed as early-effect/slayer#5 and released in 0.3.0. A handler lambda is checked against the selected method, so it needs no parameter ascription. Histos depends on that release. The laws still carry ascriptions.
 
 ## Pin moves
 
