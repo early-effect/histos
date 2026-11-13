@@ -30,6 +30,7 @@ enum ChildError:
   case Status
   case Console
   case Io(failure: IoFailure)
+  case Orphan(exit: Int)
 
   def message: String = this match
     case UnsupportedPlatform(platform) =>
@@ -46,4 +47,6 @@ enum ChildError:
     case Status            => "the child did not report a status"
     case Console           => "could not read the child's output"
     case Io(failure)       => failure.message
+    case Orphan(exit)      =>
+      s"a child outlived the process, which exited $exit, and held its output"
 end ChildError

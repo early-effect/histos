@@ -47,7 +47,6 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
 - **Docs teach the truth.** README, AGENTS.md, the plan, and scaladoc are corrected in the same pull request as the code they describe. `app/test/ReadmeLawSpec.scala` gates the README.
 - **Known hazards.**
   - After a `git checkout` across a commit that moved a source between modules, the old module keeps that source's `.tasty`, and the compile fails ([test-audit.md](test-audit.md) B42). `./histos clean <module>` clears it.
-  - A child process a suite leaves behind keeps `./histos test` waiting on its output (B41). If a run stops making progress, look for the orphan.
   - A pin move publishes a snapshot. D13 approves snapshots and pin moves. The sequence is in "Pin moves" below.
 
 ## Order
@@ -59,7 +58,7 @@ Three tracks can run side by side. Within a track, one brief at a time, because 
 | Cache | Repo-relative sources, then Link cache, then Remote cache | no |
 | Toolchain | Ship row, then Dist layer, then Container, then CI setup | each one |
 | Command line | Grammar | only if the rendered workflow changes |
-| Small fixes | B41, B42, row 50. B40 closes with Link cache | no |
+| Small fixes | B42, row 50. B40 closes with Link cache. B41 is closed | no |
 
 Read-through is last, after every other brief.
 
@@ -148,7 +147,7 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 Each is one pull request with its red law. They touch different code, so they can run beside the tracks.
 
-- **B41.** `./histos test` waits for the end of a suite's output, not for the suite. A child the suite leaves behind holds that output open: one run took 927 s until the child was killed, and B43's leak hung CI the same way. Wait for the suite's exit, drain its output for a bounded time, end its process group, and report an orphan as a typed failure. Start at `engine/src/histos/testrun` (`SuiteLaunch`).
+- **B41.** Closed. `attend` waits for the process, drains its pipes for one second on a blocking thread, ends the process group, and fails with `ChildError.Orphan`. The law is `ChildCommandLawSpec`. The ledger row has the red and green counts.
 - **B42.** A source that moved to another module leaves its `.tasty` in the old module's classes directory, with no `.class` beside it, and the next compile reads it. Find why the class-file manager removes the `.class` and not the `.tasty`, and make a deleted source's whole product go. The red law is a scenario that moves a source between modules across two compiles.
 - **Row 50.** A suite's test compile passes no problem listener, so test-source warnings print nowhere. The CLI shows them only when the compile fails. Pass the listener, as the main compile does, and prove a warning in a test source is printed.
 
