@@ -840,10 +840,12 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
+      patterns: List[histos.testrun.SuitePattern],
       say: Say,
   ): IO[ServerError, Unit] =
     Plan
       .test(repo, graph, projects)
+      .map(plan => Plan.narrow(plan, patterns))
       .foldZIO(
         error => fault(say, BuildFault.Preview(error)),
         plan => told(say, Plan.renderTest(repo, plan)) *> ok(say),

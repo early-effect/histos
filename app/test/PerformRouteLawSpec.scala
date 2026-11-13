@@ -6,7 +6,6 @@ import histos.cache.{CacheProject, ContentStore}
 import histos.clean.Products
 import histos.load.{LoadedBuild, Loader}
 import histos.plugin.{NamedText, ParamName, PluginArgs}
-import histos.publish.{LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.{ResolutionService, Resolve}
 import histos.schedule.CacheError
@@ -86,10 +85,10 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
             _            <- stub[CompileMemo](_.forget)(ZIO.unit)
             _            <- stub[Compilers](_.drop)(ZIO.unit)
             _            <- stubForget(gone, ZIO.die(new IllegalStateException("clean forgets the store")))
-            (cleaned, _) <- drive(gone, Right(None), Call.Clean(Nil), track = false)
+            (cleaned, _) <- drive(gone, Right(None), Call.Clean(Nil, CleanExtent.Products), track = false)
             removed      <- absent(gone)
             _            <- stubForget(kept, ZIO.fail(failure))
-            (failed, _)  <- drive(kept, Right(None), Call.CleanFull, track = false)
+            (failed, _)  <- drive(kept, Right(None), Call.Clean(Nil, CleanExtent.Full), track = false)
             wiped        <- absent(kept)
           yield assertTrue(
             cleaned == Chunk(Message.Event(BuildEvent.Out("cleaned")), Message.Done(CallResult.reported())),
@@ -98,32 +97,6 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
             wiped,
           )
         program.provideSomeLayer[TestEnvironment & Scope & Path](services)
-      ,
-      test("launcher latest reprints a release pin and a missing pin is absent"):
-        val program =
-          for
-            root    <- ZIO.service[Path]
-            present <- LawDir.child(root, "pin")
-            missing <- LawDir.child(root, "no-pin")
-            _       <- ZIO.attemptBlocking {
-              Files.writeString(present.resolve(LauncherPin.file), "histos.version=9.8.7\n")
-            }.orDie
-            (latest, _) <- drive(present, Right(None), Call.Launcher(LauncherAction.Latest), track = false)
-            text        <- ZIO.attemptBlocking(Files.readString(present.resolve(LauncherPin.file))).orDie
-            (absent, _) <- drive(missing, Right(None), Call.Launcher(LauncherAction.Latest), track = false)
-          yield assertTrue(
-            latest == Chunk(
-              Message.Event(BuildEvent.Out("histos.version=9.8.7")),
-              Message.Done(CallResult.reported()),
-            ),
-            text == "histos.version=9.8.7\n",
-            absent == Chunk(
-              Message.Done(
-                CallResult.Fault(BuildFault.Launcher(LauncherError.Absent(missing.resolve(LauncherPin.file))))
-              )
-            ),
-          )
-        program.provideSomeLayer[TestEnvironment & Scope & Path](services),
     ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer),
   )
 

@@ -331,6 +331,8 @@ object CliLawSpec extends ZIOSpecDefault:
       Rejection.FormatMode("diff")                                           -> 2,
       Rejection.FormatTargets                                                -> 2,
       Rejection.FormatPath("/etc")                                           -> 2,
+      Rejection.Retired("testOnly", "test --only")                           -> 2,
+      Rejection.PublishToken(histos.publish.PublishToken.Error.Empty)        -> 2,
     )
 
   extension (line: CompileConsole.Line)

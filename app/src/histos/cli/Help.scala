@@ -2,6 +2,14 @@ package histos.cli
 
 import histos.doctor.Suggest
 
+/** Why `histos help` could not render a topic. */
+enum HelpError:
+  case Unknown(token: String)
+
+  def message: String = this match
+    case Unknown(token) => Help.unknown(token, Help.names)
+end HelpError
+
 /** Grouped help, and one command. Shim commands are listed even though the installed script runs them. */
 object Help:
   final case class Entry(name: String, group: String, usage: String, about: String)
@@ -14,33 +22,35 @@ object Help:
       "Print the launcher pin, the assembly checksum, and the snapshot id.",
     ),
     Entry("help", "info", "histos help [command]", "List commands, or show one command."),
+    Entry("--explain", "info", "histos --explain <check-id>", "Print one check."),
     Entry("graph", "info", "histos graph", "Print each module, platform, and Scala version."),
     Entry("observe", "info", "histos observe", "Print the stored compile tally."),
     Entry("compile", "build", "histos compile [project ...]", "Compile the named projects, or every module."),
     Entry("run", "build", "histos run <name> [jvm|js|native]", "Run a module main, inspect, versions, or doc."),
-    Entry("clean", "build", "histos clean [project ...]", "Delete the named projects' outputs."),
-    Entry("cleanFull", "build", "histos cleanFull", "Delete every output, including the cache."),
+    Entry(
+      "clean",
+      "build",
+      "histos clean [project ...] [--full]",
+      "Delete the named projects' outputs. --full also forgets this repo in the content store and takes no project.",
+    ),
     Entry("assembly", "build", "histos assembly [path]", "Write one jar of the application."),
-    Entry("client", "build", "histos client", "Link the native client."),
     Entry(
       "fmt",
       "build",
       "histos fmt [--check] [project ... | --file <path> ...]",
-      "Format with the locked scalafmt the build declares. No project is every module and histos.scala. --check writes nothing and fails on an unformatted file.",
+      "Format with the locked scalafmt the build declares. No project is every module and histos.scala. --check writes no source and rewrites .histos/format/ledger.",
     ),
-    Entry("test", "test", "histos test [--affected <json>] [project ...]", "Run the selected suites."),
+    Entry(
+      "test",
+      "test",
+      "histos test [project ...] [--affected <json>] [--quick] [--only <pattern> ...]",
+      "Run the selected suites. --quick skips a suite whose stamp still matches. --only runs suites that match.",
+    ),
     Entry(
       "coverage",
       "test",
       "histos coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...]",
       "Instrument Scala 3 and Scala 2.13 on the JVM, run the suites, and write the report.",
-    ),
-    Entry("testOnly", "test", "histos testOnly [--module project ...] <pattern> ...", "Run suites that match."),
-    Entry(
-      "testQuick",
-      "test",
-      "histos testQuick [--module project ...] [pattern ...]",
-      "Skip a suite whose stamp still matches.",
     ),
     Entry("affected", "test", "histos affected --base <sha>", "Print modules that differ from the base."),
     Entry("~", "test", "histos ~ <command>", "Re-run a command when a source file is saved."),
@@ -56,12 +66,17 @@ object Help:
       "histos init [--bare] [--yes] [--from sbt|zipx] [--branch <name>]",
       "Write a project in the current directory. --from drafts histos.scala from sbt or zipx.",
     ),
-    Entry("publishLocal", "publish", "histos publishLocal [token ...]", "Publish to the local Ivy repository."),
+    Entry(
+      "publish local",
+      "publish",
+      "histos publish local [token ...]",
+      "Publish to the local Ivy repository. The three publish commands link the client.",
+    ),
     Entry(
       "publish",
       "publish",
       "histos publish snapshots [token ...]",
-      "Publish the snapshot coordinate at HEAD. A snapshot or pull-request session already set is kept. The pointer moves on the default branch.",
+      "Publish the snapshot coordinate at HEAD. A snapshot or pull-request session already set is kept. The pointer moves from any checkout.",
     ),
     Entry(
       "publish release",
@@ -91,12 +106,10 @@ object Help:
       "doctor",
       "ci",
       "histos doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes]",
-      "Run the repository checks. The text lists errors and warnings. --verbose lists every check. Named projects are the modules that launch.",
+      "Run the repository checks. The text lists errors and warnings. --verbose lists every check. Named projects are the modules that launch. With no --json and no --preflight, the whole doctor and --area toolchain also print the JDK, Node, and clang lines.",
     ),
     Entry("setup", "ci", "histos setup supply-chain [--from zipx] [--fix] [--yes]", "Write the supply-chain files."),
-    Entry("launcher", "ci", "histos launcher (--update | --latest)", "Rewrite the launcher pin."),
     Entry("cache", "cache", "histos cache path", "Print, list, clean, or promote the cache."),
-    Entry("toolchain", "toolchain", "histos toolchain", "Print the chosen JDK, Node, and Clang."),
     Entry(
       "toolchain install",
       "toolchain",
@@ -111,7 +124,6 @@ object Help:
     ),
     Entry("update", "toolchain", "histos update", "Move the selected Histos version. The installed shim runs this."),
     Entry("self", "toolchain", "histos self update", "Replace the shim when the published hash differs."),
-    Entry("server", "server", "histos server", "Run the build server."),
     Entry("bsp", "server", "histos bsp", "Speak the build server protocol."),
     Entry("mcp", "server", "histos mcp", "Speak the MCP server."),
     Entry("reload", "server", "histos reload", "Reload the build file."),
@@ -129,24 +141,20 @@ object Help:
   val names: List[String] = List(
     "version",
     "help",
+    "--explain",
     "graph",
     "observe",
     "compile",
     "run",
     "clean",
-    "cleanFull",
     "assembly",
-    "client",
     "fmt",
     "test",
     "coverage",
-    "testOnly",
-    "testQuick",
     "affected",
     "new",
     "init",
     "publish",
-    "publishLocal",
     "bump",
     "portal",
     "resolve",
@@ -154,12 +162,10 @@ object Help:
     "workflow",
     "doctor",
     "setup",
-    "launcher",
     "cache",
     "toolchain",
     "update",
     "self",
-    "server",
     "bsp",
     "mcp",
     "reload",
@@ -179,16 +185,18 @@ object Help:
     "dry-run",
     "fix",
     "from",
+    "explain",
+    "full",
     "json",
-    "latest",
     "major",
     "make-default",
     "minor",
-    "module",
+    "only",
     "open",
     "patch",
     "preflight",
     "report",
+    "quick",
     "security",
     "submit",
     "to",
@@ -217,13 +225,13 @@ object Help:
       (group :: lines).mkString("\n")
     ("histos help" :: "histos help <command>" :: "" :: blocks).mkString("\n")
 
-  def render(words: List[String]): Either[String, String] =
+  def render(words: List[String]): Either[HelpError, String] =
     val key = words.map(_.trim).filter(_.nonEmpty).mkString(" ")
     if key.isEmpty then Right(grouped)
     else
       family(key) match
         case Some(text) => Right(text)
-        case None       => Left(unknown(key, names))
+        case None       => Left(HelpError.Unknown(key))
 
   def unknown(token: String, known: List[String]): String =
     val typed = if token.isEmpty then "command" else token

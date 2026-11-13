@@ -16,4 +16,4 @@ A module can compile against another checkout. A library can be built from a git
 
 A scenario is how a cache claim is checked, including Histos against itself: one store, several checkouts, and an assertion on the values. The same shape is the Histos side of a comparison with sbt and zipx. The decisions are in [scenario-work-plan.md](scenario-work-plan.md). The code is [Scenario](../engine/test/Scenario.scala). It is a test, not a command.
 
-Histos runs on macOS and Linux. A Windows machine uses WSL. A native Windows build may come later. The installer and `histos toolchain` install a user-level toolchain. Still closed until we reopen them: matching sbt feature for feature, and a hermetic sandbox.
+Histos runs on macOS and Linux. A Windows machine uses WSL. A native Windows build may come later. The installer and `histos toolchain install` install a user-level toolchain. Still closed until we reopen them: matching sbt feature for feature, and a hermetic sandbox.

@@ -2,7 +2,7 @@ package histos.client
 
 import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{PluginArgs, PluginTaskId}
-import histos.server.Call
+import histos.server.{Call, CleanExtent}
 import histos.task.TaskId
 import histos.testrun.TestMode
 import histos.{Platform, ProjectName}
@@ -20,8 +20,8 @@ object Batch:
           case Nil          => runCall(name, None)
           case token :: Nil => runCall(name, Some(token))
           case _            => None
-      case "clean" :: rest            => projects(rest).map(Call.Clean(_))
-      case "cleanFull" :: Nil         => Some(Call.CleanFull)
+      case "clean" :: "--full" :: Nil => Some(Call.Clean(Nil, CleanExtent.Full))
+      case "clean" :: rest            => projects(rest).map(names => Call.Clean(names, CleanExtent.Products))
       case "fmt" :: "--check" :: rest => projects(rest).map(names => Call.Format(targets(names), FormatMode.Check))
       case "fmt" :: rest              => projects(rest).map(names => Call.Format(targets(names), FormatMode.Write))
       case _                          => None

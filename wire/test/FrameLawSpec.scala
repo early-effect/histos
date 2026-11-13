@@ -134,9 +134,12 @@ object FrameLawSpec extends ZIOSpecDefault:
           Some(Call.Task(taskId.render, histos.plugin.PluginArgs.empty)),
         histos.client.Batch.parse(List("run", "demo/site", "jvm")) == None,
         histos.client.Batch.parse(List("run", "no/such/task")) == None,
-        histos.client.Batch.parse(List("clean", "core", "api")) == Some(Call.Clean(names)),
-        histos.client.Batch.parse(List("cleanFull")) == Some(Call.CleanFull),
-        histos.client.Batch.parse(List("cleanFull", "core")) == None,
+        histos.client.Batch.parse(List("clean", "core", "api")) == Some(
+          Call.Clean(names, histos.server.CleanExtent.Products)
+        ),
+        histos.client.Batch.parse(List("clean", "--full")) == Some(Call.Clean(Nil, histos.server.CleanExtent.Full)),
+        histos.client.Batch.parse(List("cleanFull")) == None,
+        histos.client.Batch.parse(List("clean", "--full", "core")) == None,
         histos.client.Batch.parse(List("graph")) == None,
         histos.client.Batch.parse(Nil) == None,
       ),

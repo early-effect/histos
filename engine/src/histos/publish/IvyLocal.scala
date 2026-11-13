@@ -9,7 +9,7 @@ import java.security.MessageDigest
 
 import zio.{IO, ULayer, ZIO, ZLayer}
 
-/** The ivy repository `publishLocal` installs into, in the layout Coursier's `ivy2Local` reads. */
+/** The ivy repository `publish local` installs into, in the layout Coursier's `ivy2Local` reads. */
 final class IvyRoot private (private[publish] val repository: coursier.ivy.IvyRepository)
 
 object IvyRoot:

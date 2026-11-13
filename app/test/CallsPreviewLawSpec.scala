@@ -37,7 +37,7 @@ object CallsPreviewLawSpec extends ZIOSpecDefault:
             expectedTest              <- Plan.test(dir, graph, List(lawName)).map(Plan.renderTest(dir, _))
             expectedClean             <- Plan.clean(dir, graph, List(lawName)).map(Plan.renderClean(dir, _))
             (compiled, compiledHeard) <- speak(say => Calls.previewCompile(dir, graph, List(lawName), say))
-            (tested, testedHeard)     <- speak(say => Calls.previewTest(dir, graph, List(lawName), say))
+            (tested, testedHeard)     <- speak(say => Calls.previewTest(dir, graph, List(lawName), Nil, say))
             (cleaned, cleanedHeard)   <- speak(say => Calls.previewClean(dir, graph, List(lawName), say))
             (ran, ranHeard)           <- speak(say => Calls.previewRun(graph, lawName.value, None, say))
             (task, taskHeard)         <- speak(say => Calls.previewRun(graph, "doc", None, say))

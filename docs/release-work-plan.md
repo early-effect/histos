@@ -1,6 +1,6 @@
 # Release
 
-Histos publishes the way it is meant to replace sbt and zipx. One catalog row is a ship. `publishLocal` writes this machine. `publish snapshots` uploads to the Central snapshot repository. `publish release` signs a bundle and uploads it to the Central Portal. A release is that bundle after an explicit promote. A tool people install can also be a GitHub release asset. The library version stays off Central until promote.
+Histos publishes the way it is meant to replace sbt and zipx. One catalog row is a ship. `publish local` writes this machine. `publish snapshots` uploads to the Central snapshot repository. `publish release` signs a bundle and uploads it to the Central Portal. A release is that bundle after an explicit promote. A tool people install can also be a GitHub release asset. The library version stays off Central until promote.
 
 This file is history. The decision is [publishing.md](publishing.md). Do not follow a sentence in this file that names a publisher id, a per-module publisher list, or `~/.m2/repository`. The catalog is `ships(Ship("histos").next(0, 2, 0)(api, app))`. Editing this file does not upload it.
 
@@ -41,12 +41,11 @@ An asset publication is a file the build already produced, plus a name. For Hist
 
 ## Commands
 
-`publishLocal` is its own command, reserved the way `testQuick` and `cleanFull` are.
+`publish local` is the local command. `publishLocal`, `testOnly`, `testQuick`, and `cleanFull` are removed.
 
 ```text
-./histos publishLocal
-./histos publishLocal target/repo
-./histos publishLocal specular
+./histos publish local
+./histos publish local specular
 
 ./histos publish snapshots
 ./histos publish release
@@ -59,7 +58,7 @@ An asset publication is a file the build already produced, plus a name. For Hist
 ./histos portal
 ```
 
-`publishLocal` writes a Maven repository. The default root is `~/.m2/repository`. It does not touch the network and it does not sign. The coordinate is the one this session compiles, so development writes `1.4.2-ci`. A snapshot session writes the snapshot coordinate. A release session writes the release number, unsigned. An already-released number is still written. `publishLocal` does not read Central.
+`publish local` writes a Maven repository. The default root is `~/.m2/repository`. It does not touch the network and it does not sign. The coordinate is the one this session compiles, so development writes `1.4.2-ci`. A snapshot session writes the snapshot coordinate. A release session writes the release number, unsigned. An already-released number is still written. `publish local` does not read Central.
 
 `publish snapshots` stays the PUT to `https://central.sonatype.com/repository/maven-snapshots`. It reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. A release revision is refused before a request.
 
@@ -69,11 +68,11 @@ An asset publication is a file the build already produced, plus a name. For Hist
 
 `publish release` refuses `-ci` and a manual snapshot. It refuses a ship that depends on a snapshot. That refusal is that ship. The other ships in the same invocation still publish. A number the registry already has is a hold and is not uploaded again. One failed deployment is that ship.
 
-`publish` no longer takes a directory. The directory form of [PublishWhere](../engine/src/histos/publish/PublishWhere.scala) moves to `publishLocal`.
+`publish` no longer takes a directory. The directory form of [PublishWhere](../engine/src/histos/publish/PublishWhere.scala) moves to `publish local`.
 
-A token is resolved in this order. A ship name publishes that whole ship. An aggregate name publishes the modules it lists. A module name publishes that module, and a module that is not in a ship is an error. On `publishLocal`, a token that is none of those is a Maven directory, one per invocation, relative to the repo or absolute. A ship name wins when a ship and a module share it.
+A token is resolved in this order. A ship name publishes that whole ship. An aggregate name publishes the modules it lists. A module name publishes that module, and a module that is not in a ship is an error. On `publish local`, a token that is none of those is a Maven directory, one per invocation, relative to the repo or absolute. A ship name wins when a ship and a module share it.
 
-No name on `publishLocal` or `publish snapshots` is every ship the session can write. No name on `publish release` is every ship whose number is not already on the registry this run is using. No name on `publish assets` is every ship that has an asset publication and a recorded `VALIDATED` deployment. A ship with no recorded deployment fails, and the binary is not uploaded.
+No name on `publish local` or `publish snapshots` is every ship the session can write. No name on `publish release` is every ship whose number is not already on the registry this run is using. No name on `publish assets` is every ship that has an asset publication and a recorded `VALIDATED` deployment. A ship with no recorded deployment fails, and the binary is not uploaded.
 
 `./histos portal` serves the rehearsal portal. `publish release` against it does not upload assets and does not call GitHub.
 

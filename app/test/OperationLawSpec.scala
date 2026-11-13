@@ -1,9 +1,11 @@
 package histos.cli
 
 import histos.coverage.Excludes
+import histos.doctor.FixMode
 import histos.plugin.{PluginArgs, PluginId, PluginTaskId, TaskName}
 import histos.scaffold.ImportSource
-import histos.server.{Call, WatchPolicy}
+import histos.server.{Call, CleanExtent, WatchPolicy}
+import histos.supply.{PolicyWrite, ZipxConfirm}
 import histos.task.{RunId, TaskId}
 import histos.testrun.{SuitePattern, TestMode}
 import histos.{CoverageFloors, Platform, ProjectName}
@@ -18,18 +20,20 @@ object OperationLawSpec extends ZIOSpecDefault:
     test("mcp, bsp, server, portal, observe, and the local commands are not operations"):
       val nested = Left(CliParseError.WatchCommand("watch does not nest"))
       val rows   = List(
-        Command.Mcp                                                 -> Left(CliParseError.Rejected),
-        Command.Bsp                                                 -> Left(CliParseError.Rejected),
-        Command.Server                                              -> Left(CliParseError.Rejected),
-        Command.Portal                                              -> Left(CliParseError.Rejected),
-        Command.Observe                                             -> Left(CliParseError.Rejected),
-        Command.New("demo", false, false, None)                     -> Left(CliParseError.Rejected),
-        Command.Init(false, false, None, None)                      -> Left(CliParseError.Rejected),
-        Command.Init(false, false, Some(ImportSource.Sbt), None)    -> Left(CliParseError.Rejected),
-        Command.Doctor(None, false, None, false, false, false, Nil) -> Left(CliParseError.Rejected),
+        Command.Mcp                                                       -> Left(CliParseError.Rejected),
+        Command.Bsp                                                       -> Left(CliParseError.Rejected),
+        Command.Server                                                    -> Left(CliParseError.Rejected),
+        Command.Portal                                                    -> Left(CliParseError.Rejected),
+        Command.Observe                                                   -> Left(CliParseError.Rejected),
+        Command.New("demo", ScaffoldChoice.Prompt, None)                  -> Left(CliParseError.Rejected),
+        Command.Init(ScaffoldChoice.Prompt, None, None)                   -> Left(CliParseError.Rejected),
+        Command.Init(ScaffoldChoice.Prompt, Some(ImportSource.Sbt), None) -> Left(CliParseError.Rejected),
+        Command.Doctor(None, ReportForm.Text, None, FixMode.Print, DoctorDetail.Brief, Nil) -> Left(
+          CliParseError.Rejected
+        ),
         Command.Explain("supply.pin")                               -> Left(CliParseError.Rejected),
         Command.Deps(DepsAction.Check)                              -> Left(CliParseError.Rejected),
-        Command.Setup(None, false, false)                           -> Left(CliParseError.Rejected),
+        Command.Setup(None, PolicyWrite.Preview, ZipxConfirm.Ask)   -> Left(CliParseError.Rejected),
         Command.Help(Nil)                                           -> Left(CliParseError.Rejected),
         Command.Coverage(Nil, CoverageFloors(), Excludes(Nil, Nil)) -> Left(CliParseError.Rejected),
         Command.Affected("abc")                                     -> Left(CliParseError.Rejected),
@@ -55,9 +59,9 @@ object OperationLawSpec extends ZIOSpecDefault:
       )
     ,
     test("nothing affected is a pattern and every other test choice is a run"):
-      val none  = Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected)
-      val unset = Command.Test(Nil, AffectedChoice.Unset)
-      val all   = Command.Test(List(ProjectName("api")), AffectedChoice.Everything)
+      val none  = Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected, TestMode.Run, Nil)
+      val unset = Command.Test(Nil, AffectedChoice.Unset, TestMode.Run, Nil)
+      val all   = Command.Test(List(ProjectName("api")), AffectedChoice.Everything, TestMode.Run, Nil)
       assertTrue(
         Operation.operation(none) == Left(CliParseError.Pattern("nothing is affected")),
         Operation.operation(unset) == Right(Call.Test(Nil, Nil, TestMode.Run)),
@@ -78,31 +82,36 @@ object OperationLawSpec extends ZIOSpecDefault:
           Call.PublishRelease(List("ship"), true)
         ),
         Operation.operation(Command.PreviewPlugin(plugin)) == Right(Call.PreviewRun("demo/pack", None)),
-        Operation.operation(Command.TestOnly(List(ProjectName("api")), List(SuitePattern("*")))) == Right(
-          Call.Test(List(ProjectName("api")), List(SuitePattern("*")), TestMode.Run)
+        Operation.operation(
+          Command.Test(List(ProjectName("api")), AffectedChoice.Unset, TestMode.Run, List(SuitePattern("*")))
+        ) == Right(Call.Test(List(ProjectName("api")), List(SuitePattern("*")), TestMode.Run)),
+        Operation.operation(Command.Test(Nil, AffectedChoice.Unset, TestMode.Quick, Nil)) == Right(
+          Call.Test(Nil, Nil, TestMode.Quick)
         ),
-        Operation.operation(Command.TestQuick(Nil, Nil)) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
         Operation.operation(Command.Compile(List(ProjectName("api")))) == Right(
           Call.Compile(List(ProjectName("api")))
         ),
         Operation.operation(Command.Version) == Right(Call.Version),
-        Operation.operation(Command.CleanFull) == Right(Call.CleanFull),
+        Operation.operation(Command.Clean(Nil, CleanExtent.Full)) == Right(Call.Clean(Nil, CleanExtent.Full)),
+        Operation.operation(Command.Clean(List(ProjectName("api")), CleanExtent.Full)) == Left(
+          CliParseError.Pattern("clean --full does not take a project")
+        ),
       )
     ,
     test("callOf sends compile, test, run, and clean, and leaves every other command"):
       for api <- ZIO.fromEither(TaskId.from("api"))
       yield
         val rows = List(
-          Command.Compile(List(ProjectName("api"))) -> Some(Call.Compile(List(ProjectName("api")))),
-          Command.Test(Nil, AffectedChoice.Unset)   -> Some(Call.Test(Nil, Nil, TestMode.Run)),
-          Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected) -> None,
+          Command.Compile(List(ProjectName("api")))                  -> Some(Call.Compile(List(ProjectName("api")))),
+          Command.Test(Nil, AffectedChoice.Unset, TestMode.Run, Nil) -> Some(Call.Test(Nil, Nil, TestMode.Run)),
+          Command.Test(List(ProjectName("api")), AffectedChoice.NoneSelected, TestMode.Run, Nil) -> None,
           Command.Run(TaskId.Inspect, None)        -> Some(Call.Task("inspect", PluginArgs.empty)),
           Command.Run(api, Some(Platform.Native))  -> Some(Call.Run("api", Some(Platform.Native))),
-          Command.Clean(Nil)                       -> Some(Call.Clean(Nil)),
-          Command.CleanFull                        -> Some(Call.CleanFull),
+          Command.Clean(Nil, CleanExtent.Products) -> Some(Call.Clean(Nil, CleanExtent.Products)),
+          Command.Clean(Nil, CleanExtent.Full)     -> Some(Call.Clean(Nil, CleanExtent.Full)),
           Command.Plugin(plugin, PluginArgs.empty) -> None,
           Command.Version                          -> None,
-          Command.TestOnly(Nil, Nil)               -> None,
+          Command.Assembly(None)                   -> None,
           Command.Cancel(RunId("run-1"))           -> None,
           Command.Graph                            -> None,
         )

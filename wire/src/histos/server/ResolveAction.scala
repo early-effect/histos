@@ -11,6 +11,14 @@ enum ResolveAction:
 end ResolveAction
 
 object ResolveAction:
+  import zio.json.*
+
+  given JsonCodec[ResolveAction] =
+    JsonCodec.string.transformOrFail(
+      raw => from(raw).left.map(_.message),
+      _.token,
+    )
+
   private val known: List[ResolveAction] = List(Verify, Update, Check)
 
   def from(raw: String): Either[ResolveActionError, ResolveAction] =

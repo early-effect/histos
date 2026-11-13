@@ -34,17 +34,19 @@ object Perform:
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
-          Call.Client | Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) |
-          Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
+          Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_) |
+          Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewRun(_, _) =>
         true
-      case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
+      case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
         false
-      case Call.Clean(_) | Call.PreviewClean(_) =>
+      case Call.Clean(_, CleanExtent.Full) | Call.PreviewClean(_, CleanExtent.Full) =>
+        false
+      case Call.Clean(_, _) | Call.PreviewClean(_, _) =>
         true
-      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot(_) |
-          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCleanFull =>
+      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.Reload | Call.Reboot(_) | Call.Version |
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.Watch(_, _) |
+          Call.Bsp =>
         false
 
   /** Publish keeps the compile fault. Every other call reports a cell that ran, and a compile that never started is its
@@ -111,7 +113,7 @@ object Perform:
                 withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
               )
             )
-          case Call.PublishLocal(projects) =>
+          case Call.PublishLocal(tokens) =>
             held(build =>
               follow(
                 withJdk(jdk =>
@@ -121,7 +123,7 @@ object Perform:
                     build.build,
                     machine,
                     jdk,
-                    projects,
+                    tokens.map(_.value),
                     say,
                     build.plugins.launcher,
                   )
@@ -164,15 +166,13 @@ object Perform:
               )
             )
           case Call.PublishPromote(id) =>
-            follow(Calls.promote(repo, machine, id, say))
+            follow(Calls.promote(repo, machine, id.value, say))
           case Call.PublishDrop(id) =>
-            held(build => follow(Calls.drop(repo, build.graph, machine, id, say)))
+            held(build => follow(Calls.drop(repo, build.graph, machine, id.value, say)))
           case Call.PublishAssets(tokens) =>
             held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(destination) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
-          case Call.Client =>
-            held(build => follow(withJdk(jdk => Calls.client(repo, build.graph, jdk, machine, say))))
           case Call.Run(id, platform) =>
             held(build =>
               follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say, edges.compiled)))
@@ -183,34 +183,36 @@ object Perform:
             held(build => Calls.graph(build.graph, build.plugins, say))
           case Call.Cancel(id) =>
             Calls.cancel(runs, id, say)
-          case Call.Toolchain =>
-            held(build => Calls.toolchain(machine, build.graph, say))
           case Call.Resolve(action) =>
             Calls.resolve(repo, apiJar, action, say, machine.native)
           case Call.Workflow(action) =>
             held(build => Calls.workflow(repo, build, action, say))
           case Call.Format(targets, mode) =>
             held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
-          case Call.Clean(Nil) =>
+          case Call.Clean(Nil, CleanExtent.Products) =>
             Calls.wipe(repo, say)
-          case Call.Clean(projects) =>
-            held(build => Calls.clean(repo, build.graph, projects, say))
-          case Call.CleanFull =>
+          case Call.Clean(Nil, CleanExtent.Full) =>
             Calls.cleanFull(repo, say)
+          case Call.Clean(projects, CleanExtent.Products) =>
+            held(build => Calls.clean(repo, build.graph, projects, say))
+          case Call.Clean(_, CleanExtent.Full) =>
+            Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
           case Call.PreviewCompile(projects) =>
             held(build => Calls.previewCompile(repo, build.graph, projects, say))
-          case Call.PreviewTest(projects) =>
-            held(build => Calls.previewTest(repo, build.graph, projects, say))
-          case Call.PreviewPublishLocal(projects) =>
-            held(build => Calls.previewPublishLocal(repo, build.graph, projects, machine.env, say))
+          case Call.PreviewTest(projects, patterns, _) =>
+            held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
+          case Call.PreviewPublishLocal(tokens) =>
+            held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))
           case Call.PreviewPublishSnapshots(projects) =>
             held(build => Calls.previewPublishSnapshots(repo, build.graph, projects, machine.env, say))
-          case Call.PreviewClean(Nil) =>
+          case Call.PreviewClean(Nil, CleanExtent.Products) =>
             Calls.previewCleanAll(repo, say)
-          case Call.PreviewClean(projects) =>
-            held(build => Calls.previewClean(repo, build.graph, projects, say))
-          case Call.PreviewCleanFull =>
+          case Call.PreviewClean(Nil, CleanExtent.Full) =>
             Calls.previewCleanFull(repo, say)
+          case Call.PreviewClean(projects, CleanExtent.Products) =>
+            held(build => Calls.previewClean(repo, build.graph, projects, say))
+          case Call.PreviewClean(_, CleanExtent.Full) =>
+            Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
           case Call.PreviewRun(id, platform) =>
             held(build => Calls.previewRun(build.graph, id, platform, say))
           case Call.Version =>
@@ -223,8 +225,6 @@ object Perform:
             Calls.cacheClean(mode, say)
           case Call.CachePromote(from, to) =>
             Calls.cachePromote(from, to, say)
-          case Call.Launcher(action) =>
-            Calls.launcher(repo, action, say)
           case Call.Watch(inner, policy) =>
             edges.watch(inner, policy, say)
           case Call.Reload =>

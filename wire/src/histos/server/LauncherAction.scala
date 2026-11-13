@@ -1,6 +1,8 @@
 package histos.server
 
-/** What `histos launcher` writes. `update` freezes the channel. `latest` follows it. */
+/** A channel write. `update` freezes the channel. `latest` follows it. The `launcher` command is removed and names
+  * `update`.
+  */
 enum LauncherAction:
   case Update, Latest
 

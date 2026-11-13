@@ -36,7 +36,7 @@ object ToolchainExplain:
   val nodeFloor: String =
     """A module that launches on Node needs Node 25 or newer. Scala.js Wasm does not run on the Node 22 that many PATH entries still install. A JVM module and a Native module do not launch Node. An aggregate is its modules, and those children decide.
       |
-      |histos doctor with no project launches nothing, so this check does not probe, even when the graph has a Js module. histos doctor <project> asks about that project. A Js module fails when Node is missing or older than 25, and the finding names every Js module in the launch set. histos toolchain still probes whenever the graph has a Js module.
+      |histos doctor with no project launches nothing, so this check does not probe, even when the graph has a Js module. histos doctor <project> asks about that project. A Js module fails when Node is missing or older than 25, and the finding names every Js module in the launch set.
       |
       |The binary is chosen in this order. HISTOS_NODE is an absolute path to the node binary and wins over everything else. Then runnerTools.nodePath. Then the Node home written in .histos/node.local. Then the first node on PATH. A named binary that is missing or older than 25 fails. Histos does not fetch Node and does not try the next source.
       |
@@ -54,7 +54,7 @@ object ToolchainExplain:
   val clang: String =
     """A Native module is linked with the clang and clang++ pair on PATH. The major must be the ClangMajor that module names. clang and clang++ must report the same version and sit side by side. Histos does not fetch clang.
       |
-      |histos doctor with no project links nothing, so this check does not probe, even when the graph has a Native module. histos doctor <project> asks about that project. A JVM module and a Js module do not link Native. An aggregate is its modules, and those children decide. A launch set with no Native module reports `no Native module`. A miss names every Native module in the launch set. histos toolchain still probes whenever the graph has a Native module.
+      |histos doctor with no project links nothing, so this check does not probe, even when the graph has a Native module. histos doctor <project> asks about that project. A JVM module and a Js module do not link Native. An aggregate is its modules, and those children decide. A launch set with no Native module reports `no Native module`. A miss names every Native module in the launch set.
       |
       |Install that major and put its bin directory on PATH ahead of any older clang.""".stripMargin
 

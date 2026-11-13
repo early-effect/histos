@@ -10,6 +10,14 @@ enum WorkflowAction:
 end WorkflowAction
 
 object WorkflowAction:
+  import zio.json.*
+
+  given JsonCodec[WorkflowAction] =
+    JsonCodec.string.transformOrFail(
+      raw => from(raw).left.map(_.message),
+      _.token,
+    )
+
   private val known: List[WorkflowAction] = List(Check, Update)
 
   def from(raw: String): Either[WorkflowActionError, WorkflowAction] =

@@ -1426,7 +1426,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "PreviewOperation(raw) | MissingRunName() | Parameter(error) | " +
               "ProjectName(error) | SuitePattern(error) | RunId(error) | " +
               "TestMode(error) | CacheClean(error) | Flag(error) | " +
-              "TaskPlatform(name) | CommandHelp(names) | FormatMode(raw) | FormatTargets() | FormatPath(raw)"
+              "TaskPlatform(name) | CommandHelp(names) | FormatMode(raw) | FormatTargets() | FormatPath(raw) | Retired(word,use) | PublishToken(error)"
           ),
           """{"NotATool":{}}""",
           histos.report.Rejection.NotATool,

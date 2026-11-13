@@ -7,6 +7,7 @@ import histos.format.{FormatMode, FormatTargets}
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.PluginArgs
 import histos.program.ProgramError
+import histos.central.DeploymentId
 import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.{ResolutionService, Resolve, ResolveError}
@@ -231,10 +232,10 @@ object PerformLawSpec extends ZIOSpecDefault:
       yield (call, error, compileFault(error))
     val others = List(
       Call.Test(Nil, Nil, TestMode.Run),
-      Call.PreviewTest(Nil),
+      Call.PreviewTest(Nil, Nil, TestMode.Run),
       Call.Compile(Nil),
       Call.Format(FormatTargets.Build, FormatMode.Write),
-      Call.PublishDrop("drop"),
+      Call.PublishDrop(DeploymentId("drop")),
       Call.Version,
     )
     val stopped = List(
@@ -258,28 +259,26 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("publish snapshots", Call.PublishSnapshots(Nil), true),
     ("publish release", Call.PublishRelease(Nil, false), true),
     ("publish assets", Call.PublishAssets(Nil), true),
-    ("publish drop", Call.PublishDrop("drop"), true),
+    ("publish drop", Call.PublishDrop(DeploymentId("drop")), true),
     ("graph", Call.Graph, true),
     ("run", Call.Run("api", None), true),
-    ("client", Call.Client, true),
     ("task", Call.Task("demo/pack", PluginArgs.empty), true),
-    ("toolchain", Call.Toolchain, true),
     ("workflow", Call.Workflow(WorkflowAction.Check), true),
     ("assembly", Call.Assembly(None), true),
     ("format", Call.Format(FormatTargets.Build, FormatMode.Write), true),
     ("preview compile", Call.PreviewCompile(Nil), true),
-    ("preview test", Call.PreviewTest(Nil), true),
+    ("preview test", Call.PreviewTest(Nil, Nil, TestMode.Run), true),
     ("preview publish local", Call.PreviewPublishLocal(Nil), true),
     ("preview publish snapshots", Call.PreviewPublishSnapshots(Nil), true),
     ("preview run", Call.PreviewRun("api", None), true),
-    ("clean named", Call.Clean(List(api)), true),
-    ("preview clean named", Call.PreviewClean(List(api)), true),
-    ("clean empty", Call.Clean(Nil), false),
-    ("preview clean empty", Call.PreviewClean(Nil), false),
-    ("publish promote", Call.PublishPromote("id"), false),
+    ("clean named", Call.Clean(List(api), CleanExtent.Products), true),
+    ("preview clean named", Call.PreviewClean(List(api), CleanExtent.Products), true),
+    ("clean empty", Call.Clean(Nil, CleanExtent.Products), false),
+    ("preview clean empty", Call.PreviewClean(Nil, CleanExtent.Products), false),
+    ("publish promote", Call.PublishPromote(DeploymentId("id")), false),
     ("cancel", Call.Cancel(runId), false),
     ("resolve", Call.Resolve(ResolveAction.Verify), false),
-    ("clean full", Call.CleanFull, false),
+    ("clean full", Call.Clean(Nil, CleanExtent.Full), false),
     ("reload", Call.Reload, false),
     ("reboot", Call.Reboot(successor), false),
     ("version", Call.Version, false),
@@ -287,9 +286,8 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("cache list", Call.CacheList, false),
     ("cache clean", Call.CacheClean(CacheCleanMode.Remove), false),
     ("cache promote", Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main), false),
-    ("launcher", Call.Launcher(LauncherAction.Update), false),
     ("watch", Call.Watch(Call.Version, WatchPolicy.After), false),
     ("bsp", Call.Bsp, false),
-    ("preview clean full", Call.PreviewCleanFull, false),
+    ("preview clean full", Call.PreviewClean(Nil, CleanExtent.Full), false),
   )
 end PerformLawSpec

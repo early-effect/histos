@@ -322,11 +322,21 @@ object SupplySurfaceLawSpec extends ZIOSpecDefault:
       val program =
         for
           repo <- Workspace.work("surface-setup")
-          missing = SetupSurface.run(repo, None, false, false)
+          missing = SetupSurface.run(repo, None, PolicyWrite.Preview, ZipxConfirm.Ask)
           _ <- Workspace.writeString(repo.resolve("histos.scala"), "graph\n")
-          would = SetupSurface.run(repo, None, false, false)
-          wrote = SetupSurface.run(repo, Some("no-such-zipx"), true, false)
-          again = SetupSurface.run(repo, Some("no-such-zipx"), true, true)
+          would = SetupSurface.run(repo, None, PolicyWrite.Preview, ZipxConfirm.Ask)
+          wrote = SetupSurface.run(
+            repo,
+            Some(SetupSource.Directory("no-such-zipx")),
+            PolicyWrite.Write,
+            ZipxConfirm.Ask,
+          )
+          again = SetupSurface.run(
+            repo,
+            Some(SetupSource.Directory("no-such-zipx")),
+            PolicyWrite.Write,
+            ZipxConfirm.Delete,
+          )
           text <- Workspace.readString(repo.resolve("histos.scala"))
         yield assertTrue(
           missing._1 == 2 && missing._2.contains("histos.scala is missing"),

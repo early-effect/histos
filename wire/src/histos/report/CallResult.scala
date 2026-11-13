@@ -164,6 +164,8 @@ enum Rejection:
   case FormatMode(raw: String)
   case FormatTargets
   case FormatPath(raw: String)
+  case Retired(word: String, use: String)
+  case PublishToken(error: histos.publish.PublishToken.Error)
 
   def message: String = this match
     case ResolveAction(raw)     => s"'$raw' is not a resolve action"
@@ -175,7 +177,7 @@ enum Rejection:
     case Watch(detail)          => detail
     case RunFailed              => "the run failed"
     case WatchStopped           => "watch stopped"
-    case PreviewProjects        => "cleanFull does not take a project"
+    case PreviewProjects        => "clean --full does not take a project"
     case PreviewOperation(raw)  => s"preview does not run $raw"
     case MissingRunName         => "run needs one name"
     case Parameter(error)       => error.message
@@ -191,6 +193,8 @@ enum Rejection:
     case FormatPath(raw)        => s"'$raw' is not a path relative to the repository"
     case CommandHelp(names)     =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
+    case Retired(word, use)  => s"$word was removed\nuse $use"
+    case PublishToken(error) => error.message
 
   def diagnose: Finding = this match
     case CommandHelp(names) =>

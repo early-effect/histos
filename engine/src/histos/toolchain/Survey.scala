@@ -114,7 +114,9 @@ object Survey:
         case Some(survey) => ZIO.succeed(survey)
         case None         => ZIO.fail(SurveyError.Incomplete(found.text, found.failureText))
 
-  /** The lines `histos toolchain` prints. Each tool is one line, including a tool the graph does not need. */
+  /** The lines `histos doctor` prints for the toolchain survey. Each tool is one line, including a tool the graph does
+    * not need.
+    */
   def text(survey: Survey): String =
     val jdkLine  = s"${Toolchain.text(survey.jdk)} from ${survey.jdkFrom}"
     val nodeLine = survey.node match

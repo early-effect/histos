@@ -216,6 +216,9 @@ object GoldenLawSpec extends ZIOSpecDefault:
     Rejection.FormatMode("diff")                             -> """{"FormatMode":{"raw":"diff"}}""",
     Rejection.FormatTargets                                  -> """{"FormatTargets":{}}""",
     Rejection.FormatPath("/etc")                             -> """{"FormatPath":{"raw":"/etc"}}""",
+    Rejection.Retired("testOnly", "test --only")             ->
+      """{"Retired":{"word":"testOnly","use":"test --only"}}""",
+    Rejection.PublishToken(histos.publish.PublishToken.Error.Empty) -> """{"PublishToken":{"error":{"Empty":{}}}}""",
   )
 
   private val workflowFaults: List[(WorkflowFault, String)] = List(
@@ -263,8 +266,9 @@ object GoldenLawSpec extends ZIOSpecDefault:
     Call.Run("core", None)                   -> """{"Run":{"id":"core"}}""",
     Call.Task(TaskId.Inspect.value, PluginArgs.empty) ->
       """{"Task":{"id":"inspect","args":{"texts":[],"flags":[]}}}""",
-    Call.Clean(List(core, api)) -> """{"Clean":{"projects":["core","api"]}}""",
-    Call.CleanFull              -> """{"CleanFull":{}}""",
+    Call.Clean(List(core, api), CleanExtent.Products) ->
+      """{"Clean":{"projects":["core","api"],"extent":"products"}}""",
+    Call.Clean(Nil, CleanExtent.Full) -> """{"Clean":{"projects":[],"extent":"full"}}""",
   )
 
   def spec = suite("golden document laws")(

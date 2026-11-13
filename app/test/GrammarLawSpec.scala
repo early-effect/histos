@@ -1,12 +1,16 @@
 package histos.cli
 
 import histos.cache.CacheCleanMode
-import histos.plugin.{CommandName, PluginArgs, PluginIdError, PluginTaskError, PluginTaskId}
+import histos.central.DeploymentId
+import histos.doctor.{Area, FixMode}
+import histos.plugin.{CommandName, JobName, PluginArgs, PluginId, PluginIdError, PluginTaskError, PluginTaskId}
+import histos.publish.PublishToken
 import histos.scaffold.ImportSource
 import histos.schedule.{CacheNamespace, NamespaceError}
-import histos.server.{LauncherAction, ResolveAction}
+import histos.server.{CleanExtent, ResolveAction}
+import histos.supply.{PolicyWrite, SetupSource, ZipxConfirm}
 import histos.task.{RunId, TaskError, TaskId}
-import histos.testrun.{SuitePattern, SuitePatternError}
+import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.workflow.WorkflowAction
 import histos.{Platform, PlatformError, ProjectName, ProjectNameError}
 
@@ -22,7 +26,18 @@ object GrammarLawSpec extends ZIOSpecDefault:
       assertTrue(
         words.nonEmpty,
         words -- reserved == Set.empty[String],
-        reserved -- words == Set("acp", "update", "self"),
+        reserved -- words == Set(
+          "acp",
+          "update",
+          "self",
+          "testOnly",
+          "testQuick",
+          "cleanFull",
+          "publishLocal",
+          "client",
+          "launcher",
+          "toolchain",
+        ),
       )
     ,
     test("a bare watch is refused and a nested watch is refused"):
@@ -71,31 +86,37 @@ object GrammarLawSpec extends ZIOSpecDefault:
         ),
         List("publish", "snapshots", "api") -> Right(Command.PublishSnapshots(List("api"))),
         List("publish", "assets", "a")      -> Right(Command.PublishAssets(List("a"))),
-        List("publish", "promote", "dep")   -> Right(Command.PublishPromote("dep")),
-        List("publish", "drop", "dep")      -> Right(Command.PublishDrop("dep")),
-        List("publishLocal", "tok")         -> Right(Command.PublishLocal(List("tok"))),
+        List("publish", "promote", "dep")   -> Right(Command.PublishPromote(DeploymentId("dep"))),
+        List("publish", "drop", "dep")      -> Right(Command.PublishDrop(DeploymentId("dep"))),
+        List("publish", "local", "tok")     -> Right(Command.PublishLocal(List(PublishToken("tok")))),
+        List("publishLocal", "tok")         -> Left(CliParseError.Retired("publishLocal", "publish local")),
       )
     ,
-    test("cleanFull rejects a project and preview cleanFull does the same"):
+    test("clean --full takes no project and the old word names the flag"):
       held(
-        List("cleanFull")                   -> Right(Command.CleanFull),
-        List("cleanFull", "api")            -> Left(CliParseError.Pattern("cleanFull does not take a project")),
-        List("preview", "cleanFull")        -> Right(Command.PreviewCleanFull),
-        List("preview", "cleanFull", "api") -> Left(CliParseError.Pattern("cleanFull does not take a project")),
-        List("clean", "api")                -> Right(Command.Clean(List(ProjectName("api")))),
+        List("clean", "--full")            -> Right(Command.Clean(Nil, CleanExtent.Full)),
+        List("clean", "--full", "api")     -> Left(CliParseError.Pattern("clean --full does not take a project")),
+        List("preview", "clean", "--full") -> Right(Command.PreviewClean(Nil, CleanExtent.Full)),
+        List("preview", "clean", "--full", "api") -> Left(
+          CliParseError.Pattern("preview clean --full does not take a project")
+        ),
+        List("clean", "api")         -> Right(Command.Clean(List(ProjectName("api")), CleanExtent.Products)),
+        List("cleanFull")            -> Left(CliParseError.Retired("cleanFull", "clean --full")),
+        List("cleanFull", "api")     -> Left(CliParseError.Retired("cleanFull", "clean --full")),
+        List("preview", "cleanFull") -> Left(CliParseError.Retired("preview cleanFull", "preview clean --full")),
       )
     ,
     test("init from is sbt or zipx and new keeps bare, yes, and the branch"):
       held(
         List("init", "--from", "mill") -> Left(CliParseError.Pattern("init --from is sbt or zipx")),
-        List("init")                   -> Right(Command.Init(false, false, None, None)),
-        List("init", "--from", "sbt")  -> Right(Command.Init(false, false, Some(ImportSource.Sbt), None)),
+        List("init")                   -> Right(Command.Init(ScaffoldChoice.Prompt, None, None)),
+        List("init", "--from", "sbt")  -> Right(Command.Init(ScaffoldChoice.Prompt, Some(ImportSource.Sbt), None)),
         List("init", "--bare", "--yes", "--from", "zipx", "--branch", "main") -> Right(
-          Command.Init(true, true, Some(ImportSource.Zipx), Some("main"))
+          Command.Init(ScaffoldChoice.Bare, Some(ImportSource.Zipx), Some("main"))
         ),
-        List("new", "demo")                                        -> Right(Command.New("demo", false, false, None)),
+        List("new", "demo") -> Right(Command.New("demo", ScaffoldChoice.Prompt, None)),
         List("new", "--bare", "--yes", "--branch", "main", "demo") -> Right(
-          Command.New("demo", true, true, Some("main"))
+          Command.New("demo", ScaffoldChoice.Bare, Some("main"))
         ),
       )
     ,
@@ -124,31 +145,33 @@ object GrammarLawSpec extends ZIOSpecDefault:
           List("cache", "clean", "--dry-run") -> Right(Command.CacheClean(CacheCleanMode.DryRun)),
         )
     ,
-    test("resolve, workflow, and launcher refuse both flags and accept one"):
+    test("resolve and workflow refuse both flags and accept one, and launcher names update"):
       held(
-        List("resolve")                          -> Right(Command.Resolve(ResolveAction.Verify)),
-        List("resolve", "--update")              -> Right(Command.Resolve(ResolveAction.Update)),
-        List("resolve", "--check")               -> Right(Command.Resolve(ResolveAction.Check)),
-        List("resolve", "--update", "--check")   -> Left(CliParseError.Rejected),
-        List("workflow")                         -> Right(Command.Workflow(WorkflowAction.Check)),
-        List("workflow", "--update")             -> Right(Command.Workflow(WorkflowAction.Update)),
-        List("workflow", "--check")              -> Right(Command.Workflow(WorkflowAction.Check)),
-        List("workflow", "--check", "--update")  -> Left(CliParseError.Rejected),
-        List("launcher")                         -> Left(CliParseError.Rejected),
-        List("launcher", "--update", "--latest") -> Left(CliParseError.Rejected),
-        List("launcher", "--update")             -> Right(Command.Launcher(LauncherAction.Update)),
-        List("launcher", "--latest")             -> Right(Command.Launcher(LauncherAction.Latest)),
+        List("resolve")                         -> Right(Command.Resolve(ResolveAction.Verify)),
+        List("resolve", "--update")             -> Right(Command.Resolve(ResolveAction.Update)),
+        List("resolve", "--check")              -> Right(Command.Resolve(ResolveAction.Check)),
+        List("resolve", "--update", "--check")  -> Left(CliParseError.Rejected),
+        List("workflow")                        -> Right(Command.Workflow(WorkflowAction.Check)),
+        List("workflow", "--update")            -> Right(Command.Workflow(WorkflowAction.Update)),
+        List("workflow", "--check")             -> Right(Command.Workflow(WorkflowAction.Check)),
+        List("workflow", "--check", "--update") -> Left(CliParseError.Rejected),
+        List("launcher")                        -> Left(CliParseError.Retired("launcher", "update")),
+        List("launcher", "--update")            -> Left(CliParseError.Retired("launcher", "update")),
+        List("launcher", "--latest")            -> Left(CliParseError.Retired("launcher", "update")),
       )
     ,
     test("affected json selects nothing, everything, or the named modules"):
+      val run = TestMode.Run
       held(
-        List("test")                     -> Right(Command.Test(Nil, AffectedChoice.Unset)),
-        List("test", "api")              -> Right(Command.Test(List(ProjectName("api")), AffectedChoice.Unset)),
-        List("test", "--affected", "[]") -> Right(Command.Test(Nil, AffectedChoice.NoneSelected)),
-        List("test", "--affected", """["all"]""")       -> Right(Command.Test(Nil, AffectedChoice.Everything)),
-        List("test", "--affected", """["all","api"]""") -> Right(Command.Test(Nil, AffectedChoice.Everything)),
-        List("test", "--affected", """["api"]""")       -> Right(
-          Command.Test(Nil, AffectedChoice.Only(List(ProjectName("api"))))
+        List("test")        -> Right(Command.Test(Nil, AffectedChoice.Unset, run, Nil)),
+        List("test", "api") -> Right(Command.Test(List(ProjectName("api")), AffectedChoice.Unset, run, Nil)),
+        List("test", "--affected", "[]")          -> Right(Command.Test(Nil, AffectedChoice.NoneSelected, run, Nil)),
+        List("test", "--affected", """["all"]""") -> Right(Command.Test(Nil, AffectedChoice.Everything, run, Nil)),
+        List("test", "--affected", """["all","api"]""") -> Right(
+          Command.Test(Nil, AffectedChoice.Everything, run, Nil)
+        ),
+        List("test", "--affected", """["api"]""") -> Right(
+          Command.Test(Nil, AffectedChoice.Only(List(ProjectName("api"))), run, Nil)
         ),
         List("test", "--affected", "nope") -> Left(
           CliParseError.Pattern("affected is a JSON list of module names")
@@ -158,20 +181,29 @@ object GrammarLawSpec extends ZIOSpecDefault:
         ),
       )
     ,
-    test("testOnly needs a pattern and a project after module"):
-      withReady: ready =>
-        held(
-          List("testOnly")                         -> Left(CliParseError.MissingPattern),
-          List("testOnly", "--module")             -> Left(CliParseError.Pattern("testOnly --module needs a project")),
-          List("testOnly", "--module", "api", "*") -> Right(
-            Command.TestOnly(List(ProjectName("api")), List(ready.star))
-          ),
-          List("testQuick")           -> Right(Command.TestQuick(Nil, Nil)),
-          List("testQuick", "*")      -> Right(Command.TestQuick(Nil, List(ready.star))),
-          List("testOnly", " ")       -> Left(CliParseError.SuitePattern(SuitePatternError.Blank(" "))),
-          List("testOnly", "--bogus") -> Left(CliParseError.Pattern(Help.flag("testOnly", "--bogus"))),
-          List("test", "--bogus")     -> Left(CliParseError.Pattern(Help.flag("test", "--bogus"))),
-        )
+    test("test --only needs a pattern and the old words name the flags"):
+      val run   = TestMode.Run
+      val quick = TestMode.Quick
+      val star  = List(SuitePattern("*"))
+      held(
+        List("test", "--only")             -> Left(CliParseError.Pattern("test --only needs a pattern")),
+        List("test", "api", "--only", "*") -> Right(
+          Command.Test(List(ProjectName("api")), AffectedChoice.Unset, run, star)
+        ),
+        List("test", "--quick")                -> Right(Command.Test(Nil, AffectedChoice.Unset, quick, Nil)),
+        List("test", "--quick", "--only", "*") -> Right(Command.Test(Nil, AffectedChoice.Unset, quick, star)),
+        List("test", "--only", " ")            -> Left(CliParseError.SuitePattern(SuitePatternError.Blank(" "))),
+        List("test", "--bogus")                -> Left(CliParseError.Pattern(Help.flag("test", "--bogus"))),
+        List("testOnly")                       -> Left(CliParseError.Retired("testOnly", "test --only")),
+        List("testOnly", "*")                  -> Left(CliParseError.Retired("testOnly", "test --only")),
+        List("testQuick")                      -> Left(CliParseError.Retired("testQuick", "test --quick")),
+        List("preview", "testOnly", "*") -> Left(CliParseError.Retired("preview testOnly", "preview test --only")),
+        List("preview", "testQuick")     -> Left(CliParseError.Retired("preview testQuick", "preview test --quick")),
+        List("preview", "test", "--only", "*") -> Right(
+          Command.PreviewTest(Nil, AffectedChoice.Unset, run, star)
+        ),
+        List("preview", "test", "--quick") -> Right(Command.PreviewTest(Nil, AffectedChoice.Unset, quick, Nil)),
+      )
     ,
     test("a module run takes a platform and a built-in or a plugin task does not"):
       withReady: ready =>
@@ -187,28 +219,49 @@ object GrammarLawSpec extends ZIOSpecDefault:
           List("run", "/pack")            -> Left(
             CliParseError.BadPluginTask(PluginTaskError.Plugin(PluginIdError.Empty))
           ),
-          List("preview", "run", "api", "js")     -> Right(Command.PreviewRun(ready.api, Some(Platform.Js))),
-          List("preview", "run", "demo/pack")     -> Right(Command.PreviewPlugin(ready.plugin)),
-          List("preview", "compile", "api")       -> Right(Command.PreviewCompile(List(ProjectName("api")))),
-          List("preview", "test")                 -> Right(Command.PreviewTest(Nil)),
-          List("preview", "publishLocal", "tok")  -> Right(Command.PreviewPublishLocal(List("tok"))),
+          List("preview", "run", "api", "js") -> Right(Command.PreviewRun(ready.api, Some(Platform.Js))),
+          List("preview", "run", "demo/pack") -> Right(Command.PreviewPlugin(ready.plugin)),
+          List("preview", "compile", "api")   -> Right(Command.PreviewCompile(List(ProjectName("api")))),
+          List("preview", "test") -> Right(Command.PreviewTest(Nil, AffectedChoice.Unset, TestMode.Run, Nil)),
+          List("preview", "publish", "local", "tok") -> Right(
+            Command.PreviewPublishLocal(List(PublishToken("tok")))
+          ),
+          List("preview", "publishLocal", "tok") -> Left(
+            CliParseError.Retired("preview publishLocal", "preview publish local")
+          ),
           List("preview", "publish", "snapshots") -> Right(Command.PreviewPublishSnapshots(Nil)),
-          List("preview", "clean", "api")         -> Right(Command.PreviewClean(List(ProjectName("api")))),
+          List("preview", "clean", "api")         -> Right(
+            Command.PreviewClean(List(ProjectName("api")), CleanExtent.Products)
+          ),
         )
     ,
     test("doctor, deps, and setup keep the flags they were given"):
       held(
         List("doctor", "--area", "supply", "--json", "--preflight", "job", "--fix", "--yes") -> Right(
-          Command.Doctor(Some("supply"), true, Some("job"), true, true, false, Nil)
+          Command.Doctor(
+            Some(DoctorScope.Plugin(PluginId("supply"))),
+            ReportForm.Json,
+            Some(JobName("job")),
+            FixMode.from(true, true),
+            DoctorDetail.Brief,
+            Nil,
+          )
         ),
         List("doctor", "--verbose") -> Right(
-          Command.Doctor(None, false, None, false, false, true, Nil)
+          Command.Doctor(None, ReportForm.Text, None, FixMode.Print, DoctorDetail.Verbose, Nil)
         ),
         List("doctor", "web") -> Right(
-          Command.Doctor(None, false, None, false, false, false, List(ProjectName("web")))
+          Command.Doctor(None, ReportForm.Text, None, FixMode.Print, DoctorDetail.Brief, List(ProjectName("web")))
         ),
         List("doctor", "--area", "toolchain", "web") -> Right(
-          Command.Doctor(Some("toolchain"), false, None, false, false, false, List(ProjectName("web")))
+          Command.Doctor(
+            Some(DoctorScope.BuiltIn(Area.Toolchain)),
+            ReportForm.Text,
+            None,
+            FixMode.Print,
+            DoctorDetail.Brief,
+            List(ProjectName("web")),
+          )
         ),
         List("deps", "check")                         -> Right(Command.Deps(DepsAction.Check)),
         List("deps", "update", "--yes", "--security") -> Right(Command.Deps(DepsAction.Update(true, true))),
@@ -217,7 +270,10 @@ object GrammarLawSpec extends ZIOSpecDefault:
         List("deps", "alert")                         -> Right(Command.Deps(DepsAction.Alert)),
         List("deps", "snapshot", "--submit")          -> Right(Command.Deps(DepsAction.Snapshot(true))),
         List("setup", "supply-chain", "--from", "zipx", "--fix", "--yes") -> Right(
-          Command.Setup(Some("zipx"), true, true)
+          Command.Setup(Some(SetupSource.Zipx), PolicyWrite.Write, ZipxConfirm.Delete)
+        ),
+        List("setup", "supply-chain", "--from", "vendor/zipx") -> Right(
+          Command.Setup(Some(SetupSource.Directory("vendor/zipx")), PolicyWrite.Preview, ZipxConfirm.Ask)
         ),
         List("affected", "--base", "abc") -> Right(Command.Affected("abc")),
         List("bump")                      -> Right(Command.Bump(histos.version.BumpPart.Patch, Nil)),
@@ -249,7 +305,7 @@ object GrammarLawSpec extends ZIOSpecDefault:
             "nope",
             histos.doctor.Suggest.near(
               "nope",
-              List("compile", "test", "publish", "publishLocal", "clean", "cleanFull", "run"),
+              List("compile", "test", "publish", "clean", "run"),
             ),
           )
         ),
@@ -268,17 +324,22 @@ object GrammarLawSpec extends ZIOSpecDefault:
     ,
     test("a bare command is that command"):
       held(
-        List("version")                  -> Right(Command.Version),
-        List("graph")                    -> Right(Command.Graph),
-        List("mcp")                      -> Right(Command.Mcp),
-        List("bsp")                      -> Right(Command.Bsp),
-        List("server")                   -> Right(Command.Server),
-        List("portal")                   -> Right(Command.Portal),
-        List("observe")                  -> Right(Command.Observe),
-        List("toolchain")                -> Right(Command.Toolchain),
+        List("version")              -> Right(Command.Version),
+        List("graph")                -> Right(Command.Graph),
+        List("mcp")                  -> Right(Command.Mcp),
+        List("bsp")                  -> Right(Command.Bsp),
+        List("server")               -> Right(Command.Server),
+        List("portal")               -> Right(Command.Portal),
+        List("observe")              -> Right(Command.Observe),
+        List("toolchain")            -> Left(CliParseError.Retired("toolchain", "doctor")),
+        List("toolchain", "install") -> Left(
+          CliParseError.Pattern(
+            "histos toolchain install <version> is run by the installed shim\nhistos help toolchain"
+          )
+        ),
         List("reload")                   -> Right(Command.Reload),
         List("reboot")                   -> Right(Command.Reboot),
-        List("client")                   -> Right(Command.Client),
+        List("client")                   -> Left(CliParseError.Retired("client", "publish")),
         List("assembly")                 -> Right(Command.Assembly(None)),
         List("assembly", "dist/app.jar") -> Right(Command.Assembly(Some("dist/app.jar"))),
         List("help")                     -> Right(Command.Help(Nil)),
