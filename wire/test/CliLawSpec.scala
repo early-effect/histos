@@ -310,7 +310,7 @@ object CliLawSpec extends ZIOSpecDefault:
       Rejection.ResolveAction("nope")                                        -> 2,
       Rejection.WorkflowAction("nope")                                       -> 2,
       Rejection.LauncherAction("nope")                                       -> 2,
-      Rejection.AssemblyDestination("..")                                    -> 1,
+      Rejection.AssemblyModules(Nil)                                         -> 2,
       Rejection.TaskArguments("inspect")                                     -> 1,
       Rejection.NotATool                                                     -> 2,
       Rejection.Watch("again")                                               -> 2,

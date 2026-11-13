@@ -33,7 +33,12 @@ object Help:
       "histos clean [project ...] [--full]",
       "Delete the named projects' outputs. --full also forgets this repo in the content store and takes no project.",
     ),
-    Entry("assembly", "build", "histos assembly [path]", "Write one jar of the application."),
+    Entry(
+      "assembly",
+      "build",
+      "histos assembly <module> ...",
+      "Write each assembly module to its asset path, or to a build output path, and print the path.",
+    ),
     Entry(
       "fmt",
       "build",

@@ -143,7 +143,7 @@ enum Rejection:
   case ResolveAction(raw: String)
   case WorkflowAction(raw: String)
   case LauncherAction(raw: String)
-  case AssemblyDestination(raw: String)
+  case AssemblyModules(names: List[String])
   case TaskArguments(id: String)
   case NotATool
   case Watch(detail: String)
@@ -172,28 +172,31 @@ enum Rejection:
     case ResolveAction(raw)     => s"'$raw' is not a resolve action"
     case WorkflowAction(raw)    => s"'$raw' is not a workflow action"
     case LauncherAction(raw)    => s"'$raw' is not a launcher action"
-    case AssemblyDestination(_) => "assembly path is not a path"
-    case TaskArguments(id)      => s"run $id does not take arguments"
-    case NotATool               => "not a tool"
-    case Watch(detail)          => detail
-    case RunFailed              => "the run failed"
-    case WatchStopped           => "watch stopped"
-    case PreviewProjects        => "clean --full does not take a project"
-    case PreviewOperation(raw)  => s"preview does not run $raw"
-    case MissingRunName         => "run needs one name"
-    case Parameter(error)       => error.message
-    case ProjectName(error)     => error.message
-    case SuitePattern(error)    => error.message
-    case RunId(error)           => error.message
-    case TestMode(error)        => error.message
-    case CacheClean(error)      => error.message
-    case Namespace(error)       => error.message
-    case Flag(error)            => error.message
-    case TaskPlatform(name)     => s"run $name does not take a platform"
-    case FormatMode(raw)        => s"'$raw' is not a fmt mode. It is write or check"
-    case FormatTargets          => "fmt takes projects or files, not both"
-    case FormatPath(raw)        => s"'$raw' is not a path relative to the repository"
-    case CommandHelp(names)     =>
+    case AssemblyModules(names) =>
+      names match
+        case Nil    => "assembly needs a module, and this build publishes no assembly"
+        case listed => s"assembly needs a module: ${listed.mkString(" ")}"
+    case TaskArguments(id)     => s"run $id does not take arguments"
+    case NotATool              => "not a tool"
+    case Watch(detail)         => detail
+    case RunFailed             => "the run failed"
+    case WatchStopped          => "watch stopped"
+    case PreviewProjects       => "clean --full does not take a project"
+    case PreviewOperation(raw) => s"preview does not run $raw"
+    case MissingRunName        => "run needs one name"
+    case Parameter(error)      => error.message
+    case ProjectName(error)    => error.message
+    case SuitePattern(error)   => error.message
+    case RunId(error)          => error.message
+    case TestMode(error)       => error.message
+    case CacheClean(error)     => error.message
+    case Namespace(error)      => error.message
+    case Flag(error)           => error.message
+    case TaskPlatform(name)    => s"run $name does not take a platform"
+    case FormatMode(raw)       => s"'$raw' is not a fmt mode. It is write or check"
+    case FormatTargets         => "fmt takes projects or files, not both"
+    case FormatPath(raw)       => s"'$raw' is not a path relative to the repository"
+    case CommandHelp(names)    =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
     case Retired(word, use)  => s"$word was removed\nuse $use"
     case PublishToken(error) => error.message

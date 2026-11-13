@@ -343,6 +343,8 @@ object MessageLawSpec extends ZIOSpecDefault:
           "'core' names two assets (1:1)",
           "'core' names resource 'note.txt' twice (1:1)",
           "'core' stores remote test results and needs docker, network (1:1)",
+          "ship 'histos' names launcher 'core', and 'core' is not a member of that ship (1:1)",
+          "ship 'histos' names client 'core', and 'core' does not build Native (1:1)",
         ),
       )
     ,
@@ -1083,7 +1085,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD",
           "a job timeout is between 1 and 360 minutes, not 2",
           "no sha256 is pinned for clang.tar.gz",
-          "ship histos builds clients on snapshots, and it is not the one asset ship with a native client and an LLVM pin",
+          "ship histos has a toolchain. One ship pins LLVM and links the clients.",
         ),
         ciErrors.map(error => noted(error.diagnose)) == List(
           ("workflow.failed", "histos workflow --update"),
@@ -1125,6 +1127,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "/work/repo has nothing to jar",
           "an assembly needs a classes directory",
           "'nope' is not a module",
+          "'core' does not publish an assembly",
           "'core' has no 3.10.0 classes",
           "could not write /work/repo",
         ),

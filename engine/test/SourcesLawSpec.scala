@@ -37,7 +37,7 @@ object SourcesLawSpec extends ZIOSpecDefault:
             tests.map(_.getFileName.toString) == List("T.scala"),
           )
     ,
-    test("the unmanaged toolchain source replaces the committed object and keeps the other file"):
+    test("an unmanaged source replaces the committed file of the same relative path"):
       val committedRoot = Path.of("/repo/wire/src")
       val unmanagedRoot = Path.of("/repo/target/unmanaged/wire/src")
       val committed     = List(

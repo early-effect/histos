@@ -169,6 +169,8 @@ import histos.{
   BuildError,
   CiFault,
   PluginGraphFault,
+  ToolchainClientFault,
+  ToolchainLauncherFault,
   ClangMajor,
   Dep,
   DepError,
@@ -494,22 +496,24 @@ private object WireBuild extends WireSupport:
         case histos.plugin.Need.Docker  => "docker"
       },
     )
-  given JsonCodec[CiFault]              = JsonCodec.derived
-  given JsonCodec[PluginGraphFault]     = JsonCodec.derived
-  given JsonCodec[BuildError]           = JsonCodec.derived
-  given JsonCodec[LoadError]            = JsonCodec.derived
-  given JsonCodec[ProcessOutput]        = JsonCodec.string.transform(ProcessOutput.from, _.text)
-  given JsonCodec[GroupOp]              = JsonCodec.derived
-  given JsonCodec[ChildError]           = JsonCodec.derived
-  given JsonCodec[NodeOverrideError]    = JsonCodec.derived
-  given JsonCodec[RuntimeLocationError] = JsonCodec.derived
-  given JsonCodec[NodeVersionError]     = JsonCodec.derived
-  given JsonCodec[NodeError]            = JsonCodec.derived
-  given JsonCodec[NodeReject]           = JsonCodec.derived
-  given JsonCodec[NodeSource]           = JsonCodec.derived
-  given JsonCodec[NodeFileFault]        = JsonCodec.derived
-  given JsonCodec[NodePathError]        = JsonCodec.derived
-  given JsonCodec[NodeVersion]          = parsed(nodeVersion, _.message, _.value)
+  given JsonCodec[CiFault]                = JsonCodec.derived
+  given JsonCodec[PluginGraphFault]       = JsonCodec.derived
+  given JsonCodec[ToolchainLauncherFault] = JsonCodec.derived
+  given JsonCodec[ToolchainClientFault]   = JsonCodec.derived
+  given JsonCodec[BuildError]             = JsonCodec.derived
+  given JsonCodec[LoadError]              = JsonCodec.derived
+  given JsonCodec[ProcessOutput]          = JsonCodec.string.transform(ProcessOutput.from, _.text)
+  given JsonCodec[GroupOp]                = JsonCodec.derived
+  given JsonCodec[ChildError]             = JsonCodec.derived
+  given JsonCodec[NodeOverrideError]      = JsonCodec.derived
+  given JsonCodec[RuntimeLocationError]   = JsonCodec.derived
+  given JsonCodec[NodeVersionError]       = JsonCodec.derived
+  given JsonCodec[NodeError]              = JsonCodec.derived
+  given JsonCodec[NodeReject]             = JsonCodec.derived
+  given JsonCodec[NodeSource]             = JsonCodec.derived
+  given JsonCodec[NodeFileFault]          = JsonCodec.derived
+  given JsonCodec[NodePathError]          = JsonCodec.derived
+  given JsonCodec[NodeVersion]            = parsed(nodeVersion, _.message, _.value)
 
   /** A probe is `major.minor.patch`, with any pre-release or build. The floor is a trusted major, and a miss carries
     * that text.

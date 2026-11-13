@@ -60,11 +60,10 @@ object CliExit:
           BuildFault.Interrupted | BuildFault.StaleApi(_, _) =>
         Failed
 
-  /** A run that failed or an assembly path that is not a path is a failure. Every other refusal is usage. */
+  /** A run that failed is a failure. Every other refusal is usage. */
   private def rejectedExit(rejection: Rejection): CliExit =
     rejection match
-      case Rejection.AssemblyDestination(_) | Rejection.TaskArguments(_) | Rejection.RunFailed |
-          Rejection.WatchStopped =>
+      case Rejection.TaskArguments(_) | Rejection.RunFailed | Rejection.WatchStopped =>
         Failed
       case _ => Usage
 end CliExit

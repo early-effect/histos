@@ -97,10 +97,7 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 ### Ship row
 
-- **Goal.** `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)` replaces `.clients(...)`, `ClientBuilds`, `ClientBinary.present`, `installShip`, `Dist.buildFile`, and the hardcoded `app`, `api`, and `histos.cli.Main`. `histos assembly [module ...]` becomes the generic verb: it writes each `.assembly` module to its `.asset` path, or to a build output path, prints the path, and has no launcher side effects. The launcher's identity becomes `META-INF/histos/toolchain.json`, written at pack time, so `wire` no longer recompiles per commit.
-- **Closes.** Ledger rows 6 to 9.
-- **Settle first.** Whether the client's platform can be a type parameter of `.toolchain`, in a `scala-cli` miniature, before the signature is fixed.
-- **Proof.** Load errors for a bad launcher and a bad client, renders of the snapshot and release workflows, a compile-identity law that `wire` is unchanged across commits, and `assembly` writing an asset and printing its path. Pin move.
+- **Closed.** The row is `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)`. The miniature held: a Native module is accepted as `client` with no call-site ascription, and a JVM-only module is refused with `the toolchain client builds Native, and this module does not`. Laws: `ToolchainLawSpec`, `WorkflowInstallLawSpec`, `CompileIdentityLawSpec`, `CallsAssemblyLawSpec`, `AssembleLawSpec`. The red and the counts are on the Ship row in [cli-work-plan.md](cli-work-plan.md). This brief does not pin.
 
 ### Dist layer
 

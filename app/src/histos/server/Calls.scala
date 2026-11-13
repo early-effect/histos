@@ -1,7 +1,7 @@
 package histos.server
 
 import histos.jdk.JdkRuntime
-import histos.assembly.Assemble
+import histos.assembly.{Assemble, AssemblyPath}
 import histos.cache.{CacheCleanMode, CacheForget, CacheVerify, ContentStore}
 import histos.build.BuildEvent
 import histos.cli.{Cli, CompileConsole, GraphText, Lines, Show, TestLogs}
@@ -20,7 +20,6 @@ import histos.testrun.{
 import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
-import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{ApiDigest, PluginArgs, PluginCoordinate, PluginRunError, PluginTaskId}
@@ -33,13 +32,13 @@ import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{CiBranch, CiError, Workflow, WorkflowAction}
-import histos.{BuildError, Platform, ProjectGraph, ProjectName, Publishing, Sona}
+import histos.{BuildError, Module, Platform, ProjectGraph, ProjectName, Publication, Publishing, Sona}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
 
 import java.io.OutputStream
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
 
 /** One CLI message, sent as a frame or kept for a tool result. */
@@ -777,54 +776,77 @@ object Calls:
       graph: ProjectGraph,
       jdk: JdkRuntime,
       machine: Machine,
-      destination: Option[String],
+      modules: List[String],
       say: Say,
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
-    placed(repo, destination) match
-      case None =>
-        reject(say, Rejection.AssemblyDestination(destination.getOrElse("")))
-      case Some(path) =>
-        CompileConsole.open(repo).flatMap { console =>
-          Assemble
-            .run(
-              repo,
-              graph,
-              jdk,
-              NativeOrigin.read(machine.env),
-              path,
-              feed => speak(say, console, feed).ignore,
-            )
-            .foldZIO(
-              error =>
-                val result = Faults.assembleStopped(error) match
-                  case Some(why) => CallResult.Fault(why)
-                  case None      => CallResult.reported(error.message)
-                console.announce(text => told(say, text)) *>
-                  finishNoted(repo, say, console, List(console.observation), result)
-              ,
-              assembled =>
-                console.announce(text => told(say, text)) *>
-                  pin(repo, assembled.path).foldZIO(
-                    failure =>
-                      finishNoted(
-                        repo,
-                        say,
-                        console,
-                        List(console.observation),
-                        CallResult.Fault(BuildFault.Io(failure)),
-                      ),
-                    _ =>
-                      told(say, relative(repo, assembled.path)) *>
-                        finishNoted(
-                          repo,
-                          say,
-                          console,
-                          List(console.observation),
-                          CallResult.reported(),
-                        ),
+    modules match
+      case Nil   => reject(say, Rejection.AssemblyModules(assemblyNames(graph)))
+      case asked =>
+        CompileConsole
+          .open(repo)
+          .flatMap: console =>
+            assembleNamed(repo, graph, jdk, machine, asked, say, console, Nil)
+
+  private def assembleNamed(
+      repo: Path,
+      graph: ProjectGraph,
+      jdk: JdkRuntime,
+      machine: Machine,
+      remaining: List[String],
+      say: Say,
+      console: CompileConsole.Session,
+      written: List[String],
+  ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
+    remaining match
+      case Nil =>
+        console.announce(text => told(say, text)) *>
+          ZIO.foreachDiscard(written)(line => told(say, line)) *>
+          finishNoted(repo, say, console, List(console.observation), CallResult.reported())
+      case raw :: rest =>
+        ProjectName.from(raw) match
+          case Left(error) => reject(say, Rejection.ProjectName(error))
+          case Right(name) =>
+            val destination = graph.get(name) match
+              case Some(module: Module) => AssemblyPath.output(repo, module)
+              case _                    => repo.resolve("target").resolve("assembly").resolve(s"${name.value}.jar")
+            Assemble
+              .run(
+                repo,
+                graph,
+                jdk,
+                NativeOrigin.read(machine.env),
+                name,
+                destination,
+                feed => speak(say, console, feed).ignore,
+              )
+              .foldZIO(
+                error =>
+                  val result = Faults.assembleStopped(error) match
+                    case Some(why) => CallResult.Fault(why)
+                    case None      => CallResult.reported(error.message)
+                  console.announce(text => told(say, text)) *>
+                    finishNoted(repo, say, console, List(console.observation), result)
+                ,
+                assembled =>
+                  assembleNamed(
+                    repo,
+                    graph,
+                    jdk,
+                    machine,
+                    rest,
+                    say,
+                    console,
+                    written :+ relative(repo, assembled.path),
                   ),
-            )
-        }
+              )
+
+  private def assemblyNames(graph: ProjectGraph): List[String] =
+    graph.projects.flatMap:
+      case module: Module =>
+        module.publication match
+          case Publication.Assembly(_) => List(module.name.value)
+          case _                       => Nil
+      case _ => Nil
 
   def compile(
       repo: Path,
@@ -1208,38 +1230,11 @@ object Calls:
       case found: histos.select.SelectError  => BuildFault.Select(found)
       case found: histos.workspace.IoFailure => BuildFault.Io(found)
 
-  private def placed(repo: Path, raw: Option[String]): Option[Path] =
-    raw match
-      case None       => Some(repo.resolve("dist").resolve("histos.jar"))
-      case Some(text) =>
-        try
-          val path = Path.of(text)
-          Some(if path.isAbsolute then path else repo.resolve(path))
-        catch case _: java.nio.file.InvalidPathException => None
-
-  private def placed(repo: Path, raw: String): Option[Path] =
-    try
-      val path = Path.of(raw)
-      Some(if path.isAbsolute then path else repo.resolve(path))
-    catch case _: java.nio.file.InvalidPathException => None
-
   private def relative(repo: Path, path: Path): String =
     val base = repo.toAbsolutePath.normalize
     val full = path.toAbsolutePath.normalize
     (if full.startsWith(base) then base.relativize(full) else full).toString
       .replace('\\', '/')
-
-  /** The launcher verifies this checksum of `dist/histos.jar`. */
-  private def pin(repo: Path, jar: Path): IO[histos.workspace.IoFailure, Unit] =
-    val pinned = repo.resolve("dist").resolve("histos.jar").toAbsolutePath.normalize
-    val dest   = repo.resolve(".histos").resolve("assembly.sha256")
-    if jar.toAbsolutePath.normalize != pinned then ZIO.unit
-    else
-      ZIO
-        .attemptBlocking(Files.readAllBytes(jar))
-        .mapError(_ => histos.workspace.IoFailure(jar, histos.workspace.IoFault.Read))
-        .flatMap: bytes =>
-          histos.workspace.Workspace.writeString(dest, Sha256Digest.of(Chunk.fromArray(bytes)).value + "\n")
 
   private def speak(
       say: Say,

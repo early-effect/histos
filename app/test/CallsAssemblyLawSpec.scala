@@ -2,7 +2,7 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.cache.ContentStore
-import histos.jdk.Sha256Digest
+import histos.plugin.RepoPath
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.{ResolutionService, Resolve}
 import histos.version.Catalog
@@ -10,12 +10,14 @@ import histos.workspace.Workspace
 import histos.{
   CompilerClosure,
   LawMachine,
+  MainClass,
   Module,
   Platform,
   Platforms,
   ProjectDep,
   ProjectGraph,
   ProjectName,
+  Publication,
   Resolution,
   ScalaVersion,
   ScalaVersions,
@@ -29,15 +31,15 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
 import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 
-/** Assembly writes `dist/histos.jar`, its checksum, and the compile tally. A destination that is not a path is refused.
-  * What the jar holds is `AssembleLawSpec`'s.
+/** `assembly` writes each named module's asset and prints that path. An empty list names the assembly modules. It does
+  * not write `.histos/assembly.sha256`.
   */
 object CallsAssemblyLawSpec extends ZIOSpecDefault:
   private val api = ProjectName.trusted("api")
   private val app = ProjectName.trusted("app")
 
   def spec = suite("calls assembly laws")(
-    test("a destination that is not a path is a fault before anything compiles"):
+    test("an empty list names the assembly modules and compiles nothing"):
       Workspace
         .work("histos-calls-refuse")
         .flatMap: dir =>
@@ -45,15 +47,15 @@ object CallsAssemblyLawSpec extends ZIOSpecDefault:
             for
               machine           <- LawMachine.at(dir)
               (refused, report) <- speak(say =>
-                Calls.assembly(dir, graph(ScalaVersion("3.10.0")), LawMachine.fixtureJdk, machine, Some("\u0000"), say)
+                Calls.assembly(dir, graph(ScalaVersion("3.10.0")), LawMachine.fixtureJdk, machine, Nil, say)
               )
             yield assertTrue(
               refused == Right(()),
-              done(report) == Some(CallResult.Fault(BuildFault.Rejected(Rejection.AssemblyDestination("\u0000")))),
+              done(report) == Some(CallResult.Fault(BuildFault.Rejected(Rejection.AssemblyModules(List("app"))))),
             )
           program.provideSomeLayer[Scope](stubbed[Resolve] ++ stubbed[ContentStore] ++ stubbed[ResolutionService])
     ,
-    test("the call writes the jar's checksum next to the build and reports both modules"):
+    test("a named module is written to its asset, and the checksum file is absent"):
       assembled.provideSomeLayer[Scope](CompilerClosure.layer),
   )
 
@@ -77,15 +79,16 @@ object CallsAssemblyLawSpec extends ZIOSpecDefault:
                 "package histos.cli\nobject Main:\n  def main(args: Array[String]): Unit = ()\n",
               )
               (written, heard) <- speak(say =>
-                Calls.assembly(dir, graph(closure.scalaVersion), jdk, machine, None, say)
+                Calls.assembly(dir, graph(closure.scalaVersion), jdk, machine, List("app"), say)
               )
-              digest <- ZIO.attempt(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(jar))).value).orDie
-              pinned <- ZIO.attempt(Files.readString(pin)).orDie
+              jarThere <- ZIO.attempt(Files.isRegularFile(jar)).orDie
+              pinned   <- ZIO.attempt(Files.exists(pin)).orDie
             yield assertTrue(
               written == Right(()),
               modulesOf(done(heard)) == List("api", "app"),
               outs(heard) == "files compiled: 2 skipped: 0; modules: 2; classes: 4\ndist/histos.jar",
-              pinned == s"$digest\n",
+              jarThere,
+              !pinned,
             )
           program.provideSomeLayer[Resolve & Scope](session(dir, closure))
 
@@ -125,6 +128,8 @@ object CallsAssemblyLawSpec extends ZIOSpecDefault:
       Nil,
       List(ProjectDep(api, None)),
       SourcePos("app.scala", 1, 1),
+      publication = Publication.Assembly(MainClass.trusted("histos.cli.Main")),
+      asset = Some(RepoPath.trusted("dist/histos.jar")),
     )
     ProjectGraph.trusted(
       List(apiModule, appModule),

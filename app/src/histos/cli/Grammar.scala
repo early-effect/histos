@@ -48,7 +48,7 @@ object Grammar:
     case Affected(base: String)
     case Compile(projects: List[String])
     case Clean(tokens: List[String])
-    case Assembly(destination: Option[String])
+    case Assembly(modules: List[String])
     case PublishLocal(tokens: List[String])
     case PublishSnapshots(projects: List[String])
     case PublishRelease(automatic: Boolean, tokens: List[String])
@@ -121,7 +121,7 @@ object Grammar:
   private val compile    = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
   private val cleanBuild = CliCommand("clean", Args.text("token").*).map(tokens => Wire.Clean(tokens.toList))
   private val assembly   =
-    CliCommand("assembly", Args.text("destination").atMost(1)).map(paths => Wire.Assembly(paths.headOption))
+    CliCommand("assembly", Args.text("module").*).map(names => Wire.Assembly(names.toList))
   private val publishLocal =
     CliCommand("local", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
   private val publishSnapshots =
@@ -386,8 +386,8 @@ object Grammar:
         projectList("compile", projects).map(Command.Compile(_))
       case Wire.Clean(tokens) =>
         cleaned("clean", tokens, Command.Clean.apply)
-      case Wire.Assembly(destination) =>
-        ZIO.succeed(Command.Assembly(destination))
+      case Wire.Assembly(modules) =>
+        ZIO.succeed(Command.Assembly(modules))
       case Wire.PublishLocal(tokens) =>
         publishTokens(tokens).map(Command.PublishLocal(_))
       case Wire.PublishSnapshots(tokens) =>

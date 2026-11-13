@@ -126,7 +126,7 @@ object WorkflowLawSpec extends ZIOSpecDefault:
             case Some(file) =>
               assertTrue(
                 off.forall(_.name != Workflow.snapshotsName),
-                file.body.contains("""- run: "./histos assembly""""),
+                file.body.contains("""- run: "./histos assembly app""""),
                 !file.body.contains(s"""- if: "$onDefault""""),
                 file.body.contains("""- run: "./histos publish snapshots""""),
                 file.body.contains("          HISTOS_SESSION: snapshot"),

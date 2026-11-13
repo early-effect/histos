@@ -1,21 +1,17 @@
 package histos.assembly
 
 import histos.jdk.JdkRuntime
-import histos.resolve.LockedTools
-import histos.zinc.JvmCompile
 import histos.load.BuildClasspath
 import histos.native.NativeOrigin
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, Assembled, ClassJar, JarError, MainClass}
+import histos.pack.{Assembly, AssemblyFile, Assembled, ClassJar, MainClass as BinaryName}
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
-  DependencyLock,
+  LockedTools,
   ResolutionService,
   Repositories,
-  RepositoryIo,
   Resolve,
   ResolveCell,
-  ResolveError,
 }
 import histos.schedule.CacheConfig
 import histos.workspace.Workspace
@@ -25,95 +21,111 @@ import histos.zinc.{
   CompiledCell,
   GraphCompile,
   GraphCompileError,
+  JvmCompile,
   UpstreamCell,
   UpstreamCells,
 }
-import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, Publication, ScalaVersion, ToolchainIdentity}
 
-import java.nio.file.{Files, Path}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, StandardCopyOption}
 
 import scala.jdk.CollectionConverters.*
 
+import zio.json.*
 import zio.{IO, Scope, UIO, ZIO, ZLayer}
 
 object Assemble:
   val ApiEntry: String = BuildClasspath.Entry
-  private val Program  = MainClass.trusted("histos.cli.Main")
 
-  /** Compile `app` and the modules it depends on, and write the one jar the launcher execs.
+  /** Compile `name` and the modules it depends on, and write that assembly. A launcher also embeds the ship's library
+    * members and, when this checkout has a commit, `META-INF/histos/toolchain.json`.
     */
   def run(
       repo: Path,
       graph: ProjectGraph,
       jdk: JdkRuntime,
       native: NativeOrigin,
+      name: ProjectName,
       destination: Path,
       report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService, AssembleError, Assembled] =
     ZIO.scoped:
       for
+        target  <- ZIO.fromEither(require(graph, name))
+        main    <- ZIO.fromEither(mainOf(target))
+        libs    <- ZIO.fromEither(libraries(graph, target.name))
         process <- CacheConfig.processEnv
         remote  <- CacheConfig
           .open(process)
           .mapError(error => AssembleError.Toolchain(CompileError.Remote(error)))
-        app      <- module(graph, "app")
-        api      <- module(graph, "api")
-        ordered  <- ZIO.fromEither(closure(app, index(graph)))
+        ordered  <- ZIO.fromEither(closure(target, index(graph)))
         resolved <- ZIO.service[ResolutionService]
         lock     <- resolved.current
-        _        <- ToolchainStamp.write(repo)
         compiled <- GraphCompile
           .run(
             histos.zinc.CompileSession(repo, graph, jdk, native, lock),
-            List(app.name),
+            List(target.name),
             None,
             report,
           )
           .provideSomeLayer(ZLayer.succeed(remote))
           .mapError(AssembleError.Compile(_))
-        version = app.versions.first
+        version = target.versions.first
         tools   = zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
         upstream <- UpstreamCells
           .read(
-            app,
-            Module.chain(app, graph.projects.collect { case found: Module => found }, Platform.Jvm),
+            target,
+            Module.chain(target, graph.projects.collect { case found: Module => found }, Platform.Jvm),
             version,
             Platform.Jvm,
             UpstreamCells.compiled(compiled),
           )
           .mapError(AssembleError.Compile(_))
           .provideSome[Resolve](tools)
-        cells <- ZIO.fromEither(placed(app, ordered, upstream, compiled, version))
+        cells <- ZIO.fromEither(placed(target, ordered, upstream, compiled, version))
         classes = cells.map(_.classes)
         jars    <- artifacts(cells, BuildResolvers(graph.resolvers))
-        library <- JvmCompile
+        runtime <- JvmCompile
           .runtime(version)
           .mapError(error => AssembleError.Toolchain(error))
           .provideSome[Resolve](tools)
-        apiClasses <- ZIO.fromEither(apiDirectory(api.name, cells, version))
-        assembled  <- pack(
+        dirs      <- ZIO.fromEither(directories(libs, cells))
+        extra     <- embedded(repo, dirs)
+        assembled <- pack(
           classes,
-          library ++ jars.filterNot(library.contains),
-          apiClasses,
+          runtime ++ jars.filterNot(runtime.contains),
+          main,
+          extra,
           destination,
         )
       yield assembled
 
-  private def module(
-      graph: ProjectGraph,
-      name: String,
-  ): IO[AssembleError, Module] =
-    ZIO
-      .fromEither(
-        ProjectName
-          .from(name)
-          .left
-          .map(error => AssembleError.NoModule(error.message))
-      )
-      .flatMap: project =>
-        graph.get(project) match
-          case Some(found: Module) => ZIO.succeed(found)
-          case _                   => ZIO.fail(AssembleError.NoModule(name))
+  private def require(graph: ProjectGraph, name: ProjectName): Either[AssembleError, Module] =
+    graph.get(name) match
+      case Some(found: Module) => Right(found)
+      case _                   => Left(AssembleError.NoModule(name.value))
+
+  private def mainOf(module: Module): Either[AssembleError, BinaryName] =
+    module.publication match
+      case Publication.Assembly(main) => Right(BinaryName.trusted(main.value))
+      case _                          => Left(AssembleError.NotAssembly(module.name))
+
+  /** Library members of the ship that names `launcher`. Empty when `launcher` is not a launcher. */
+  private def libraries(graph: ProjectGraph, launcher: ProjectName): Either[AssembleError, List[Module]] =
+    graph.catalog.ships.find(_.toolchain.exists(_.launcher == launcher)) match
+      case None       => Right(Nil)
+      case Some(ship) =>
+        ship.members.toList
+          .filterNot(_ == launcher)
+          .foldLeft[Either[AssembleError, List[Module]]](Right(Nil)): (acc, name) =>
+            acc.flatMap: seen =>
+              graph.get(name) match
+                case Some(module: Module) =>
+                  module.publication match
+                    case Publication.Library => Right(seen :+ module)
+                    case _                   => Right(seen)
+                case _ => Left(AssembleError.NoModule(name.value))
 
   private def index(graph: ProjectGraph): Map[ProjectName, Module] =
     graph.projects.collect { case found: Module => found.name -> found }.toMap
@@ -132,9 +144,9 @@ object Assemble:
               closure(next, modules).map(deeper => seen ++ deeper)
       .map(dependencies => (module :: dependencies).distinctBy(_.name))
 
-  /** `app`'s own cell, then each module it depends on at the cell `upstream` read, in `ordered` order. */
+  /** The assembly's own cell, then each module it depends on, in `ordered` order. */
   private def placed(
-      app: Module,
+      root: Module,
       ordered: List[Module],
       upstream: List[UpstreamCell],
       compiled: List[CompiledCell],
@@ -143,25 +155,23 @@ object Assemble:
     ordered.foldLeft[Either[AssembleError, List[UpstreamCell]]](Right(Nil)): (acc, module) =>
       acc.flatMap: cells =>
         val found =
-          if module.name == app.name then
+          if module.name == root.name then
             compiled
-              .find(cell => cell.module == app.name && cell.version == version && cell.platform == Platform.Jvm)
-              .map(cell => UpstreamCell(app, version, cell.classes))
+              .find(cell => cell.module == root.name && cell.version == version && cell.platform == Platform.Jvm)
+              .map(cell => UpstreamCell(root, version, cell.classes))
           else upstream.find(_.module.name == module.name)
         found match
           case Some(cell) => Right(cells :+ cell)
           case None       => Left(AssembleError.NoClasses(module.name, version))
 
-  private def apiDirectory(
-      api: ProjectName,
-      cells: List[UpstreamCell],
-      version: ScalaVersion,
-  ): Either[AssembleError, Path] =
-    cells.find(_.module.name == api) match
-      case Some(cell) => Right(cell.classes)
-      case None       => Left(AssembleError.NoClasses(api, version))
+  /** Each library member's own cell. The launcher's Scala version is not the member's. */
+  private def directories(libs: List[Module], cells: List[UpstreamCell]): Either[AssembleError, List[Path]] =
+    libs.foldLeft[Either[AssembleError, List[Path]]](Right(Nil)): (acc, module) =>
+      acc.flatMap: seen =>
+        cells.find(_.module.name == module.name) match
+          case Some(cell) => Right(seen :+ cell.classes)
+          case None       => Left(AssembleError.NoClasses(module.name, module.versions.first))
 
-  /** Each cell's runtime jars, at that cell's own version. */
   private def artifacts(
       cells: List[UpstreamCell],
       repositories: Repositories,
@@ -184,37 +194,73 @@ object Assemble:
             acc ++ fresh,
         )
 
-  private def readLock(repo: Path): IO[AssembleError, DependencyLock] =
-    Resolve
-      .readLock(repo)
-      .mapError:
-        case ResolveError.Io(failure) => AssembleError.Io(failure.path)
-        case other                    => AssembleError.Resolve(other)
+  /** The bootstrap jar of library classes, and the identity resource when git names a commit. */
+  private def embedded(repo: Path, dirs: List[Path]): ZIO[Scope, AssembleError, List[AssemblyFile]] =
+    for
+      nested <- nested(dirs)
+      ident  <- identityFile(repo)
+    yield nested.toList ++ ident.toList
+
+  private def nested(dirs: List[Path]): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
+    dirs match
+      case Nil        => ZIO.succeed(None)
+      case one :: Nil =>
+        for
+          dir <- temp("histos-api")
+          jar = dir.resolve("libraries.jar")
+          written <- ClassJar.write(one, jar).mapError(AssembleError.Jar(_))
+        yield Some(AssemblyFile(ApiEntry, written.path))
+      case many =>
+        for
+          dir <- temp("histos-api")
+          merged = dir.resolve("classes")
+          _ <- ZIO.foreachDiscard(many)(copyTree(_, merged))
+          jar = dir.resolve("libraries.jar")
+          written <- ClassJar.write(merged, jar).mapError(AssembleError.Jar(_))
+        yield Some(AssemblyFile(ApiEntry, written.path))
+
+  private def identityFile(repo: Path): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
+    ToolchainIdentity
+      .discover(repo)
+      .flatMap:
+        case None           => ZIO.succeed(None)
+        case Some(identity) =>
+          for
+            dir <- temp("histos-identity")
+            path = dir.resolve("toolchain.json")
+            _ <- ZIO
+              .attemptBlocking(Files.writeString(path, identity.toJson, StandardCharsets.UTF_8))
+              .mapError(_ => AssembleError.Io(path))
+          yield Some(AssemblyFile(ToolchainIdentity.entry, path))
+
+  private def copyTree(from: Path, into: Path): IO[AssembleError, Unit] =
+    ZIO
+      .attemptBlocking:
+        val walk = Files.walk(from)
+        try
+          walk.forEach: path =>
+            val dest = into.resolve(from.relativize(path))
+            if Files.isDirectory(path) then Files.createDirectories(dest)
+            else
+              Option(dest.getParent).foreach(parent => Files.createDirectories(parent))
+              Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
+        finally walk.close()
+      .mapError(_ => AssembleError.Io(from))
+      .unit
 
   private def pack(
       classes: List[Path],
       jars: List[Path],
-      apiClasses: Path,
+      main: BinaryName,
+      extra: List[AssemblyFile],
       destination: Path,
-  ): ZIO[Any, AssembleError, Assembled] =
-    ZIO.scoped:
-      for
-        dir <- temp
-        jar = dir.resolve("histos-api.jar")
-        _         <- ClassJar.write(apiClasses, jar).mapError(AssembleError.Jar(_))
-        assembled <- Assembly
-          .write(
-            classes,
-            jars,
-            Program,
-            destination,
-            List(AssemblyFile(ApiEntry, jar)),
-          )
-          .mapError(AssembleError.Pack(_))
-      yield assembled
+  ): IO[AssembleError, Assembled] =
+    Assembly
+      .write(classes, jars, main, destination, extra)
+      .mapError(AssembleError.Pack(_))
 
-  private def temp: ZIO[Scope, AssembleError, Path] =
+  private def temp(name: String): ZIO[Scope, AssembleError, Path] =
     Workspace
-      .work("histos-api")
+      .work(name)
       .mapError(failure => AssembleError.Io(failure.path))
 end Assemble

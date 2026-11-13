@@ -118,7 +118,7 @@ object Session:
   private def withProcess(repo: Path, call: Call, result: CallResult): UIO[CallResult] =
     call match
       case Call.Version =>
-        ApiClock.mcpLine(repo).map(line => note(result, line, front = false))
+        ApiClock.mcpLine.map(line => note(result, line, front = false))
       case Call.Reboot(_) =>
         ApiClock.rebootLine(repo).map(line => note(result, line, front = true))
       case _ => ZIO.succeed(result)

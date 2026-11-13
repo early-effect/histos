@@ -6,9 +6,10 @@ import histos.jdk.{Sha256, Sha256Digest}
 import histos.version.{CommitSha, ShipName, SnapshotCoordinate, SnapshotPointer}
 import histos.{
   BuildError,
-  ClientBuilds,
+  ClangMajor,
   Jvm,
   MainClass,
+  Native,
   ProjectName,
   Projects,
   Ship,
@@ -233,11 +234,13 @@ object DistChannelLawSpec extends ZIOSpecDefault:
   )
 
   private def clientPlans: Either[BuildError | LocalPublishError, List[ChannelPlan]] =
-    val app = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
+    val app    = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
+    val client = module("client", Native)(scala3).clang(ClangMajor(21)).main(MainClass("histos.client.Main"))
     Projects
       .organization(organization"example.com")(
-        ships(Ship("demo").next(1, 2, 3)(app).clients(ClientBuilds.ReleasesAndSnapshots)),
+        ships(Ship("demo").next(1, 2, 3)(app).toolchain(launcher = app, client = client)),
         app,
+        client,
       )
       .flatMap(built => DistChannel.plan(built, List(row(pointer.render))))
 

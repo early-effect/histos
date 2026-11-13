@@ -8,10 +8,10 @@ import java.nio.file.{Files, Path}
 import zio.{UIO, ZIO}
 
 /** The revision a ship publishes to Coursier: `<ship>-<12 hex>-SNAPSHOT`. Assembly and every artifact of that publish
-  * use this string. A checkout with no `app` ship, or no commit, has none.
+  * use this string. A checkout with no `.toolchain` ship, or no commit, has none.
   */
 object SnapshotId:
-  /** `head` reads the checkout's commit, and runs only when `histos.scala` names an `app` ship. Production passes
+  /** `head` reads the checkout's commit, and runs only when `histos.scala` names a `.toolchain` ship. Production passes
     * [[SnapshotId.head]].
     */
   def current(repo: Path, head: Path => UIO[Option[CommitSha]]): UIO[Option[String]] =
@@ -41,7 +41,7 @@ object SnapshotId:
   def render(number: ShipNumber, sha: CommitSha): String =
     SnapshotCoordinate(number, sha.abbreviate).render
 
-  /** The ship whose members include `app`. That is the assembly this checkout launches. */
+  /** The first ship that names `.toolchain`. That is the launcher this checkout publishes. */
   private[histos] def publishing(text: String): Option[ShipNumber] =
     scan(text, 0)
 
@@ -77,8 +77,9 @@ object SnapshotId:
                   val membersEnd = text.indexOf(')', openMembers + 1)
                   if membersEnd < 0 then None
                   else
-                    val members = text.substring(openMembers + 1, membersEnd).split(',').map(_.trim).toList
-                    if members.contains("app") then Some(number) else None
+                    val next  = text.indexOf("Ship(\"", membersEnd + 1)
+                    val until = if next < 0 then text.length else next
+                    if text.substring(membersEnd + 1, until).contains(".toolchain") then Some(number) else None
 
   private def triple(text: String, from: Int): Option[(ShipNumber, Int)] =
     component(text, from).flatMap: (major, afterMajor) =>

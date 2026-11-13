@@ -1,6 +1,5 @@
 package histos.server
 
-import histos.assembly.AssembleError
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cache.ContentStore
@@ -8,7 +7,7 @@ import histos.cli.Cli
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.program.ProgramError
 import histos.publish.IvyRoot
-import histos.report.{BuildFault, CallResult}
+import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.{DependencyLock, Resolve}
 import histos.version.Catalog
 import histos.workspace.Workspace
@@ -62,7 +61,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           cleanFeeds <- Client.talk(socket, Call.Clean(Nil, histos.server.CleanExtent.Products)).runCollect
           kept       <- ZIO.attempt(Files.exists(clazz)).orDie
           missed     <- Client.talk(socket, Call.PreviewCompile(List(lawName))).runCollect
-          assembled  <- Client.talk(socket, Call.Assembly(None)).runCollect
+          assembled  <- Client.talk(socket, Call.Assembly(Nil)).runCollect
           ran        <- Client.talk(socket, Call.Run(lawName.value, None)).runCollect
           rebooted   <- Client.talk(socket, Call.Reboot(unnamed)).runCollect
           stopped    <- running.done.either
@@ -74,7 +73,7 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           outs(cleanFeeds) == "cleaned",
           !kept,
           outs(missed).contains("daemonlaw 3.10.0 jvm selected"),
-          done(assembled) == Some(CallResult.Fault(BuildFault.Assemble(AssembleError.NoModule("app")))),
+          done(assembled) == Some(CallResult.Fault(BuildFault.Rejected(Rejection.AssemblyModules(Nil)))),
           done(ran) == Some(CallResult.Fault(BuildFault.Program(ProgramError.NoMain(lawName)))),
           done(rebooted).contains(CallResult.reported()),
           stopped == Right(()),

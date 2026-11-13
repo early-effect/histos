@@ -14,7 +14,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
   private val inCi: Either[BuildError, List[WorkflowFile]] = Right(List(WorkflowFile.Ci))
 
   def spec = suite("job check laws")(
-    test("generated names follow the modules, the catalog, and the client"):
+    test("generated names follow the modules and the catalog, and a module named client adds none"):
       val core    = module("core", Jvm)(scala3)
       val client  = module("client", Native)(scala3).clang(ClangMajor(21)).main(MainClass("histos.Client"))
       val desktop = module("client", Jvm)(scala3).main(MainClass("histos.Client"))
@@ -25,7 +25,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
         names(Projects.docCheck(core)) == Right(Set("workflow", "affected", "test", "cache-seed", "scaladoc")),
         names(Projects.coverage()(core)) == Right(Set("workflow", "affected", "test", "cache-seed", "coverage")),
         names(Projects(ships(row), core)) == Right(Set("workflow", "affected", "test", "cache-seed", "versions")),
-        names(Projects(client)) == Right(Set("workflow", "affected", "test", "cache-seed", "launcher")),
+        names(Projects(client)) == Right(Set("workflow", "affected", "test", "cache-seed")),
         names(Projects(desktop)) == Right(Set("workflow", "affected", "test", "cache-seed")),
       )
     ,

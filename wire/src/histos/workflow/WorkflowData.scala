@@ -46,7 +46,7 @@ enum CiError:
     case LlvmChecksum(archive) =>
       s"no sha256 is pinned for $archive"
     case SnapshotClients(ship) =>
-      s"ship ${ship.value} builds clients on snapshots, and it is not the one asset ship with a native client and an LLVM pin"
+      s"ship ${ship.value} has a toolchain. One ship pins LLVM and links the clients."
 
   def diagnose: Diagnostic = this match
     case Drift(file, hint) =>

@@ -1,6 +1,6 @@
 package histos
 
-import histos.version.{ShipName, ShipNumber}
+import histos.version.{ShipName, ShipNumber, ShipToolchain}
 
 import zio.test.*
 
@@ -10,18 +10,23 @@ object ShipDraftLawSpec extends ZIOSpecDefault:
   private val here   = SourcePos("law", 2, 3)
 
   def spec = suite("ship draft laws")(
-    test("a ship builds clients on releases unless it asks for snapshots too, and the catalog row keeps that choice"):
-      val core  = module("core", Jvm)(scala"3.10.0")
-      val row   = ShipDef.line(name.value, number, ::(core, Nil), here)
-      val asked = row.clients(ClientBuilds.ReleasesAndSnapshots)
+    test("a ship records no toolchain until the row names a launcher and a client"):
+      val core   = module("core", Jvm)(scala"3.10.0")
+      val app    = module("app", Jvm)(scala"3.10.0").assembly(MainClass("demo.Main"))
+      val client = module("client", Native)(scala"3.10.0").clang(ClangMajor(21)).main(MainClass("demo.Client"))
+      val row    = ShipDef.line(name.value, number, ::(core, List(app)), here)
+      val asked  = row.toolchain(launcher = app, client = client)
       assertTrue(
-        row.clients == ClientBuilds.Releases,
-        asked.clients == ClientBuilds.ReleasesAndSnapshots,
-        linked(row, core) == Some(ClientBuilds.Releases),
-        linked(asked, core) == Some(ClientBuilds.ReleasesAndSnapshots),
+        linked(row, core, app, client).isEmpty,
+        linked(asked, core, app, client) == Some(ShipToolchain(ProjectName("app"), ProjectName("client"))),
       )
   )
 
-  private def linked(row: ShipDef, member: ProjectDef): Option[ClientBuilds] =
-    Projects(CatalogSpec(row), member).toOption.flatMap(_.catalog.get(name)).map(_.clients)
+  private def linked(
+      row: ShipDef,
+      core: ProjectDef,
+      app: ProjectDef,
+      client: ProjectDef,
+  ): Option[ShipToolchain] =
+    Projects(CatalogSpec(row), core, app, client).toOption.flatMap(_.catalog.get(name)).flatMap(_.toolchain)
 end ShipDraftLawSpec

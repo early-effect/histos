@@ -8,7 +8,6 @@ import histos.{
   DocCheck,
   Formatting,
   Module,
-  Platform,
   PluginGraphFault,
   ProjectGraph,
   ProjectName,
@@ -70,16 +69,7 @@ object JobCheck:
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(JobName.trusted("format"))
     val versions = if graph.catalog != Catalog.Empty then List(JobName.trusted("versions")) else Nil
-    val launch   = if launcher(graph) then List(JobName.trusted("launcher")) else Nil
-    (base ++ suite ++ doc ++ coverage ++ format ++ versions ++ launch).toSet
-
-  private def launcher(graph: ProjectGraph): Boolean =
-    graph.projects.exists:
-      case module: Module =>
-        module.name.value == "client" &&
-        module.platforms.all.contains(Platform.Native) &&
-        module.application.nonEmpty
-      case _ => false
+    (base ++ suite ++ doc ++ coverage ++ format ++ versions).toSet
 
   private final case class Item(plugin: PluginId, job: CiJob, render: JobRender)
 

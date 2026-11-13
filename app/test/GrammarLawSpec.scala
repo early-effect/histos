@@ -353,13 +353,13 @@ object GrammarLawSpec extends ZIOSpecDefault:
             "histos toolchain install <version> is run by the installed shim\nhistos help toolchain"
           )
         ),
-        List("reload")                   -> Right(Command.Reload),
-        List("reboot")                   -> Right(Command.Reboot),
-        List("client")                   -> Left(CliParseError.Retired("client", "publish")),
-        List("assembly")                 -> Right(Command.Assembly(None)),
-        List("assembly", "dist/app.jar") -> Right(Command.Assembly(Some("dist/app.jar"))),
-        List("help")                     -> Right(Command.Help(Nil)),
-        List("help", "compile")          -> Right(Command.Help(List("compile"))),
+        List("reload")          -> Right(Command.Reload),
+        List("reboot")          -> Right(Command.Reboot),
+        List("client")          -> Left(CliParseError.Retired("client", "publish")),
+        List("assembly")        -> Right(Command.Assembly(Nil)),
+        List("assembly", "app") -> Right(Command.Assembly(List("app"))),
+        List("help")            -> Right(Command.Help(Nil)),
+        List("help", "compile") -> Right(Command.Help(List("compile"))),
       ),
   )
 

@@ -170,6 +170,8 @@ import histos.{
   BuildError,
   CiFault,
   PluginGraphFault,
+  ToolchainClientFault,
+  ToolchainLauncherFault,
   ClangMajor,
   Dep,
   DepError,
@@ -466,9 +468,11 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[histos.plugin.Need] =
     enumeration("Need", List("network", "docker"))
 
-  given Schema[CiFault]          = Schema.derived
-  given Schema[PluginGraphFault] = Schema.derived
-  given Schema[BuildError]       = Schema.derived
+  given Schema[CiFault]                = Schema.derived
+  given Schema[PluginGraphFault]       = Schema.derived
+  given Schema[ToolchainLauncherFault] = Schema.derived
+  given Schema[ToolchainClientFault]   = Schema.derived
+  given Schema[BuildError]             = Schema.derived
 
   given Schema[LoadError] = Schema.derived
 
