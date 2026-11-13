@@ -23,6 +23,7 @@ import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, Map
 import sbt.util.Logger
 import xsbti.compile.{
   AnalysisContents,
+  AuxiliaryClassFiles,
   CompileAnalysis,
   CompileOrder,
   IncOptions,
@@ -502,7 +503,7 @@ object JvmCompile:
       false,
       request.analysis,
       prepared.cache,
-      IncOptions.of(),
+      IncOptions.of().withAuxiliaryClassFiles(Array(ProductSiblings)),
       reporter,
       None,
       None,
@@ -772,6 +773,20 @@ object JvmCompile:
         try Some(walk.iterator.asScala.toList)
         finally walk.close()
       catch case _: IOException | _: UncheckedIOException => None
+
+  /** Zinc deletes a `.class` and asks this for the rest of that source's product. Scala 3 reads `.tasty`, Native reads
+    * `.nir`, and Scala.js reads `.sjsir`. A sibling that is not there is left alone.
+    */
+  private object ProductSiblings extends AuxiliaryClassFiles:
+    def associatedFiles(classFile: Path): Array[Path] =
+      val name = Option(classFile.getFileName).fold("")(_.toString)
+      if !name.endsWith(".class") then Array.empty
+      else
+        val stem  = name.stripSuffix(".class")
+        val found = List(".tasty", ".nir", ".sjsir").flatMap: ext =>
+          val sibling = classFile.resolveSibling(stem + ext)
+          if Files.isRegularFile(sibling) then List(sibling) else Nil
+        found.toArray
 end JvmCompile
 
 private final class CollectingReporter(hear: CompileProblem => Unit) extends xsbti.Reporter:

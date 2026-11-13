@@ -110,6 +110,51 @@ object ScenarioSpec extends ZIOSpecDefault:
           starts == 2,
         )
     ,
+    test("a source that moved to another module leaves no tasty behind, and the next compile reads the new member"):
+      ZIO.scoped:
+        for
+          scala3 <- locked
+          upstream = module("lib", Jvm)(scala3)
+          built    <- ZIO.fromEither(Projects.locked(upstream, module("app", Jvm)(scala3).dependsOn(upstream)))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          app = GraphCompile.classesDir(checkout.root, ProjectName("app"), scala3)
+          lib = GraphCompile.classesDir(checkout.root, ProjectName("lib"), scala3)
+          _           <- checkout.write("lib/src/main/scala/histos/cli/Place.scala", stdioPlace)
+          _           <- checkout.write("app/src/main/scala/histos/cli/Stdio.scala", stdioOld)
+          _           <- checkout.write("app/src/main/scala/histos/cli/Use.scala", useOld)
+          first       <- checkout.compile
+          appClass    <- exists(app.resolve("histos/cli/Stdio.class"))
+          appModule   <- exists(app.resolve("histos/cli/Stdio$.class"))
+          appTasty    <- exists(app.resolve("histos/cli/Stdio.tasty"))
+          _           <- Workspace.delete(checkout.root.resolve("app/src/main/scala/histos/cli/Stdio.scala"))
+          _           <- checkout.write("lib/src/main/scala/histos/cli/Stdio.scala", stdioMoved)
+          _           <- checkout.write("app/src/main/scala/histos/cli/Use.scala", useMoved)
+          second      <- checkout.compile
+          staleClass  <- exists(app.resolve("histos/cli/Stdio.class"))
+          staleModule <- exists(app.resolve("histos/cli/Stdio$.class"))
+          staleTasty  <- exists(app.resolve("histos/cli/Stdio.tasty"))
+          useClass    <- exists(app.resolve("histos/cli/Use.class"))
+          useTasty    <- exists(app.resolve("histos/cli/Use.tasty"))
+          libClass    <- exists(lib.resolve("histos/cli/Stdio.class"))
+          libTasty    <- exists(lib.resolve("histos/cli/Stdio.tasty"))
+          placeTasty  <- exists(lib.resolve("histos/cli/Place.tasty"))
+        yield assertTrue(
+          failed(first).isEmpty,
+          appClass,
+          appModule,
+          appTasty,
+          failed(second).map(_.message).toList == Nil,
+          !staleClass,
+          !staleModule,
+          !staleTasty,
+          useClass,
+          useTasty,
+          libClass,
+          libTasty,
+          placeTasty,
+        )
+    ,
     test("an unchanged native cell is a hit that needs neither the store nor the compiler"):
       ZIO.scoped:
         for
@@ -674,6 +719,43 @@ object ScenarioSpec extends ZIOSpecDefault:
        |""".stripMargin
 
   private def sha(bytes: Chunk[Byte]): Sha256 = Sha256Digest.of(bytes)
+
+  /** `Stdio` starts in `app` and moves to `lib`, gaining `redirected`. `Use` calls whichever member is current. */
+  private val stdioOld =
+    """package histos.cli
+      |
+      |object Stdio:
+      |  def old: Int = 1
+      |""".stripMargin
+
+  private val stdioMoved =
+    """package histos.cli
+      |
+      |object Stdio:
+      |  def redirected: Int = 2
+      |""".stripMargin
+
+  private val useOld =
+    """package histos.cli
+      |
+      |object Use:
+      |  def n: Int = Stdio.old
+      |""".stripMargin
+
+  private val useMoved =
+    """package histos.cli
+      |
+      |object Use:
+      |  def n: Int = Stdio.redirected
+      |""".stripMargin
+
+  /** Keeps `lib` a module with sources before `Stdio` arrives, so the second compile is incremental. */
+  private val stdioPlace =
+    """package histos.cli
+      |
+      |object Place:
+      |  def n: Int = 0
+      |""".stripMargin
 
   private val core =
     """object Core:
