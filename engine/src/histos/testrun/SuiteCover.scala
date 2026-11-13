@@ -12,11 +12,11 @@ import histos.resolve.{
   ToolInput,
 }
 import histos.toolchain.{RuntimeIdentity, Runtimes}
-import histos.zinc.{ApiDigest, GraphCompile}
+import histos.zinc.{ApiDigest, GraphCompile, UpstreamCell}
 import histos.{Dep, Module, Platform, ProjectName, ScalaVersion, ToolCatalog}
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.Files
 
 import zio.Chunk
 
@@ -42,11 +42,11 @@ private[histos] enum CoverGap:
 end CoverGap
 
 /** Inputs of the cover a quick record stores. Preview and [[SuiteLaunch.remember]] both pass this to
-  * [[SuiteCover.stored]].
+  * [[SuiteCover.stored]]. `upstream` are the cells [[histos.zinc.UpstreamCells.read]] picked for this cell.
   */
 private[histos] final case class SuiteAsk(
     module: Module,
-    modules: List[Module],
+    upstream: List[UpstreamCell],
     version: ScalaVersion,
     platform: Platform,
     lock: DependencyLock,
@@ -60,7 +60,7 @@ private[histos] final case class SuiteAsk(
 /** The cover a quick record stores. Jar lines are lock shas and tool fingerprints. Nothing here fetches.
   */
 private[histos] object SuiteCover:
-  def stored(repo: Path, ask: SuiteAsk): Either[CoverGap, SuiteStamp.Cover] =
+  def stored(ask: SuiteAsk): Either[CoverGap, SuiteStamp.Cover] =
     val runtimes = ask.platform match
       case Platform.Js =>
         ask.node match
@@ -72,7 +72,7 @@ private[histos] object SuiteCover:
       own        <- ownHashes(ask)
       upstream   <- upstreamHashes(ask, own.toSet)
       tools      <- toolHashes(ask)
-      apis       <- upstreamApis(repo, ask)
+      apis       <- upstreamApis(ask)
     yield SuiteStamp.Cover(
       (own ++ tools ++ identities.map(SuiteCover.tokenHash)).map(_.value),
       upstream.map(_.value),
@@ -89,37 +89,33 @@ private[histos] object SuiteCover:
 
   private def ownHashes(ask: SuiteAsk): Either[CoverGap, List[Sha256]] =
     val (dependencies, scope) = classpath(ask.module, ask.platform)
-    cellHashes(ask, ask.module, scope, dependencies, dropStandardLibrary = ask.platform == Platform.Jvm)
+    cellHashes(ask, ask.module, ask.version, scope, dependencies, dropStandardLibrary = ask.platform == Platform.Jvm)
 
+  /** Each upstream's lock jars at the version of the cell its compile read. */
   private def upstreamHashes(ask: SuiteAsk, own: Set[Sha256]): Either[CoverGap, List[Sha256]] =
-    Module
-      .chain(ask.module, ask.modules, ask.platform)
+    ask.upstream
       .foldLeft[Either[CoverGap, List[Sha256]]](Right(Nil)):
-        case (Left(gap), _)           => Left(gap)
-        case (Right(acc), dependency) =>
-          val dependencies = Dep.select(dependency.dependencies, ask.platform)
-          cellHashes(ask, dependency, ClasspathScope.Compile, dependencies, dropStandardLibrary = false)
+        case (Left(gap), _)     => Left(gap)
+        case (Right(acc), cell) =>
+          val dependencies = Dep.select(cell.module.dependencies, ask.platform)
+          cellHashes(ask, cell.module, cell.version, ClasspathScope.Compile, dependencies, dropStandardLibrary = false)
             .map(found => acc ++ found)
       .map(found => found.distinct.filterNot(own.contains))
 
   /** A missing file adds no line. [[ApiDigest.empty]] would claim this upstream defined no classes. */
-  private def upstreamApis(repo: Path, ask: SuiteAsk): Either[CoverGap, List[String]] =
-    Module
-      .chain(ask.module, ask.modules, ask.platform)
+  private def upstreamApis(ask: SuiteAsk): Either[CoverGap, List[String]] =
+    ask.upstream
       .foldLeft[Either[CoverGap, List[String]]](Right(Nil)):
-        case (Left(gap), _)           => Left(gap)
-        case (Right(acc), dependency) =>
-          apiLine(repo, dependency.name, ask.version, ask.platform).map:
+        case (Left(gap), _)     => Left(gap)
+        case (Right(acc), cell) =>
+          apiLine(cell, ask.platform).map:
             case None       => acc
             case Some(line) => acc :+ line
 
-  private def apiLine(
-      repo: Path,
-      name: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-  ): Either[CoverGap, Option[String]] =
-    GraphCompile.analysisDirOf(GraphCompile.classesDir(repo, name, version, platform)) match
+  private def apiLine(cell: UpstreamCell, platform: Platform): Either[CoverGap, Option[String]] =
+    val name    = cell.module.name
+    val version = cell.version
+    GraphCompile.analysisDirOf(cell.classes) match
       case None      => Left(CoverGap.NoApi(name, version, platform))
       case Some(dir) =>
         val path = dir.resolve(ApiDigest.fileName)
@@ -132,12 +128,13 @@ private[histos] object SuiteCover:
   private def cellHashes(
       ask: SuiteAsk,
       module: Module,
+      version: ScalaVersion,
       scope: ClasspathScope,
       dependencies: List[Dep],
       dropStandardLibrary: Boolean,
   ): Either[CoverGap, List[Sha256]] =
     ask.lock.cells.find(cell =>
-      cell.module == module.name && cell.scalaVersion == ask.version && cell.platform == ask.platform && cell.scope == scope
+      cell.module == module.name && cell.scalaVersion == version && cell.platform == ask.platform && cell.scope == scope
     ) match
       case Some(cell) =>
         val kept =
@@ -145,7 +142,7 @@ private[histos] object SuiteCover:
           else cell.artifacts
         Right(kept.map(_.sha256))
       case None if dependencies.nonEmpty =>
-        Left(CoverGap.Absent(module.name, ask.version, ask.platform, scope))
+        Left(CoverGap.Absent(module.name, version, ask.platform, scope))
       case None => Right(Nil)
 
   private def classpath(module: Module, platform: Platform): (List[Dep], ClasspathScope) =

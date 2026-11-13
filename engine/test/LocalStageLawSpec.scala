@@ -25,6 +25,8 @@ import histos.{
 
 import java.nio.file.{Files, Path}
 
+import scala.jdk.CollectionConverters.*
+
 import zio.*
 import zio.test.*
 
@@ -202,6 +204,54 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   sources == List(OnDisk(true, true, true)),
                   javadoc == List(OnDisk(true, true, true)),
                   text.contains("Main-Class: Hello\r\n"),
+                )
+              }
+            }
+          }
+        }
+      }
+    ,
+    test("an assembly over an older upstream packs the classes of that upstream's own cell"):
+      ZIO.scoped {
+        Workspace.work("histos-local-older").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val newest = closure.scalaVersion
+                val maven  = repo.resolve("maven")
+                val store  = repo.resolve("store")
+                for
+                  older <- closure.previous
+                  base = module("base", Jvm)(older)
+                  pack = module("pack", Jvm)(newest).dependsOn(base).assembly(MainClass("Hello"))
+                  graph <- ZIO.fromEither(
+                    Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(pack)), base, pack)
+                  )
+                  _ <- LawGit.ready(repo)
+                  _ <- Workspace.writeString(
+                    repo.resolve("base").resolve("src").resolve("main").resolve("scala").resolve("Base.scala"),
+                    "object Base:\n  def ready: Int = 1\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("pack").resolve("src").resolve("main").resolve("scala").resolve("Hello.scala"),
+                    "object Hello:\n  def main(args: Array[String]): Unit = println(Base.ready)\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock
+                      .render(closure.pinningAt(ProjectName("base") -> older, ProjectName("pack") -> newest)),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
+                    .either
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  entries <- jarEntries(found.toOption.toList.flatMap(_.modules.flatMap(_.jar.toList)))
+                yield assertTrue(
+                  found.map(_.modules.map(_.artifact)) == Right(List("pack")),
+                  entries.contains("Base.class"),
+                  entries.contains("Hello.class"),
                 )
               }
             }
@@ -414,6 +464,17 @@ object LocalStageLawSpec extends ZIOSpecDefault:
           finally zip.close()
         }.orDie
       case _ => ZIO.succeed(None)
+
+  /** The entry names of the one jar in `paths`, or none. */
+  private def jarEntries(paths: List[Path]): UIO[Set[String]] =
+    paths match
+      case path :: Nil =>
+        ZIO.attemptBlocking {
+          val zip = new java.util.zip.ZipFile(path.toFile)
+          try zip.entries().asScala.map(_.getName).toSet
+          finally zip.close()
+        }.orDie
+      case _ => ZIO.succeed(Set.empty)
 
   private def manifestOf(found: PublishOutput): UIO[String] =
     found.modules.flatMap(_.jar.toList) match

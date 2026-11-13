@@ -2,6 +2,7 @@ package histos
 
 import histos.doc.DocClasspath
 import histos.jdk.{Sha256, Sha256Digest}
+import histos.preview.QuickAnswer
 import histos.program.ProgramFeed
 import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCell, Resolve, ResolveError, ToolRole}
 import histos.testrun.{TestFeed, TestMode, TestStatus}
@@ -166,6 +167,74 @@ object ScenarioSpec extends ZIOSpecDefault:
             starts == 2,
             docs == app.map(compiled => Right(compiled.classes :: jars.map(_.path) ++ List(libClasses))),
           )
+    ,
+    test("a program over an older upstream runs on the classes and lock jars of that upstream's own cell"):
+      ZIO.scoped:
+        for
+          newest  <- locked
+          older   <- ZIO.serviceWithZIO[CompilerClosure](_.previous)
+          closure <- ZIO.service[CompilerClosure]
+          base = module("lib", Jvm)(older)
+          built <- ZIO.fromEither(
+            Projects.locked(base, module("app", Jvm)(newest).dependsOn(base).main(MainClass("demo.Run")))
+          )
+          tasty = tastyCore(closure.lock, older)
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          cells = List(cell(ProjectName("lib"), older, tasty), cell(ProjectName("app"), newest, Nil))
+          _ <- checkout.write(
+            "dependencies.lock",
+            DependencyLock.render(DependencyLock(cells, tools = closure.lock.tools)),
+          )
+          _    <- checkout.write("lib/src/main/scala/demo/Reader.scala", reader)
+          _    <- checkout.write("app/src/main/scala/demo/Run.scala", runs)
+          seen <- checkout.run("app").runCollect.timeout(60.seconds).either
+        yield assertTrue(
+          tasty.nonEmpty,
+          seen.map(_.map(_.collect { case ProgramFeed.Out(text) => text })) ==
+            Right(Some(Chunk("dotty.tools.tasty.TastyReader"))),
+          seen.exists(_.exists(_.exists { case ProgramFeed.Exited(_, _, _, code) => code == 0; case _ => false })),
+        )
+    @@ TestAspect.withLiveClock,
+    test("a quick record over an older upstream moves when that upstream gains a public method the suite never calls"):
+      ZIO.scoped:
+        for
+          newest   <- locked
+          older    <- ZIO.serviceWithZIO[CompilerClosure](_.previous)
+          built    <- ZIO.fromEither(upstreamAt(older, newest))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          _        <- writeUpstream(checkout)
+          first    <- checkout.test(TestMode.Quick)
+          hit      <- checkout.test(TestMode.Quick)
+          _        <- checkout.write("core/src/main/scala/demo/Other.scala", widened)
+          signed   <- checkout.test(TestMode.Quick)
+        yield assertTrue(
+          statuses(first) == List(TestStatus.Passed),
+          out(first).contains("alpha 1 /api/v1/users"),
+          cached(hit) == List("demo.Foo"),
+          statuses(signed) == List(TestStatus.Passed),
+          cached(signed).isEmpty,
+        )
+    ,
+    test("a preview of a quick hit over an older upstream names the suite a skip"):
+      ZIO.scoped:
+        for
+          newest   <- locked
+          older    <- ZIO.serviceWithZIO[CompilerClosure](_.previous)
+          built    <- ZIO.fromEither(upstreamAt(older, newest))
+          scenario <- Scenario.open
+          checkout <- scenario.checkout(built)
+          _        <- writeUpstream(checkout)
+          first    <- checkout.test(TestMode.Quick)
+          modules = built.projects.collect { case found: Module => found }
+          answer <- ZIO.foreach(modules.find(_.name == ProjectName("app")))(app =>
+            QuickAnswer.read(checkout.root, app, modules, newest, Platform.Jvm, built)
+          )
+        yield assertTrue(
+          statuses(first) == List(TestStatus.Passed),
+          answer == Some(QuickAnswer.Named(List("demo.Foo"), Nil, Nil)),
+        )
     ,
     test("an upstream comment keeps the quick stamp, and a new public method the suite never calls moves it"):
       ZIO.scoped:
@@ -387,6 +456,11 @@ object ScenarioSpec extends ZIOSpecDefault:
   private def upstream(version: ScalaVersion): Either[BuildError, ProjectGraph] =
     val core = module("core", Jvm)(version)
     Projects.locked(core, module("app", Jvm)(version).dependsOn(core).test(TestMain("demo.Foo")))
+
+  /** [[upstream]] with `core` at `older` and `app` at `newest`. */
+  private def upstreamAt(older: ScalaVersion, newest: ScalaVersion): Either[BuildError, ProjectGraph] =
+    val core = module("core", Jvm)(older)
+    Projects.locked(core, module("app", Jvm)(newest).dependsOn(core).test(TestMain("demo.Foo")))
 
   /** `Lib` and `Other` in `core`. `Foo` calls `Lib` and never names `Other`. */
   private def writeUpstream(checkout: Checkout): IO[IoFailure, Unit] =
@@ -640,5 +714,21 @@ object ScenarioSpec extends ZIOSpecDefault:
       |object Foo:
       |  def main(args: Array[String]): Unit =
       |    println(Lib.word)
+      |""".stripMargin
+
+  /** Names a class from `lib`'s locked `tasty-core_3` jar, so the run fails without that jar. */
+  private val reader =
+    """package demo
+      |
+      |object Reader:
+      |  def name: String = classOf[dotty.tools.tasty.TastyReader].getName
+      |""".stripMargin
+
+  private val runs =
+    """package demo
+      |
+      |object Run:
+      |  def main(args: Array[String]): Unit =
+      |    println(Reader.name)
       |""".stripMargin
 end ScenarioSpec

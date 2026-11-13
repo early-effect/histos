@@ -9,7 +9,7 @@ import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
 import histos.testrun.{ModuleTestError, TestCompile}
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, JvmCompile}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, JvmCompile, UpstreamCells}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -123,7 +123,6 @@ private[load] object PluginCells:
               compiled,
               lock,
               repositories,
-              Dep.select(cell.module.dependencies, cell.platform),
             )
             .provideSome[Resolve](tools)
             .mapError(error => PluginFault.Task(failed(error.message)))
@@ -297,10 +296,17 @@ private[load] object PluginCells:
       lock: DependencyLock,
       repositories: Repositories,
   ): ZIO[Resolve & LockedTools, PluginFault, List[Path]] =
-    val upstream = Module
-      .chain(cell.module, modules, cell.platform)
-      .map(dependency => classes(repo, dependency.name, cell))
     for
+      read <- UpstreamCells
+        .read(
+          cell.module,
+          Module.chain(cell.module, modules, cell.platform),
+          cell.version,
+          cell.platform,
+          UpstreamCells.declared(repo, modules, cell.platform),
+        )
+        .mapError(PluginFault.Compiled(_))
+      upstream = read.map(_.classes)
       fetched <- materialize(
         cell,
         lock,
@@ -309,22 +315,14 @@ private[load] object PluginCells:
         cell.module.dependencies,
       )
       library    <- standardLibrary(cell).mapError(PluginFault.Tested(_))
-      transitive <- ZIO.foreach(Module.chain(cell.module, modules, cell.platform)): dependency =>
-        histos.zinc.UpstreamCells.chosen(cell.version, dependency, cell.platform, modules) match
-          case None =>
-            ZIO.fail(
-              PluginFault.Tested(
-                ModuleTestError.MissingUpstream(cell.module.name, dependency.name, cell.version)
-              )
-            )
-          case Some(chosen) =>
-            materialize(
-              Cell(dependency, chosen, cell.platform),
-              lock,
-              repositories,
-              ClasspathScope.Compile,
-              dependency.dependencies,
-            )
+      transitive <- ZIO.foreach(read): found =>
+        materialize(
+          Cell(found.module, found.version, cell.platform),
+          lock,
+          repositories,
+          ClasspathScope.Compile,
+          found.module.dependencies,
+        )
       jars =
         (fetched ++ transitive.flatten.distinct.filterNot(fetched.toSet.contains))
           .filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))

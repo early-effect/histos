@@ -18,7 +18,7 @@ import histos.resolve.{
   ResolveError,
 }
 import histos.workspace.Workspace
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError, UpstreamCell, UpstreamCells}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -56,24 +56,27 @@ object Assemble:
           report,
         )
         .mapError(AssembleError.Compile(_))
-      classes <- ZIO.fromEither(
-        directories(ordered, compiled, app.versions.first)
-      )
-      jars <- artifacts(
-        ordered,
-        app.versions.first,
-        BuildResolvers(graph.resolvers),
-      )
-      library <- JvmCompile
-        .runtime(app.versions.first)
-        .mapError(error => AssembleError.Toolchain(error))
-        .provideSome[Resolve](
-          zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
+      version = app.versions.first
+      tools   = zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
+      upstream <- UpstreamCells
+        .read(
+          app,
+          Module.chain(app, graph.projects.collect { case found: Module => found }, Platform.Jvm),
+          version,
+          Platform.Jvm,
+          UpstreamCells.compiled(compiled),
         )
-      apiClasses <- ZIO.fromEither(
-        apiDirectory(api.name, compiled, app.versions.first)
-      )
-      assembled <- pack(
+        .mapError(AssembleError.Compile(_))
+        .provideSome[Resolve](tools)
+      cells <- ZIO.fromEither(placed(app, ordered, upstream, compiled, version))
+      classes = cells.map(_.classes)
+      jars    <- artifacts(cells, BuildResolvers(graph.resolvers))
+      library <- JvmCompile
+        .runtime(version)
+        .mapError(error => AssembleError.Toolchain(error))
+        .provideSome[Resolve](tools)
+      apiClasses <- ZIO.fromEither(apiDirectory(api.name, cells, version))
+      assembled  <- pack(
         classes,
         library ++ jars.filterNot(library.contains),
         apiClasses,
@@ -114,37 +117,45 @@ object Assemble:
               closure(next, modules).map(deeper => seen ++ deeper)
       .map(dependencies => (module :: dependencies).distinctBy(_.name))
 
-  private def directories(
+  /** `app`'s own cell, then each module it depends on at the cell `upstream` read, in `ordered` order. */
+  private def placed(
+      app: Module,
       ordered: List[Module],
+      upstream: List[UpstreamCell],
       compiled: List[CompiledCell],
       version: ScalaVersion,
-  ): Either[AssembleError, List[Path]] =
-    val cells = compiled.filter(_.version == version)
-    ordered.foldLeft[Either[AssembleError, List[Path]]](Right(Nil)): (acc, module) =>
-      acc.flatMap: paths =>
-        cells.find(_.module == module.name) match
-          case Some(cell) => Right(paths :+ cell.classes)
+  ): Either[AssembleError, List[UpstreamCell]] =
+    ordered.foldLeft[Either[AssembleError, List[UpstreamCell]]](Right(Nil)): (acc, module) =>
+      acc.flatMap: cells =>
+        val found =
+          if module.name == app.name then
+            compiled
+              .find(cell => cell.module == app.name && cell.version == version && cell.platform == Platform.Jvm)
+              .map(cell => UpstreamCell(app, version, cell.classes))
+          else upstream.find(_.module.name == module.name)
+        found match
+          case Some(cell) => Right(cells :+ cell)
           case None       => Left(AssembleError.NoClasses(module.name, version))
 
   private def apiDirectory(
       api: ProjectName,
-      compiled: List[CompiledCell],
+      cells: List[UpstreamCell],
       version: ScalaVersion,
   ): Either[AssembleError, Path] =
-    compiled.find(cell => cell.module == api && cell.version == version) match
+    cells.find(_.module.name == api) match
       case Some(cell) => Right(cell.classes)
       case None       => Left(AssembleError.NoClasses(api, version))
 
+  /** Each cell's runtime jars, at that cell's own version. */
   private def artifacts(
-      ordered: List[Module],
-      version: ScalaVersion,
+      cells: List[UpstreamCell],
       repositories: Repositories,
   ): ZIO[Resolve & ResolutionService, AssembleError, List[Path]] =
-    ZIO.foldLeft(ordered)(List.empty[Path]): (acc, module) =>
+    ZIO.foldLeft(cells)(List.empty[Path]): (acc, placed) =>
       val cell = ResolveCell(
-        module.name,
-        Dep.runtime(module.dependencies, Platform.Jvm),
-        version,
+        placed.module.name,
+        Dep.runtime(placed.module.dependencies, Platform.Jvm),
+        placed.version,
         Platform.Jvm,
         repositories,
         ClasspathScope.Compile,

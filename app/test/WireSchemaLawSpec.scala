@@ -1124,7 +1124,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "BadDependency(organization,name,revision) | Credentials() | Io(path) | " +
               "Stock(message) | Classpath(error) | Runtime(error) | " +
               "Pack(module,version,platform,error) | " +
-              "MissingClasses(module,version,platform) | MissingClient(ship,path)"
+              "MissingClient(ship,path)"
           ),
           """{"NoOrganization":{}}""",
           histos.publish.LocalPublishError.NoOrganization,

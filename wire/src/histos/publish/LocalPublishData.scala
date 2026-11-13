@@ -51,7 +51,6 @@ enum LocalPublishError:
       platform: Platform,
       error: AssemblyError,
   )
-  case MissingClasses(module: ProjectName, version: ScalaVersion, platform: Platform)
   case MissingClient(ship: ShipName, path: Path)
 
   def message: String = this match
@@ -91,8 +90,6 @@ enum LocalPublishError:
     case Runtime(error)                         => error.message
     case Pack(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
-    case MissingClasses(module, version, platform) =>
-      s"'${module.value}' has no ${version.value} ${platform.token} classes"
     case MissingClient(ship, path) =>
       s"${ship.value} builds clients on snapshots, and $path is not a file. The snapshots workflow downloads each client there."
 

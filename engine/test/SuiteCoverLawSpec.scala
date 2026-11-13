@@ -15,7 +15,7 @@ import histos.resolve.{
 }
 import histos.toolchain.{RuntimeIdentity, Runtimes}
 import histos.workspace.Workspace
-import histos.zinc.{ApiDigest, CompilerRequests, GraphCompile}
+import histos.zinc.{ApiDigest, CompilerRequests, GraphCompile, UpstreamCell}
 import histos.{
   Dep,
   DepKind,
@@ -88,23 +88,19 @@ object SuiteCoverLawSpec extends ZIOSpecDefault:
       val token   = SuiteCover.tokenHash(jdk).value
       val refused = NativeOrigin.Refused(NativeToolchainError.Empty)
       assertTrue(
-        SuiteCover.stored(Path.of("repo"), ask(bare, List(bare), scala3, Platform.Js, lock, jdk, None)) ==
+        SuiteCover.stored(ask(bare, List(bare), scala3, Platform.Js, lock, jdk, None)) ==
           Left(CoverGap.NoNode),
         SuiteCover
-          .stored(Path.of("repo"), ask(bare, List(bare), scala3, Platform.Js, DependencyLock(Nil), jdk, Some(node))) ==
+          .stored(ask(bare, List(bare), scala3, Platform.Js, DependencyLock(Nil), jdk, Some(node))) ==
           Left(CoverGap.Locked(ResolveError.NoTool(compile.id))),
-        SuiteCover.stored(
-          Path.of("repo"),
-          ask(bare, List(bare), scala3, Platform.Native, DependencyLock(Nil), jdk, None, refused),
-        ) ==
+        SuiteCover.stored(ask(bare, List(bare), scala3, Platform.Native, DependencyLock(Nil), jdk, None, refused)) ==
           Left(CoverGap.Locked(ResolveError.NativeOrigin(NativeToolchainError.Empty))),
         SuiteCover
-          .stored(Path.of("repo"), ask(app, List(core, app), scala3, Platform.Native, lock, jdk, None, refused)) ==
+          .stored(ask(app, List(core, app), scala3, Platform.Native, lock, jdk, None, refused)) ==
           Left(CoverGap.Absent(appName, scala3, Platform.Native, ClasspathScope.Test)),
-        SuiteCover.stored(Path.of("repo"), ask(app, List(core, app), scala213, Platform.Jvm, lock, jdk, None)) ==
+        SuiteCover.stored(ask(app, List(core, app), scala213, Platform.Jvm, lock, jdk, None)) ==
           Left(CoverGap.Locked(ResolveError.NoTool(sem.id))),
         SuiteCover.stored(
-          Path.of("repo"),
           ask(
             bare,
             List(bare),
@@ -114,10 +110,10 @@ object SuiteCoverLawSpec extends ZIOSpecDefault:
             jdk,
             None,
             refused,
-          ),
+          )
         ) ==
           Right(SuiteStamp.Cover(List(finger.value, token), Nil, Runtimes.identityToken(jdk), Nil, Nil)),
-        SuiteCover.stored(Path.of("repo"), ask(app, List(core, app), scala3, Platform.Jvm, lock, jdk, None)) ==
+        SuiteCover.stored(ask(app, List(core, app), scala3, Platform.Jvm, lock, jdk, None)) ==
           Right(
             SuiteStamp.Cover(
               List(staging.value, kit.value, finger.value, token),
@@ -150,17 +146,17 @@ object SuiteCoverLawSpec extends ZIOSpecDefault:
         .flatMap: repo =>
           val classes  = GraphCompile.classesDir(repo, coreName, scala3, Platform.Jvm)
           val analysis = GraphCompile.analysisDirOf(classes)
-          val asked    = ask(app, List(core, app), scala3, Platform.Jvm, lock, jdk, None)
-          val missing  = SuiteCover.stored(repo, asked)
+          val asked    = ask(app, List(core, app), scala3, Platform.Jvm, lock, jdk, None, repo = repo)
+          val missing  = SuiteCover.stored(asked)
           val write    = analysis match
             case Some(dir) =>
               val path = dir.resolve(ApiDigest.fileName)
               Workspace.writeString(path, "nope\n") *>
                 ZIO
-                  .succeed(SuiteCover.stored(repo, asked))
+                  .succeed(SuiteCover.stored(asked))
                   .flatMap: unreadable =>
                     Workspace.writeString(path, digest.value + "\n") *>
-                      ZIO.succeed(SuiteCover.stored(repo, asked)).map(readable => (true, unreadable, readable))
+                      ZIO.succeed(SuiteCover.stored(asked)).map(readable => (true, unreadable, readable))
             case None => ZIO.succeed((false, missing, missing))
           write.map: (defined, unreadable, readable) =>
             assertTrue(
@@ -180,8 +176,12 @@ object SuiteCoverLawSpec extends ZIOSpecDefault:
       runtime: RuntimeIdentity,
       nodeRuntime: Option[RuntimeIdentity],
       native: NativeOrigin = NativeOrigin.Central,
+      repo: Path = Path.of("repo"),
   ): SuiteAsk =
-    SuiteAsk(module, modules, version, platform, lock, repos, ToolCatalog.default, native, runtime, nodeRuntime)
+    val upstream = Module
+      .chain(module, modules, platform)
+      .map(item => UpstreamCell(item, version, GraphCompile.classesDir(repo, item.name, version, platform)))
+    SuiteAsk(module, upstream, version, platform, lock, repos, ToolCatalog.default, native, runtime, nodeRuntime)
 
   private def module(name: ProjectName, dependencies: List[Dep], tests: List[Dep], upstream: List[ProjectDep]): Module =
     Module(

@@ -126,8 +126,68 @@ object AssembleLawSpec extends ZIOSpecDefault:
             }
           }
         }
+      }
+    ,
+    test("an app over an older api packs the classes of api's own cell"):
+      ZIO.scoped {
+        Workspace.work("histos-assemble-older").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[CompilerClosure] { closure =>
+                val newest      = closure.scalaVersion
+                val destination = repo.resolve("dist").resolve("histos.jar")
+                val run         =
+                  for
+                    older <- closure.previous
+                    _     <- Workspace.writeString(
+                      repo.resolve("api").resolve("src").resolve("main").resolve("scala").resolve("Api.scala"),
+                      "package histos.cli\nobject ApiLib:\n  def ready: Int = 1\n",
+                    )
+                    _ <- Workspace.writeString(
+                      repo.resolve("app").resolve("src").resolve("main").resolve("scala").resolve("Main.scala"),
+                      "package histos.cli\nobject Main:\n  def main(args: Array[String]): Unit = println(ApiLib.ready)\n",
+                    )
+                    assembled <- Assemble
+                      .run(
+                        repo,
+                        graphAt(older, newest),
+                        jdk,
+                        machine.native,
+                        destination,
+                        _ => ZIO.unit,
+                      )
+                      .either
+                      .provideSomeLayer[Resolve](
+                        ResolutionService.pinned(closure.pinningAt(api -> older, app -> newest)) ++
+                          ZLayer.succeed(ContentStore.in(repo.resolve("store")))
+                      )
+                    packed <- ZIO.attemptBlocking(readJar(destination)).orDie
+                  yield assertTrue(
+                    assembled.map(_.path) == Right(destination),
+                    packed.contains("histos/cli/ApiLib.class"),
+                    packed.contains("histos/cli/Main.class"),
+                    packed.contains(Assemble.ApiEntry),
+                  )
+                run
+              }
+            }
+          }
+        }
       },
   ).provideSomeLayerShared[zio.test.TestEnvironment & Scope](CompilerClosure.layer) @@ TestAspect.withLiveSystem
+
+  /** `api` at `older`, and `app` at `newest` over it. */
+  private def graphAt(older: ScalaVersion, newest: ScalaVersion): ProjectGraph =
+    val apiModule =
+      Module(api, Platforms(Platform.Jvm, Nil), ScalaVersions(older, Nil), Nil, Nil, SourcePos("api.scala", 1, 1))
+    ProjectGraph.trusted(
+      List(apiModule, appModule(newest, List(ProjectDep(api, None)))),
+      Splits.aggregate,
+      Catalog.empty,
+      None,
+      Nil,
+      resolution = Resolution.Lock,
+    )
 
   private def empty: ProjectGraph =
     ProjectGraph.trusted(Nil, Splits.aggregate, Catalog.empty, None, Nil, resolution = Resolution.Lock)

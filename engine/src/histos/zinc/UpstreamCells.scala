@@ -44,18 +44,7 @@ private[histos] object UpstreamCells:
     else if isScala3(depender) then cells.filter((_, item, _) => isScala3(item))
     else Nil
 
-  /** The cell compile would put on the classpath. Exact wins. Otherwise the newest declared version this compiler can
-    * read: same series, not a newer minor.
-    */
-  def chosen(
-      depender: ScalaVersion,
-      upstream: Module,
-      platform: Platform,
-      modules: List[Module],
-  ): Option[ScalaVersion] =
-    val declared = modules.flatMap(item => item.versions.all.map(version => (item.name, version, platform))).toSet
-    newestAtMost(depender, required(depender, upstream, platform, declared))
-
+  /** The newest candidate no newer than `depender`. */
   private def newestAtMost(depender: ScalaVersion, candidates: List[Cell]): Option[ScalaVersion] =
     candidates
       .filter((_, item, _) => atMost(item, depender))
@@ -72,13 +61,18 @@ private[histos] object UpstreamCells:
           (module.name, version, platform) -> GraphCompile.classesDir(repo, module.name, version, platform)
       .toMap
 
+  /** The cells a compile wrote, at the classes directory each one wrote. */
+  def compiled(cells: List[CompiledCell]): Map[Cell, Path] =
+    cells.map(cell => (cell.module, cell.version, cell.platform) -> cell.classes).toMap
+
   /** The cell of each upstream in `chain` that the `version` cell of `module` reads, from `cells`. Compile, its recall,
-    * and every classpath built for the cell read this, so they read the same cells.
+    * BSP, scaladoc, assembly, publish, run, plugin cells, and tests read this, so they read the same cells.
     *
     * An exact cell wins. A 2.13 cell reads the newest declared 2.13 cell. A Scala 3 cell reads the newest TASTy header
     * `dotty.tools.tasty.TastyFormat.isVersionCompatible` accepts. The three compiler numbers come from this cell's
-    * `tasty-core`, not from the compiler that built Histos. While no candidate holds TASTy yet, as for an editor import
-    * before the first compile or an upstream with no main sources, it reads [[chosen]]'s cell.
+    * `tasty-core`, not from the compiler that built Histos, and that reader opens only when some upstream has Scala 3
+    * cells and none at `version`. While no candidate holds TASTy yet, as for an editor import before the first compile
+    * or an upstream with no main sources, it reads the newest declared cell no newer than `version`.
     */
   def read(
       module: Module,
@@ -88,8 +82,12 @@ private[histos] object UpstreamCells:
       cells: Map[Cell, Path],
   ): ZIO[LockedTools, GraphCompileError, List[UpstreamCell]] =
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
-    val exact  = chain.forall(dependency => cells.contains((dependency.name, version, platform)))
-    if !isScala3(version) || exact then each(module, chain, version, platform, cells, None)
+    val judged = chain.exists: dependency =>
+      required(version, dependency, platform, cells.keySet) match
+        case Nil                  => false
+        case (_, found, _) :: Nil => found != version
+        case _ :: _ :: _          => true
+    if !isScala3(version) || !judged then each(module, chain, version, platform, cells, None)
     else
       ZIO.scoped:
         ZIO

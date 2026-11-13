@@ -702,7 +702,6 @@ object CodecSamples:
     LocalPublishError.Classpath(found),
     LocalPublishError.Runtime(noSources),
     LocalPublishError.Pack(core, scala3, Platform.Jvm, AssemblyError.NoClasses),
-    LocalPublishError.MissingClasses(core, scala3, Platform.Native),
     LocalPublishError.MissingClient(ship, path),
   )
 

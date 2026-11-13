@@ -45,6 +45,8 @@ import histos.zinc.{
   SemanticDb,
   Sources,
   ToolchainMiss,
+  UpstreamCell,
+  UpstreamCells,
 }
 import histos.pack.{AssetSync, MainClass, MainClassError, Resources}
 import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
@@ -128,29 +130,27 @@ private[histos] object TestCompile:
       }
       .mapError(_ => ModuleTestError.Root(repo))
 
-  private[testrun] def upstreamClasses(
+  /** Each upstream cell's classes directory, or its measured copy under coverage. A directory no compile wrote is a
+    * missing upstream.
+    */
+  private def upstreamClasses(
       repo: Path,
       module: Module,
-      modules: List[Module],
-      version: ScalaVersion,
+      upstream: List[UpstreamCell],
       platform: Platform,
-      coverage: Option[histos.coverage.CoverageCompile] = None,
+      coverage: Option[histos.coverage.CoverageCompile],
   ): IO[ModuleTestError, List[Path]] =
-    ZIO.foreach(Module.chain(module, modules, platform)): dependency =>
-      histos.zinc.UpstreamCells.chosen(version, dependency, platform, modules) match
-        case None =>
-          ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, version))
-        case Some(chosen) =>
-          val measured = coverage.isDefined && histos.coverage.Cell.measures(chosen, platform)
-          val path     =
-            if measured then histos.coverage.Flags.classesDir(repo, dependency.name, chosen, platform)
-            else GraphCompile.classesDir(repo, dependency.name, chosen, platform)
-          ZIO
-            .attemptBlocking(Files.isDirectory(path))
-            .mapError(_ => ModuleTestError.Root(path))
-            .flatMap: found =>
-              if found then ZIO.succeed(path)
-              else ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, chosen))
+    ZIO.foreach(upstream): cell =>
+      val measured = coverage.isDefined && histos.coverage.Cell.measures(cell.version, platform)
+      val path     =
+        if measured then histos.coverage.Flags.classesDir(repo, cell.module.name, cell.version, platform)
+        else cell.classes
+      ZIO
+        .attemptBlocking(Files.isDirectory(path))
+        .mapError(_ => ModuleTestError.Root(path))
+        .flatMap: found =>
+          if found then ZIO.succeed(path)
+          else ZIO.fail(ModuleTestError.MissingUpstream(module.name, cell.module.name, cell.version))
 
   private[testrun] final case class Fetched(
       paths: List[Path],
@@ -161,7 +161,8 @@ private[histos] object TestCompile:
   /** Compiler library first, then locked jars. The first jar on the classpath defines `scala.*`.
     */
   /** `hashes` are this module's locked jars. `upstream` are compile jars of upstream modules, without the hashes
-    * already in `hashes`. `classDirs` contribute their API digests, not their class bytes.
+    * already in `hashes`. `classDirs` contribute their API digests, not their class bytes. `cells` are the upstream
+    * cells [[UpstreamCells.read]] picked.
     */
   private[histos] final case class Linked(
       paths: List[Path],
@@ -169,6 +170,7 @@ private[histos] object TestCompile:
       upstream: List[Sha256],
       classDirs: List[Path],
       permitted: List[Path],
+      cells: List[UpstreamCell],
   )
 
   private[histos] def runtimeClasspath(
@@ -188,24 +190,19 @@ private[histos] object TestCompile:
         lock,
         repositories,
       ).mapError(ModuleTestError.Lock(_))
-      upstream <- upstreamClasses(
-        repo,
-        module,
-        modules,
-        cell.version,
-        cell.platform,
-        coverage,
-      )
-      libraries <- dependencyJars(
-        module,
-        modules,
-        cell.version,
-        cell.platform,
-        lock,
-        repositories,
-      )
-      library <- standardLibrary(cell)
-      api     <-
+      cells <- UpstreamCells
+        .read(
+          module,
+          Module.chain(module, modules, cell.platform),
+          cell.version,
+          cell.platform,
+          UpstreamCells.declared(repo, modules, cell.platform),
+        )
+        .mapError(ModuleTestError.Compile(_))
+      upstream  <- upstreamClasses(repo, module, cells, cell.platform, coverage)
+      libraries <- dependencyJars(cells, cell.platform, lock, repositories)
+      library   <- standardLibrary(cell)
+      api       <-
         if fetched.needsHost then histos.zinc.ScalacClasspath.hostApi(repo).mapBoth(ModuleTestError.Compile(_), Some(_))
         else ZIO.none
       drop = dropJvmLibrary(cell.platform)
@@ -230,6 +227,7 @@ private[histos] object TestCompile:
       upstreamHashes,
       cell.classes :: upstream,
       api.toList,
+      cells,
     )
 
   /** A resolved JVM `scala-library` is a second copy of the compiler runtime. JavaScript supplies its own library list.
@@ -413,22 +411,14 @@ private[histos] object TestCompile:
 
   /** Compile jars of `dependsOn`, not their tests. The child runs those classes.
     */
-  private[testrun] def dependencyJars(
-      module: Module,
-      modules: List[Module],
-      version: ScalaVersion,
+  private def dependencyJars(
+      upstream: List[UpstreamCell],
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
   ): ZIO[Resolve & LockedTools, ModuleTestError, List[ResolvedArtifact]] =
-    val found = Module.chain(module, modules, platform)
     ZIO
-      .foreach(found): dependency =>
-        histos.zinc.UpstreamCells.chosen(version, dependency, platform, modules) match
-          case None =>
-            ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, version))
-          case Some(chosen) =>
-            compileArtifacts(dependency, chosen, platform, lock, repositories)
+      .foreach(upstream)(cell => compileArtifacts(cell.module, cell.version, platform, lock, repositories))
       .map(_.flatten.distinct)
 
   private[testrun] def compileArtifacts(

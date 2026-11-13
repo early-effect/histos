@@ -886,7 +886,6 @@ object MessageLawSpec extends ZIOSpecDefault:
           missing,
           sources,
           "'core' 3.10.0 jvm failed to assemble\nan assembly needs a classes directory",
-          "'core' has no 3.10.0 native classes",
           "histos builds clients on snapshots, and /work/repo is not a file. The snapshots workflow downloads each client there.",
         ),
         localPublishes.map(error => noted(error.diagnose)) == List(
@@ -913,7 +912,6 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("resolve.not-found", "histos resolve --update"),
-          ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),

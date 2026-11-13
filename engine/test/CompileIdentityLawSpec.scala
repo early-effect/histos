@@ -217,29 +217,34 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
                 ),
     ),
     suite("upstream, sources, and product paths")(
-      test("an exact cell wins, and a newer minor is not a fallback"):
-        val upstream = mod("core", scala38, scala39, scala310)
-        val old      = mod("core", scala21316, scala21317, scala21318)
-        assertTrue(
-          UpstreamCells.chosen(scala39, upstream, Platform.Jvm, List(upstream)).contains(scala39),
-          UpstreamCells
-            .chosen(scala39, upstream, Platform.Jvm, List(mod("core", scala38, scala310)))
-            .contains(scala38),
-          UpstreamCells.chosen(scala37, upstream, Platform.Jvm, List(upstream)).isEmpty,
-          UpstreamCells.chosen(scala21317, old, Platform.Jvm, List(old)).contains(scala21317),
-          UpstreamCells
-            .chosen(
-              scala21316,
-              mod("core", scala21317, scala21318),
-              Platform.Jvm,
-              List(mod("core", scala21317, scala21318)),
-            )
-            .isEmpty,
-          UpstreamCells.chosen(scala21318, old, Platform.Jvm, List(old)).contains(scala21318),
-          UpstreamCells.chosen(scala212, old, Platform.Jvm, List(old)).isEmpty,
-          UpstreamCells.chosen(scala310, old, Platform.Jvm, List(old)).isEmpty,
-          UpstreamCells.chosen(scala310, upstream, Platform.Jvm, Nil).isEmpty,
-        )
+      test("an exact cell wins, a 2.13 cell reads the newest 2.13 patch, and a series with no cell is missing"):
+        val upstream                       = mod("core", scala38, scala39, scala310)
+        val old                            = mod("core", scala21316, scala21317, scala21318)
+        val newer                          = mod("core", scala21317, scala21318)
+        def missing(version: ScalaVersion) =
+          GraphCompileError.MissingUpstream(
+            ProjectName.trusted("app"),
+            ProjectName.trusted("core"),
+            version,
+            Platform.Jvm,
+          )
+        val program =
+          for
+            exact  <- picked(scala39, upstream, List(upstream))
+            patch  <- picked(scala21317, old, List(old))
+            ahead  <- picked(scala21316, newer, List(newer))
+            scala2 <- picked(scala212, old, List(old))
+            series <- picked(scala310, old, List(old))
+            absent <- picked(scala310, upstream, Nil)
+          yield assertTrue(
+            exact == Right(List(scala39)),
+            patch == Right(List(scala21317)),
+            ahead == Right(List(scala21318)),
+            scala2 == Left(missing(scala212)),
+            series == Left(missing(scala310)),
+            absent == Left(missing(scala310)),
+          )
+        program.provideLayer(gate)
       ,
       test("semanticdb flags follow the series, and an unknown series adds none"):
         val repo = Path.of("/repo")
@@ -465,7 +470,6 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
   )
 
   private val scala3     = ScalaVersion.trusted("3.10.0")
-  private val scala37    = ScalaVersion.trusted("3.7.0")
   private val scala38    = ScalaVersion.trusted("3.8.0")
   private val scala39    = ScalaVersion.trusted("3.9.0")
   private val scala310   = scala3
@@ -530,6 +534,21 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
       classesWritten = Some(0),
       miss = None,
     )
+
+  /** The version of `upstream`'s cell an `app` cell at `version` reads, over the cells `declared` names. No case here
+    * reads a TASTy header, so the stubbed resolver is never asked.
+    */
+  private def picked(version: ScalaVersion, upstream: Module, declared: List[Module]) =
+    UpstreamCells
+      .read(
+        mod("app", version),
+        List(upstream),
+        version,
+        Platform.Jvm,
+        UpstreamCells.declared(Path.of("/repo"), declared, Platform.Jvm),
+      )
+      .map(_.map(_.version))
+      .either
 
   private def mod(name: String, version: ScalaVersion, rest: ScalaVersion*): Module =
     Module(

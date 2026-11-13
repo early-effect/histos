@@ -43,7 +43,8 @@ private[zinc] object ScheduleCells:
   private type CellStep      =
     histos.step.HermeticStep[GraphCompile.Fed, GraphCompileError, String]
 
-  /** One step per cell. A cell's upstreams are the cells it depends on, at its own version and platform.
+  /** One step per cell. A cell's upstreams are the cells [[UpstreamCells.required]] names on its platform. `only` picks
+    * the root cells, and an upstream cell at another version still runs when a root needs it.
     */
   def goal(
       plan: CompilePlan,
@@ -57,7 +58,7 @@ private[zinc] object ScheduleCells:
     val names                        = selected.map(_.name).toSet
     val byName                       = selected.map(module => module.name -> module).toMap
     val keys                         = selected.flatMap(module => keysOf(module, only, platform))
-    val declared                     = keys.toSet
+    val declared                     = selected.flatMap(module => keysOf(module, None, platform)).toSet
     val built                        = scala.collection.mutable.Map.empty[CellKey, CellStep]
     def cell(key: CellKey): CellStep =
       built.get(key) match
