@@ -48,11 +48,13 @@ object CommandRunner:
           Ran.Exited(process.waitFor(), text.linesIterator.toList)
         }(ended(process))
 
-  /** A command that cannot start is not run. An interrupted wait ends the command, so no child outlives its fix. */
+  /** A command that cannot start is not run. A started child is ended however its run ends, including an interruption
+    * that lands before the wait begins, so no child outlives its fix.
+    */
   private def started(built: ProcessBuilder)(waited: Process => zio.Task[Ran]): UIO[Ran] =
-    ZIO
-      .attemptBlocking(built.start())
-      .foldZIO(_ => ZIO.succeed(Ran.Unstarted), process => waited(process).orDie)
+    ZIO.acquireReleaseWith(ZIO.attemptBlocking(built.start()).option)(ZIO.foreachDiscard(_)(ended)):
+      case None          => ZIO.succeed(Ran.Unstarted)
+      case Some(process) => waited(process).orDie
 
   private def ended(process: Process): UIO[Unit] =
     ZIO.succeed(process.destroyForcibly()).unit
