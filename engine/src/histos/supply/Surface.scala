@@ -10,13 +10,16 @@ import histos.doctor.{
   FixMode,
   GhAuth,
   GitHubCredential,
+  GitHubPut,
+  HistosCommand,
   JobEnv,
   Outcome,
   Probe,
   Render,
   Runner,
 }
-import histos.central.ReleaseFeed
+import histos.central.{KeyServer, ReleaseFeed}
+import histos.cli.Stdio
 import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.workflow.PinScan
@@ -26,7 +29,7 @@ import histos.ProjectGraph
 import java.nio.file.{Files, Path}
 import java.time.ZoneOffset
 
-import zio.{durationInt, Clock, IO, UIO, URIO, ZIO}
+import zio.{durationInt, Clock, IO, UIO, ULayer, URIO, ZIO, ZLayer}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -43,13 +46,20 @@ object DoctorSurface:
       verbose: Boolean,
   )
 
-  /** What the terminal doctor reads besides the environment: the registry feed, git, the terminal, the network, the
-    * token `gh` holds, and the shell a fix command runs in.
-    */
-  type Needs = ReleaseFeed & GitRead & Terminal & Net & GhAuth & Shell
+  /** What doctor reads from the host: the registry feed, git, the network, the token `gh` holds, and the keyserver. */
+  type Reads = ReleaseFeed & GitRead & Net & GhAuth & KeyServer
 
-  /** The terminal's doctor. The environment comes from `zio.System`, and the edge provides the live `Needs`. Only a
-    * `--fix` run asks the terminal, because only a fix can prompt.
+  /** What a doctor run needs from its edge: the reads, whether a person is at the terminal, and the runner a fix's
+    * histos command runs in.
+    */
+  type Needs = Reads & Stdio & CommandRunner
+
+  /** The live reads. An edge adds its own [[Stdio]] and [[CommandRunner]]. */
+  val reads: ULayer[Reads] =
+    ReleaseFeed.live ++ GitRead.live ++ ZLayer.succeed(Net.live) ++ GhAuth.live ++ KeyServer.central
+
+  /** The terminal's doctor. The environment comes from `zio.System`, a token from it or from `gh`, and every other read
+    * from `Needs`. Only a `--fix` run asks the terminal, because only a fix can prompt.
     */
   def run(
       repo: Path,
@@ -58,43 +68,12 @@ object DoctorSurface:
       machine: histos.jdk.Machine,
   ): URIO[Needs, (Int, String)] =
     for
-      env    <- zio.System.envs.orElseSucceed(Map.empty)
-      tty    <- if request.fix then ZIO.serviceWithZIO[Terminal](_.attached) else ZIO.succeed(false)
-      token  <- ZIO.serviceWithZIO[GhAuth](gh => GitHubCredential.resolve(env, gh.token))
-      net    <- ZIO.service[Net]
-      shell  <- ZIO.service[Shell]
-      result <- runWith(
-        repo,
-        graph,
-        request,
-        machine,
-        net,
-        env,
-        token,
-        tty,
-        prompt(tty),
-        line => shell.run(repo, line),
-        applySetting(net, token.map(_.value)),
-      )
-    yield result
-
-  def runWith(
-      repo: Path,
-      graph: ProjectGraph,
-      request: Request,
-      machine: histos.jdk.Machine,
-      net: Net,
-      env: Map[String, String],
-      token: Option[GitHubCredential.Token],
-      tty: Boolean,
-      ask: Fix => UIO[FixApply.Answer],
-      exec: String => UIO[Unit],
-      setting: String => UIO[Unit],
-  ): URIO[ReleaseFeed & GitRead, (Int, String)] =
-    val job        = JobEnv.from(env)
-    val credential = if request.preflight.isDefined then None else token
-    for
-      feed               <- ZIO.service[ReleaseFeed]
+      env   <- zio.System.envs.orElseSucceed(Map.empty)
+      token <- ZIO.serviceWithZIO[GhAuth](gh => GitHubCredential.resolve(env, gh.token))
+      net   <- ZIO.service[Net]
+      feed  <- ZIO.service[ReleaseFeed]
+      job        = JobEnv.from(env)
+      credential = if request.preflight.isDefined then None else token
       located            <- github(repo, net, env, credential, job, graph)
       (auth, pgp, pages) <- probes(repo, graph, request, net, env, token, located)
       report             <- Runner.run(
@@ -102,7 +81,7 @@ object DoctorSurface:
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
         checkLimit,
       )
-      written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, tty, ask, exec, setting)
+      written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, token)
     yield
       val body =
         if request.json then Render.json(report) else Render.text(repoName(repo), report, request.verbose)
@@ -117,7 +96,7 @@ object DoctorSurface:
       env: Map[String, String],
       token: Option[GitHubCredential.Token],
       located: Located,
-  ): UIO[(histos.doctor.CentralProbe.Auth, histos.doctor.PgpProbe.Hit, histos.doctor.PagesProbe.Hit)] =
+  ): URIO[KeyServer, (histos.doctor.CentralProbe.Auth, histos.doctor.PgpProbe.Hit, histos.doctor.PagesProbe.Hit)] =
     if request.preflight.isDefined then
       ZIO.succeed(
         (histos.doctor.CentralProbe.Auth.NotRun, histos.doctor.PgpProbe.Hit.Unset, histos.doctor.PagesProbe.Hit.Absent)
@@ -227,23 +206,26 @@ object DoctorSurface:
             )
         outcomes.map(found => if preflight then SupplyChecks.unseenAsSkip(found) else found)
 
-  /** Local edits and histos commands run when `--fix` is set. A GitHub setting runs only after a yes on a terminal. */
+  /** Local edits and histos commands run when `--fix` is set, the commands in the given runner. A GitHub setting with a
+    * call is sent on the net with `token` only after a person at the terminal says yes. A shell command and a step are
+    * for a person, so nothing here runs them.
+    */
   def applyReported(
       repo: Path,
       fixes: List[Fix],
       request: Request,
-      tty: Boolean,
-      ask: Fix => UIO[FixApply.Answer],
-      exec: String => UIO[Unit],
-      setting: String => UIO[Unit],
-  ): UIO[List[String]] =
+      token: Option[GitHubCredential.Token],
+  ): URIO[Stdio & CommandRunner & Net, List[String]] =
     if !request.fix then ZIO.succeed(Nil)
     else
       val mode     = FixMode.from(request.fix, request.yes)
       val targets  = fixes.collect { case Fix.Config(file, _) => file.value }.distinct
       val settings = fixes.collect { case fix: Fix.Settings => fix }
       for
-        read <- ZIO.foreach(targets)(name => readFile(repo.resolve(name)).either.map(name -> _))
+        stdio  <- ZIO.service[Stdio]
+        runner <- ZIO.service[CommandRunner]
+        net    <- ZIO.service[Net]
+        read   <- ZIO.foreach(targets)(name => readFile(repo.resolve(name)).either.map(name -> _))
         files  = read.collect { case (name, Right(text)) => name -> text }.toMap
         unread = read.collect { case (_, Left(failure)) => s"not applied: ${failure.message}" }
         kept   = fixes.filter:
@@ -255,29 +237,34 @@ object DoctorSurface:
           Workspace
             .writeString(repo.resolve(name), body)
             .fold(failure => s"not applied: ${failure.message}", _ => s"wrote $name")
-        ran   <- ZIO.foreach(commands)(line => runCommand(line, exec))
-        asked <- ZIO.foreach(settings)(fix => confirmSetting(fix, request.yes, tty, ask, setting))
-      yield unread ++ wrote ++ ran ++ asked
+        ran   <- ZIO.foreach(commands)(command => runner.run(repo, command).map(ranNotes(command, _)))
+        asked <- ZIO.foreach(settings): fix =>
+          confirmSetting(fix, request.yes, stdio.prompts, applySetting(net, token.map(_.value)))
+      yield unread ++ wrote ++ ran.flatten ++ asked
 
-  private def runCommand(line: String, exec: String => UIO[Unit]): UIO[String] =
-    if line.toLowerCase.contains("secret") then ZIO.succeed(s"not applied (secret): $line")
-    else exec(line).as(s"ran: $line")
+  /** The command, then what it printed when the runner kept that, indented under it. */
+  private def ranNotes(command: HistosCommand, ran: Ran): List[String] =
+    ran match
+      case Ran.Exited(0, output)      => s"ran: ${command.line}" :: output.map(line => s"  $line")
+      case Ran.Exited(status, output) =>
+        s"failed with status $status: ${command.line}" :: output.map(line => s"  $line")
+      case Ran.Unstarted => List(s"not run (./histos did not start): ${command.line}")
 
+  /** A page with no call is a person's to open. A call goes out only after a yes on a terminal, never on `--yes`. */
   private def confirmSetting(
       fix: Fix.Settings,
       yes: Boolean,
-      tty: Boolean,
-      ask: Fix => UIO[FixApply.Answer],
-      setting: String => UIO[Unit],
+      person: Boolean,
+      setting: GitHubPut => UIO[Unit],
   ): UIO[String] =
     val url = fix.url.value
-    if url.contains("secret") then ZIO.succeed(s"not applied (secret): $url")
-    else if !tty then ZIO.succeed(s"not applied (no terminal): $url")
-    else if yes then ZIO.succeed(s"not applied (--yes does not confirm GitHub settings): $url")
-    else
-      ask(fix).flatMap:
-        case FixApply.Answer.Yes => setting(url).as(s"applied: $url")
-        case _                   => ZIO.succeed(s"skipped: $url")
+    fix.call match
+      case None               => ZIO.succeed(s"not applied (open it in a browser): $url")
+      case Some(_) if !person => ZIO.succeed(s"not applied (no terminal): $url")
+      case Some(_) if yes     => ZIO.succeed(s"not applied (--yes does not confirm GitHub settings): $url")
+      case Some(put)          =>
+        confirmed(url).flatMap: agreed =>
+          if agreed then setting(put).as(s"applied: $url") else ZIO.succeed(s"skipped: $url")
 
   private final case class Located(name: Option[RepoName], hit: histos.doctor.GitHubProbe.Hit, venue: Venue)
 
@@ -300,54 +287,25 @@ object DoctorSurface:
             .read(net, name, BranchName.trusted("main"), token.map(_.value), api, job, needed)
             .map(hit => Located(Some(name), hit, job.venue))
 
-  private def prompt(tty: Boolean)(fix: Fix): UIO[FixApply.Answer] =
-    if !tty then ZIO.succeed(FixApply.Answer.NonTty)
-    else
-      val url = fix match
-        case Fix.Settings(target, _) => target.value
-        case _                       => ""
-      zio.Console.printLine(s"Apply GitHub setting $url? [y/N] ").orDie *>
-        zio.Console.readLine
-          .map(line =>
-            if line.trim.equalsIgnoreCase("y") || line.trim.equalsIgnoreCase("yes") then FixApply.Answer.Yes
-            else FixApply.Answer.No
+  /** `y` or `yes` on the console. Any other line, or none, is no. */
+  private def confirmed(url: String): UIO[Boolean] =
+    zio.Console.printLine(s"Apply GitHub setting $url? [y/N] ").orDie *>
+      zio.Console.readLine
+        .map(line => line.trim.equalsIgnoreCase("y") || line.trim.equalsIgnoreCase("yes"))
+        .orElseSucceed(false)
+
+  private def applySetting(net: Net, token: Option[String])(put: GitHubPut): UIO[Unit] =
+    token match
+      case None        => ZIO.unit
+      case Some(value) =>
+        net
+          .send(
+            "PUT",
+            put.url.value,
+            put.body,
+            List("Authorization" -> s"Bearer $value", "Accept" -> "application/vnd.github+json"),
           )
-          .orElseSucceed(FixApply.Answer.NonTty)
-
-  private def applySetting(net: Net, token: Option[String])(url: String): UIO[Unit] =
-    apiFor(url) match
-      case None                         => ZIO.unit
-      case Some((method, target, body)) =>
-        token match
-          case None        => ZIO.unit
-          case Some(value) =>
-            net
-              .send(
-                method,
-                target,
-                body,
-                List("Authorization" -> s"Bearer $value", "Accept" -> "application/vnd.github+json"),
-              )
-              .ignore
-
-  private def apiFor(url: String): Option[(String, String, String)] =
-    val repo = url
-      .split("github.com/")
-      .lift(1)
-      .flatMap(_.split("/").toList match
-        case owner :: name :: _ if !name.startsWith("settings") => Some(s"$owner/$name")
-        case _                                                  => None)
-    if url.contains("secret") then None
-    else if url.contains("security_analysis") || url.contains("vulnerability") then
-      repo.map(name => ("PUT", s"https://api.github.com/repos/$name/vulnerability-alerts", ""))
-    else if url.contains("/settings/actions") then
-      repo.map: name =>
-        (
-          "PUT",
-          s"https://api.github.com/repos/$name/actions/permissions/workflow",
-          """{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}""",
-        )
-    else None
+          .ignore
 
   /** The file's text, or no text when there is no file. */
   private def readFile(path: Path): IO[IoFailure, String] =
@@ -396,13 +354,16 @@ object DepsSurface:
       (proposal, graph) =>
         if !yes then ZIO.succeed(DepsResult(0, proposal.text))
         else
-          ZIO
-            .attempt:
-              val files = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
-              val wrote = Plan.write(repo, proposal, graph, files)
-              proposal.text + wrote.map(name => s"wrote $name\n").mkString
-            .map(body => DepsResult(0, body))
-            .orElseSucceed(DepsResult(1, "could not write the plan\n")),
+          val wrote =
+            for
+              paths <- Plan.workflowFiles(repo)
+              files <- ZIO.foreach(paths)(path => Workspace.readString(path).map(path -> _))
+              names <- Plan.write(repo, proposal, graph, files)
+            yield names
+          wrote.fold(
+            failure => DepsResult(1, failure.message + "\n"),
+            names => DepsResult(0, proposal.text + names.map(name => s"wrote $name\n").mkString),
+          ),
     )
 
   def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =

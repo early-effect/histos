@@ -58,17 +58,37 @@ enum Probe:
 enum Level derives CanEqual:
   case Error, Warning, Info
 
-/** One way to repair a finding. The first of a diagnostic's fixes is preferred. There is no secret case. */
+/** One way to repair a finding. The first of a diagnostic's fixes is preferred. There is no secret case. `--fix` runs
+  * only a [[Fix.Histos]] command and sends only a [[Fix.Settings]] call. A person runs a [[Fix.Command]] and follows
+  * [[Fix.Steps]].
+  */
 enum Fix:
-  case Settings(url: HttpUrl, click: String)
+  /** A GitHub page a person opens. `call` is the request doctor sends in its place once a person confirms it. */
+  case Settings(url: HttpUrl, click: String, call: Option[GitHubPut])
+
+  /** A shell command for a person. Doctor prints it and never runs it. */
   case Command(line: ShellLine)
+
+  /** A histos command `--fix` runs in the checkout. */
+  case Histos(command: HistosCommand)
   case Config(file: RepoPath, edit: Edit)
   case Steps(items: ::[String])
+end Fix
 
 /** A local file edit. `before` is the text that is replaced. `after` is the replacement. */
 final case class Edit(before: String, after: String)
 
-/** One non-empty shell command. It is not a secret value. */
+/** A histos command a fix may run: the words after `./histos`. It runs with no shell, so no word is parsed again. */
+final case class HistosCommand(words: ::[String]):
+  def line: String = ("./histos" :: words).mkString(" ")
+
+object HistosCommand:
+  def of(head: String, tail: String*): HistosCommand = HistosCommand(::(head, tail.toList))
+
+/** The GitHub API request that applies a setting: a PUT of `body` to `url`. */
+final case class GitHubPut(url: HttpUrl, body: String)
+
+/** One non-empty shell command for a person to run. It is not a secret value. */
 opaque type ShellLine = String
 
 object ShellLine:
@@ -90,7 +110,7 @@ enum ShellLineError:
     case Bad(raw) => s"'$raw' is not a shell command"
 end ShellLineError
 
-/** Which fixes `--fix` may apply. Secrets are not a kind. */
+/** Which fixes `--fix` may apply. Secrets are not a kind, and neither is a shell command or a step. */
 enum FixKind:
   case LocalEdit, HistosCommand, GitHubSetting
 

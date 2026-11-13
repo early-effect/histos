@@ -44,7 +44,7 @@ object Runner:
     val missing = check.needs.filterNot(ctx.present.contains)
     missing.headOption match
       case Some(probe) =>
-        val how = Fix.Command(ShellLine.trusted(s"provide ${probe.toString}"))
+        val how = Fix.Steps(::(s"provide ${probe.toString}", Nil))
         ZIO.succeed((List(Outcome.Skipped(check.id, probe, how)), None))
       case None =>
         check
@@ -66,10 +66,8 @@ object Render:
     val found = report.found.map { diagnostic =>
       val kind = if diagnostic.level == Level.Error then "error" else "warning"
       val fix  = diagnostic.fixes.head match
-        case Fix.Settings(url, _) => url.value
-        case Fix.Command(line)    => line.value
-        case Fix.Config(file, _)  => file.value
-        case Fix.Steps(items)     => items.head
+        case Fix.Settings(url, _, _) => url.value
+        case other                   => FaultText.shown(other)
       s"::${kind} title=histos doctor: ${diagnostic.check.value}::${diagnostic.summary} Fix: $fix"
     }
     val late = report.timedOut.map(id => s"::error title=histos doctor: ${id.value}::timed out")
@@ -116,26 +114,20 @@ object Render:
         List(s"  ok         ${check.value}           $note")
       case Outcome.Skipped(check, missing, how) =>
         val hints = how match
-          case Fix.Command(line)    => List(line.value)
-          case Fix.Settings(url, _) => List(url.value)
-          case Fix.Config(file, _)  => List(file.value)
-          case Fix.Steps(items)     => items.toList
+          case Fix.Settings(url, _, _) => List(url.value)
+          case Fix.Steps(items)        => items.toList
+          case other                   => List(FaultText.shown(other))
         s"  -  skipped ${check.value}  (needs $missing)" :: hints.map(hint => s"             $hint")
       case Outcome.Found(diagnostic) =>
         val mark = diagnostic.level match
           case Level.Error   => "x error   "
           case Level.Warning => "! warning "
           case Level.Info    => "i info    "
-        val fix = diagnostic.fixes.head match
-          case Fix.Command(line)        => s"fix  ${line.value}"
-          case Fix.Settings(url, click) => s"fix  ${url.value}  $click"
-          case Fix.Config(file, _)      => s"fix  ${file.value}"
-          case Fix.Steps(items)         => s"fix  ${items.head}"
         List(
           s"  $mark ${diagnostic.check.value}",
           s"             ${diagnostic.summary}",
           s"             ${diagnostic.explain}",
-          s"             $fix",
+          s"             ${FaultText.rendered(diagnostic.fixes.head)}",
         )
 
   private def quote(text: String): String =
@@ -158,38 +150,39 @@ object FixApply:
       mode: FixMode,
       confirm: Fix => Answer,
       files: Map[String, String],
-  ): (Map[String, String], List[String]) =
+  ): (Map[String, String], List[HistosCommand]) =
     mode match
       case FixMode.Print        => (files, Nil)
       case FixMode.Apply(kinds) =>
-        fixes.foldLeft((files, List.empty[String])):
+        fixes.foldLeft((files, List.empty[HistosCommand])):
           case ((current, commands), fix) =>
-            val kind = kindOf(fix)
-            if !kinds.contains(kind) then (current, commands)
-            else if kind == FixKind.GitHubSetting && confirm(fix) != Answer.Yes then (current, commands)
-            else applyOne(current, commands, fix)
+            kindOf(fix) match
+              case Some(kind) if kinds.contains(kind) =>
+                if kind == FixKind.GitHubSetting && confirm(fix) != Answer.Yes then (current, commands)
+                else applyOne(current, commands, fix)
+              case _ => (current, commands)
 
-  def kindOf(fix: Fix): FixKind =
+  /** The kind `--fix` applies a fix as. A shell command and a step are for a person, so they have none. */
+  def kindOf(fix: Fix): Option[FixKind] =
     fix match
-      case Fix.Config(_, _)   => FixKind.LocalEdit
-      case Fix.Command(_)     => FixKind.HistosCommand
-      case Fix.Settings(_, _) => FixKind.GitHubSetting
-      case Fix.Steps(_)       => FixKind.HistosCommand
+      case Fix.Config(_, _)      => Some(FixKind.LocalEdit)
+      case Fix.Histos(_)         => Some(FixKind.HistosCommand)
+      case Fix.Settings(_, _, _) => Some(FixKind.GitHubSetting)
+      case Fix.Command(_)        => None
+      case Fix.Steps(_)          => None
 
   private def applyOne(
       files: Map[String, String],
-      commands: List[String],
+      commands: List[HistosCommand],
       fix: Fix,
-  ): (Map[String, String], List[String]) =
+  ): (Map[String, String], List[HistosCommand]) =
     fix match
       case Fix.Config(file, edit) =>
         val next =
           files.get(file.value).map(_.replace(edit.before, edit.after)).getOrElse(files.getOrElse(file.value, ""))
         (files.updated(file.value, next), commands)
-      case Fix.Command(line) =>
-        (files, commands :+ line.value)
-      case Fix.Settings(_, _) =>
-        (files, commands)
-      case Fix.Steps(_) =>
+      case Fix.Histos(command) =>
+        (files, commands :+ command)
+      case Fix.Settings(_, _, _) | Fix.Command(_) | Fix.Steps(_) =>
         (files, commands)
 end FixApply

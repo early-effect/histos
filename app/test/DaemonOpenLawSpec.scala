@@ -135,6 +135,21 @@ object DaemonOpenLawSpec extends ZIOSpecDefault:
           record.map(_.version).contains("histos 0.0.1-law"),
         )
     ,
+    test("a second server finds the first listening and stops, so exactly one server serves the checkout"):
+      served(identity, Loader.live): repo =>
+        for
+          first  <- stand(repo, version, (_, _) => ZIO.unit)
+          second <- stand(repo, "0.0.2-law", (_, _) => ZIO.unit).either
+          heard  <- Client.talk(first.record.socket, Call.Version).runCollect
+          record <- Record.read(repo)
+          _      <- Client.talk(first.record.socket, Call.Reboot(unnamed)).runCollect
+          _      <- first.done
+        yield assertTrue(
+          second == Left(ServerError.Listening(first.record.socket)),
+          outs(heard).startsWith(version),
+          record.map(_.version).contains(version),
+        )
+    ,
     test("a checkout deeper than a Unix socket path holds still binds, answers, and removes its socket"):
       served(_.resolve(("d" * 60 + "/") * 4 + "repo"), Loader.live): repo =>
         for

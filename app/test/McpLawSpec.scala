@@ -1,21 +1,28 @@
 package histos.mcp
 
+import heddle.LinePipe
 import heddle.mcp.{McpBuildError, ToolError}
-import heddle.mcp.protocol.{ListToolsResult, ProtocolVersion, RequestMeta, Tool, ToolName}
+import heddle.mcp.protocol.{CallToolResult, ContentBlock, ListToolsResult, ProtocolVersion, RequestMeta, Tool, ToolName}
 import histos.cache.{CacheCleanMode, CacheCleanModeError, ContentStore}
+import histos.central.{KeyServer, ReleaseFeed}
 import histos.cli.{Grammar, Operation}
 import histos.client.Session
+import histos.doctor.GhAuth
 import histos.format.{FormatMode, FormatTargets}
-import histos.load.Loader
+import histos.load.{LoadedBuild, Loader}
 import histos.publish.IvyRoot
 import histos.report.{ObserveError, Rejection}
 import histos.resolve.Resolve
 import histos.server.Call
+import histos.supply.{GitRead, Net}
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode, TestModeError}
 import histos.select.SelectError
+import histos.workspace.Workspace
 import histos.{
+  HistosBuild,
   LawMachine,
+  LawPlugins,
   Module,
   Platform,
   Platforms,
@@ -26,14 +33,14 @@ import histos.{
   ScalaVersions,
   SourcePos,
 }
-import slayer.stubbed
+import slayer.{any, stub, stubbed}
 
 import java.nio.file.Path
 
 import zio.json.*
 import zio.json.ast.Json
 import zio.test.*
-import zio.{NonEmptyChunk, Scope, ZIO, ZLayer}
+import zio.{Chunk, NonEmptyChunk, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 
 object McpLawSpec extends ZIOSpecDefault:
   private val api     = ProjectName("api")
@@ -150,13 +157,71 @@ object McpLawSpec extends ZIOSpecDefault:
         HistosMcp.launched(graph, Nil) == Right(Nil),
         HistosMcp.launched(graph, List("core")) == Right(List(core)),
         HistosMcp.launched(graph, List("1api", "nope")) == Left(ProjectNameError.Bad("1api")),
-        HistosMcp.launched(graph, List("nope")) == Left(SelectError.Unknown(ProjectName("nope"), List("core"))),
+        HistosMcp.launched(graph, List("nope")) ==
+          Left(SelectError.Unknown(ProjectName("nope"), List(ProjectName("core")))),
         HistosMcp.notLaunched(ProjectNameError.Bad("1api")) == HistosMcp.DoctorText("'1api' is not a project name"),
         HistosMcp.notLaunched(SelectError.Unknown(ProjectName("nope"), Nil)) == HistosMcp.DoctorText(
           "'nope' is not a project\nThe name is not a project in this graph.\nfix  histos graph"
         ),
       )
     ,
+    test(
+      "a doctor fix over stdio writes only protocol frames, and its command reads nothing and prints into the answer"
+    ):
+      val core = Module(
+        ProjectName("core"),
+        Platforms(Platform.Jvm, Nil),
+        ScalaVersions(ScalaVersion("3.10.0"), Nil),
+        Nil,
+        Nil,
+        SourcePos("histos.scala", 1, 1),
+      )
+      val graph   = ProjectGraph.trusted(List(core))
+      val program =
+        for
+          repo <- Workspace.work("mcp-doctor-fix")
+          script = repo.resolve("histos")
+          _ <- Workspace.writeString(
+            script,
+            "#!/bin/sh\necho \"fix said $*\"\necho \"fix warned\" >&2\nif read line; then echo \"fix read $line\"; else echo \"fix read nothing\"; fi\n",
+          )
+          _ <- ZIO.attemptBlocking(script.toFile.setExecutable(true)).orDie
+          _ <- stub[Loader](_.load(any[Path], any[Path])):
+            ZIO.succeed(LoadedBuild(graph, LawPlugins.none, HistosBuild.fixed(graph)))
+          _       <- stub[GitRead](_.origin(any[Path]))(ZIO.none)
+          _       <- stub[GhAuth](_.token(any[Option[String]]))(ZIO.none)
+          pipe    <- Scripted.of(List(doctorFix.toJson))
+          _       <- HistosMcp.serve(repo, Path.of("api.jar"), pipe, LawMachine.idle)
+          written <- pipe.written
+          printed <- TestConsole.output
+        yield
+          val frames  = written.map(_.fromJson[Json.Obj])
+          val answers = frames
+            .collect { case Right(frame) if frame.get("id").contains(Json.Num(2)) => frame.get("result") }
+            .collect { case Some(result) => result.as[CallToolResult] }
+          val shown = answers
+            .collect { case Right(answer) => answer.content.toList }
+            .flatten
+            .collect { case ContentBlock.Text(said, _) => said }
+            .mkString
+          assertTrue(
+            frames.nonEmpty,
+            frames.forall(_.exists(_.get("jsonrpc").contains(Json.Str("2.0")))),
+            answers.size == 1,
+            answers.forall(_.exists(!_.failed)),
+            shown.contains("ran: ./histos workflow --update"),
+            shown.contains("  fix said workflow --update"),
+            shown.contains("  fix warned"),
+            shown.contains("  fix read nothing"),
+            printed.isEmpty,
+          )
+      program.provideSomeLayer[Scope](
+        stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written"))) ++ stubbed[ReleaseFeed] ++ stubbed[GitRead] ++
+          stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[KeyServer]
+      )
+    // A fix that read the protocol's stdin would wait for it, and the doctor bounds each check on the live clock.
+    @@ TestAspect.timeout(60.seconds) @@ TestAspect.withLiveClock,
     test("a notice level is sent as info or error"):
       assertTrue(
         Notice.Level.Info.toJson == "\"info\"",
@@ -192,8 +257,43 @@ object McpLawSpec extends ZIOSpecDefault:
     program
       .provideSomeLayer[Scope](
         stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
-          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
+          ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written"))) ++ stubbed[ReleaseFeed] ++ stubbed[GitRead] ++
+          stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[KeyServer]
       )
+
+  /** `tools/call` of doctor with `--fix` on the supply chain, whose Actions author names `./histos workflow --update`.
+    */
+  private val doctorFix = Json.Obj(
+    "jsonrpc" -> Json.Str("2.0"),
+    "id"      -> Json.Num(2),
+    "method"  -> Json.Str("tools/call"),
+    "params"  -> Json.Obj(
+      "name"      -> Json.Str("doctor"),
+      "arguments" -> Json.Obj("fix" -> Json.Bool(true), "area" -> Json.Str("supply-chain")),
+      "_meta"     -> Json.Obj(
+        RequestMeta.VersionKey    -> Json.Str(ProtocolVersion.Current.value),
+        RequestMeta.ClientCapsKey -> Json.Obj(),
+      ),
+    ),
+  )
+
+  /** A protocol pipe that reads `lines` and then ends, and keeps every line the server writes. */
+  private final class Scripted(lines: Ref[List[String]], frames: Ref[Chunk[String]]) extends LinePipe:
+    def readLine: UIO[Option[String]] =
+      lines.modify:
+        case line :: rest => (Some(line), rest)
+        case Nil          => (None, Nil)
+
+    def writeLine(line: String): UIO[Unit] =
+      frames.update(_ :+ line)
+
+    def written: UIO[List[String]] =
+      frames.get.map(_.toList)
+  end Scripted
+
+  private object Scripted:
+    def of(lines: List[String]): UIO[Scripted] =
+      (Ref.make(lines) <*> Ref.make(Chunk.empty[String])).map(Scripted(_, _))
 
   /** Every titled type in `json`, with its schema. */
   private def titled(json: Json): List[(String, Json)] =

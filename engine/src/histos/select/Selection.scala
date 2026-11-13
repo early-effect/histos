@@ -24,8 +24,8 @@ object Selection:
             acc.flatMap: selected =>
               expand(graph, name, selected)
 
-  private def near(graph: ProjectGraph, name: ProjectName): List[String] =
-    Suggest.near(name.value, graph.projects.map(_.name.value))
+  private def near(graph: ProjectGraph, name: ProjectName): List[ProjectName] =
+    Suggest.projects(name, graph.projects.map(_.name))
 
   private def expand(graph: ProjectGraph, name: ProjectName, selected: Selected): Either[SelectError, Selected] =
     graph.get(name) match

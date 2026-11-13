@@ -146,7 +146,7 @@ object Preflight:
         gate *> upload.mapError(PreflightError.Upload(_))
 
   /** HKP lookup of one fingerprint. A miss is [[PreflightError.KeyMissing]]. Histos does not upload the key. */
-  def key(fingerprint: Fingerprint, hosts: Hosts = Hosts.central): IO[PreflightError, Unit] =
+  def key(fingerprint: Fingerprint, hosts: Hosts): IO[PreflightError, Unit] =
     ZIO
       .serviceWithZIO[Client](client => lookup(client, hosts.keyserver, fingerprint))
       .provide(clientLayer)

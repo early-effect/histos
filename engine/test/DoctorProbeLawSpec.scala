@@ -16,7 +16,7 @@ import histos.supply.{
   SupplyFault,
 }
 import histos.toolchain.Architecture
-import histos.central.{FeedError, ReleaseFeed}
+import histos.central.{FeedError, Fingerprint, KeyServer, PreflightError, ReleaseFeed, TransportFault}
 import histos.publish.{LauncherChannel, LauncherChoice}
 import histos.version.{
   BumpReason,
@@ -156,10 +156,42 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a bad signing hex is bad and an empty env is unset, and neither asks a keyserver"):
-      for
-        bad   <- PgpProbe.read(Map("PGP_KEY_HEX" -> "nope"))
-        unset <- PgpProbe.read(Map.empty)
-      yield assertTrue(bad == PgpProbe.Hit.Bad, unset == PgpProbe.Hit.Unset)
+      val program =
+        for
+          bad   <- PgpProbe.read(Map("PGP_KEY_HEX" -> "nope"))
+          unset <- PgpProbe.read(Map.empty)
+        yield assertTrue(bad == PgpProbe.Hit.Bad, unset == PgpProbe.Hit.Unset)
+      program.provide(stubbed[KeyServer])
+    ,
+    test(
+      "a named key asks the key server it is given: a hit is present, a miss is missing, and a fault is unreachable"
+    ):
+      val key     = Fingerprint("0123456789abcdef")
+      val named   = Map("PGP_KEY_HEX" -> "0123456789abcdef")
+      val program =
+        for
+          asked   <- Ref.make(List.empty[Fingerprint])
+          answers <- Ref.make(
+            List[IO[PreflightError, Unit]](
+              ZIO.unit,
+              ZIO.fail(PreflightError.KeyMissing(key)),
+              ZIO.fail(PreflightError.KeyDown(TransportFault.Connect("keyserver.ubuntu.com", 443))),
+            )
+          )
+          _ <- stub[KeyServer](_.key(any[Fingerprint])): (fingerprint: Fingerprint) =>
+            asked.update(_ :+ fingerprint) *>
+              answers.modify(rest => (rest.headOption.getOrElse(ZIO.unit), rest.drop(1))).flatten
+          present <- PgpProbe.read(named)
+          missing <- PgpProbe.read(named)
+          down    <- PgpProbe.read(named)
+          keys    <- asked.get
+        yield assertTrue(
+          present == PgpProbe.Hit.Present(key.value),
+          missing == PgpProbe.Hit.Missing(key.value),
+          down == PgpProbe.Hit.Unreachable(key.value),
+          keys == List(key, key, key),
+        )
+      program.provide(stubbed[KeyServer])
     ,
     test("an unset signing hit is ok and a bad hex is found"):
       val unset = HygieneChecks.key(PgpProbe.Hit.Unset)
@@ -179,14 +211,12 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
         skipped == Outcome.Skipped(
           HygieneChecks.credentialsId,
           Probe.JobEnv,
-          Fix.Command(
-            ShellLine.trusted("export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets")
-          ),
+          Fix.Steps(::("export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets", Nil)),
         ),
         unread == Outcome.Skipped(
           HygieneChecks.credentialsId,
           Probe.JobEnv,
-          Fix.Command(ShellLine.trusted("retry when the portal answers")),
+          Fix.Steps(::("retry when the portal answers", Nil)),
         ),
         accepted == Outcome.Ok(HygieneChecks.credentialsId, "the portal accepted the token"),
         found(rejected),
@@ -201,11 +231,8 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       assertTrue(
         off == List(Outcome.Ok(HygieneChecks.pagesId, "no pages site")),
         down == List(
-          Outcome.Skipped(
-            HygieneChecks.pagesId,
-            Probe.GitHubRead,
-            Fix.Command(ShellLine.trusted("retry when the GitHub API answers")),
-          )
+          Outcome
+            .Skipped(HygieneChecks.pagesId, Probe.GitHubRead, Fix.Steps(::("retry when the GitHub API answers", Nil)))
         ),
         open == List(Outcome.Ok(HygieneChecks.pagesId, "Pages deploys from GitHub Actions")),
         other.exists(found),
@@ -426,7 +453,7 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
                   (
                     unknown match
                       case Left(SelectError.Unknown(name, near)) =>
-                        name == typo && near.contains("web")
+                        name == typo && near.contains(ProjectName("web"))
                       case _ => false
                   ),
                   jvmFloor == List(Outcome.Ok(ToolchainChecks.nodeFloorId, "no Js module")),
@@ -710,20 +737,16 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       machine: Machine,
   ): URIO[ReleaseFeed, (Int, String)] =
     DoctorSurface
-      .runWith(
+      .run(
         repo,
         graph,
         DoctorSurface.Request(Some("toolchain"), false, None, false, false, launch, true),
         machine,
-        Quiet,
-        Map.empty,
-        None,
-        false,
-        _ => ZIO.dieMessage("doctor asked"),
-        line => ZIO.dieMessage(s"doctor ran $line"),
-        url => ZIO.dieMessage(s"doctor wrote $url"),
       )
-      .provideSomeLayer[ReleaseFeed](GitAnswers().layer)
+      .provideSomeLayer[ReleaseFeed](
+        GitAnswers().layer ++ ZLayer.succeed[Net](Quiet) ++ ZLayer.succeed(histos.cli.Stdio.redirected) ++
+          ZLayer.succeed[GhAuth](_ => ZIO.none) ++ stubbed[KeyServer] ++ stubbed[histos.supply.CommandRunner]
+      )
 
   private def floorText(outcomes: List[Outcome]): String =
     outcomes match

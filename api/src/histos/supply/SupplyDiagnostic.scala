@@ -1,6 +1,6 @@
 package histos.supply
 
-import histos.doctor.{CheckId, Diagnostic, Fix, Level, Location, ShellLine}
+import histos.doctor.{CheckId, Diagnostic, Fix, GitHubPut, HistosCommand, Level, Location, ShellLine}
 import histos.plugin.{JobName, RepoPath, SecretName}
 import histos.HttpUrl
 
@@ -55,6 +55,7 @@ enum SupplyDiagnostic(
               s"https://github.com/apps/${AppSlug.histosDeps.value}/installations/new/permissions?target_id=${repo.value}"
             ),
             "install the App on this repository",
+            None,
           )
         ),
       )
@@ -80,6 +81,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/settings/apps/${AppSlug.histosDeps.value}/permissions"),
             "set the permission, then accept it on the installation",
+            None,
           )
         ),
       )
@@ -165,7 +167,7 @@ enum SupplyDiagnostic(
         "signed commits conflict with CommitSigning",
         s"${rule.wire} requires signed commits, and ${signingName(signing)} does not satisfy ${mergeMethods.map(_.wire).mkString(", ")}.",
         "Switch to CommitSigning.ApiSigned, or allow squash only.",
-        fixes(Fix.Command(ShellLine.trusted("switch to CommitSigning.ApiSigned, or allow squash only"))),
+        fixes(Fix.Steps(lines("Switch to CommitSigning.ApiSigned, or allow squash only."))),
       )
 
   case DependabotOverlap(ecosystems: ::[Ecosystem], file: RepoPath)
@@ -175,7 +177,7 @@ enum SupplyDiagnostic(
         "Dependabot updates an ecosystem histos also bumps",
         s"${file.value} updates ${ecosystems.map(_.wire).mkString(", ")}. histos also bumps these.",
         "You would get two pull requests for the same bump, and Dependabot's would fail workflow --check.",
-        fixes(Fix.Command(ShellLine.trusted("./histos setup supply-chain --fix"))),
+        fixes(Fix.Histos(HistosCommand.of("setup", "supply-chain", "--fix"))),
       )
 
   case DependabotUnread(file: RepoPath)
@@ -199,6 +201,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted("https://github.com/settings/security_analysis"),
             "security_analysis",
+            None,
           )
         ),
       )
@@ -215,6 +218,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings/security_analysis"),
             "security_analysis",
+            Some(GitHubPut(HttpUrl.trusted(s"https://api.github.com/repos/${repo.value}/vulnerability-alerts"), "")),
           ),
         ),
       )
@@ -240,6 +244,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings"),
             "default branch",
+            None,
           )
         ),
       )
@@ -281,6 +286,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings/actions"),
             "Workflow permissions",
+            None,
           )
         ),
       )
@@ -296,6 +302,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings/actions"),
             "Workflow permissions",
+            None,
           )
         ),
       )
@@ -307,7 +314,7 @@ enum SupplyDiagnostic(
         "a person commits the workflow files",
         "The Actions bot does not commit .github/workflows.",
         "Run ./histos workflow --update and commit the result.",
-        fixes(Fix.Command(ShellLine.trusted("./histos workflow --update"))),
+        fixes(Fix.Histos(HistosCommand.of("workflow", "--update"))),
       )
 
   case AllowPullRequestsBlind(repo: RepoName, why: Blind)
@@ -331,6 +338,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings/actions"),
             "settings/actions",
+            None,
           )
         ),
       )
@@ -347,6 +355,7 @@ enum SupplyDiagnostic(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/actions"),
             "enable the workflow",
+            None,
           ),
         ),
       )
@@ -507,10 +516,12 @@ private def secretFixes(name: SecretName, repo: RepoName, owner: RepoOwner): ::[
         Fix.Settings(
           HttpUrl.trusted(s"https://github.com/organizations/$login/settings/secrets/actions"),
           s"share ${name.value} with this repository",
+          None,
         ),
         Fix.Settings(
           HttpUrl.trusted(s"https://github.com/${repo.value}/settings/secrets/actions/new"),
           "a repository secret also counts",
+          None,
         ),
       )
     case RepoOwner.User(_) =>
@@ -518,6 +529,7 @@ private def secretFixes(name: SecretName, repo: RepoName, owner: RepoOwner): ::[
         Fix.Settings(
           HttpUrl.trusted(s"https://github.com/${repo.value}/settings/secrets/actions/new"),
           s"set ${name.value}",
+          None,
         )
       )
 
@@ -539,7 +551,7 @@ private def ruleFix(rule: RuleSource, repo: RepoName, expected: JobName): Fix =
       (s"https://github.com/organizations/$org/settings/rules/$id", s"add status check \"${expected.value}\"")
     case RuleSource.Absent =>
       (s"https://github.com/${repo.value}/settings/rules", s"add a rule that requires \"${expected.value}\"")
-  Fix.Settings(HttpUrl.trusted(url), click)
+  Fix.Settings(HttpUrl.trusted(url), click, None)
 
 private def workflowSight(why: Blind, repo: RepoName): String =
   val lead = why match

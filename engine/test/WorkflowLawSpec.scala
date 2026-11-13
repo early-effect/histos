@@ -198,7 +198,7 @@ object WorkflowLawSpec extends ZIOSpecDefault:
             Workflow.target(graph, List("1core")) == Left(CiError.BadName("1core")),
             Workflow.target(graph, List("core", "core")) == Left(CiError.Duplicate(coreName)),
             Workflow.target(graph, List("all")) == Left(CiError.NotModule(all)),
-            Workflow.target(graph, List("missing")) == Left(CiError.Unknown(missingName)),
+            Workflow.target(graph, List("missing")) == Left(CiError.Unknown(missingName, Nil)),
           )
         case _ => assertTrue(false)
     ,

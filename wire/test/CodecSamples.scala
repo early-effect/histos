@@ -93,7 +93,7 @@ object CodecSamples:
 
   val selectErrors: List[SelectError] = List(
     SelectError.Duplicate(core),
-    SelectError.Unknown(core, List(api.value)),
+    SelectError.Unknown(core, List(api)),
   )
 
   val childErrors: List[ChildError] = List(
@@ -784,7 +784,7 @@ object CodecSamples:
 
   val ciErrors: List[CiError] = List(
     CiError.BadName("1job"),
-    CiError.Unknown(core, List(api.value)),
+    CiError.Unknown(core, List(api)),
     CiError.NotModule(core),
     CiError.Duplicate(core),
     CiError.Missing(path),

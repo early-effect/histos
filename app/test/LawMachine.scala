@@ -1,6 +1,6 @@
 package histos
 
-import histos.cli.{Attached, Stdio}
+import histos.cli.Stdio
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Os, Sha256}
 import histos.native.NativeOrigin
 import histos.toolchain.{Architecture, RuntimeIdentity}
@@ -44,7 +44,7 @@ object LawMachine:
 
   /** A law's standard streams: nobody reads its output or answers a prompt. */
   val redirected: ULayer[Stdio] =
-    ZLayer.succeed(Stdio(Attached.Redirected, Attached.Redirected))
+    ZLayer.succeed(Stdio.redirected)
 
   /** The same machine through `TestSystem`, for product code that calls `Machine.load` itself. */
   def system(dir: Path): UIO[Unit] =

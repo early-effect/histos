@@ -9,7 +9,9 @@ import java.nio.file.Path
 
 enum CiError:
   case BadName(raw: String)
-  case Unknown(name: ProjectName, near: List[String] = Nil)
+
+  /** `near` is the projects whose names are close to `name`, nearest first. */
+  case Unknown(name: ProjectName, near: List[ProjectName])
   case NotModule(name: ProjectName)
   case Duplicate(name: ProjectName)
   case Missing(path: Path)
@@ -63,10 +65,10 @@ enum CiError:
       )
     case Unknown(_, near) =>
       val explain = near match
-        case head :: _ => s"did you mean $head?"
+        case head :: _ => s"did you mean ${head.value}?"
         case Nil       => "The name is not a project in this graph."
       val fix = near.headOption match
-        case Some(guess) => Noted.command(s"histos test $guess")
+        case Some(guess) => Noted.command(s"histos test ${guess.value}")
         case None        => Noted.command("histos graph")
       Noted.error("workflow.unknown-project", message, explain, fix)
     case Missing(_) =>

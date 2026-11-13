@@ -2,9 +2,15 @@ package histos.server
 
 import histos.{LawMachine, Resolution}
 import histos.bsp.Frame
+import histos.cache.ContentStore
 import histos.cli.{Cli, CliExit, Completed, Playback}
+import histos.client.Session
+import histos.load.Loader
+import histos.publish.IvyRoot
 import histos.report.CallResult
+import histos.resolve.Resolve
 import histos.workspace.Workspace
+import slayer.stubbed
 
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
 import java.nio.channels.{Channels, ServerSocketChannel}
@@ -27,10 +33,53 @@ object DriverLawSpec extends ZIOSpecDefault:
       drive(recorded = "stale", mark = None)
     ,
     test("a new assembly checksum reboots when the version line matches"):
-      drive(recorded = shown, mark = Some(sha)),
+      drive(recorded = shown, mark = Some(sha))
+    ,
+    test("the MCP reboot of a different version reboots once, and the replacement hears nothing"):
+      replaced("stale", None): repo =>
+        ZIO.scoped:
+          Session.desk.flatMap: desk =>
+            Session
+              .perform(repo, Path.of("api.jar"), LawMachine.idle, desk, Call.Reboot(Successor(Some(shown), None)))
+              .either
+              .provideSomeLayer[Scope](
+                stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ContentStore] ++
+                  ZLayer.succeed(IvyRoot.at(Path.of("ivy-never-written")))
+              )
+      .map: (result, calls, jar) =>
+        val reported = result match
+          case Right(CallResult.Reported(_)) => true
+          case _                             => false
+        assertTrue(reported, calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))))),
   ) @@ TestAspect.timeout(20.seconds)
 
   private def drive(recorded: String, mark: Option[String]): UIO[TestResult] =
+    replaced(recorded, mark): repo =>
+      Ref
+        .make(0)
+        .flatMap: missed =>
+          Cli
+            .compileAt(
+              repo,
+              Nil,
+              missed.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
+            )
+            .provideLayer(LawMachine.redirected)
+            .zip(missed.get)
+    .map: (done, calls, jar) =>
+      val (completed, n) = done
+      assertTrue(
+        n == 0,
+        completed.exit == CliExit.Success,
+        completed.out != "miss",
+        calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))), Call.encode(Call.Compile(Nil))),
+      )
+
+  /** A record names an old peer under the law's directory. The old peer writes a record for the next peer before it
+    * answers, as a server that relaunches does. Each peer answers one call. The requester runs as `shown` with the
+    * law's jar, and `act` is what it does. The result is what `act` returned, every call the peers heard, and that jar.
+    */
+  private def replaced[A](recorded: String, mark: Option[String])(act: Path => UIO[A]): UIO[(A, Chunk[String], Path)] =
     ZIO.scoped {
       for
         root <- short
@@ -59,24 +108,11 @@ object DriverLawSpec extends ZIOSpecDefault:
         ).forkScoped
         _ <- answer(nextPeer, heard, ZIO.unit).forkScoped
         jar = root.resolve("next.jar")
-        _      <- TestSystem.putEnv("HISTOS_VERSION", shown)
-        _      <- TestSystem.putEnv("HISTOS_ASSEMBLY", jar.toString)
-        missed <- Ref.make(0)
-        done   <- Cli
-          .compileAt(
-            repo,
-            Nil,
-            missed.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
-          )
-          .provideLayer(LawMachine.redirected)
-        n     <- missed.get
+        _     <- TestSystem.putEnv("HISTOS_VERSION", shown)
+        _     <- TestSystem.putEnv("HISTOS_ASSEMBLY", jar.toString)
+        done  <- act(repo)
         calls <- heard.get
-      yield assertTrue(
-        n == 0,
-        done.exit == CliExit.Success,
-        done.out != "miss",
-        calls == Chunk(Call.encode(Call.Reboot(Successor(Some(shown), Some(jar)))), Call.encode(Call.Compile(Nil))),
-      )
+      yield (done, calls, jar)
     }
 
   /** The law's own directory, removed after it. A Unix socket path fits in about 100 bytes, so it is under `/tmp`. */
@@ -100,27 +136,26 @@ object DriverLawSpec extends ZIOSpecDefault:
       heard: Ref[Chunk[String]],
       before: UIO[Unit],
   ): UIO[Unit] =
-    ZIO.scoped {
-      ZIO
-        .acquireRelease(ZIO.attemptBlockingInterrupt(server.accept()).orDie)(channel =>
-          ZIO.attempt(channel.close()).ignore
-        )
-        .flatMap { channel =>
-          val input  = Channels.newInputStream(channel)
-          val output = Channels.newOutputStream(channel)
-          Frame
-            .read(input)
-            .flatMap {
-              case Some(payload) =>
-                heard.update(_ :+ payload) *>
-                  before *>
-                  Frame.write(output, Say.wire(Message.Ready)) *>
-                  Frame.write(output, Say.wire(Message.Done(CallResult.reported())))
-              case None => ZIO.unit
-            }
-            .catchAll(error => ZIO.dieMessage(error.toString))
-        }
-    }
+    // The accept stays interruptible, so a peer nobody calls ends with the law.
+    ZIO
+      .attemptBlockingInterrupt(server.accept())
+      .orDie
+      .flatMap { channel =>
+        val input  = Channels.newInputStream(channel)
+        val output = Channels.newOutputStream(channel)
+        Frame
+          .read(input)
+          .flatMap {
+            case Some(payload) =>
+              heard.update(_ :+ payload) *>
+                before *>
+                Frame.write(output, Say.wire(Message.Ready)) *>
+                Frame.write(output, Say.wire(Message.Done(CallResult.reported())))
+            case None => ZIO.unit
+          }
+          .catchAll(error => ZIO.dieMessage(error.toString))
+          .ensuring(ZIO.attempt(channel.close()).ignore)
+      }
 
   private def must[A](effect: IO[ServerError, A]): UIO[A] =
     effect.catchAll(error => ZIO.dieMessage(error.message))

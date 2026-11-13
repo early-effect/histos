@@ -13,15 +13,16 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
 
   def spec = suite("doctor render laws")(
     test("annotations, the summary, and json name the preferred fix and a timeout"):
-      val settings = found(Level.Error, Fix.Settings(HttpUrl.trusted("https://example.test/set"), "open settings"))
-      val command  = found(Level.Warning, Fix.Command(ShellLine.trusted("histos doctor")))
-      val config   = found(Level.Info, Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")))
-      val steps    = found(Level.Info, Fix.Steps(::("first step", List("second step"))))
-      val report   = DoctorReport(List(settings, command, config, steps), List(late))
-      val notes    = Render.annotations(report)
-      val table    = Render.summary("ci", report)
-      val encoded  = Render.json(report)
-      val shown    = Render.text("repo", report, true)
+      val settings =
+        found(Level.Error, Fix.Settings(HttpUrl.trusted("https://example.test/set"), "open settings", None))
+      val command = found(Level.Warning, Fix.Command(ShellLine.trusted("histos doctor")))
+      val config  = found(Level.Info, Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after")))
+      val steps   = found(Level.Info, Fix.Steps(::("first step", List("second step"))))
+      val report  = DoctorReport(List(settings, command, config, steps), List(late))
+      val notes   = Render.annotations(report)
+      val table   = Render.summary("ci", report)
+      val encoded = Render.json(report)
+      val shown   = Render.text("repo", report, true)
       assertTrue(
         report.infos == 2,
         report.exit == 1,
@@ -72,53 +73,57 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
     test("a skipped check names the probe it needs and prints the command, the settings url, the file, or every step"):
       val command  = Outcome.Skipped(mark, Probe.Local, Fix.Command(ShellLine.trusted("histos test")))
       val settings =
-        Outcome.Skipped(mark, Probe.GitHubAdmin, Fix.Settings(HttpUrl.trusted("https://example.test/s"), "click"))
+        Outcome.Skipped(mark, Probe.GitHubAdmin, Fix.Settings(HttpUrl.trusted("https://example.test/s"), "click", None))
       val config =
         Outcome.Skipped(mark, Probe.JobEnv, Fix.Config(RepoPath.trusted(".github/workflows/ci.yml"), Edit("a", "b")))
       val steps = Outcome.Skipped(mark, Probe.GitHubRead, Fix.Steps(::("gh auth login", List("gh auth status"))))
-      val shown = Render.text("repo", DoctorReport(List(command, settings, config, steps), Nil), true)
+      val run   = Outcome.Skipped(mark, Probe.Local, Fix.Histos(HistosCommand.of("workflow", "--update")))
+      val shown = Render.text("repo", DoctorReport(List(command, settings, config, steps, run), Nil), true)
       assertTrue(
         shown.contains("histos test"),
+        shown.contains("             ./histos workflow --update"),
         shown.contains("https://example.test/s"),
         shown.contains(".github/workflows/ci.yml"),
         shown.contains("gh auth login"),
         shown.contains("gh auth status"),
         List("Local", "GitHubAdmin", "JobEnv", "GitHubRead").forall(probe => shown.contains(s"(needs $probe)")),
-        shown.contains("0 errors, 0 warnings, 0 ok, 4 skipped"),
+        shown.contains("0 errors, 0 warnings, 0 ok, 5 skipped"),
       )
     ,
-    test("apply rewrites a present file, records a command, and leaves a denied setting"):
+    test("apply rewrites a present file, records a histos command, never a person's, and leaves a denied setting"):
       val files    = Map("histos.scala" -> "keep before tail")
       val edit     = Fix.Config(RepoPath.trusted("histos.scala"), Edit("before", "after"))
       val missing  = Fix.Config(RepoPath.trusted("gone.scala"), Edit("x", "y"))
-      val command  = Fix.Command(ShellLine.trusted("histos test"))
-      val settings = Fix.Settings(HttpUrl.trusted("https://example.test/set"), "open")
+      val run      = Fix.Histos(HistosCommand.of("test"))
+      val person   = Fix.Command(ShellLine.trusted("gh auth login"))
+      val settings = Fix.Settings(HttpUrl.trusted("https://example.test/set"), "open", None)
       val steps    = Fix.Steps(::("first step", Nil))
       val kinds    = Set(FixKind.LocalEdit, FixKind.HistosCommand, FixKind.GitHubSetting)
-      val printed  = FixApply.applyAll(List(edit, command), FixMode.Print, _ => FixApply.Answer.Yes, files)
+      val printed  = FixApply.applyAll(List(edit, run), FixMode.Print, _ => FixApply.Answer.Yes, files)
       val applied  = FixApply.applyAll(
-        List(edit, missing, command, settings, steps),
+        List(edit, missing, run, person, settings, steps),
         FixMode.Apply(kinds),
         {
-          case Fix.Settings(_, _) => FixApply.Answer.Yes
-          case _                  => FixApply.Answer.NonTty
+          case Fix.Settings(_, _, _) => FixApply.Answer.Yes
+          case _                     => FixApply.Answer.NonTty
         },
         files,
       )
       val denied =
         FixApply.applyAll(List(settings), FixMode.Apply(Set(FixKind.GitHubSetting)), _ => FixApply.Answer.No, files)
       val held =
-        FixApply.applyAll(List(command), FixMode.Apply(Set(FixKind.LocalEdit)), _ => FixApply.Answer.Yes, files)
+        FixApply.applyAll(List(run), FixMode.Apply(Set(FixKind.LocalEdit)), _ => FixApply.Answer.Yes, files)
       assertTrue(
         printed == (files, Nil),
         applied._1 == Map("histos.scala" -> "keep after tail", "gone.scala" -> ""),
-        applied._2 == List("histos test"),
+        applied._2 == List(HistosCommand.of("test")),
         denied == (files, Nil),
         held == (files, Nil),
-        FixApply.kindOf(edit) == FixKind.LocalEdit,
-        FixApply.kindOf(command) == FixKind.HistosCommand,
-        FixApply.kindOf(settings) == FixKind.GitHubSetting,
-        FixApply.kindOf(steps) == FixKind.HistosCommand,
+        FixApply.kindOf(edit).contains(FixKind.LocalEdit),
+        FixApply.kindOf(run).contains(FixKind.HistosCommand),
+        FixApply.kindOf(settings).contains(FixKind.GitHubSetting),
+        FixApply.kindOf(person).isEmpty,
+        FixApply.kindOf(steps).isEmpty,
         RefusalMap.refused(ApiCall.Rules, 500, "closed") == None,
       ),
   )

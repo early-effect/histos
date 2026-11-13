@@ -1,5 +1,6 @@
 package histos.doctor
 
+import histos.ProjectName
 import histos.plugin.RepoPath
 
 import zio.test.*
@@ -52,7 +53,7 @@ object DoctorModelLawSpec extends ZIOSpecDefault:
     ,
     test("fault text keeps the summary, one location, and only the first fix"):
       val first  = Fix.Command(ShellLine.trusted("histos help"))
-      val second = Fix.Settings(histos.HttpUrl.trusted("https://example.com/second-fix"), "second-fix")
+      val second = Fix.Settings(histos.HttpUrl.trusted("https://example.com/second-fix"), "second-fix", None)
       val same   = Noted.error("demo.check", "summary", "summary", first, second)
       val longer = Noted.error("demo.check", "summary", "why", first)
       val placed = Noted.at(longer, "build.scala", Some(4))
@@ -85,6 +86,9 @@ object DoctorModelLawSpec extends ZIOSpecDefault:
         Suggest.closest("b", List("bbb", "cb", "ab", "a")) == Some("a"),
         Suggest.closest("zzzz", List("core")).isEmpty,
         Suggest.runs("docc", Nil) == List("doc"),
+        Suggest.projects(ProjectName("cort"), List(ProjectName("core"), ProjectName("api"))) ==
+          List(ProjectName("core")),
+        Suggest.projects(ProjectName("core"), List(ProjectName("core"))).isEmpty,
         Suggest.binary("dev.zio", "zio_3", "2").isEmpty,
         Suggest.binary("dev.zio", "zio", "2").exists(_.contains("dev.zio::zio:2")),
       ),

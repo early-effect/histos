@@ -1445,8 +1445,9 @@ object MessageLawSpec extends ZIOSpecDefault:
   /** A `::` always has a head, so the first fix and the first step are fields, not lookups. */
   private def fixText(fixes: ::[Fix]): String =
     fixes.head match
-      case Fix.Command(line)        => line.value
-      case Fix.Settings(url, click) => s"${url.value}  $click"
-      case Fix.Config(file, _)      => file.value
-      case Fix.Steps(items)         => items.head
+      case Fix.Command(line)           => line.value
+      case Fix.Histos(command)         => command.line
+      case Fix.Settings(url, click, _) => s"${url.value}  $click"
+      case Fix.Config(file, _)         => file.value
+      case Fix.Steps(items)            => items.head
 end MessageLawSpec

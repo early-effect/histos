@@ -1,11 +1,23 @@
 package histos
 
-import histos.central.ReleaseFeed
-import histos.doctor.{FixApply, GitHubCredential}
+import histos.central.{KeyServer, ReleaseFeed}
+import histos.cli.Stdio
+import histos.doctor.GhAuth
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.plugin.SecretName
-import histos.supply.{DoctorSurface, GitAnswers, Net, PrAuthor, Reply, SupplyChain, SupplyFault, UpdatePolicy}
+import histos.supply.{
+  CommandRunner,
+  DoctorSurface,
+  GitAnswers,
+  GitRead,
+  Net,
+  PrAuthor,
+  Reply,
+  SupplyChain,
+  SupplyFault,
+  UpdatePolicy,
+}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -19,7 +31,6 @@ import zio.test.*
 /** The supply survey over one fake GitHub, run as a laptop and as a GitHub Actions job. No socket is opened. */
 object DoctorVenueLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
-  private val user   = GitHubCredential.Token("user-token", "github.com")
 
   private val laptop  = Map("GITHUB_REPOSITORY" -> "early-effect/histos")
   private val actions = laptop + ("GITHUB_ACTIONS" -> "true")
@@ -120,25 +131,25 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
   private def survey(env: Map[String, String], installations: Reply) =
     ZIO.scoped(Workspace.work("histos-doctor-venue").flatMap(surveyAt(_, env, installations)))
 
+  /** The job's variables through `TestSystem`, a user token from `gh`, and the fake GitHub as the net. */
   private def surveyAt(repo: Path, env: Map[String, String], installations: Reply) =
     val machine =
       Machine(Map.empty, "/home/demo", histos.jdk.Os.Mac, Architecture.Aarch64, repo, repo, None, NativeOrigin.Central)
     ZIO
       .fromEither(app)
       .flatMap: built =>
-        DoctorSurface.runWith(
-          repo,
-          built,
-          DoctorSurface.Request(Some("supply-chain"), false, None, false, false, Nil, true),
-          machine,
-          FakeGitHub(installations),
-          env,
-          Some(user),
-          false,
-          fix => ZIO.dieMessage(s"doctor asked about $fix").as(FixApply.Answer.No),
-          line => ZIO.dieMessage(s"doctor ran $line"),
-          url => ZIO.dieMessage(s"doctor wrote $url"),
-        )
+        ZIO.foreachDiscard(env)((name, value) => TestSystem.putEnv(name, value)) *>
+          DoctorSurface
+            .run(
+              repo,
+              built,
+              DoctorSurface.Request(Some("supply-chain"), false, None, false, false, Nil, true),
+              machine,
+            )
+            .provideSomeLayer[ReleaseFeed & GitRead](
+              ZLayer.succeed[Net](FakeGitHub(installations)) ++ ZLayer.succeed[GhAuth](UserGh) ++
+                ZLayer.succeed(Stdio.redirected) ++ stubbed[KeyServer] ++ stubbed[CommandRunner]
+            )
 
   private def app =
     Projects
@@ -167,6 +178,10 @@ object DoctorVenueLawSpec extends ZIOSpecDefault:
       case line if line.startsWith(mark) =>
         line.drop(mark.length).trim.takeWhile(!_.isWhitespace)
 end DoctorVenueLawSpec
+
+/** `gh` holding a user's token. */
+private object UserGh extends GhAuth:
+  def token(hostname: Option[String]): UIO[Option[String]] = ZIO.some("user-token")
 
 /** Answers like an organization-owned repository. Only the installation list varies. */
 private final class FakeGitHub(installations: Reply) extends Net:

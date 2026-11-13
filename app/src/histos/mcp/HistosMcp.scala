@@ -16,6 +16,7 @@ import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.publish.IvyRoot
 import histos.resolve.Resolve
 import histos.server.{Call, LauncherAction, ResolveAction, Successor}
+import histos.supply.DoctorSurface
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
@@ -97,7 +98,7 @@ object HistosMcp:
       apiJar: Path,
       pipe: LinePipe,
       machine: Machine,
-  ): ZIO[Loader & Scope & Resolve & ContentStore & IvyRoot, ServeError, Unit] =
+  ): ZIO[Loader & Scope & Resolve & ContentStore & IvyRoot & DoctorSurface.Reads, ServeError, Unit] =
     for
       desk <- Session.desk
       _    <- ZIO.addFinalizer(
@@ -179,7 +180,7 @@ object HistosMcp:
       desk: Session.Desk,
   ): Either[
     NonEmptyChunk[McpBuildError],
-    Mcp[Loader & Scope & Resolve & ContentStore & IvyRoot],
+    Mcp[Loader & Scope & Resolve & ContentStore & IvyRoot & DoctorSurface.Reads],
   ] =
     val ask     = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
     val refused = (reason: Rejection) => Session.CallProblem.Fault(BuildFault.Rejected(reason))
@@ -317,7 +318,7 @@ object HistosMcp:
       )(_ => Stored.read(repo))
       diagnosed <- observed.tool[DoctorArgs](
         Names.doctor,
-        "Run doctor. projects are the modules this run launches. An empty list launches nothing, so node.floor, node.shadowed, and clang.source do not probe. The text lists errors and warnings. verbose lists every check. area limits the checks. json prints json. preflight runs the offline checks and does not call GitHub. fix applies local edits and never changes GitHub settings.",
+        "Run doctor. projects are the modules this run launches. An empty list launches nothing, so node.floor, node.shadowed, and clang.source do not probe. The text lists errors and warnings. verbose lists every check. area limits the checks. json prints json. preflight runs the offline checks and does not call GitHub. fix applies local edits and runs histos commands, whose output is part of the text, and never changes GitHub settings.",
       )(args =>
         ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap {
           case Left(error)   => ZIO.succeed(DoctorText(error.message))
@@ -325,11 +326,11 @@ object HistosMcp:
             launched(loaded.graph, args.projects) match
               case Left(error)    => ZIO.succeed(notLaunched(error))
               case Right(modules) =>
-                histos.supply.DoctorSurface
+                DoctorSurface
                   .run(
                     repo,
                     loaded.graph,
-                    histos.supply.DoctorSurface.Request(
+                    DoctorSurface.Request(
                       args.area,
                       args.json,
                       args.preflight,
@@ -340,13 +341,9 @@ object HistosMcp:
                     ),
                     machine,
                   )
-                  .provide(
-                    histos.central.ReleaseFeed.live,
-                    histos.supply.GitRead.live,
-                    histos.supply.Terminal.detached,
-                    ZLayer.succeed(histos.supply.Net.live),
-                    histos.doctor.GhAuth.live,
-                    histos.supply.Shell.live,
+                  // The standard streams are the protocol, so no person answers and no fix prints on them.
+                  .provideSomeLayer[DoctorSurface.Reads](
+                    ZLayer.succeed(histos.cli.Stdio.redirected) ++ histos.supply.CommandRunner.captured
                   )
                   .map((_, text) => DoctorText(text))
         }

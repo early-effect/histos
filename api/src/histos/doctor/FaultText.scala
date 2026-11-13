@@ -11,9 +11,13 @@ object FaultText:
       s"\n${loc.file.value}$line"
     s"$body$where\n${rendered(diagnostic.fixes.head)}"
 
-  def rendered(fix: Fix): String = fix match
-    case Fix.Command(line)        => s"fix  ${line.value}"
-    case Fix.Settings(url, click) => s"fix  ${url.value}  $click"
-    case Fix.Config(file, _)      => s"fix  ${file.value}"
-    case Fix.Steps(items)         => s"fix  ${items.head}"
+  def rendered(fix: Fix): String = s"fix  ${shown(fix)}"
+
+  /** The one line a fix shows: what to run, open, edit, or do first. */
+  def shown(fix: Fix): String = fix match
+    case Fix.Command(line)           => line.value
+    case Fix.Histos(command)         => command.line
+    case Fix.Settings(url, click, _) => s"${url.value}  $click"
+    case Fix.Config(file, _)         => file.value
+    case Fix.Steps(items)            => items.head
 end FaultText

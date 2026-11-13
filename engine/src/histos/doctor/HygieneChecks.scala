@@ -37,11 +37,7 @@ object HygieneChecks:
               case CentralProbe.Auth.Accepted =>
                 Outcome.Ok(credentialsId, "the portal accepted the token")
               case CentralProbe.Auth.NotRun | CentralProbe.Auth.Unreachable =>
-                Outcome.Skipped(
-                  credentialsId,
-                  Probe.JobEnv,
-                  Fix.Command(ShellLine.trusted("retry when the portal answers")),
-                )
+                Outcome.Skipped(credentialsId, Probe.JobEnv, Fix.Steps(::("retry when the portal answers", Nil)))
           case _ =>
             secrets match
               case Some(names) if missing(names) =>
@@ -52,11 +48,7 @@ object HygieneChecks:
                 Outcome.Skipped(
                   credentialsId,
                   Probe.JobEnv,
-                  Fix.Command(
-                    ShellLine.trusted(
-                      "export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets"
-                    )
-                  ),
+                  Fix.Steps(::("export SONATYPE_USERNAME and SONATYPE_PASSWORD, or list the repository secrets", Nil)),
                 )
 
   def key(hit: PgpProbe.Hit): Outcome =
@@ -84,11 +76,7 @@ object HygieneChecks:
           List(Outcome.Skipped(pagesId, Probe.GitHubRead, Fix.Command(ShellLine.trusted("gh auth login"))))
         case PagesProbe.Hit.Unreachable =>
           List(
-            Outcome.Skipped(
-              pagesId,
-              Probe.GitHubRead,
-              Fix.Command(ShellLine.trusted("retry when the GitHub API answers")),
-            )
+            Outcome.Skipped(pagesId, Probe.GitHubRead, Fix.Steps(::("retry when the GitHub API answers", Nil)))
           )
         case PagesProbe.Hit.Ready(source, gate) =>
           val sourceOutcome = source match

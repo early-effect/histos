@@ -2,6 +2,7 @@ package histos.supply
 
 import histos.version.CommitSha
 import histos.workflow.ActionPins
+import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -158,35 +159,47 @@ object Plan:
     val extra  = notes.toList.map((key, value) => s"note $key $value")
     (List("deps plan") ++ libraryLines ++ actionLines ++ faults ++ extra).mkString("\n") + "\n"
 
-  def write(root: Path, proposal: Proposal, histos: String, workflows: List[(Path, String)]): List[String] =
-    val nextHistos = proposal.libraries.apply.foldLeft(histos)(rewriteDep)
-    val written    =
-      if nextHistos == histos then Nil
-      else
-        Files.writeString(root.resolve("histos.scala"), nextHistos)
-        List("histos.scala")
-    val actionFiles = workflows.flatMap: (path, text) =>
-      val next = proposal.actions.filterNot(_.listed).foldLeft(text)(rewriteAction)
-      if next == text then Nil
-      else
-        Files.writeString(path, next)
-        List(root.relativize(path).toString)
-    written ++ actionFiles
+  /** Writes `histos.scala`, then each workflow file the plan changes, and names each from `root`. */
+  def write(
+      root: Path,
+      proposal: Proposal,
+      histos: String,
+      workflows: List[(Path, String)],
+  ): IO[IoFailure, List[String]] =
+    val edits =
+      (root.resolve("histos.scala"), histos, proposal.libraries.apply.foldLeft(histos)(rewriteDep)) ::
+        workflows.map((path, text) => (path, text, proposal.actions.filterNot(_.listed).foldLeft(text)(rewriteAction)))
+    ZIO.foreach(edits.filter((_, before, after) => before != after)): (path, _, after) =>
+      Workspace.writeString(path, after).as(root.relativize(path).toString)
 
-  def workflowFiles(root: Path): List[Path] =
+  /** Workflows, composite actions, and the action pin catalog under `root`. */
+  def workflowFiles(root: Path): IO[IoFailure, List[Path]] =
     val workflows = root.resolve(".github").resolve("workflows")
     val actions   = root.resolve(".github").resolve("actions")
     val pins = root.resolve("engine").resolve("src").resolve("histos").resolve("workflow").resolve("ActionPins.scala")
-    val yml  =
-      if Files.isDirectory(workflows) then
-        Files.list(workflows).iterator.asScala.filter(_.toString.endsWith(".yml")).toList
-      else Nil
-    val nested =
-      if Files.isDirectory(actions) then
-        Files.walk(actions).iterator.asScala.filter(_.getFileName.toString == "action.yml").toList
-      else Nil
-    val catalog = if Files.isRegularFile(pins) then List(pins) else Nil
-    yml ++ nested ++ catalog
+    for
+      yml     <- under(workflows, Files.list(_))(_.toString.endsWith(".yml"))
+      nested  <- under(actions, Files.walk(_))(_.getFileName.toString == "action.yml")
+      catalog <- ZIO
+        .attemptBlocking(Files.isRegularFile(pins))
+        .mapBoth(_ => IoFailure(pins, IoFault.Stat), present => if present then List(pins) else Nil)
+    yield yml ++ nested ++ catalog
+
+  /** The paths `open` lists under `dir` that `keep` admits, or none when `dir` is not a directory. */
+  private def under(dir: Path, open: Path => java.util.stream.Stream[Path])(
+      keep: Path => Boolean
+  ): IO[IoFailure, List[Path]] =
+    ZIO
+      .scoped:
+        ZIO
+          .attemptBlocking(Files.isDirectory(dir))
+          .flatMap: present =>
+            if !present then ZIO.succeed(Nil)
+            else
+              ZIO
+                .fromAutoCloseable(ZIO.attemptBlocking(open(dir)))
+                .flatMap(paths => ZIO.attemptBlocking(paths.iterator.asScala.filter(keep).toList.sortBy(_.toString)))
+      .mapError(_ => IoFailure(dir, IoFault.Walk))
 
   def rewriteDep(source: String, bump: ChosenBump): String =
     val parts = bump.from.coordinate.value.split(":", 2)

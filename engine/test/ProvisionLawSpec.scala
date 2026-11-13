@@ -1,12 +1,13 @@
 package histos.scaffold
 
-import histos.central.ReleaseFeed
+import histos.central.{KeyServer, ReleaseFeed}
+import histos.cli.Stdio
 import histos.doctor.GhAuth
 import histos.jdk.{Machine, Os}
 import histos.load.Loader
 import histos.native.NativeOrigin
 import histos.resolve.Resolve
-import histos.supply.{GitRead, Net, Shell, Terminal}
+import histos.supply.{CommandRunner, GitRead, Net}
 import histos.toolchain.Architecture
 import histos.workspace.Workspace
 
@@ -14,7 +15,7 @@ import java.nio.file.{Files, Path}
 
 import slayer.stubbed
 
-import zio.{Scope, ZIO}
+import zio.{Scope, ZIO, ZLayer}
 import zio.test.*
 
 object ProvisionLawSpec extends ZIOSpecDefault:
@@ -120,8 +121,8 @@ object ProvisionLawSpec extends ZIOSpecDefault:
 
   /** Every service dies if read. A bare project loads nothing, resolves nothing, and runs no doctor. */
   private val stock =
-    stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ReleaseFeed] ++ stubbed[GitRead] ++ stubbed[Terminal] ++
-      stubbed[Net] ++ stubbed[GhAuth] ++ stubbed[Shell]
+    stubbed[Loader] ++ stubbed[Resolve] ++ stubbed[ReleaseFeed] ++ stubbed[GitRead] ++ stubbed[Net] ++
+      stubbed[GhAuth] ++ stubbed[KeyServer] ++ stubbed[CommandRunner] ++ ZLayer.succeed(Stdio.redirected)
 
   private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
     ZIO

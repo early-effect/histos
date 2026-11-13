@@ -64,7 +64,8 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         identity(rule) == ("supply.required-check", Level.Error),
         identity(SupplyDiagnostic.RuleBlind(None, Blind.Unreachable)) == ("supply.required-check", Level.Error),
         identity(overlap) == ("supply.dependabot-overlap", Level.Warning),
-        commands(overlap) == List("./histos setup supply-chain --fix"),
+        histosRuns(overlap) == List("./histos setup supply-chain --fix"),
+        commands(overlap).isEmpty,
         identity(SupplyDiagnostic.DependabotUnread(RepoPath("dependabot.yml"))) ==
           ("supply.dependabot-overlap", Level.Warning),
         steps(SupplyDiagnostic.DependabotUnread(RepoPath("dependabot.yml"))) ==
@@ -91,7 +92,8 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         identity(cannot) == ("supply.allow-prs", Level.Error),
         settings(cannot) == List(s"https://github.com/${repo.value}/settings/actions"),
         identity(files) == ("supply.workflow-files", Level.Warning),
-        commands(files) == List("./histos workflow --update"),
+        histosRuns(files) == List("./histos workflow --update"),
+        commands(files).isEmpty,
         identity(SupplyDiagnostic.AllowPullRequestsBlind(repo, Blind.Refused)) == ("supply.allow-prs", Level.Warning),
         identity(pins) == ("supply.sha-pin-policy", Level.Info),
         identity(schedule) == ("supply.schedule-disabled", Level.Error),
@@ -99,6 +101,27 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         settings(schedule) == List(s"https://github.com/${repo.value}/actions"),
         identity(refused) == ("supply.github-refused", Level.Error),
         steps(refused) == List("Read the 403 response for POST /pulls."),
+      )
+    ,
+    test("only the dependency graph page carries the call that applies it, and every other page is a person's"):
+      val pages = List(
+        SupplyDiagnostic.SecretMissing(secret, job, repo, org),
+        SupplyDiagnostic.SecretMissing(secret, job, repo, user),
+        SupplyDiagnostic.AppNotInstalled(repo),
+        SupplyDiagnostic.AppPermissionMissing(AppPermission.Contents, Access.Write, "why"),
+        SupplyDiagnostic.RequiredCheckMissing(branch, job, Nil, RuleSource.Absent, repo),
+        SupplyDiagnostic.DependabotSecurityPrsOn(::(Ecosystem.Npm, Nil)),
+        SupplyDiagnostic.DefaultBranchMismatch(branch, BranchName.trusted("trunk"), repo),
+        SupplyDiagnostic.AllowActionsToCreatePrs(repo, PrAuthor.Actions),
+        SupplyDiagnostic.ActionsCannotOpenPullRequests(repo),
+        SupplyDiagnostic.ShaPinPolicyOff(repo),
+        SupplyDiagnostic.ScheduleDisabled(RepoPath(".github/workflows/ci.yml"), repo),
+      )
+      assertTrue(
+        pages.filterNot(settings(_).nonEmpty) == Nil,
+        pages.filterNot(calls(_).isEmpty) == Nil,
+        calls(SupplyDiagnostic.DependencyGraphOff(repo)) ==
+          List((s"https://api.github.com/repos/${repo.value}/vulnerability-alerts", "")),
       )
     ,
     test("a required-check fix opens the rule that was read"):
@@ -139,7 +162,8 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         found.check.value == "supply.signing" &&
         found.summary.contains(token) &&
         (token != "CommitSigning.GitPush" || !ssh) &&
-        commands(found) == List("switch to CommitSigning.ApiSigned, or allow squash only")
+        steps(found) == List("Switch to CommitSigning.ApiSigned, or allow squash only.") &&
+        commands(found).isEmpty
       val unexplained = authors.filterNot: (author, token) =>
         val found = SupplyDiagnostic.AllowActionsToCreatePrs(repo, author)
         found.level == Level.Info && found.explain.contains(token)
@@ -215,10 +239,16 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
     (diagnostic.check.value, diagnostic.level)
 
   private def settings(diagnostic: SupplyDiagnostic): List[String] =
-    diagnostic.fixes.toList.collect { case Fix.Settings(url, _) => url.value }
+    diagnostic.fixes.toList.collect { case Fix.Settings(url, _, _) => url.value }
+
+  private def calls(diagnostic: SupplyDiagnostic): List[(String, String)] =
+    diagnostic.fixes.toList.collect { case Fix.Settings(_, _, Some(put)) => (put.url.value, put.body) }
 
   private def commands(diagnostic: SupplyDiagnostic): List[String] =
     diagnostic.fixes.toList.collect { case Fix.Command(line) => line.value }
+
+  private def histosRuns(diagnostic: SupplyDiagnostic): List[String] =
+    diagnostic.fixes.toList.collect { case Fix.Histos(command) => command.line }
 
   private def steps(diagnostic: SupplyDiagnostic): List[String] =
     diagnostic.fixes.toList.collect:
