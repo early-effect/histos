@@ -1,5 +1,7 @@
 package histos.doctor
 
+import histos.ProjectName
+
 /** Names within edit distance `limit`. Zipx uses 3. Histos uses 2. An exact match is not a suggestion. */
 object Suggest:
   def near(typed: String, known: Iterable[String], limit: Int = 2): List[String] =
@@ -15,6 +17,11 @@ object Suggest:
         .map(_._2)
         .distinct
         .take(3)
+
+  /** The projects whose names are near `typed`, as projects. */
+  def projects(typed: ProjectName, known: Iterable[ProjectName]): List[ProjectName] =
+    val named = known.map(name => name.value -> name).toMap
+    near(typed.value, named.keys).flatMap(named.get)
 
   def closest(typed: String, known: Iterable[String], limit: Int = 2): Option[String] =
     near(typed, known, limit).headOption

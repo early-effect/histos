@@ -163,9 +163,11 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
         yield assertTrue(bad == PgpProbe.Hit.Bad, unset == PgpProbe.Hit.Unset)
       program.provide(stubbed[KeyServer])
     ,
-    test("a named key asks the key server it is given: a hit is present, a miss is missing, and a fault is unreachable"):
-      val key   = Fingerprint("0123456789abcdef")
-      val named = Map("PGP_KEY_HEX" -> "0123456789abcdef")
+    test(
+      "a named key asks the key server it is given: a hit is present, a miss is missing, and a fault is unreachable"
+    ):
+      val key     = Fingerprint("0123456789abcdef")
+      val named   = Map("PGP_KEY_HEX" -> "0123456789abcdef")
       val program =
         for
           asked   <- Ref.make(List.empty[Fingerprint])
@@ -229,7 +231,8 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       assertTrue(
         off == List(Outcome.Ok(HygieneChecks.pagesId, "no pages site")),
         down == List(
-          Outcome.Skipped(HygieneChecks.pagesId, Probe.GitHubRead, Fix.Steps(::("retry when the GitHub API answers", Nil)))
+          Outcome
+            .Skipped(HygieneChecks.pagesId, Probe.GitHubRead, Fix.Steps(::("retry when the GitHub API answers", Nil)))
         ),
         open == List(Outcome.Ok(HygieneChecks.pagesId, "Pages deploys from GitHub Actions")),
         other.exists(found),
@@ -450,7 +453,7 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
                   (
                     unknown match
                       case Left(SelectError.Unknown(name, near)) =>
-                        name == typo && near.contains("web")
+                        name == typo && near.contains(ProjectName("web"))
                       case _ => false
                   ),
                   jvmFloor == List(Outcome.Ok(ToolchainChecks.nodeFloorId, "no Js module")),

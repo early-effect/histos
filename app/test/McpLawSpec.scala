@@ -164,7 +164,8 @@ object McpLawSpec extends ZIOSpecDefault:
         HistosMcp.launched(graph, Nil) == Right(Nil),
         HistosMcp.launched(graph, List("core")) == Right(List(core)),
         HistosMcp.launched(graph, List("1api", "nope")) == Left(ProjectNameError.Bad("1api")),
-        HistosMcp.launched(graph, List("nope")) == Left(SelectError.Unknown(ProjectName("nope"), List("core"))),
+        HistosMcp.launched(graph, List("nope")) ==
+          Left(SelectError.Unknown(ProjectName("nope"), List(ProjectName("core")))),
         HistosMcp.notLaunched(ProjectNameError.Bad("1api")) == HistosMcp.DoctorText("'1api' is not a project name"),
         HistosMcp.notLaunched(SelectError.Unknown(ProjectName("nope"), Nil)) == HistosMcp.DoctorText(
           "'nope' is not a project\nThe name is not a project in this graph.\nfix  histos graph"

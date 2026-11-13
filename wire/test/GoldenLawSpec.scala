@@ -283,5 +283,13 @@ object GoldenLawSpec extends ZIOSpecDefault:
     JsonLaw.golden("every position base is its case name", bases),
     JsonLaw.golden("every io fault is its case name", ioFaults),
     JsonLaw.sent("every call the native client sends is the document the server reads", batchCalls),
+    JsonLaw.sent[SelectError](
+      "an unknown selection names its near projects as names",
+      List(SelectError.Unknown(core, List(api)) -> """{"Unknown":{"name":"core","near":["api"]}}"""),
+    ),
+    JsonLaw.sent[CiError](
+      "an unknown workflow project names its near projects as names",
+      List(CiError.Unknown(core, List(api)) -> """{"Unknown":{"name":"core","near":["api"]}}"""),
+    ),
   )
 end GoldenLawSpec

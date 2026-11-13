@@ -99,7 +99,7 @@ object Workflow:
     s".github/workflows/$name"
 
   private def unknownProject(graph: ProjectGraph, name: ProjectName): CiError =
-    CiError.Unknown(name, Suggest.near(name.value, graph.projects.map(_.name.value)))
+    CiError.Unknown(name, Suggest.projects(name, graph.projects.map(_.name)))
 
   private def firstDiff(rendered: String, committed: String): String =
     val want  = rendered.split("\n", -1).toVector
