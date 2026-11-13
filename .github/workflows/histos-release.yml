@@ -22,7 +22,7 @@ jobs:
           PGP_SECRET: ${{ secrets.PGP_SECRET }}
           PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
           PGP_KEY_HEX: ${{ secrets.PGP_KEY_HEX }}
-      - run: "./histos assembly"
+      - run: "./histos assembly app"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: histos-jar

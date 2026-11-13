@@ -106,6 +106,7 @@ jobs:
       - run: "./histos test --affected '${{ needs.affected.outputs.modules }}'"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
+          HISTOS_CACHE_MODE: "write"
       - if: "always()"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -252,6 +253,9 @@ jobs:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos compile"
+        env:
+          HISTOS_CACHE_NAMESPACE: "main"
+          HISTOS_CACHE_MODE: "write"
       - if: "always()"
         env:
           GH_TOKEN: ${{ github.token }}
