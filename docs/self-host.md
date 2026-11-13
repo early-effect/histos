@@ -13,7 +13,7 @@ The pin moves through a pull request:
 3. Pin the commit channel, `<ship>-<sha>-SNAPSHOT`, in `build.properties`.
 4. Push.
 
-`./histos` in this checkout is still the pin at `c5d402f`, channel `0.3.0-c7d1b280cc0a-SNAPSHOT`. That pin does not pack or prove. The pin move runs once a toolchain built from this layer is what `./histos` executes. This layer does not change `histos.version`.
+The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. Linux is absent until Container. `./histos` execs the user shim, which reads `.histos/toolchain` when it is set and otherwise this channel.
 
 ## Fetch the lock before the suite
 
