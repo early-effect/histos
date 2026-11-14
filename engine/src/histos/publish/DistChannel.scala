@@ -105,6 +105,39 @@ object DistChannel:
         DistLayout.channel(coordinate) -> text(revision + "\n"),
       )
 
+  /** [[files]] plus `shim-<sha256>`, `shim`, and `shim.sha256` when this repository publishes a shim. The channel stays
+    * last. No shim leaves the list alone.
+    */
+  def payload(
+      coordinate: String,
+      revision: String,
+      jar: Chunk[Byte],
+      clients: List[(DistPlatform, Chunk[Byte])],
+      shim: Option[Chunk[Byte]],
+  ): List[(String, Chunk[Byte])] =
+    attach(files(coordinate, revision, jar, clients), shim)
+
+  private def attach(
+      listed: List[(String, Chunk[Byte])],
+      shim: Option[Chunk[Byte]],
+  ): List[(String, Chunk[Byte])] =
+    shim match
+      case None        => listed
+      case Some(bytes) =>
+        val sha     = DistLayout.sha256(bytes.toArray)
+        val pinned  = DistLayout.pinnedShim(sha) -> bytes
+        val pointer = DistLayout.Shim            -> bytes
+        val digest  = DistLayout.ShimSha         -> text(sha + "\n")
+        val at      = listed.length - 1
+        if at < 0 then List(pinned, pointer, digest)
+        else listed.take(at) ++ List(pinned, pointer, digest) ++ listed.drop(at)
+
+  private def readShim(repo: Path): IO[LocalPublishError, Option[Chunk[Byte]]] =
+    val path = repo.resolve("install").resolve("histos")
+    ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => LocalPublishError.Read(path)).flatMap { present =>
+      if present then bytes(path).map(Some(_)) else ZIO.succeed(None)
+    }
+
   private def one(
       graph: ProjectGraph,
       ship: ShipName,
@@ -204,7 +237,8 @@ object DistChannel:
       clients   <- ZIO.foreach(platforms)(platform =>
         bytes(repo.resolve(DistLayout.builtClient(platform)).normalize).map(platform -> _)
       )
-      _ <- replace(access, bases, plan, files(plan.revision, unique, jar, clients))
+      shim <- readShim(repo)
+      _    <- replace(access, bases, plan, payload(plan.revision, unique, jar, clients, shim))
     yield s"${plan.ship.value} dist ${DistLayout.channel(plan.revision)} $unique"
 
   private def timestamp(plan: ChannelPlan, lines: List[String]): Either[LocalPublishError, String] =

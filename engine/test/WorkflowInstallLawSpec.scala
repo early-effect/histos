@@ -12,7 +12,8 @@ import zio.test.*
 object WorkflowInstallLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
 
-  given CiBranch = CiBranch("main")
+  given CiBranch      = CiBranch("main")
+  given RenderingShip = RenderingLaw.ship
 
   private val finished = SonaProbe(ReleaseMode.Automatic)
 
@@ -50,6 +51,7 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         "          name: client-linux-x86_64",
         "          path: dist/clients/client-linux-x86_64/histos-client",
         "gh release upload dist",
+        "\"shim-$shim_sha\"",
         "version=1.2.3",
         s"expected=\"$linux\"",
         s"expected=\"$mac\"",

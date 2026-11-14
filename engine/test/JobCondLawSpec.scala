@@ -11,6 +11,8 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object JobCondLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
 
+  given RenderingShip = RenderingLaw.ship
+
   private def trigger(events: List[On], condition: Cond): Trigger = new Trigger:
     def on: List[On] = events
     def cond: Cond   = condition

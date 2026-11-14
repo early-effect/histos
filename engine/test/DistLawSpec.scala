@@ -41,4 +41,30 @@ object DistLawSpec extends ZIOSpecDefault:
         text.contains(DistLayout.sha256(mac.toArray)),
         !text.contains("sources"),
       )
+    ,
+    test("a shim is pinned before the moving names, and the channel stays last"):
+      val jar     = Chunk[Byte](9)
+      val shim    = Chunk[Byte](4, 5, 6)
+      val sha     = DistLayout.sha256(shim.toArray)
+      val stamp   = "9.9.9-20261112.042525-1"
+      val channel = "channel-9.9.9-SNAPSHOT"
+      val pinned  = DistChannel.payload("9.9.9-SNAPSHOT", stamp, jar, Nil, Some(shim))
+      val plain   = DistChannel.payload("9.9.9-SNAPSHOT", stamp, jar, Nil, None)
+      val names   = pinned.map(_._1)
+      val digest  = pinned.collect:
+        case (DistLayout.ShimSha, bytes) => new String(bytes.toArray, StandardCharsets.UTF_8)
+      assertTrue(
+        names == List(
+          s"$stamp-histos.jar",
+          s"$stamp-manifest.json",
+          DistLayout.pinnedShim(sha),
+          DistLayout.Shim,
+          DistLayout.ShimSha,
+          channel,
+        ),
+        names.lastOption.contains(channel),
+        pinned.collect { case (DistLayout.Shim, bytes) => bytes } == List(shim),
+        digest == List(sha + "\n"),
+        plain.map(_._1) == DistChannel.files("9.9.9-SNAPSHOT", stamp, jar, Nil).map(_._1),
+      ),
   )

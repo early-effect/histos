@@ -146,6 +146,7 @@ final case class ProjectGraph private (
     coverageExcludes: CoverageExcludes = CoverageExcludes(),
     formatting: Formatting = Formatting.Off,
     coordinates: List[PluginCoordinate] = Nil,
+    ciSetup: CiSetup = CiSetup.Remote,
 ):
   /** The wiring built these plugins. The rest of the graph is unchanged. */
   def withPlugins(registered: List[RegisteredPlugin]): ProjectGraph =
@@ -212,6 +213,7 @@ object ProjectGraph:
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
       coordinates: List[PluginCoordinate] = Nil,
+      ciSetup: CiSetup = CiSetup.Remote,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -233,6 +235,7 @@ object ProjectGraph:
       coverageExcludes,
       formatting,
       coordinates,
+      ciSetup,
     )
 end ProjectGraph
 
@@ -284,6 +287,9 @@ object Projects:
 
   /** Runners, action pins, secrets, and graph env for the workflow. */
   def ci(settings: CiSettings): Organized = Organized.empty.ci(settings)
+
+  /** How generated workflows install Histos. Omission is [[CiSetup.Remote]]. */
+  def ciSetup(value: CiSetup): Organized = Organized.empty.ciSetup(value)
 
   /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
   def jobTimeout(value: JobTimeout): Organized = Organized.empty.jobTimeout(value)
@@ -396,6 +402,7 @@ object Projects:
             settings.coverageExcludes,
             settings.formatting,
             coordinates,
+            settings.ciSetup,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -1012,6 +1019,9 @@ final class Organized private (settings: Organized.Settings):
   /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
   def ci(value: CiSettings): Organized = Organized(settings.copy(ci = value))
 
+  /** How generated workflows install Histos. A second call replaces the choice. Omission is [[CiSetup.Remote]]. */
+  def ciSetup(value: CiSetup): Organized = Organized(settings.copy(ciSetup = value))
+
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.build(settings, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
@@ -1078,6 +1088,7 @@ object Organized:
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
       formatting: Formatting = Formatting.Off,
       pluginSources: List[PluginRef] = Nil,
+      ciSetup: CiSetup = CiSetup.Remote,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())

@@ -1,7 +1,7 @@
 package histos
 
 import histos.plugin.{JobCheck, JobName}
-import histos.workflow.{CiBranch, Workflow}
+import histos.workflow.{CiBranch, RenderingLaw, RenderingShip, Workflow}
 
 import zio.test.*
 
@@ -9,7 +9,8 @@ object CoverageExcludeWorkflowLawSpec extends ZIOSpecDefault:
   private val scala3   = scala"3.10.0"
   private val excluded = CoverageExcludes(classlikes = List(".*Macro.*"), files = List("generated/.*"))
 
-  given CiBranch = CiBranch("main")
+  given CiBranch      = CiBranch("main")
+  given RenderingShip = RenderingLaw.ship
 
   def spec = suite("coverage excludes on the workflow")(
     test("excludes alone do not render a coverage job"):

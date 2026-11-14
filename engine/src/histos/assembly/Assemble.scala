@@ -1,6 +1,7 @@
 package histos.assembly
 
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Sha256Digest}
+import histos.publish.PublishedShim
 import histos.load.BuildClasspath
 import histos.native.NativeOrigin
 import histos.pack.{Assembly, AssemblyFile, Assembled, ClassJar, MainClass as BinaryName}
@@ -33,7 +34,7 @@ import java.nio.file.{Files, Path, StandardCopyOption}
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{IO, Scope, UIO, ZIO, ZLayer}
+import zio.{Chunk, IO, Scope, UIO, ZIO, ZLayer}
 
 object Assemble:
   val ApiEntry: String = BuildClasspath.Entry
@@ -201,9 +202,9 @@ object Assemble:
       launcher: Boolean,
   ): ZIO[Scope, AssembleError, List[AssemblyFile]] =
     for
-      nested <- nested(dirs)
-      ident  <- if launcher then identityFile(repo) else ZIO.succeed(None)
-    yield nested.toList ++ ident.toList
+      nested  <- nested(dirs)
+      shipped <- if launcher then identityFiles(repo) else ZIO.succeed(Nil)
+    yield nested.toList ++ shipped
 
   private def isLauncher(graph: ProjectGraph, name: ProjectName): Boolean =
     graph.catalog.ships.exists(_.toolchain.exists(_.launcher == name))
@@ -225,6 +226,30 @@ object Assemble:
           jar = dir.resolve("libraries.jar")
           written <- ClassJar.write(merged, jar).mapError(AssembleError.Jar(_))
         yield Some(AssemblyFile(ApiEntry, written.path))
+
+  private def identityFiles(repo: Path): ZIO[Scope, AssembleError, List[AssemblyFile]] =
+    for
+      ident <- identityFile(repo)
+      shim  <- shimFile(repo)
+    yield ident.toList ++ shim.toList
+
+  /** The digest of `install/histos` when this checkout has that file. */
+  private def shimFile(repo: Path): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
+    val source = repo.resolve(PublishedShim.fileName)
+    ZIO.attemptBlocking(Files.isRegularFile(source)).orElseSucceed(false).flatMap {
+      case false => ZIO.succeed(None)
+      case true  =>
+        for
+          dir <- temp("histos-shim")
+          path = dir.resolve("shim.sha256")
+          _ <- ZIO
+            .attemptBlocking {
+              val digest = Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(source)))
+              Files.writeString(path, digest.value + "\n", StandardCharsets.UTF_8)
+            }
+            .mapError(_ => AssembleError.Io(source))
+        yield Some(AssemblyFile(PublishedShim.entry, path))
+    }
 
   private def identityFile(repo: Path): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
     ToolchainIdentity

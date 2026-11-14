@@ -22,7 +22,9 @@ end EventEcho
 /** Events that would wake `ci.yml` stay off that file. The owned file is the only printer for those lines. */
 object JobYamlEventLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
-  private val echo   = TaskName("echo")
+
+  given RenderingShip = RenderingLaw.ship
+  private val echo    = TaskName("echo")
 
   private val wideOn =
     """on:

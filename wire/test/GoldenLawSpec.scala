@@ -223,7 +223,7 @@ object GoldenLawSpec extends ZIOSpecDefault:
 
   private val workflowFaults: List[(WorkflowFault, String)] = List(
     WorkflowFault.Files(CiError.NoDefaultBranch) -> """{"Files":{"error":{"NoDefaultBranch":{}}}}""",
-    WorkflowFault.Scripts(ScriptError.Revision)  -> """{"Scripts":{"error":{"Revision":{}}}}""",
+    WorkflowFault.Scripts(ScriptError.Shim)      -> """{"Scripts":{"error":{"Shim":{}}}}""",
   )
 
   /** A job the graph cannot render carries its `CiFault`. */

@@ -1,7 +1,7 @@
 package histos
 
 import histos.plugin.{JobCheck, JobName, RepoPath}
-import histos.workflow.{CiBranch, Workflow}
+import histos.workflow.{CiBranch, RenderingLaw, RenderingShip, Workflow}
 
 import zio.test.*
 
@@ -9,7 +9,8 @@ object FormatWorkflowLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
   private val format = JobName.trusted("format")
 
-  given CiBranch = CiBranch("main")
+  given CiBranch      = CiBranch("main")
+  given RenderingShip = RenderingLaw.ship
 
   def spec = suite("format workflow")(
     test("a build that does not format has no format job"):

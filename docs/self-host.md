@@ -25,9 +25,9 @@ The engine laws read compilers and other locked tools from the Coursier cache of
 
 The install is `~/.histos/toolchains/<id>/`: `histos.jar`, this platform's `histos-client`, and `manifest.json`. The command writes `.histos/toolchain`, one path segment, the ship coordinate. The shim prefers that file over `build.properties` and does not fetch. A missing jar fails with `local toolchain <id> is not installed`. Delete the file to return to the pin. The tracked pin does not change.
 
-`./histos assembly <module>` still writes that module's asset. For this repository `app`'s asset is `dist/histos.jar`. When `app` is the ship's launcher, a pack writes the ship's library members at `bootstrap/histos-api.jar` and `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. No source file carries the commit. Nothing writes `.histos/assembly.sha256`. The checkout script does not launch `dist/histos.jar`. An empty argument list is an error that names the assembly modules.
+`./histos assembly <module>` still writes that module's asset. For this repository `app`'s asset is `dist/histos.jar`. When `app` is the ship's launcher, a pack writes the ship's library members at `bootstrap/histos-api.jar` and `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. When the checkout has `install/histos`, the same pack writes `META-INF/histos/shim.sha256`, the digest the bootstrap wrapper installs. No source file carries the commit. Nothing writes `.histos/assembly.sha256`. The checkout script does not launch `dist/histos.jar`. An empty argument list is an error that names the assembly modules.
 
-`./histos` is rendered by `workflow --update` from the ship number. It checks the operating system, then execs `~/.histos/bin/histos`. The shim chooses the local toolchain or the pin. The generator writes that script. The committed `./histos` in this repository stays the pin's script until the pin moves, because `workflow --check` compares the file to the pin.
+`./histos` is the bootstrap wrapper `workflow --update` writes for every build, including one with no assembly module. When `~/.histos/bin/histos` is missing it refuses a JDK older than `Toolchain.Floor`, installs `shim-<sha256>` from `dist`, checks that sha256, and execs the shim. It does not fetch `shim` or `shim.sha256`. The shim chooses the local toolchain or the pin and sets `HISTOS_VERSION`. The committed `./histos` in this repository stays the pin's script until the pin moves, because `workflow --check` compares the file to the pin.
 
 There is no `client` command and no `launcher` command. A removed `./histos client` names `publish`. A removed `./histos launcher` names `update`.
 
@@ -51,10 +51,11 @@ The successor starts with the requester's `HISTOS_VERSION`. An inherited `HISTOS
 
 `./histos publish snapshots` writes the Maven snapshot and uploads to the GitHub release named `dist`:
 
-- `channel-<ship>-<sha>-SNAPSHOT` and `channel-<ship>-SNAPSHOT`, each a file whose body is one timestamp
+- `channel-<ship>-<sha>-SNAPSHOT` and `channel-<ship>-SNAPSHOT`, each a file whose body is one timestamp. The channel is last
 - `<timestamp>-manifest.json`, which names the jar's sha256 and each client's
 - `<timestamp>-histos.jar`
 - `<timestamp>-client-<platform>` for each file under `dist/clients/client-<platform>/histos-client`
+- `shim-<sha256>`, `shim`, and `shim.sha256`, when the repository has `install/histos`. The pinned name is the digest, so those bytes do not move. `shim` and `shim.sha256` are the same bytes, and `self update` still fetches them. A repository without that file uploads no shim
 
 The ship names `.toolchain(launcher = app, client = client)`. This layer links the host only. A platform that was not linked is omitted from the manifest, and none at all is refused before a token. A Mac publish names `macos-aarch64`. A Linux publish names `linux-x86_64`. A laptop does not cross-build the other platform, so a Linux job on this pin runs `java -jar`. The proof runs before the upload. `PairError.Handshake` refuses the Maven publish and the `dist` upload. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
 
@@ -62,7 +63,7 @@ The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./
 
 ## Releases
 
-`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The generator, for a toolchain ship, renders a `macos-26` client job that runs `./histos publish local`, then a release job that needs it, installs Linux LLVM, runs `./histos publish release` (which proves the pair before the portal upload), and uploads the jar, the shim, and the Linux client. The committed workflow stays the pin's render until the pin moves. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The generator, for a toolchain ship, renders a `macos-26` client job that runs `./histos publish local`, then a release job that needs it, installs Linux LLVM, runs `./histos publish release` (which proves the pair before the portal upload), and uploads the jar, `shim-<sha256>`, `shim`, `shim.sha256`, and the Linux client. The committed workflow stays the pin's render until the pin moves. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
 
 ## The other self-host commands
 

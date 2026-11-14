@@ -26,8 +26,10 @@ private final class LawEcho(jobs: List[CiJob]) extends HistosPlugin:
 end LawEcho
 
 object JobYamlLawSpec extends ZIOSpecDefault:
-  private val scala3   = scala"3.10.0"
-  private val branch   = "trunk"
+  private val scala3 = scala"3.10.0"
+  private val branch = "trunk"
+
+  given RenderingShip  = RenderingLaw.ship
   private val large    = RunnerName("large")
   private val token    = SecretName("HISTOS_TOKEN")
   private val tokenKey = EnvName("TOKEN")
@@ -331,7 +333,7 @@ object JobYamlLawSpec extends ZIOSpecDefault:
       "      pages: write",
       "    steps:",
       s"      - uses: ${ActionPins.checkout.line}",
-      "      - uses: ./.github/actions/setup",
+      s"      - uses: ${CiInstall.remote(RenderingLaw.ship)}",
       "      - run: ./histos doctor --preflight pages",
       s"      - run: $siteRun",
       s"      - uses: ${ActionPins.uploadPages.line}",
@@ -353,7 +355,7 @@ object JobYamlLawSpec extends ZIOSpecDefault:
     List(
       "    steps:",
       s"      - uses: ${ActionPins.checkout.line}",
-      "      - uses: ./.github/actions/setup",
+      s"      - uses: ${CiInstall.remote(RenderingLaw.ship)}",
       s"      - run: ./histos doctor --preflight $job",
       s"      - run: $run",
     ) ++ tail

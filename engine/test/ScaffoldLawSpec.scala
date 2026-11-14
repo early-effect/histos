@@ -1,5 +1,7 @@
 package histos.scaffold
 
+import histos.jdk.Sha256
+import histos.publish.LauncherScript
 import histos.workspace.Workspace
 
 import java.nio.file.Files
@@ -9,6 +11,7 @@ import zio.test.*
 
 object ScaffoldLawSpec extends ZIOSpecDefault:
   private val pin = "9.9.9"
+  private val sha = Sha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
   def spec = suite("scaffold laws")(
     test("a version argument is the pin, and histos alone is refused"):
@@ -27,7 +30,7 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
     test("a full project writes the wrapper and the ignore file, and a bare project does not"):
       Workspace.work("histos-scaffold").flatMap { parent =>
         for
-          demo       <- Skeleton.create(parent, "demo", pin, ScaffoldKind.Full)
+          demo       <- Skeleton.create(parent, "demo", pin, ScaffoldKind.Full, Some(sha))
           bare       <- Skeleton.create(parent, "bare", pin, ScaffoldKind.Bare)
           build      <- ZIO.attemptBlocking(Files.readString(demo.resolve("histos.scala"))).orDie
           props      <- ZIO.attemptBlocking(Files.readString(demo.resolve("build.properties"))).orDie
@@ -44,7 +47,7 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
           build.contains("""MainClass("demo.Main")"""),
           props == s"histos.version=$pin\n",
           Skeleton.ignoreLines.forall(ignore.contains),
-          script == Skeleton.wrapper,
+          script == LauncherScript.posix(sha),
           exec,
           bareBuild,
           !bareIgnore,
@@ -79,7 +82,7 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
             Files.writeString(occupied.resolve("histos.scala"), "already\n")
             ()
           }.orDie
-          made    <- Skeleton.init(demo, pin, ScaffoldKind.Full, Some(draft))
+          made    <- Skeleton.init(demo, pin, ScaffoldKind.Full, Some(draft), Some(sha))
           text    <- ZIO.attemptBlocking(Files.readString(made.resolve("histos.scala"))).orDie
           props   <- ZIO.attemptBlocking(Files.readString(made.resolve("build.properties"))).orDie
           sources <- ZIO.attemptBlocking(Files.exists(made.resolve("app/src/main/scala/demo/Main.scala"))).orDie
@@ -91,6 +94,20 @@ object ScaffoldLawSpec extends ZIOSpecDefault:
           !sources,
           named == Left(SkeletonError.Name("1bad")),
           again == Left(SkeletonError.Exists(occupied.resolve("histos.scala"))),
+        )
+      }
+    ,
+    test("a full project without a shim digest is refused, and init writes the same wrapper"):
+      Workspace.work("histos-scaffold-shim").flatMap { parent =>
+        val demo = parent.resolve("kept")
+        for
+          missing <- Skeleton.create(parent, "need", pin).either
+          _       <- ZIO.attemptBlocking(Files.createDirectories(demo)).orDie
+          made    <- Skeleton.init(demo, pin, ScaffoldKind.Full, None, Some(sha))
+          script  <- ZIO.attemptBlocking(Files.readString(made.resolve("histos"))).orDie
+        yield assertTrue(
+          missing == Left(SkeletonError.Shim),
+          script == LauncherScript.posix(sha),
         )
       },
   )

@@ -7,13 +7,13 @@ enum ScriptError:
   case Drift(path: Path)
   case Missing(path: Path)
   case Io(failure: IoFailure)
-  case Revision
-  case Pin(error: LauncherError)
+
+  /** The launcher jar has no `install/histos` digest. */
+  case Shim
 
   def message: String = this match
-    case Drift(path)   => s"launcher script does not match the ship: $path"
+    case Drift(path)   => s"launcher script does not match the rendering ship: $path"
     case Missing(path) => s"no launcher script at $path"
     case Io(failure)   => failure.message
-    case Pin(error)    => error.message
-    case Revision      => "the launcher script needs one ship version"
+    case Shim          => "the rendering ship has no shim digest"
 end ScriptError

@@ -110,11 +110,8 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 ### CI setup
 
-- **Goal.** `Projects.ciSetup(CiSetup.Remote)` (the default) renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship>`. `CiSetup.Wrapper` renders pinned `actions/cache` steps and then `./histos`, with no external action. `origin-head` becomes an inline `git remote set-head origin --auto` step. `shim-<sha256>` is a content-addressed `dist` asset. Every build gets the bootstrap wrapper, which installs that shim at a pinned sha256 when it is missing, and `init`, `new`, and `workflow --update` write it.
-- **Closes.** Ledger rows 13 to 15, 29, and 55, and E29 and B39 in [test-audit.md](test-audit.md).
-  - Row 29 and E29: the rendered wrapper still checks JDK 21, and the floor is 25. Render it from `Toolchain.Floor`.
-  - Row 55 and B39: the wrapper's `server`, `bsp`, and `mcp` path keeps whatever `HISTOS_VERSION` its spawner exported.
-- **Proof.** Renders for both choices; the wrapper installing the pinned shim on loopback and refusing a checksum mismatch; and `init` and `new` writing it. Live: a remote action pinned at a branch-only commit still resolves after the branch is deleted. Pin move.
+- **Generator landed. The pin has not moved.** `Projects.ciSetup(CiSetup.Remote)` is the default and renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <that same commit>`. The comment is that commit, because the pin scan requires one and this action has no release tag. `CiSetup.Wrapper` renders pinned `actions/cache` steps and then the job's `./histos`, with no Histos action. `origin-head` is the inline step `git remote set-head origin --auto`. `shim-<sha256>` is uploaded beside `shim` and `shim.sha256`. The bootstrap wrapper installs that pinned asset, checks the sha256, and refuses a JDK older than `Toolchain.Floor` before the fetch. `init`, `new`, and `workflow --update` write it for every build. The shim sets `HISTOS_VERSION` for `server`, `bsp`, `mcp`, and a client command. E29 and B39 close against that code.
+- **Still open.** The committed workflows and `./histos` stay the pin's render, so the checklist box stays open. Live: a remote action pinned at a commit that lives only on a merged branch still has to resolve after that branch is deleted. That check is not a unit test and is not done.
 
 ## Command-line track
 
