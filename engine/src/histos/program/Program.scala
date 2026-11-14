@@ -111,8 +111,9 @@ object Program:
       paths <- kitClasspath(repo, graph, ready)
       major <- nativeMajor(ready.module, ready.cell.version)
       native = ready.module.nativeVersion.getOrElse(ready.tools.catalog.native.revision)
+      kept   = NativeLink.withoutStandardLibraries(paths)
       written <- ClientKit
-        .write(destination, ClientKit(ready.binary, major, ready.cell.version, native, paths))
+        .write(destination, ClientKit(ready.binary, major, ready.cell.version, native, kept))
         .mapError(error => ProgramError.Kit(error.message))
     yield written
 

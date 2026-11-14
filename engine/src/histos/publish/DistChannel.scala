@@ -95,7 +95,7 @@ object DistChannel:
       jar: Chunk[Byte],
       kit: Option[Chunk[Byte]],
   ): List[(String, Chunk[Byte])] =
-    val named = kit.map(bytes => DistLayout.kit(revision) -> DistLayout.sha256(bytes.toArray))
+    val named    = kit.map(bytes => DistLayout.kit(revision) -> DistLayout.sha256(bytes.toArray))
     val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), named)
     List(DistLayout.jar(revision) -> jar) ++
       kit.toList.map(bytes => DistLayout.kit(revision) -> bytes) ++

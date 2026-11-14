@@ -38,7 +38,7 @@ import zio.cli.{
   */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Reload, Reboot
+    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Reload, Reboot, ToolchainClient
     case Cancel(id: String)
     case New(name: String, bare: Boolean, yes: Boolean, branch: Option[String])
     case Init(bare: Boolean, yes: Boolean, from: Option[String], branch: Option[String])
@@ -83,9 +83,11 @@ object Grammar:
     case Bump(part: BumpPart, ships: List[String])
     case Help(words: List[String])
 
-  private val version = CliCommand("version").map(_ => Wire.Version)
-  private val graph   = CliCommand("graph").map(_ => Wire.Graph)
-  private val run     =
+  private val version         = CliCommand("version").map(_ => Wire.Version)
+  private val toolchainClient =
+    CliCommand("toolchain").subcommands(CliCommand("client").map(_ => Wire.ToolchainClient))
+  private val graph = CliCommand("graph").map(_ => Wire.Graph)
+  private val run   =
     CliCommand("run", Args.text("name") ++ Args.text("platform").atMost(1))
       .map { case (name, platform) =>
         Wire.Run(name, platform.headOption)
@@ -257,7 +259,7 @@ object Grammar:
     previewCompile | previewTest | previewPublish | previewClean | previewRun
   )
   private val commands =
-    version | graph | run | test | coverage | affected | compile | fresh | init | cleanBuild | assembly | publish | mcp | bsp | server | portal | cache | resolve | workflow | fmt | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | helpCmd
+    version | graph | run | test | coverage | affected | compile | fresh | init | cleanBuild | assembly | publish | mcp | bsp | server | portal | cache | resolve | workflow | fmt | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | toolchainClient | helpCmd
   private val root = CliCommand("histos").subcommands(commands)
 
   /** The root commands. Each one's word is in `CommandName.reserved`, so no plugin command can take it. */
@@ -321,17 +323,18 @@ object Grammar:
 
   private def command(wire: Wire): IO[CliParseError, Command] =
     wire match
-      case Wire.Version    => ZIO.succeed(Command.Version)
-      case Wire.Graph      => ZIO.succeed(Command.Graph)
-      case Wire.Mcp        => ZIO.succeed(Command.Mcp)
-      case Wire.Bsp        => ZIO.succeed(Command.Bsp)
-      case Wire.Server     => ZIO.succeed(Command.Server)
-      case Wire.Portal     => ZIO.succeed(Command.Portal)
-      case Wire.CachePath  => ZIO.succeed(Command.CachePath)
-      case Wire.CacheList  => ZIO.succeed(Command.CacheList)
-      case Wire.Reload     => ZIO.succeed(Command.Reload)
-      case Wire.Reboot     => ZIO.succeed(Command.Reboot)
-      case Wire.Cancel(id) =>
+      case Wire.Version         => ZIO.succeed(Command.Version)
+      case Wire.ToolchainClient => ZIO.succeed(Command.ToolchainClient)
+      case Wire.Graph           => ZIO.succeed(Command.Graph)
+      case Wire.Mcp             => ZIO.succeed(Command.Mcp)
+      case Wire.Bsp             => ZIO.succeed(Command.Bsp)
+      case Wire.Server          => ZIO.succeed(Command.Server)
+      case Wire.Portal          => ZIO.succeed(Command.Portal)
+      case Wire.CachePath       => ZIO.succeed(Command.CachePath)
+      case Wire.CacheList       => ZIO.succeed(Command.CacheList)
+      case Wire.Reload          => ZIO.succeed(Command.Reload)
+      case Wire.Reboot          => ZIO.succeed(Command.Reboot)
+      case Wire.Cancel(id)      =>
         ZIO.fromEither(
           RunId.from(id).left.map(CliParseError.RunId(_)).map(Command.Cancel(_))
         )
@@ -479,6 +482,7 @@ object Grammar:
       case "publishLocal" :: _              => Some(CliParseError.Retired("publishLocal", "publish local"))
       case "client" :: _                    => Some(CliParseError.Retired("client", "publish"))
       case "launcher" :: _                  => Some(CliParseError.Retired("launcher", "update"))
+      case "toolchain" :: "client" :: _     => None
       case "toolchain" :: _                 => Some(CliParseError.Retired("toolchain", "doctor"))
       case "preview" :: "testOnly" :: _     => Some(CliParseError.Retired("preview testOnly", "preview test --only"))
       case "preview" :: "testQuick" :: _    => Some(CliParseError.Retired("preview testQuick", "preview test --quick"))

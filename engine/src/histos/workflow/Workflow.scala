@@ -1,10 +1,9 @@
 package histos.workflow
 
 import histos.doctor.Suggest
-import histos.jdk.Toolchain
 import histos.plugin.{CiExtra, CiHeader}
 import histos.assembly.AssemblyPath
-import histos.publish.{DistLayout, DistPlatform}
+import histos.publish.DistLayout
 import histos.resolve.PlatformToken
 import histos.schedule.{CacheConfig, CacheNamespace}
 import histos.Promote
@@ -196,11 +195,7 @@ object Workflow:
           module.platforms.all.contains(Platform.Native)
       val linux =
         if native then List(s"LLVM-$version-Linux-X64.tar.xz") else Nil
-      val client =
-        if graph.catalog.ships.exists(_.toolchain.isDefined) then
-          DistPlatform.values.toList.map(platform => llvmArchive(version, clientHost(platform)))
-        else Nil
-      (linux ++ client).distinct
+      linux.distinct
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     differsNamed(fileName, rendered, committed)
@@ -351,8 +346,8 @@ object Workflow:
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. The publish step sets `HISTOS_SESSION` to `release`, then lists
-    * `secretNames` in that order. A ship that names `.toolchain` then links that client and uploads the install files
-    * to the existing `dist` release.
+    * `secretNames` in that order. A ship that names `.toolchain` uploads the jar, the shim, and the link kit to the
+    * existing `dist` release.
     */
   private def releaseWorkflow(
       graph: ProjectGraph,
@@ -363,33 +358,20 @@ object Workflow:
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
   /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
-    * list emits nothing, so update deletes a stale copy. A toolchain ship links every dist platform. Two toolchain
-    * ships, or one toolchain ship with no LLVM pin, fail the render.
+    * list emits nothing, so update deletes a stale copy. A toolchain ship publishes the jar and the link kit. Two
+    * toolchain ships fail the render.
     */
   private def snapshotWorkflow(graph: ProjectGraph)(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
-    snapshotLink(graph).map: link =>
+    toolchain(graph).map: _ =>
       if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
-        Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph, link)))
+        Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
       else None
 
-  private def snapshotLink(graph: ProjectGraph)(using RenderingShip): Either[CiError, SnapshotLink] =
-    toolchain(graph).flatMap:
-      case None        => Right(SnapshotLink.JarOnly)
-      case Some(found) =>
-        for
-          job   <- clientJob(graph, found.llvm.value)
-          linux <- linuxLlvm(found.llvm.value)
-        yield SnapshotLink.WithClients(job, linux)
-
   /** Assembly writes each asset, and the launcher when the ship names one. The channel reads the asset file.
-    * `HISTOS_BRANCH` is `default` so the pointer moves from any ref. With clients, the publish job waits for the macOS
-    * client, downloads it, installs Linux LLVM, and `publish snapshots` links the Linux client on this runner.
+    * `HISTOS_BRANCH` is `default` so the pointer moves from any ref. `publish snapshots` compiles the link kit on this
+    * runner and does not link a client.
     */
-  private def snapshotDocument(graph: ProjectGraph, link: SnapshotLink)(using RenderingShip): String =
-    val (clients, needs, grant, fetch) = link match
-      case SnapshotLink.JarOnly                => (Nil, Nil, Nil, Nil)
-      case SnapshotLink.WithClients(job, llvm) =>
-        (job, List("    needs: client"), List("      actions: read"), downloadClients ++ llvm)
+  private def snapshotDocument(graph: ProjectGraph)(using RenderingShip): String =
     val lines = List(
       "name: snapshots",
       "on:",
@@ -397,17 +379,14 @@ object Workflow:
       "permissions:",
       "  contents: read",
       "jobs:",
-    ) ++ clients ++ List(
-      "  snapshots:"
-    ) ++ needs ++ List(
-      s"    runs-on: $Runner"
+      "  snapshots:",
+      s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:"
-    ) ++ grant ++ List(
+      "    permissions:",
       "      contents: write",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "snapshots") ++ assemblyStep(graph) ++ fetch ++ List(
+    ) ++ coursierCli(graph, "snapshots") ++ assemblyStep(graph) ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
       "        env:",
       "          HISTOS_SESSION: snapshot",
@@ -419,15 +398,6 @@ object Workflow:
       "          GITHUB_REPOSITORY: ${{ github.repository }}",
     )
     lines.mkString("\n") + "\n"
-
-  /** One directory per artifact, `dist/clients/client-<platform>`, which is [[DistLayout.builtClient]]. */
-  private def downloadClients: List[String] =
-    List(
-      s"      - uses: ${ActionPins.downloadArtifact.line}",
-      "        with:",
-      s"          pattern: ${DistLayout.ClientArtifact}*",
-      s"          path: ${DistLayout.BuiltClients}",
-    )
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
   private def promoteWorkflow(graph: ProjectGraph, sona: Publishing)(using RenderingShip): Option[RenderedWorkflow] =
@@ -453,31 +423,26 @@ object Workflow:
         seen.flatMap: lines =>
           val shape =
             if install.exists(_.ship.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish
-          releaseJob(graph, ship, sona, shape, install.map(_.llvm)).map(lines ++ _)
+          releaseJob(graph, ship, sona, shape).map(lines ++ _)
       install match
         case None        => jobs.map(lines => (header ++ lines).mkString("\n") + "\n")
         case Some(found) =>
           for
-            client  <- clientJob(graph, found.llvm.value)
             lines   <- jobs
             install <- installJob(graph, ships, found)
-          yield (header ++ client ++ lines ++ install).mkString("\n") + "\n"
+          yield (header ++ lines ++ install).mkString("\n") + "\n"
 
   private def releaseJob(
       graph: ProjectGraph,
       ship: Ship,
       sona: Publishing,
       shape: ReleaseShape,
-      llvm: Option[ToolRevision],
   )(using RenderingShip): Either[CiError, List[String]] =
-    val name  = ship.name.value
-    val needs = shape match
-      case ReleaseShape.Publish     => Nil
-      case ReleaseShape.WithInstall => List("    needs: client")
+    val name = ship.name.value
     val head = List(
       s"  release-$name:",
       s"    runs-on: $Runner",
-    ) ++ needs ++ jobLimit(graph) ++ List(
+    ) ++ jobLimit(graph) ++ List(
       "    permissions:"
     ) ++ releasePermissions(shape) ++ List(
       "    steps:",
@@ -490,13 +455,8 @@ object Workflow:
     ) ++ sona.secretNames.map(secret)
     val tail = shape match
       case ReleaseShape.Publish     => Nil
-      case ReleaseShape.WithInstall => jarArtifact(graph, ship) ++ shimArtifact ++ linuxClient
-    shape match
-      case ReleaseShape.Publish     => Right(head ++ publish ++ tail)
-      case ReleaseShape.WithInstall =>
-        llvm match
-          case None           => Right(head ++ publish ++ tail)
-          case Some(revision) => linuxLlvm(revision.value).map(lines => head ++ lines ++ publish ++ tail)
+      case ReleaseShape.WithInstall => jarArtifact(graph, ship) ++ kitArtifact ++ shimArtifact
+    Right(head ++ publish ++ tail)
 
   /** `upload-artifact` writes through the Actions API. A permissions block that omits `actions` sets it to none. */
   private def releasePermissions(shape: ReleaseShape): List[String] =
@@ -523,20 +483,25 @@ object Workflow:
           "          if-no-files-found: error",
         )
 
-  /** The one toolchain ship, and the LLVM revision that links its client. */
-  private final case class Install(ship: Ship, llvm: ToolRevision)
+  /** The link kit `publish release` compiled, uploaded beside the jar and the shim. */
+  private def kitArtifact: List[String] =
+    List(
+      s"      - uses: ${ActionPins.uploadArtifact.line}",
+      "        with:",
+      "          name: client-kit",
+      s"          path: ${DistLayout.BuiltKit}",
+      "          if-no-files-found: error",
+    )
 
-  /** One ship with `.toolchain` and an LLVM pin. None when no ship names a toolchain. Two ships, or a ship with no LLVM
-    * pin, fail.
-    */
+  /** The one toolchain ship. None when no ship names a toolchain. Two ships fail. */
+  private final case class Install(ship: Ship)
+
+  /** One ship with `.toolchain`. None when no ship names a toolchain. Two ships fail. */
   private def toolchain(graph: ProjectGraph): Either[CiError, Option[Install]] =
     graph.catalog.ships.filter(_.toolchain.isDefined) match
       case Nil         => Right(None)
-      case ship :: Nil =>
-        graph.runnerTools.llvm match
-          case None       => Left(CiError.SnapshotClients(ship.name))
-          case Some(llvm) => Right(Some(Install(ship, llvm)))
-      case ship :: _ => Left(CiError.SnapshotClients(ship.name))
+      case ship :: Nil => Right(Some(Install(ship)))
+      case ship :: _   => Left(CiError.SnapshotClients(ship.name))
 
   private def assemblyStep(graph: ProjectGraph): List[String] =
     assemblyModules(graph) match
@@ -578,53 +543,12 @@ object Workflow:
       ships: List[Ship],
       install: Install,
   )(using RenderingShip): Either[CiError, List[String]] =
-    val needed = "client" :: ships.map(row => s"release-${row.name.value}")
+    val needed = ships.map(row => s"release-${row.name.value}")
     install.ship.toolchain match
       case None         => Left(CiError.SnapshotClients(install.ship.name))
       case Some(linked) =>
         val jarName = jarBase(modulePath(graph, linked.launcher))
         Right(distJob(graph, shipVersion(install.ship), jarName, needed))
-
-  /** The runner that links one platform's client, and the LLVM release name for that runner. */
-  private final case class ClientHost(runner: String, archive: String)
-
-  private def clientHost(platform: DistPlatform): ClientHost =
-    platform match
-      case DistPlatform.LinuxX86_64  => ClientHost(Runner, "Linux-X64")
-      case DistPlatform.MacosAarch64 => ClientHost("macos-26", "macOS-ARM64")
-
-  private def llvmArchive(revision: String, host: ClientHost): String =
-    s"LLVM-$revision-${host.archive}.tar.xz"
-
-  /** The macOS client. It needs no other job. `publish local` links this host and the workflow uploads that binary. */
-  private def clientJob(graph: ProjectGraph, revision: String)(using RenderingShip): Either[CiError, List[String]] =
-    val platform = DistPlatform.MacosAarch64
-    val file     = llvmArchive(revision, clientHost(platform))
-    LlvmDigest
-      .of(file)
-      .map: hex =>
-        List(
-          "  client:",
-          "    runs-on: macos-26",
-        ) ++ jobLimit(graph) ++ List(
-          "    permissions:",
-          "      actions: write",
-          "      contents: read",
-          "    steps:",
-          s"      - uses: $Checkout",
-        ) ++ clientSetup(graph) ++ SupplyYaml.preflight(graph, "client") ++ clientLlvm(revision, file, hex) ++ List(
-          s"      - run: ${quote("./histos publish local")}",
-          s"      - uses: ${ActionPins.uploadArtifact.line}",
-          "        with:",
-          s"          name: ${DistLayout.ClientArtifact}${platform.token}",
-          s"          path: ${DistLayout.builtClient(platform)}",
-          "          if-no-files-found: error",
-        )
-
-  /** Linux LLVM on the publish runner, with the archive and the digest written out. */
-  private def linuxLlvm(revision: String): Either[CiError, List[String]] =
-    val file = llvmArchive(revision, clientHost(DistPlatform.LinuxX86_64))
-    LlvmDigest.of(file).map(hex => clientLlvm(revision, file, hex))
 
   /** The installer the README curls. A piped `sh` cannot see its own file, so the release publishes this copy. */
   private def shimArtifact: List[String] =
@@ -633,65 +557,6 @@ object Workflow:
       "        with:",
       "          name: shim",
       "          path: install/histos",
-      "          if-no-files-found: error",
-    )
-
-  /** Temurin at [[Toolchain.Floor]]. The process bootstrap compiles `java.lang.foreign`, which an older JDK marks
-    * preview. The unpacked LLVM clang does not find the Xcode SDK, and the linker child keeps only `PATH`, so the macOS
-    * job puts a `clang` wrapper on `PATH` that passes `-isysroot`.
-    */
-  private def clientSetup(graph: ProjectGraph)(using RenderingShip): List[String] =
-    List(
-      s"      - uses: ${ActionPins.setupJava.line}",
-      "        with:",
-      "          distribution: temurin",
-      s"          java-version: ${quote(Toolchain.Floor.value)}",
-    ) ++ CiInstall.steps(graph)
-
-  private def clientLlvm(revision: String, archive: String, sha: String): List[String] =
-    val key = "llvm-" + revision + "-${{ runner.os }}-${{ runner.arch }}"
-    val url = s"https://github.com/llvm/llvm-project/releases/download/llvmorg-$revision/$archive"
-    cacheStep(Some("llvm"), List("${{ runner.temp }}/llvm"), key) ++ List(
-      "      - run: |",
-      "          dir=\"${{ runner.temp }}/llvm\"",
-      "          if [ \"${{ steps.llvm.outputs.cache-hit }}\" != \"true\" ]; then",
-      "            mkdir -p \"$dir\"",
-      "            curl -fsSL \"" + url + "\" -o \"$dir/llvm.tar.xz\"",
-      s"            expected=\"$sha\"",
-      "            got=$(openssl dgst -sha256 \"$dir/llvm.tar.xz\" | awk '{print $NF}')",
-      "            [ \"$got\" = \"$expected\" ] || { echo \"llvm checksum mismatch\" >&2; exit 1; }",
-      "            tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
-      "            rm \"$dir/llvm.tar.xz\"",
-      "          fi",
-      "          test -x \"$dir/bin/clang\"",
-      "          echo \"$dir/bin\" >> \"$GITHUB_PATH\"",
-      "          if [ \"$(uname -s)\" = Linux ]; then",
-      "            if [ -n \"$LD_LIBRARY_PATH\" ]; then",
-      "              echo \"LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH\" >> \"$GITHUB_ENV\"",
-      "            else",
-      "              echo \"LD_LIBRARY_PATH=$dir/lib\" >> \"$GITHUB_ENV\"",
-      "            fi",
-      "          fi",
-      "          if [ \"$(uname -s)\" = Darwin ]; then",
-      "            sdk=$(xcrun --show-sdk-path)",
-      "            wrap=\"${{ runner.temp }}/clang-sdk\"",
-      "            mkdir -p \"$wrap\"",
-      "            for tool in clang clang++; do",
-      "              printf '%s\\n' '#!/bin/sh' \"exec \\\"$dir/bin/$tool\\\" -isysroot \\\"$sdk\\\" \\\"\\$@\\\"\" > \"$wrap/$tool\"",
-      "              chmod +x \"$wrap/$tool\"",
-      "            done",
-      "            echo \"$wrap\" >> \"$GITHUB_PATH\"",
-      "          fi",
-    )
-
-  /** The Linux client `publish release` linked, uploaded beside the jar and the shim. */
-  private def linuxClient: List[String] =
-    val platform = DistPlatform.LinuxX86_64
-    List(
-      s"      - uses: ${ActionPins.uploadArtifact.line}",
-      "        with:",
-      s"          name: ${DistLayout.ClientArtifact}${platform.token}",
-      s"          path: ${DistLayout.builtClient(platform)}",
       "          if-no-files-found: error",
     )
 
@@ -719,15 +584,12 @@ object Workflow:
       "          set -eu",
       s"          version=$version",
       s"          jar=dist-in/histos-jar/$jarName",
-      "          linux=dist-in/client-linux-x86_64/histos-client",
-      "          mac=dist-in/client-macos-aarch64/histos-client",
+      "          kit=dist-in/client-kit/client-kit.zip",
       "          sha() { sha256sum \"$1\" | awk '{print $1}'; }",
       "          jar_sha=$(sha \"$jar\")",
-      "          linux_sha=$(sha \"$linux\")",
-      "          mac_sha=$(sha \"$mac\")",
+      "          kit_sha=$(sha \"$kit\")",
       "          cp \"$jar\" \"$version-histos.jar\"",
-      "          cp \"$linux\" \"$version-client-linux-x86_64\"",
-      "          cp \"$mac\" \"$version-client-macos-aarch64\"",
+      "          cp \"$kit\" \"$version-client-kit.zip\"",
       "          shim_file=dist-in/shim/histos",
       "          shim_sha=$(sha \"$shim_file\")",
       "          cp \"$shim_file\" shim",
@@ -738,13 +600,11 @@ object Workflow:
       "            \"version\": \"$version\",",
       "            \"jar\": \"$version-histos.jar\",",
       "            \"jarSha256\": \"$jar_sha\",",
-      "            \"clients\": {",
-      "              \"linux-x86_64\": \"$linux_sha\",",
-      "              \"macos-aarch64\": \"$mac_sha\"",
-      "            }",
+      "            \"clientKit\": \"$version-client-kit.zip\",",
+      "            \"clientKitSha256\": \"$kit_sha\"",
       "          }",
       "          EOF",
-      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" \"shim-$shim_sha\" shim shim.sha256 --clobber --repo \"$GITHUB_REPOSITORY\"",
+      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-kit.zip\" \"shim-$shim_sha\" shim shim.sha256 --clobber --repo \"$GITHUB_REPOSITORY\"",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
     )
@@ -798,11 +658,6 @@ object Workflow:
   private enum ReleaseShape:
     case Publish
     case WithInstall
-
-  /** A snapshot publishes the jar alone, or waits on the macOS client and links Linux on the publish runner. */
-  private enum SnapshotLink:
-    case JarOnly
-    case WithClients(job: List[String], llvm: List[String])
 
   /** On a push, `github.ref` is `refs/heads/<branch>` and `repository.default_branch` is the short name. */
   private val OnDefaultBranch: String =

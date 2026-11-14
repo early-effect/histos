@@ -55,7 +55,7 @@ object DistStock:
         ZIO.fail(ToolchainPublishError.Upload(s"${ship.name.value} has no toolchain"))
       case Some(linked) =>
         for
-          machine <- Machine.load(repo).mapError(error => ToolchainPublishError.Upload(error.message))
+          machine  <- Machine.load(repo).mapError(error => ToolchainPublishError.Upload(error.message))
           identity <- ToolchainIdentity.discover(repo).flatMap {
             case Some(found) => ZIO.succeed(found)
             case None        => ZIO.fail(ToolchainPublishError.Upload("could not read the commit at HEAD"))
@@ -108,13 +108,15 @@ object DistStock:
       moduleName: String,
       destination: Path,
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, ToolchainPublishError, Unit] =
-    Runtimes.read(machine, graph.runnerTools.nodePath).flatMap: runtimes =>
-      opened(repo, graph)(
-        Program
-          .exportKit(repo, graph, moduleName, destination, jdk, runtimes, quiet)
-          .mapError(ToolchainPublishError.Kit(_))
-          .unit
-      )
+    Runtimes
+      .read(machine, graph.runnerTools.nodePath)
+      .flatMap: runtimes =>
+        opened(repo, graph)(
+          Program
+            .exportKit(repo, graph, moduleName, destination, jdk, runtimes, quiet)
+            .mapError(ToolchainPublishError.Kit(_))
+            .unit
+        )
 
   private def opened[A](repo: Path, graph: ProjectGraph)(
       body: ZIO[

@@ -4,11 +4,14 @@ Histos is a Scala build tool. The build is a Scala program that returns a graph.
 
 ```mermaid
 flowchart TD
-  person[terminal] --> cmd[histos command]
+  person[terminal] --> shim[histos shim]
   metals[Metals] --> bsp["histos bsp"]
   agent[MCP client] --> mcp["histos mcp"]
-  cmd --> client[native client]
-  client --> record[".histos/server.json"]
+  shim --> pick{client for this jar?}
+  pick -->|compile, test, run, clean, fmt| native[histos-client]
+  pick -->|every other command, and CI| jar["java -jar"]
+  native --> record[".histos/server.json"]
+  jar --> record
   bsp --> record
   mcp --> record
   record --> jvm[JVM server]
@@ -17,9 +20,9 @@ flowchart TD
   jvm --> store[content store]
 ```
 
-A command goes to a warm JVM server for its project, and starts one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
+The shim sends `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` through `histos-client` when that binary was linked for this jar. Every other command, and every command in CI, runs `java -jar`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. Both paths talk to one warm JVM server for the project, and start one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
 
-This is a 0.x release. The API breaks when that makes it more honest. What we still intend is [next](docs/next.md).
+This is a 0.x release. The API breaks when that makes it more honest.
 
 ## Install
 
@@ -38,25 +41,28 @@ The script installs itself as `~/.histos/bin/histos` and does not edit a shell r
 
 ### Toolchains and pins
 
-A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest, `histos.jar`, and, when the manifest names one for this platform, the native client `histos-client`. Prebuilt clients exist for `linux-x86_64` and `macos-aarch64`. Before a command runs, the shim fetches whatever that directory is missing and checks it against the manifest. Once the directory is complete, a command does not touch the network. Without a client, the shim runs `java -jar`.
+A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest and `histos.jar`. When the manifest names a link kit, `toolchain install` and `update` also place `client-kit.zip` beside the jar. A command fetches the jar and the manifest only when that directory does not already have both, and checks them. Once those two files are on disk, a command does not touch the network. CI uses the jar and does not fetch the kit. `toolchain client` fetches a missing kit, then links. CI refuses that command.
 
-A checkout may name a local toolchain in `.histos/toolchain`. The file is one path segment, the id `publish local` installed under `~/.histos/toolchains/<id>` with its jar, this platform's client, and a manifest. The shim uses that directory and does not fetch. A missing jar fails. Delete the file to return to the pin. The tracked pin does not change.
+A native client is optional. On a terminal, `toolchain install` and `update` ask once per jar whether to build `histos-client` on this machine. Enter means yes. Answering `n` is remembered for that jar, and later commands do not ask. `histos toolchain client` builds it later. `--client` builds without asking, and `--no-client` skips. With no terminal and CI unset, install prints one line that names `histos toolchain client` and does not link. In CI the shim always runs `java -jar`, even when a client is already on disk. Building the client needs clang 21 on `PATH` and takes a few minutes, once for that jar. A missing clang, a missing kit, or a failed link still leaves the jar installed. Histos does not install clang.
+
+A checkout may name a local toolchain in `.histos/toolchain`. The file is one path segment, the id `publish local` installed under `~/.histos/toolchains/<id>` with its jar and a manifest. The shim uses that directory and does not fetch. A missing jar fails. Delete the file to return to the pin. The tracked pin does not change.
 
 A project pins its toolchain in `build.properties`:
 
 ```text
-histos.version=0.2.10
+histos.version=0.3.2
 ```
 
 The pin wins over `~/.histos/default`. It has three forms:
 
-- `0.2.10` is a release.
-- `0.2.10-SNAPSHOT` is a pointer that follows the newest snapshot of that line. The shim reads `channel-<pin>` from the `dist` release at most once an hour (`HISTOS_CHANNEL_REFRESH=every-call` reads it every time), and uses the cached answer when the network is down.
-- A timestamp such as `0.2.10-20261112.042525-1`, or a commit pointer such as `0.2.10-7230ba21293f-SNAPSHOT`, freezes one build.
+- `0.3.2` is a release.
+- `0.3.2-SNAPSHOT` is a pointer that follows the newest snapshot of that line. The shim reads `channel-<pin>` from the `dist` release at most once an hour (`HISTOS_CHANNEL_REFRESH=every-call` reads it every time), and uses the cached answer when the network is down.
+- A timestamp such as `0.3.2-20261112.042525-1`, or a commit pointer such as `0.3.2-7230ba21293f-SNAPSHOT`, freezes one build.
 
-The shim answers four commands itself:
+The shim answers these commands itself:
 
-- `histos toolchain install 0.2.10` installs one version and checks every file it already has. It records that version as the default when none is set.
+- `histos toolchain install 0.3.2` installs one version and checks every file it already has. It records that version as the default when none is set. `--client` and `--no-client` choose the native client. Passing both fails: they are opposites.
+- `histos toolchain client` links `histos-client` beside the installed jar. CI refuses.
 - `histos toolchain list` prints the installed versions.
 - `histos self update` replaces the shim when the published one differs.
 - `histos update` moves the pin. Inside a project it rewrites `build.properties`, removes the previous server's record, then runs `version` on the driver the next command would use. That rewrites `.bsp/histos.json`. Outside a project it rewrites `~/.histos/default` and stops. `--make-default` writes both.
@@ -129,8 +135,9 @@ Each module names its own Scala versions in the second argument list: `module("l
 | CI | `workflow`, `doctor`, `setup supply-chain`, `--explain` |
 | Cache | `cache path`, `cache list`, `cache clean`, `cache promote`, `cache forget`, `cache verify` |
 | Server | `server`, `bsp`, `mcp`, `reload`, `reboot`, `cancel` |
+| Toolchain | `toolchain install`, `toolchain client`, `toolchain list`, `update`, `self update` |
 | Preview | `preview compile`, `preview test`, `preview publish local`, `preview publish snapshots`, `preview clean`, `preview run` |
-| Building Histos | `assembly`, `portal` ([self-host](docs/self-host.md)) |
+| Building Histos | `assembly`, `portal` |
 
 ### Build and run
 
@@ -176,41 +183,43 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 `histos workflow --update` writes the generated workflows, and `histos workflow --check` (the default) compares them with the tree. Neither publishes or changes the pin.
 
-`ci.yml` has these jobs:
+The generator installs Histos with `early-effect/histos/.github/actions/setup` at the full commit stored in the launcher jar that renders the workflow. The comment on that `uses` line is the same commit. The action runs `install/histos` from that ref, then `toolchain install` of `histos.version` from `build.properties` (or of the action's `version` input). GitHub sets `CI`, so that install places the jar and does not fetch the kit or link a client. `Projects.ciSetup(CiSetup.Wrapper)` is the other choice: pinned `actions/cache` steps for `~/.histos/toolchains` and the Coursier cache, then the job's own command, and no Histos action. A job that renders a workflow runs `git remote set-head origin --auto` after a full checkout, because a fetch does not write `refs/remotes/origin/HEAD`.
+
+`ci.yml` in this repository is that render. Its jobs:
 
 - `affected` computes the modules that changed.
 - `test` runs `./histos test --affected ...` on a pull request or a dispatch. It restores and saves the content store `~/.cache/histos` under a key per pull request.
 - `versions` runs `./histos run versions`.
-- `scaladoc` runs `./histos run doc` when the build calls `.docCheck`, and fails on a warning.
-- `coverage` runs `./histos coverage` when the build calls `.coverage()`.
-- `format` runs `./histos fmt --check` when the build declares `.scalafmt`.
+- `scaladoc` runs `./histos run doc`. This build calls `.docCheck`, so a warning fails the job.
+- `format` runs `./histos fmt --check`. This build declares `.scalafmt`.
 - `cache-seed` compiles on a push to the default branch and saves the main store.
 - `workflow` runs `doctor` and `workflow --check`.
 - `supply-chain` checks the workflows, the lock, and the advisories.
 - `dependency-snapshot` submits the dependency graph on a push to the default branch.
-- Plugin jobs (`TaskJob`, `SiteJob`). Each runs one task of the plugin that contributes it.
 
-The generator installs Histos with `early-effect/histos/.github/actions/setup` at the full commit of the rendering ship. The comment on that line is the same commit. That action runs `install/histos` from the same ref. `Projects.ciSetup(CiSetup.Wrapper)` is the other choice: pinned `actions/cache` steps for `~/.histos/toolchains` and the Coursier cache, then the job's own command, and no Histos action. Jobs that read the default branch run `git remote set-head origin --auto` after checkout. The committed workflows in this repository are that render, pinned at `756b511` (D20). Node and LLVM are installed only in jobs that need them: the test job for the modules it runs, `scaladoc` for the build's JavaScript and native modules, and `cache-seed` for every module. Playwright, and Node with it, is installed in those jobs whenever the build names a Playwright revision.
+The generator also writes a `coverage` job when the build calls `.coverage()`, and one job for each plugin `TaskJob` or `SiteJob`. This build does neither, so those jobs are not in this `ci.yml`. A catalog with two toolchain ships does not render: one publish names one toolchain.
+
+Node is installed for a JavaScript module, or when Playwright is installed. LLVM is installed for a native module. In this repository that is LLVM on `test`, `scaladoc`, and `cache-seed`, and Node plus Playwright on `test` and `cache-seed`, because `RunnerTools` names a Playwright revision. CI does not link `histos-client` and does not install LLVM in order to do so.
 
 A `SiteJob` publishes one directory. `Automatic` deploys from a `pages` job on a push to the default branch, `Manual` writes `histos-pages.yml` for a person to dispatch, and `Both` (the default) does both.
 
-The catalog adds `histos-release.yml` (dispatch only), `histos-promote.yml` when the release holds the deployment, and `histos-snapshots.yml` when a ship names an asset. The supply chain adds `histos-deps.yml`, and `histos-audit.yml` when it schedules an audit.
+The catalog adds `histos-release.yml` (dispatch only), `histos-promote.yml` when the release holds the deployment, and `histos-snapshots.yml` when a ship names an asset. The supply chain adds `histos-deps.yml`, and `histos-audit.yml` when it schedules an audit. This repository's snapshot workflow is one job: it assemblies the launcher and runs `./histos publish snapshots`. It does not link a client. The release workflow publishes the ship, then an `install` job uploads the jar, the client kit, and the shim to the `dist` release. It does not upload a linked client. This build's publisher finishes the release, so there is no promote workflow.
 
 ## Publishing
 
-The decision is [publishing.md](docs/publishing.md). A ship is a catalog row, `Ship("demo").next(0, 1, 0)(api, app)`, and the number is the next release. SNAPSHOT is never written in the catalog. `histos run versions` prints what a session would publish.
+A ship is a catalog row, `Ship("demo").next(0, 1, 0)(api, app)`, and the number is the next release. SNAPSHOT is never written in the catalog. `histos run versions` prints what a session would publish.
 
 | Command | Writes |
 | --- | --- |
 | `publish local` | The snapshot coordinate of HEAD into Coursier's `ivy2Local`, unsigned. A release when `HISTOS_SESSION=release`. |
-| `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. |
-| `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. |
+| `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. The same command uploads that coordinate to the GitHub `dist` release: the channel file, the manifest, the jar, the client kit when the ship has one, and the shim when the repository has `install/histos`. |
+| `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. The release workflow's `install` job, not this command, uploads the jar, the kit, and the shim to `dist`. |
 
 `publish local` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publish local` moves it only on the default branch.
 
-A ship that names `.toolchain` makes `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before they write anything. The new client runs `version`, then `graph`, against the new jar, in a copy of HEAD. A broken handshake refuses the upload. `publish local` then installs that pair under `~/.histos/toolchains/<id>` and writes `.histos/toolchain`. A ship without `.toolchain` publishes coordinates only.
+A ship that names `.toolchain` makes `publish local`, `publish snapshots`, and `publish release` pack the launcher and compile the client kit before they write anything. The kit is the client's compiled native code and the versions a later link needs. It contains no clang and no linked binary. Publish does not link a binary. `publish local` installs the jar and the kit under `~/.histos/toolchains/<id>`, writes `.histos/toolchain`, and writes `dist/install` for a local installer. The manifest's jar digest is the staged module jar, the file the installer copies out of ivy. The native client is built on the machine that installs, with `histos toolchain client`. A ship without `.toolchain` publishes coordinates only. Two ships that name a toolchain fail the workflow render.
 
-- A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
+- A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. An upload to `dist` also needs `GITHUB_TOKEN` (or `gh auth token`) and `GITHUB_REPOSITORY` (or an `origin` remote that names `owner/name`).
 - A release also needs `PGP_SECRET`. `PGP_PASSPHRASE` unlocks it (empty by default), and `PGP_KEY_HEX` selects a fingerprint. `HISTOS_SIGNER=gpg` signs with `gpg` instead, and then `PGP_KEY_HEX` is required and `PGP_SECRET` is not read.
 - A release needs a license, a developer, and an scm, or the command fails before upload. Each pom is checked against Central first, and an already public coordinate is held.
 
@@ -259,7 +268,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publish`, `version`,
 
 `histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
-The native client sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` to the server itself, without starting a JVM to enter the tool. `clean --full` is only that form with no project. Every other command, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
+When a native client was built for this jar, it sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` to the server itself, without starting a JVM to enter the tool. CI always uses the jar. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. `clean --full` is only that form with no project. Every other command, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
 
 ## Cache
 
@@ -286,13 +295,31 @@ A file that points at a missing or too-old home fails, and Histos does not pick 
 
 ## Plugins
 
-A plugin is a service, and the layer provides it. The contract is [plugins.md](docs/plugins.md). A command name the grammar owns is reserved. `acp` is reserved and has no command.
+A plugin is a service, and the layer provides it. The types live in [api/src/histos/plugin](api/src/histos/plugin). A command name the grammar owns is reserved. `acp` is reserved and has no command.
 
 A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar.
 
 ## Building Histos
 
-Histos builds itself. `histos publish local` installs this ship's toolchain and writes `.histos/toolchain`, which the shim prefers over `build.properties`. `histos assembly app` writes the launcher jar to its asset path and does not install that toolchain. `histos portal` rehearses a release. How the pin, the local toolchain, and the snapshot channel fit together is [self-host.md](docs/self-host.md).
+Histos builds itself. The ship is `Ship("histos").next(0, 3, 2)(api, app).toolchain(launcher = app, client = client)`.
+
+`histos.version` in `build.properties` is the published Histos that CI installs. Each job runs `./histos` on that jar. `histos.scala` is compiled against the api packed inside the running jar, so a change that adds build API this file uses needs a pin that already has it. `.histos/toolchain`, written by `publish local`, wins over the pin. Delete that file to return to the pin.
+
+`histos publish local` packs the launcher, compiles the client kit, installs both under `~/.histos/toolchains/<id>`, and writes `.histos/toolchain`. It does not link `histos-client`. `histos assembly app` writes `dist/histos.jar` and does not install a toolchain. `histos portal` rehearses a release.
+
+`histos publish snapshots` writes the Maven snapshot and uploads to the GitHub release named `dist`:
+
+- `channel-<ship>-<sha>-SNAPSHOT`, and `channel-<ship>-SNAPSHOT` when this command moves the pointer. Each body is one timestamp. The channel file is uploaded last.
+- `<timestamp>-manifest.json`, naming the jar and, for this ship, the client kit.
+- `<timestamp>-histos.jar`
+- `<timestamp>-client-kit.zip`
+- `shim-<sha256>`, `shim`, and `shim.sha256`. The pinned name is the digest, so those bytes do not move.
+
+To build this tree with a snapshot of itself: commit, run `histos publish snapshots`, then set `histos.version` to `<ship>-<12 hex of that commit>-SNAPSHOT`. `workflow --update`, run by that jar, pins the setup action to the commit stored in the jar.
+
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The `install` job then uploads the jar, the kit, and the shim to `dist`. After that release is on Central, `histos bump` moves `.next`.
+
+There is no `client` command and no `launcher` command. `histos toolchain client` links the client beside the installed jar. `histos update` moves the pin.
 
 ## License
 

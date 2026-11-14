@@ -149,43 +149,52 @@ object PublishRun:
     placed match
       case Nil => ZIO.unit
       case _   =>
-        ZIO.fromEither(launcherModule(graph, staged)).flatMap: module =>
-          ZIO.foreachDiscard(placed)(item => writeAssets(repo, item, module))
+        ZIO
+          .fromEither(launcherModule(graph, staged))
+          .flatMap: module =>
+            ZIO.foreachDiscard(placed)(item => writeAssets(repo, item, module))
 
   private def launcherModule(
       graph: ProjectGraph,
       staged: StagedTree,
   ): Either[LocalPublishError, PublishedModule] =
     graph.catalog.ships.flatMap(_.toolchain.toList) match
-      case Nil => Left(LocalPublishError.Stock("no toolchain ship was packed"))
+      case Nil         => Left(LocalPublishError.Stock("no toolchain ship was packed"))
       case linked :: _ =>
         staged.output.modules.find(item => item.module == linked.launcher) match
           case Some(found) => Right(found)
           case None        => Left(LocalPublishError.Stock("publish local did not stage the launcher"))
 
+  /** The manifest sha is the ivy jar the local installer copies. That file is the staged module jar. The assembly
+    * copied into the toolchain directory is a different zip, so hashing `placed.jar` would fail the installer's check.
+    */
   private def writeAssets(
       repo: Path,
       placed: DistStock.Placed,
       module: PublishedModule,
   ): IO[LocalPublishError, Unit] =
-    val install = repo.resolve("dist").resolve("install")
-    val name    = DistLayout.kit(placed.id)
-    ZIO
-      .attemptBlocking {
-        Files.createDirectories(install)
-        Files.copy(placed.kit, install.resolve(name), StandardCopyOption.REPLACE_EXISTING)
-        val jarSha = DistLayout.sha256(Files.readAllBytes(placed.jar))
-        val kitSha = DistLayout.sha256(Files.readAllBytes(placed.kit))
-        val text   = DistLayout.manifestJson(
-          placed.id,
-          jarSha,
-          Some(name -> kitSha),
-          Some(DistLayout.IvyPin(module.group.value, module.artifact, module.revision)),
-        )
-        Files.writeString(install.resolve("manifest.json"), text)
-        ()
-      }
-      .mapError(_ => LocalPublishError.Io(install.toString))
+    module.jar match
+      case None =>
+        ZIO.fail(LocalPublishError.Stock("publish local did not stage a launcher jar"))
+      case Some(jar) =>
+        val install = repo.resolve("dist").resolve("install")
+        val name    = DistLayout.kit(placed.id)
+        ZIO
+          .attemptBlocking {
+            Files.createDirectories(install)
+            Files.copy(placed.kit, install.resolve(name), StandardCopyOption.REPLACE_EXISTING)
+            val jarSha = DistLayout.sha256(Files.readAllBytes(jar))
+            val kitSha = DistLayout.sha256(Files.readAllBytes(placed.kit))
+            val text   = DistLayout.manifestJson(
+              placed.id,
+              jarSha,
+              Some(name -> kitSha),
+              Some(DistLayout.IvyPin(module.group.value, module.artifact, module.revision)),
+            )
+            Files.writeString(install.resolve("manifest.json"), text)
+            ()
+          }
+          .mapError(_ => LocalPublishError.Io(install.toString))
 
   /** Install after the maven publish. An empty proof installs nothing and does not read a home. */
   private def installToolchain(repo: Path, placed: List[DistStock.Placed]): IO[LocalPublishError, Unit] =

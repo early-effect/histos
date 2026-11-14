@@ -97,6 +97,12 @@ object NativeComponent:
 
   def libraries(version: ScalaVersion): List[NativeComponent] =
     order.filter(component => component != NativeComponent.Scala3Lib || version.value.startsWith("3."))
+
+  /** `nativelib`, `clib`, and the rest of the toolchain jars. A dependency that publishes one of these is replaced by
+    * the nightly the module links.
+    */
+  def standardLibrary(title: String): Boolean =
+    order.exists(_.base == title)
 end NativeComponent
 
 object NativeClasspath:
