@@ -37,7 +37,7 @@ curl -fsSL https://github.com/early-effect/histos/releases/download/dist/shim | 
 export PATH="$HOME/.histos/bin:$PATH"
 ```
 
-The script installs itself as `~/.histos/bin/histos` and does not edit a shell rc. A first install writes `~/.histos/default`, the toolchain used outside a project, from the channel `dist` publishes.
+The script installs itself as `~/.histos/bin/histos` and does not edit a shell rc. A first install writes `~/.histos/default` to the latest stable release on `dist`. A snapshot is the default only when `dist` has no release. An explicit `channel` asset on `dist` wins over both.
 
 ### Toolchains and pins
 

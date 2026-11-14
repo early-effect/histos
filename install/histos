@@ -269,6 +269,8 @@ dist_assets() {
   rm -f "$listing"
   [ "$listed" = yes ]
 }
+# The default is the latest stable release. A snapshot pointer is used only when dist has no release.
+# An explicit channel asset wins over both.
 published_channel() {
   tmp=$(mktemp)
   if fetch_ok "$dist/channel" "$tmp"; then
@@ -279,7 +281,7 @@ published_channel() {
       return 0
     fi
   fi
-  if dist_assets > "$tmp" && { channel=$(newest snapshot < "$tmp") || channel=$(newest release < "$tmp"); }; then
+  if dist_assets > "$tmp" && { channel=$(newest release < "$tmp") || channel=$(newest snapshot < "$tmp"); }; then
     rm -f "$tmp"
     printf '%s' "$channel"
     return 0
