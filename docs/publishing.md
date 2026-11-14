@@ -15,7 +15,7 @@ export HISTOS_BRANCH=default
 ./histos run versions
 ```
 
-`releases` is the registry the versions task reads. An empty file means nothing in the catalog is released. A line is `histos matches`, `histos moved`, or `histos unknown`. `histos doctor` reports `ship.releases` when the file is missing, `ship.session` when `HISTOS_*` is incomplete, and `ship.should-bump` when `.next(...)` is already released. The bump finding is a warning. `histos bump` rewrites `.next` past the newest stable `coursier.Versions` lists. A maven repository wins over ivy2 local. The default is the next patch. `--minor` and `--major` move that component. The command does not change `histos.version`.
+`releases` is the registry the versions task reads. An empty file means nothing in the catalog is released. A line is `histos matches`, `histos moved`, or `histos unknown`. `histos doctor` reports `ship.releases` when the file is missing, `ship.session` when `HISTOS_*` is incomplete, and `ship.should-bump` when `.next(...)` is already released. The bump finding is a warning. `histos bump` refreshes published version metadata through `coursier.Versions` on every invocation. A Maven stable wins over ivy2 local. It rewrites `.next` past that stable only when the stable has caught `.next`; an ahead catalog stays unchanged. A failed refresh cannot reuse stale cached metadata as a remote answer. The default is the next patch. `--minor` and `--major` move that component. The command does not change `histos.version`.
 
 Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are different types.
 
