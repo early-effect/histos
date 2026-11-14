@@ -9,7 +9,8 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object WorkflowHeaderLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
 
-  given CiBranch = CiBranch("main")
+  given CiBranch      = CiBranch("main")
+  given RenderingShip = RenderingLaw.ship
 
   private val hidden = SecretName("HIDDEN")
   private val plain  = EnvName("PLAIN")

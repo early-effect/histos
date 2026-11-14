@@ -48,7 +48,7 @@ This file is the decision. The checklist below is the work. Top to bottom. Finis
 - **A stale local toolchain warns.** When the local toolchain was built from another commit or a dirty tree, every command prints one line naming both, `doctor` reports a warning, and the command runs. The `ApiClock` stop and `allow-drift` are deleted. If the older jar lacks new API, `histos.scala` fails to compile and says so.
 - **Fat jars.** `histos assembly [module ...]` is the generic verb, the same word sbt-assembly and Mill use. It writes each `.assembly` module to its `.asset` path, or to a build output path, and prints the path. It has no launcher side effects.
 - **A bootstrap wrapper in every build.** `./histos` installs the shim at a pinned sha256 when `~/.histos/bin/histos` is missing, then execs it. `init`, `new`, and `workflow --update` write it for every build, and `workflow --check` keeps it current. The shim it installs is a content-addressed `dist` asset, `shim-<sha256>`, which never moves. Editors and agents keep a repository-relative launch path, and a fresh clone needs only a JDK.
-- **CI setup is the build's choice.** `Projects.ciSetup(CiSetup.Remote)` is the default and renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship>`, which runs `install/histos` from that same ref. `CiSetup.Wrapper` renders no external action: pinned `actions/cache` steps, then `./histos`. `origin-head` becomes an inline `git remote set-head origin --auto` step. This repository uses `Remote` at the pin's commit, like any consumer. No copy of the shim exists anywhere.
+- **CI setup is the build's choice.** `Projects.ciSetup(CiSetup.Remote)` is the default and renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <that same commit>`, which runs `install/histos` from that same ref. The comment is that commit: the pin scan requires one, and this action has no release tag. `CiSetup.Wrapper` renders no external action: pinned `actions/cache` steps, then `./histos`. `origin-head` becomes an inline `git remote set-head origin --auto` step. This repository uses `Remote`, like any consumer. No copy of the shim exists anywhere. The committed workflows and `./histos` stay the pin's render until that pin moves.
 - **Verbs with flags.** `test [project ...] [--affected <json>] [--quick] [--only <pattern> ...]`, `clean [--full]`, `publish local`, and the same forms under `preview`. `testOnly`, `testQuick`, `cleanFull`, and `publishLocal` are gone, with no aliases.
 - **The command line and MCP stay in parity.** Every command has a tool that sends the same call, and every tool has a command. A removal or a rename lands on both in the same step.
 - **Removed from the command line and MCP.** `client`, the self-host `assembly`, `launcher`, `portal`, `observe`, the server `toolchain` (its report moves into `doctor`'s Toolchain area), and the shim's `--compile-client`. `server` stays in the jar, because the client spawns it, and leaves `histos help`.
@@ -114,7 +114,7 @@ flowchart TD
   tc --> proof["prove the host pair: version, graph, copy of HEAD"]
   tc --> out{"session"}
   out -->|local| home["~/.histos/toolchains/<id> and .histos/toolchain"]
-  out -->|snapshot or release| dist["dist: jar, clients, manifest, shim, channel last"]
+  out -->|snapshot or release| dist["dist: jar, clients, manifest, shim-<sha>, shim, channel last"]
 ```
 
 ```mermaid
@@ -151,9 +151,9 @@ Each item audits the files it touches against the Totality list and adds what it
 | 10 | Self-host in the CLI | Closed. There is no `client` verb. `publish local`, `publish snapshots`, and `publish release` link the host client | Dist layer |
 | 11 | Self-host at run time | Closed. The `ApiClock` stop, `allow-drift`, `AssemblyMark`, `HISTOS_ASSEMBLY`, and the wrapper's `dist/histos.jar` are deleted. `Successor` is the version only and drops an inherited `HISTOS_ASSEMBLY` ([test-audit.md](test-audit.md) B29) | Dist layer |
 | 12 | Snapshot clients | Closed. A publish links the host only (D19). A laptop names that host. A Linux job on a macOS-only pin runs `java -jar` | Host client |
-| 13 | Consumer CI | Generated workflows use local `setup` and `origin-head` actions only this repository has | CI setup |
-| 14 | Moving asset | `dist/shim` moves, so a pinned wrapper needs `shim-<sha256>` | CI setup |
-| 15 | Two wrappers | `Skeleton.wrapper` (a thin exec that `init` and `new` write) and `LauncherScript` (also a thin exec of the user shim, which `workflow --update` writes for a build with an assembly module). The committed `./histos` stays the pin's script until the pin moves. The JDK floor of that committed wrapper stays with CI setup | CI setup |
+| 13 | Consumer CI | The generator renders `early-effect/histos/.github/actions/setup@<full commit> # <that commit>` and an inline `git remote set-head origin --auto`. The committed workflows stay the pin's local actions until the pin moves | CI setup |
+| 14 | Moving asset | The wrapper installs `shim-<sha256>`. `dist` still publishes `shim` and `shim.sha256` so `self update` can move. The wrapper does not fetch those names | CI setup |
+| 15 | Two wrappers | One wrapper, `LauncherScript`. `init`, `new`, and `workflow --update` write it for every build, including one with no assembly module. It checks `Toolchain.Floor` and installs `shim-<sha256>`. The committed `./histos` stays the pin's script until the pin moves | CI setup |
 | 16 | Two update paths | `launcher --update/--latest` against `histos update` | Grammar |
 | 17 | Rehearsal in the CLI | `portal` | Grammar |
 | 18 | Name collision | The server `toolchain` against the shim's `toolchain install/list` | Grammar |
@@ -167,7 +167,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 26 | AGENTS.md | `testQuick` as a command, a local suite on `dist/histos.jar`, the dogfood line, docker in tests, the read rule for this file, and worktree and MCP rules written as hard rules | Work plan, then every item |
 | 27 | Docs gate | Nothing checks that README commands parse or that its links exist | README |
 | 28 | Handshake bug | The shim exports the resolved timestamp as `HISTOS_VERSION`, and the server records the `build.properties` pointer. With a `-SNAPSHOT` pin and a client, every command reboots the server and then fails | Shim |
-| 29 | JDK floor | The shim, the wrapper, and the engine accept JDK 21. The child-process bootstrap that test, run, and link use compiles `java.lang.foreign`, which JDK 21 marks preview | Shim (the floor is 25). The generator execs the user shim and does not check a JDK. The committed `./histos` still checks 21, because `workflow --check` compares it to the pin. The CI setup item renders the floor from `Toolchain.Floor` when the pin moves |
+| 29 | JDK floor | The shim, the wrapper, and the engine accept JDK 21. The child-process bootstrap that test, run, and link use compiles `java.lang.foreign`, which JDK 21 marks preview | Shim (the floor is 25). The generator's wrapper checks `Toolchain.Floor` before it fetches the shim. The committed `./histos` is the pin's script and does not check a JDK, because `workflow --check` compares it to the pin |
 | 30 | Startup race | Closed. The client notes the `server.json` stamp before spawn and accepts a record only when it is strictly newer. The restart error names the version: `histos server at <socket> did not record version <wanted>; it has <got>`. The reboot loop after the `0.3.0` pin was a different cause ([test-audit.md](test-audit.md) B29, fixed) | Dist layer |
 | 31 | Hatch skew | Closed. The hatch is deleted. A stale local toolchain warns on the command line and in `doctor`, and the command runs | Dist layer |
 | 32 | Drift at HEAD | `1b88d92` moved `.next` to `0.3.0`. The committed wrapper and `histos-release.yml` still say `0.2.10` | README (`workflow --update`) |
@@ -193,7 +193,7 @@ Each item audits the files it touches against the Totality list and adds what it
 | 52 | Unverified store | D12 is in. Only CI writes the remote. A download is checked against its digest. A compile whose sources change while it runs is not stored. `histos cache forget` and `histos cache verify` name a hit beside `clean --full` (fixed) | Remote cache |
 | 53 | Stamp positions | `SuiteStamp` hashed raw class bytes, `TASTY` attribute included, so a trailing comment in a class a suite calls ran the suite again ([test-audit.md](test-audit.md) B33, fixed) | Scenario stamp |
 | 54 | Path scrub | `ProductDigest.normalize` used to cut every rooted string constant to its leaf, so `/api/v1/users` and `/api/v2/users` were both `users`. D10 strips only the checkout root and leaves every other string intact. A link key includes that digest, so the path change relinks. The quick stamp still keeps every path (B33). Package still runs | Link cache |
-| 55 | Inherited label | `LauncherScript` sets `HISTOS_VERSION` only when it execs the native client. Its `server`, `bsp`, and `mcp` path, and any command without a client, execs `java -jar` with whatever `HISTOS_VERSION` the spawner exported, so a server started by a process that exported another label records that label as its own | CI setup (CI's `workflow --check` renders the wrapper with the pin, as in row 29) |
+| 55 | Inherited label | The shim sets `HISTOS_VERSION` from the toolchain it selected before the native client and before `java -jar`, including `server`, `bsp`, and `mcp`. The generator's wrapper does not set it. The committed `./histos` only execs the shim | CI setup |
 
 ## Left out
 
@@ -205,8 +205,8 @@ Each item audits the files it touches against the Totality list and adds what it
 
 ## Risks
 
-- A remote action pinned at a commit that lives only on a merged pull-request branch has to keep resolving after the branch is deleted. The CI setup item proves it, or pins move to `main` commits only.
-- The ship row, dist layer, and CI setup items each pin a snapshot of their own commit before CI can compile `histos.scala`.
+- D20. The setup action is pinned only to a commit already on `main`. A branch-only SHA is not used. The branch-only resolution check was not run.
+- The ship row and the dist layer each pinned a snapshot of their own commit before CI could compile `histos.scala`. CI setup does not. The build file is unchanged, and this pull request stays on the current pin.
 - The ship row and dist layer items are the large ones. Either splits along pack, then link, then proof, if it outgrows one review.
 
 ## Checklist
@@ -312,7 +312,8 @@ The open items are written as agent-ready briefs, with their order, bindings, an
 - [x] **Container.** Dropped. D19: a publish links the host only. There is no container, no second main, and no cross-build. A Mac names `macos-aarch64` and a Linux machine names `linux-x86_64`. Client files already under `dist/clients` are still uploaded. Done:
   - The Dist layer already links the host only. The unpushed container link was not merged. A trial `publish snapshots` from that jar built the image and then failed before any upload: the container reported `no build file at /work/histos.scala` because the checkout copy lived in `java.io.tmpdir`.
   - No code change and no pin move.
-- [ ] **CI setup.** `Projects.ciSetup`, the inline `origin-head` step, `shim-<sha256>` on `dist`, and the bootstrap wrapper for every build. Ledger rows 13 to 15, 29, and 55 close. Proof: renders for both choices, the wrapper installing the pinned shim on loopback and refusing a checksum mismatch, and `init` and `new` writing it. Live: a remote action pinned at a branch-only commit still resolves after the branch is deleted. Pin move.
+- [ ] **CI setup.** `Projects.ciSetup`, the inline `origin-head` step, `shim-<sha256>` on `dist`, and the bootstrap wrapper for every build. Ledger rows 13 to 15, 29, and 55 close. Proof: renders for both choices, the wrapper installing the pinned shim on loopback and refusing a checksum mismatch, and `init` and `new` writing it. Pin move, packed from a commit already on `main` (D20).
+  - The generator and the laws are in this commit. The committed `ci.yml`, `histos-snapshots.yml`, `histos-release.yml`, and `./histos` stay the pin's render. `./histos workflow --check` exited 0 against that pin. `./histos test api wire engine app`: api 202 on jvm and on native, wire 246 on jvm and on native, engine 754, app 215. `./histos fmt --check` and `./histos run doc` are clean. D20: this pull request does not publish and does not move `histos.version`. The pin is packed from the squash commit once it is on `main`.
 - [x] **Grammar.** The verbs with flags, the removals the decisions name, `server` out of help, `Help` and MCP in step, and typed MCP arguments. Ledger rows 16, 18, 19, 21, 22, 23, 24, 33, and 51 close. Rows 17 and 20 stay open. `ReadmeLawSpec` refuses the removed words. Proof: `GrammarLawSpec`, `HelpLawSpec`, and `McpLawSpec` cover each new form and refuse each removed word with a typed error that names the replacement. Done:
   - `test --only`, `test --quick`, `clean --full`, and `publish local`, and the same forms under `preview`, replace `testOnly`, `testQuick`, `cleanFull`, and `publishLocal`. No alias.
   - `client` is removed. The error names `publish`. `launcher` and the MCP name `launcherUpdate` are removed. The error names `update`. Bare `toolchain` is removed. The error names `doctor`. `toolchain install` and `toolchain list` stay on the shim.

@@ -27,6 +27,9 @@ enum CiError:
   case LlvmChecksum(archive: String)
   case SnapshotClients(ship: ShipName)
 
+  /** The launcher jar has no toolchain identity, so a remote setup action has no commit. */
+  case NoShip
+
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
     case Unknown(name, _)             => s"'${name.value}' is not a project"
@@ -47,6 +50,8 @@ enum CiError:
       s"no sha256 is pinned for $archive"
     case SnapshotClients(ship) =>
       s"ship ${ship.value} has a toolchain. One ship pins LLVM and links the clients."
+    case NoShip =>
+      "the rendering ship has no commit. The launcher jar has no toolchain identity."
 
   def diagnose: Diagnostic = this match
     case Drift(file, hint) =>

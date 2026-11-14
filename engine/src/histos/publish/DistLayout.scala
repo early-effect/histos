@@ -10,6 +10,9 @@ object DistLayout:
   val Shim: String    = "shim"
   val ShimSha: String = "shim.sha256"
 
+  /** `shim-<sha256>`. The bytes at this name do not move. */
+  def pinnedShim(sha: String): String = s"shim-$sha"
+
   /** The workflow uploads each linked client as `client-<platform>`. */
   val ClientArtifact: String = "client-"
 

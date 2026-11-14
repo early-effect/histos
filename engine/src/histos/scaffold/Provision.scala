@@ -2,12 +2,12 @@ package histos.scaffold
 
 import histos.jdk.Machine
 import histos.load.{LoadError, Loader}
-import histos.publish.{LauncherScript, UpgradeNotice}
+import histos.publish.{LauncherScript, PublishedShim, ScriptError, UpgradeNotice}
 import histos.Sona
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.supply.DoctorSurface
-import histos.workflow.{CiBranch, CiError, Workflow}
-import histos.{BuildError, ProjectName, Publishing}
+import histos.workflow.{CiBranch, CiError, RenderingShip, Workflow}
+import histos.{BuildError, ProjectName, Publishing, ToolchainIdentity}
 
 import java.nio.file.{Files, Path}
 
@@ -39,8 +39,11 @@ object Provision:
       machine: Machine,
       request: Request,
   ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
-    Skeleton.create(parent, name, version, request.kind).mapError(ProvisionError.Files(_)).flatMap { dir =>
-      finish(dir, apiJar, machine, request)
+    prepare(request.kind).flatMap { ready =>
+      Skeleton
+        .create(parent, name, version, request.kind, ready.shim)
+        .mapError(ProvisionError.Files(_))
+        .flatMap(dir => finish(dir, apiJar, machine, request, ready))
     }
 
   def init(
@@ -50,9 +53,12 @@ object Provision:
       machine: Machine,
       request: Request,
   ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
-    draft(dir, request.source).flatMap { text =>
-      Skeleton.init(dir, version, request.kind, text).mapError(ProvisionError.Files(_)).flatMap { written =>
-        finish(written, apiJar, machine, request)
+    prepare(request.kind).flatMap { ready =>
+      draft(dir, request.source).flatMap { text =>
+        Skeleton
+          .init(dir, version, request.kind, text, ready.shim)
+          .mapError(ProvisionError.Files(_))
+          .flatMap(written => finish(written, apiJar, machine, request, ready))
       }
     }
 
@@ -71,34 +77,56 @@ object Provision:
           modulesOf(dir).map(names => Some(ImportDraft.zipx(text, names, directoryName(dir))))
         }
 
+  private final case class Ready(shim: Option[histos.jdk.Sha256], ship: Option[RenderingShip])
+
+  private def prepare(kind: ScaffoldKind): IO[ProvisionError, Ready] =
+    kind match
+      case ScaffoldKind.Bare => ZIO.succeed(Ready(None, None))
+      case ScaffoldKind.Full =>
+        for
+          sha  <- ZIO.fromEither(PublishedShim.load).mapError(error => ProvisionError.Workflow(error.message))
+          ship <- rendering
+        yield Ready(Some(sha), Some(ship))
+
+  private def rendering: IO[ProvisionError, RenderingShip] =
+    ToolchainIdentity.loaded match
+      case None        => ZIO.fail(ProvisionError.Workflow(CiError.NoShip.message))
+      case Some(found) =>
+        ZIO.fromEither(RenderingShip.from(found.commit)).mapError(error => ProvisionError.Workflow(error.message))
+
   private def finish(
       dir: Path,
       apiJar: Path,
       machine: Machine,
       request: Request,
+      ready: Ready,
   ): ZIO[Loader & Resolve & DoctorSurface.Needs, ProvisionError, Report] =
     val head = s"${dir.toAbsolutePath.normalize}\nhistos test"
     request.kind match
       case ScaffoldKind.Bare => ZIO.succeed(Report(dir, head))
       case ScaffoldKind.Full =>
-        loaded(dir, apiJar).flatMap: (graph, sona) =>
-          branchOf(dir, request).flatMap: name =>
-            val branch = CiBranch(name)
-            Workflow
-              .update(dir, graph, sona)(using branch)
-              .mapError:
-                case error: CiError    => ProvisionError.Workflow(error.message)
-                case error: BuildError => ProvisionError.Load(LoadError.BrokenGraph(error))
-              .flatMap: file =>
-                LauncherScript.update(dir, graph).mapError(error => ProvisionError.Workflow(error.message)) *>
-                  Resolve
+        (ready.shim, ready.ship) match
+          case (None, _)               => ZIO.fail(ProvisionError.Workflow(ScriptError.Shim.message))
+          case (_, None)               => ZIO.fail(ProvisionError.Workflow(CiError.NoShip.message))
+          case (Some(sha), Some(ship)) =>
+            loaded(dir, apiJar).flatMap: (graph, sona) =>
+              branchOf(dir, request).flatMap: name =>
+                val branch = CiBranch(name)
+                for
+                  file <- Workflow
+                    .update(dir, graph, sona)(using branch, ship)
+                    .mapError:
+                      case error: CiError    => ProvisionError.Workflow(error.message)
+                      case error: BuildError => ProvisionError.Load(LoadError.BrokenGraph(error))
+                  _    <- LauncherScript.update(dir, sha).mapError(error => ProvisionError.Workflow(error.message))
+                  lock <- Resolve
                     .update(dir, graph, BuildResolvers(graph.resolvers), machine.native)
                     .mapError(ProvisionError.Lock(_))
-                    .flatMap: lock =>
-                      doctor(dir, graph, request.env, machine).map: report =>
-                        val notes = List(file.toString, lock, report).filter(_.nonEmpty).mkString("\n")
-                        val out   = if notes.isEmpty then head else s"$head\n$notes"
-                        Report(dir, out)
+                  report <- doctor(dir, graph, request.env, machine)
+                yield
+                  val notes = List(file.toString, lock, report).filter(_.nonEmpty).mkString("\n")
+                  val out   = if notes.isEmpty then head else s"$head\n$notes"
+                  Report(dir, out)
 
   private def loaded(dir: Path, apiJar: Path): ZIO[Loader, ProvisionError, (histos.ProjectGraph, Publishing)] =
     ZIO.serviceWithZIO[Loader]: loader =>

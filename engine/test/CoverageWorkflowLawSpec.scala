@@ -1,14 +1,15 @@
 package histos
 
 import histos.plugin.{JobCheck, JobName}
-import histos.workflow.{CiBranch, Workflow}
+import histos.workflow.{CiBranch, RenderingLaw, RenderingShip, Workflow}
 
 import zio.test.*
 
 object CoverageWorkflowLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
 
-  given CiBranch = CiBranch("main")
+  given CiBranch      = CiBranch("main")
+  given RenderingShip = RenderingLaw.ship
 
   def spec = suite("coverage workflow")(
     test("a build that does not ask has no coverage job"):

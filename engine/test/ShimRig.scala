@@ -86,30 +86,39 @@ final case class ShimRig(root: Path, base: String, shim: Path, path: String):
          |""".stripMargin,
     )
 
-  /** What the last exec recorded: the program, its arguments, and `HISTOS_JAR`. None when nothing ran. */
+  /** What the last exec recorded: the program, `HISTOS_JAR`, `HISTOS_VERSION`, and the arguments. */
   def executed: ZIO[Any, ShimFault, Option[Executed]] =
     Workspace
       .readIfPresent(root.resolve("exec"))
       .mapBoth(ShimFault.Io(_), _.flatMap(Executed.parse))
 
-  def update(flags: String*): ZIO[Any, ShimFault, Ran] = run(shim, "update" :: flags.toList)
+  def update(flags: String*): ZIO[Any, ShimFault, Ran] = run(shim, "update" :: flags.toList, Map.empty)
 
-  def install(version: String): ZIO[Any, ShimFault, Ran] = run(shim, List("toolchain", "install", version))
+  def install(version: String): ZIO[Any, ShimFault, Ran] = run(shim, List("toolchain", "install", version), Map.empty)
 
-  def launch(args: String*): ZIO[Any, ShimFault, Ran] = run(installed, args.toList)
+  def launch(args: String*): ZIO[Any, ShimFault, Ran] = run(installed, args.toList, Map.empty)
+
+  /** `extra` is the parent environment. The shim replaces `HISTOS_VERSION` before it execs. */
+  def launchWith(extra: Map[String, String], args: String*): ZIO[Any, ShimFault, Ran] =
+    run(installed, args.toList, extra)
 
   /** `sh <script> <args>` in the project, with stdin from `/dev/null` so the shim never sees a terminal. */
-  private def run(script: Path, args: List[String]): ZIO[Any, ShimFault, Ran] =
+  private def run(script: Path, args: List[String], extra: Map[String, String]): ZIO[Any, ShimFault, Ran] =
     val err = root.resolve("stderr")
     ZIO.scoped:
       ZIO.attemptBlocking(Files.deleteIfExists(root.resolve("exec"))).orElseFail(ShimFault.Stat) *>
         ZIO
-          .acquireRelease(start(script, err, args))(process => ZIO.succeed(process.destroyForcibly()).unit)
+          .acquireRelease(start(script, err, args, extra))(process => ZIO.succeed(process.destroyForcibly()).unit)
           .flatMap(process => ZIO.attemptBlockingInterrupt(process.waitFor()).orElseFail(ShimFault.Wait))
           .flatMap: exit =>
             Workspace.readString(err).mapBoth(ShimFault.Io(_), text => Ran(exit, text.linesIterator.toList))
 
-  private def start(script: Path, err: Path, args: List[String]): ZIO[Any, ShimFault, java.lang.Process] =
+  private def start(
+      script: Path,
+      err: Path,
+      args: List[String],
+      extra: Map[String, String],
+  ): ZIO[Any, ShimFault, java.lang.Process] =
     ZIO
       .attemptBlocking:
         val builder = new ProcessBuilder(("sh" :: script.toString :: args).asJava)
@@ -120,6 +129,7 @@ final case class ShimRig(root: Path, base: String, shim: Path, path: String):
         env.put("HOME", user.toString)
         env.put("HISTOS_HOME", home.toString)
         env.put("HISTOS_DIST", base)
+        extra.foreach((key, value) => env.put(key, value))
         builder.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")))
         builder.redirectOutput(ProcessBuilder.Redirect.DISCARD)
         builder.redirectError(err.toFile)
@@ -139,7 +149,7 @@ final case class ShimRig(root: Path, base: String, shim: Path, path: String):
 
   private def record(program: String): String =
     val out = root.resolve("exec")
-    s"""{ echo '$program'; echo "HISTOS_JAR=$${HISTOS_JAR:-}"; for arg in "$$@"; do echo "$$arg"; done; } > '$out'"""
+    s"""{ echo '$program'; echo "HISTOS_JAR=$${HISTOS_JAR:-}"; echo "HISTOS_VERSION=$${HISTOS_VERSION:-}"; for arg in "$$@"; do echo "$$arg"; done; } > '$out'"""
 
   private def script(file: Path, text: String): ZIO[Any, ShimFault, Unit] =
     Workspace.writeString(file, text).mapError(ShimFault.Io(_)) *>
@@ -164,14 +174,15 @@ object ShimRig:
 
   final case class Ran(exit: Int, err: List[String])
 
-  /** The program the shim exec'd (`java` or `client-<platform>`), `HISTOS_JAR`, and the arguments. */
-  final case class Executed(program: String, jar: String, args: List[String])
+  /** The program the shim exec'd (`java` or `client-<platform>`), `HISTOS_JAR`, `HISTOS_VERSION`, and the arguments. */
+  final case class Executed(program: String, jar: String, version: String, args: List[String])
 
   object Executed:
     def parse(text: String): Option[Executed] =
       text.linesIterator.toList match
-        case program :: s"HISTOS_JAR=$jar" :: args => Some(Executed(program, jar, args))
-        case _                                     => None
+        case program :: s"HISTOS_JAR=$jar" :: s"HISTOS_VERSION=$version" :: args =>
+          Some(Executed(program, jar, version, args))
+        case _ => None
 
   enum ShimFault:
     case NoRepo

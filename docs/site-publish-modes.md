@@ -87,7 +87,7 @@ private def siteEnvironment(job: CiJob): List[String] =
         )
 ```
 
-`UploadPages`, `DeployPages`, and `Checkout` are full commit SHAs with a tag comment, from the built-in pin table. The runner is `ubuntu-26.04`. A local composite action stays `./.github/actions/setup`.
+`UploadPages`, `DeployPages`, and `Checkout` are full commit SHAs with a tag comment, from the built-in pin table. The runner is `ubuntu-26.04`. The install step is `early-effect/histos/.github/actions/setup` at the rendering ship's full commit, and the comment on that line is the same commit. `Projects.ciSetup(CiSetup.Wrapper)` renders pinned cache steps instead, and no Histos action.
 
 `ci.yml` runs on every pull request and on a push whose branch filter is the literal `main`. There is no `workflow_dispatch` on that file. The same literal is the non-PR cache namespace ([Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 571-584, 849-852, and 884-885). A push that is not that literal does not start this workflow. That literal is the bug the correction removes: the git branch and the cache token are different facts.
 
@@ -140,7 +140,7 @@ A site job today is one job. For `CiJob(JobName("docs"), TaskName("site"), JobWh
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      - uses: early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <same commit>
       - run: "./histos run dev.example/site"
       - uses: actions/upload-pages-artifact@v5
         with:
@@ -290,7 +290,7 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      - uses: early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <same commit>
       - run: "./histos run dev.example/site"
 ```
 
@@ -311,7 +311,7 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      - uses: early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <same commit>
       - run: "./histos run dev.example/site"
       - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
         uses: actions/upload-pages-artifact@v5
@@ -369,7 +369,7 @@ jobs:
       pages: write
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      - uses: early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <same commit>
       - run: "./histos run dev.example/site"
       - uses: actions/upload-pages-artifact@v5
         with:

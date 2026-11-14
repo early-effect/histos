@@ -1,6 +1,7 @@
 package histos.workflow
 
 import histos.doctor.Suggest
+import histos.jdk.Toolchain
 import histos.plugin.{CiExtra, CiHeader}
 import histos.assembly.AssemblyPath
 import histos.publish.{DistLayout, DistPlatform}
@@ -141,7 +142,7 @@ object Workflow:
           case first :: rest => Right(TestTarget.Named(first, rest))
           case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph)(using CiBranch): Either[CiError | BuildError, String] =
+  def render(graph: ProjectGraph)(using CiBranch, RenderingShip): Either[CiError | BuildError, String] =
     prepared(graph).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
@@ -151,7 +152,7 @@ object Workflow:
   def renderAll(
       graph: ProjectGraph,
       sona: Publishing,
-  )(using CiBranch): Either[CiError | BuildError, List[RenderedWorkflow]] =
+  )(using CiBranch, RenderingShip): Either[CiError | BuildError, List[RenderedWorkflow]] =
     for
       (body, files) <- prepared(graph)
       release       <- releaseWorkflow(graph, sona)
@@ -166,7 +167,7 @@ object Workflow:
 
   private def prepared(
       graph: ProjectGraph
-  )(using branch: CiBranch): Either[CiError | BuildError, (String, List[RenderedWorkflow])] =
+  )(using branch: CiBranch)(using RenderingShip): Either[CiError | BuildError, (String, List[RenderedWorkflow])] =
     for
       _       <- limits(graph)
       _       <- llvmPinned(graph)
@@ -217,7 +218,10 @@ object Workflow:
       .mapError(_ => CiError.Io(IoFailure(path, IoFault.Stat)))
       .flatMap(found => if found then ZIO.unit else ZIO.fail(CiError.Missing(path)))
 
-  def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError | BuildError, Path] =
+  def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using
+      CiBranch,
+      RenderingShip,
+  ): IO[CiError | BuildError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
@@ -227,7 +231,10 @@ object Workflow:
       _ <- PinScan.check(repo, graph)
     yield path(repo)
 
-  def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError | BuildError, Path] =
+  def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using
+      CiBranch,
+      RenderingShip,
+  ): IO[CiError | BuildError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
@@ -315,7 +322,12 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def document(graph: ProjectGraph, jobs: List[TestJob], planned: JobYaml.Rendered, branch: String): String =
+  private def document(
+      graph: ProjectGraph,
+      jobs: List[TestJob],
+      planned: JobYaml.Rendered,
+      branch: String,
+  )(using RenderingShip): String =
     val modules = graph.projects.collect { case module: Module => module }
     val test    = jobs match
       case Nil => Nil
@@ -342,7 +354,10 @@ object Workflow:
     * `secretNames` in that order. A ship that names `.toolchain` then links that client and uploads the install files
     * to the existing `dist` release.
     */
-  private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Either[CiError, Option[RenderedWorkflow]] =
+  private def releaseWorkflow(
+      graph: ProjectGraph,
+      sona: Publishing,
+  )(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
     graph.catalog.ships match
       case Nil   => Right(None)
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
@@ -351,13 +366,13 @@ object Workflow:
     * list emits nothing, so update deletes a stale copy. A toolchain ship links every dist platform. Two toolchain
     * ships, or one toolchain ship with no LLVM pin, fail the render.
     */
-  private def snapshotWorkflow(graph: ProjectGraph): Either[CiError, Option[RenderedWorkflow]] =
+  private def snapshotWorkflow(graph: ProjectGraph)(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
     snapshotLink(graph).map: link =>
       if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
         Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph, link)))
       else None
 
-  private def snapshotLink(graph: ProjectGraph): Either[CiError, SnapshotLink] =
+  private def snapshotLink(graph: ProjectGraph)(using RenderingShip): Either[CiError, SnapshotLink] =
     toolchain(graph).flatMap:
       case None        => Right(SnapshotLink.JarOnly)
       case Some(found) =>
@@ -370,7 +385,7 @@ object Workflow:
     * `HISTOS_BRANCH` is `default` so the pointer moves from any ref. With clients, the publish job waits for the macOS
     * client, downloads it, installs Linux LLVM, and `publish snapshots` links the Linux client on this runner.
     */
-  private def snapshotDocument(graph: ProjectGraph, link: SnapshotLink): String =
+  private def snapshotDocument(graph: ProjectGraph, link: SnapshotLink)(using RenderingShip): String =
     val (clients, needs, grant, fetch) = link match
       case SnapshotLink.JarOnly                => (Nil, Nil, Nil, Nil)
       case SnapshotLink.WithClients(job, llvm) =>
@@ -415,12 +430,16 @@ object Workflow:
     )
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
-  private def promoteWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
+  private def promoteWorkflow(graph: ProjectGraph, sona: Publishing)(using RenderingShip): Option[RenderedWorkflow] =
     sona.followUp match
       case FollowUp.Finished   => None
       case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument(graph)))
 
-  private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): Either[CiError, String] =
+  private def releaseDocument(
+      graph: ProjectGraph,
+      ships: List[Ship],
+      sona: Publishing,
+  )(using RenderingShip): Either[CiError, String] =
     toolchain(graph).flatMap: install =>
       val header = List(
         "name: release",
@@ -450,7 +469,7 @@ object Workflow:
       sona: Publishing,
       shape: ReleaseShape,
       llvm: Option[ToolRevision],
-  ): Either[CiError, List[String]] =
+  )(using RenderingShip): Either[CiError, List[String]] =
     val name  = ship.name.value
     val needs = shape match
       case ReleaseShape.Publish     => Nil
@@ -554,7 +573,11 @@ object Workflow:
         case Some(module: Module) => module.asset.isDefined
         case _                    => false
 
-  private def installJob(graph: ProjectGraph, ships: List[Ship], install: Install): Either[CiError, List[String]] =
+  private def installJob(
+      graph: ProjectGraph,
+      ships: List[Ship],
+      install: Install,
+  )(using RenderingShip): Either[CiError, List[String]] =
     val needed = "client" :: ships.map(row => s"release-${row.name.value}")
     install.ship.toolchain match
       case None         => Left(CiError.SnapshotClients(install.ship.name))
@@ -574,7 +597,7 @@ object Workflow:
     s"LLVM-$revision-${host.archive}.tar.xz"
 
   /** The macOS client. It needs no other job. `publish local` links this host and the workflow uploads that binary. */
-  private def clientJob(graph: ProjectGraph, revision: String): Either[CiError, List[String]] =
+  private def clientJob(graph: ProjectGraph, revision: String)(using RenderingShip): Either[CiError, List[String]] =
     val platform = DistPlatform.MacosAarch64
     val file     = llvmArchive(revision, clientHost(platform))
     LlvmDigest
@@ -589,7 +612,7 @@ object Workflow:
           "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ clientSetup ++ SupplyYaml.preflight(graph, "client") ++ clientLlvm(revision, file, hex) ++ List(
+        ) ++ clientSetup(graph) ++ SupplyYaml.preflight(graph, "client") ++ clientLlvm(revision, file, hex) ++ List(
           s"      - run: ${quote("./histos publish local")}",
           s"      - uses: ${ActionPins.uploadArtifact.line}",
           "        with:",
@@ -613,20 +636,17 @@ object Workflow:
       "          if-no-files-found: error",
     )
 
-  /** Temurin 25. The process bootstrap compiles `java.lang.foreign`. JDK 21 still marks that API preview, and that is
-    * the JDK image on `macos-26`. The unpacked LLVM clang does not find the Xcode SDK, and the linker child keeps only
-    * `PATH`, so the macOS job puts a `clang` wrapper on `PATH` that passes `-isysroot`.
+  /** Temurin at [[Toolchain.Floor]]. The process bootstrap compiles `java.lang.foreign`, which an older JDK marks
+    * preview. The unpacked LLVM clang does not find the Xcode SDK, and the linker child keeps only `PATH`, so the macOS
+    * job puts a `clang` wrapper on `PATH` that passes `-isysroot`.
     */
-  private val ClientJdk: String = "25"
-
-  private def clientSetup: List[String] =
+  private def clientSetup(graph: ProjectGraph)(using RenderingShip): List[String] =
     List(
       s"      - uses: ${ActionPins.setupJava.line}",
       "        with:",
       "          distribution: temurin",
-      s"          java-version: ${quote(ClientJdk)}",
-      s"      - uses: $Setup",
-    )
+      s"          java-version: ${quote(Toolchain.Floor.value)}",
+    ) ++ CiInstall.steps(graph)
 
   private def clientLlvm(revision: String, archive: String, sha: String): List[String] =
     val key = "llvm-" + revision + "-${{ runner.os }}-${{ runner.arch }}"
@@ -675,7 +695,12 @@ object Workflow:
       "          if-no-files-found: error",
     )
 
-  private def distJob(graph: ProjectGraph, version: String, jarName: String, needed: List[String]): List[String] =
+  private def distJob(
+      graph: ProjectGraph,
+      version: String,
+      jarName: String,
+      needed: List[String],
+  )(using RenderingShip): List[String] =
     List(
       "  install:",
       s"    needs: [${needed.mkString(", ")}]",
@@ -686,8 +711,7 @@ object Workflow:
       "      contents: write",
       "    steps:",
       s"      - uses: $Checkout",
-      s"      - uses: $Setup",
-    ) ++ SupplyYaml.preflight(graph, "install") ++ List(
+    ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "install") ++ List(
       s"      - uses: ${ActionPins.downloadArtifact.line}",
       "        with:",
       "          path: dist-in",
@@ -707,6 +731,7 @@ object Workflow:
       "          shim_file=dist-in/shim/histos",
       "          shim_sha=$(sha \"$shim_file\")",
       "          cp \"$shim_file\" shim",
+      "          cp \"$shim_file\" \"shim-$shim_sha\"",
       "          printf '%s\\n' \"$shim_sha\" > shim.sha256",
       "          cat > \"$version-manifest.json\" <<EOF",
       "          {",
@@ -719,7 +744,7 @@ object Workflow:
       "            }",
       "          }",
       "          EOF",
-      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" shim shim.sha256 --clobber --repo \"$GITHUB_REPOSITORY\"",
+      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" \"shim-$shim_sha\" shim shim.sha256 --clobber --repo \"$GITHUB_REPOSITORY\"",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
     )
@@ -728,7 +753,7 @@ object Workflow:
   private val promoteSecrets: List[String] =
     List("SONATYPE_USERNAME", "SONATYPE_PASSWORD")
 
-  private def promoteDocument(graph: ProjectGraph): String =
+  private def promoteDocument(graph: ProjectGraph)(using RenderingShip): String =
     val lines = List(
       "name: promote",
       "on:",
@@ -879,7 +904,7 @@ object Workflow:
     * `archive.ubuntu.com` first and gives the command three minutes. A step `if` that skips the download leaves a job
     * that did not run. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles`
     * names the build file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every
-    * job that runs `./histos` uses the setup action and does not install a JDK or the `cs` binary.
+    * job that runs `./histos` installs Histos the way the build chose and does not install a JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -938,11 +963,9 @@ object Workflow:
   private def coursierStep(resolution: Resolution): List[String] =
     cacheStep(None, List(CoursierCache), coursierKey(resolution))
 
-  /** The composite action in this repo. It installs the shim and restores the caches. It does not install a JDK. */
-  private val Setup = "./.github/actions/setup"
-
-  private def coursierCli(graph: ProjectGraph, job: String): List[String] =
-    List(s"      - uses: $Setup") ++ SupplyYaml.preflight(graph, job)
+  /** Histos the way the build chose, then the job's preflight. This does not install a JDK. */
+  private def coursierCli(graph: ProjectGraph, job: String)(using RenderingShip): List[String] =
+    CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, job)
 
   private def nodeStep(floor: Option[NodeFloor], scope: MatrixScope): List[String] =
     floor match
@@ -1009,7 +1032,7 @@ object Workflow:
           "          timeout 180s node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
         ) ++ cell.toList.map(text => s"        if: $text")
 
-  private def affectedJob(graph: ProjectGraph): String =
+  private def affectedJob(graph: ProjectGraph)(using RenderingShip): String =
     val script =
       """          base=all
           |          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -1033,9 +1056,7 @@ object Workflow:
       "    outputs:",
       "      modules: ${{ steps.affected.outputs.modules }}",
       "    steps:",
-    ) ++ fullGitCheckout() ++ List(
-      s"      - uses: $Setup"
-    ) ++ SupplyYaml.preflight(graph, "affected") ++ List(
+    ) ++ fullGitCheckout() ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
@@ -1047,7 +1068,7 @@ object Workflow:
   /** A push to the default branch fills `main` and saves the store. Rebuild compiles. CopyIndex copies the pull-request
     * index. The suite does not run on that push.
     */
-  private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph): String =
+  private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph)(using RenderingShip): String =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
     val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
@@ -1068,7 +1089,7 @@ object Workflow:
       seedCommand(graph.promote),
     ) ++ storeSave).mkString("\n")
 
-  private def testJob(jobs: List[TestJob], graph: ProjectGraph): List[String] =
+  private def testJob(jobs: List[TestJob], graph: ProjectGraph)(using RenderingShip): List[String] =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
     val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
@@ -1267,7 +1288,7 @@ object Workflow:
 
   /** The whole history and the tags, the way zipx checks out. `fetch-depth: 0` is all branches and tags. A fetch still
     * does not write `refs/remotes/origin/HEAD`, so a job that renders a workflow follows this with
-    * [[ActionPins.originHead]].
+    * [[CiInstall.originHead]].
     */
   private[workflow] def fullGitCheckout(persistCredentials: Boolean = true): List[String] =
     val creds =
@@ -1287,7 +1308,7 @@ object Workflow:
   private[workflow] def onDefaultPush: String = OnDefaultPush
 
   /** Beside the suite. It does not wait for the suite, so a scaladoc warning does not hold the tests. */
-  private def docJob(graph: ProjectGraph): String =
+  private def docJob(graph: ProjectGraph)(using RenderingShip): String =
     val modules   = graph.projects.collect { case module: Module => module }
     val published = graph.catalog.ships.flatMap(_.members.toList)
     val chosen    = modules.filter(module => published.contains(module.name))
@@ -1310,7 +1331,7 @@ object Workflow:
   /** Beside the suite. It does not wait for the suite. A floor on the ask is a flag. Excludes recorded on the build are
     * flags too. No floor does not fail on a rate.
     */
-  private def coverageJob(graph: ProjectGraph, floors: CoverageFloors): String =
+  private def coverageJob(graph: ProjectGraph, floors: CoverageFloors)(using RenderingShip): String =
     val command = ("./histos coverage" :: (floors.argv ++ graph.coverageExcludes.argv)).mkString(" ")
     val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
     val lines   = List(
@@ -1329,7 +1350,7 @@ object Workflow:
     lines.mkString("\n")
 
   /** Beside the suite. It does not wait for the suite, and it compiles nothing, so it restores no store. */
-  private def formatJob(graph: ProjectGraph): String =
+  private def formatJob(graph: ProjectGraph)(using RenderingShip): String =
     val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
     (List(
       "  format:"
@@ -1351,7 +1372,7 @@ object Workflow:
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
   /** The required check. It runs on a pull request and runs the full doctor. */
-  private def workflowJob(graph: ProjectGraph): String =
+  private def workflowJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
       "  workflow:"
     ) ++ verifyIf ++ List(
@@ -1361,16 +1382,16 @@ object Workflow:
     ) ++ List(
       "      contents: read",
       "    steps:",
-    ) ++ fullGitCheckout() ++ List(
-      s"      - uses: ${ActionPins.originHead}",
-      s"      - uses: $Setup",
-    ) ++ SupplyYaml.preflight(graph, "workflow") ++ SupplyYaml.fullDoctor(
+    ) ++ fullGitCheckout() ++ CiInstall.originHead ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(
+      graph,
+      "workflow",
+    ) ++ SupplyYaml.fullDoctor(
       graph.supply.updates.author
     ) ++ List(
       "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
-  private def versionsJob(graph: ProjectGraph): String =
+  private def versionsJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
       "  versions:"
     ) ++ verifyIf ++ List(
@@ -1381,8 +1402,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-      s"      - uses: $Setup",
-    ) ++ SupplyYaml.preflight(graph, "versions") ++ List(
+    ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "versions") ++ List(
       "      - run: \"./histos run versions\""
     )).mkString("\n")
 

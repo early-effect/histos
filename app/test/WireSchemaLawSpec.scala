@@ -886,7 +886,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
             "BadName(raw) | Unknown(name,near) | NotModule(name) | Duplicate(name) | " +
               "Missing(path) | Drift(file,hint) | Io(failure) | " +
               "DuplicateSite(first,second) | Fault(fault) | Pins(text) | " +
-              "NoDefaultBranch() | JobTimeout(count) | LlvmChecksum(archive) | SnapshotClients(ship)"
+              "NoDefaultBranch() | JobTimeout(count) | LlvmChecksum(archive) | SnapshotClients(ship) | NoShip()"
           ),
           """{"NoDefaultBranch":{}}""",
           histos.workflow.CiError.NoDefaultBranch,
@@ -1493,9 +1493,9 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         ) &&
         mixed[histos.publish.ScriptError](
           "ScriptError",
-          "Drift(path) | Missing(path) | Io(failure) | Revision() | Pin(error)",
-          """{"Revision":{}}""",
-          histos.publish.ScriptError.Revision,
+          "Drift(path) | Missing(path) | Io(failure) | Shim()",
+          """{"Shim":{}}""",
+          histos.publish.ScriptError.Shim,
         ) &&
         mixed[histos.select.SelectError](
           "SelectError",

@@ -15,10 +15,10 @@ object SupplyYaml:
       case DoctorPlacement.PreflightPlusWorkflowJob =>
         List(s"      - run: ./histos doctor --preflight $job")
 
-  def files(graph: ProjectGraph): List[RenderedWorkflow] =
+  def files(graph: ProjectGraph)(using RenderingShip): List[RenderedWorkflow] =
     RenderedWorkflow(depsName, deps(graph)) :: audit(graph).toList
 
-  def supplyChain(graph: ProjectGraph): String =
+  def supplyChain(graph: ProjectGraph)(using RenderingShip): String =
     val policy = graph.supply
     val name   = policy.checkName.value
     val issues =
@@ -35,9 +35,7 @@ object SupplyYaml:
       "      contents: read"
     ) ++ issues ++ List(
       "    steps:"
-    ) ++ Workflow.fullGitCheckout() ++ List(
-      s"      - uses: ${ActionPins.originHead}",
-      s"      - uses: ${ActionPins.localSetup}",
+    ) ++ Workflow.fullGitCheckout() ++ CiInstall.originHead ++ CiInstall.steps(graph) ++ List(
       s"      - uses: ${ActionPins.cache.line}",
       "        with:",
       "          path: ~/.cache/histos/advisories",
@@ -53,7 +51,7 @@ object SupplyYaml:
       "          GH_TOKEN: ${{ github.token }}",
     )).mkString("\n")
 
-  def snapshot(graph: ProjectGraph): Option[String] =
+  def snapshot(graph: ProjectGraph)(using RenderingShip): Option[String] =
     graph.supply.snapshot match
       case Snapshot.Off                  => None
       case Snapshot.OnPushToDefault(job) =>
@@ -70,15 +68,14 @@ object SupplyYaml:
             "      contents: write",
             "    steps:",
             s"      - uses: ${ActionPins.checkout.line}",
-            s"      - uses: ${ActionPins.localSetup}",
-          ) ++ preflight(graph, name) ++ List(
+          ) ++ CiInstall.steps(graph) ++ preflight(graph, name) ++ List(
             "      - run: ./histos deps snapshot --submit",
             "        env:",
             "          GH_TOKEN: ${{ github.token }}",
           )).mkString("\n")
         )
 
-  private def deps(graph: ProjectGraph): String =
+  private def deps(graph: ProjectGraph)(using RenderingShip): String =
     val policy = graph.supply.updates
     val opened =
       graph.supply.placement match
@@ -111,20 +108,18 @@ object SupplyYaml:
       s"    runs-on: ${Workflow.runner}",
     ) ++ Workflow.jobLimit(graph) ++ List(
       "    steps:"
-    ) ++ mint(policy.author) ++ Workflow.fullGitCheckout(persistCredentials = false) ++ List(
-      s"      - uses: ${ActionPins.originHead}",
-      s"      - uses: ${ActionPins.localSetup}",
-    ) ++ opened ++ List(
-      "      - run: ./histos deps update --yes",
-      "      - run: ./histos resolve --update",
-      "      - run: ./histos workflow --update",
-      "      - run: ./histos deps audit --report",
-      "      - if: inputs.dry-run != true",
-      "        run: ./histos deps pr",
-      "        env:",
-      commitToken(policy.author),
-      "          HISTOS_DRY_RUN: ${{ inputs.dry-run }}",
-    )).mkString("\n") + "\n"
+    ) ++ mint(policy.author) ++ Workflow.fullGitCheckout(persistCredentials = false) ++ CiInstall.originHead ++
+      CiInstall.steps(graph) ++ opened ++ List(
+        "      - run: ./histos deps update --yes",
+        "      - run: ./histos resolve --update",
+        "      - run: ./histos workflow --update",
+        "      - run: ./histos deps audit --report",
+        "      - if: inputs.dry-run != true",
+        "        run: ./histos deps pr",
+        "        env:",
+        commitToken(policy.author),
+        "          HISTOS_DRY_RUN: ${{ inputs.dry-run }}",
+      )).mkString("\n") + "\n"
 
   /** The Actions token is the job token, so the workflow has to grant the writes `createCommitOnBranch` needs. It does
     * not grant `workflows`, so a slipped workflow file is still refused.
@@ -143,7 +138,7 @@ object SupplyYaml:
           "  contents: read",
         )
 
-  private def audit(graph: ProjectGraph): Option[RenderedWorkflow] =
+  private def audit(graph: ProjectGraph)(using RenderingShip): Option[RenderedWorkflow] =
     graph.supply.advisories.daily match
       case DailyAudit.Off    => None
       case DailyAudit.On(at) =>
@@ -181,14 +176,13 @@ object SupplyYaml:
           "      fixable: ${{ steps.audit.outputs.fixable }}",
           "    steps:",
           s"      - uses: ${ActionPins.checkout.line}",
-          s"      - uses: ${ActionPins.localSetup}",
-        ) ++ preflight(graph, "audit") ++ List(
+        ) ++ CiInstall.steps(graph) ++ preflight(graph, "audit") ++ List(
           "      - id: audit",
           "        run: ./histos deps audit",
         ) ++ security
         Some(RenderedWorkflow(auditName, body.mkString("\n") + "\n"))
 
-  private def securityJob(graph: ProjectGraph): List[String] =
+  private def securityJob(graph: ProjectGraph)(using RenderingShip): List[String] =
     val author = graph.supply.updates.author
     List(
       "  security:",
@@ -201,8 +195,7 @@ object SupplyYaml:
       s"      - uses: ${ActionPins.checkout.line}",
       "        with:",
       "          persist-credentials: false",
-      s"      - uses: ${ActionPins.localSetup}",
-    ) ++ preflight(graph, "security") ++ List(
+    ) ++ CiInstall.steps(graph) ++ preflight(graph, "security") ++ List(
       "      - run: ./histos deps update --security --yes",
       "      - run: ./histos deps pr --security",
       "        env:",

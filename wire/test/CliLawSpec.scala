@@ -109,7 +109,7 @@ object CliLawSpec extends ZIOSpecDefault:
           List(
             fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch)))                               -> 1,
             fault(BuildFault.Workflow(WorkflowFault.Files(CiError.Pins("x"))))                                     -> 1,
-            fault(BuildFault.Workflow(WorkflowFault.Scripts(ScriptError.Revision)))                                -> 1,
+            fault(BuildFault.Workflow(WorkflowFault.Scripts(ScriptError.Shim)))                                    -> 1,
             fault(BuildFault.Program(histos.program.ProgramError.Absent("nope")))                                  -> 1,
             fault(BuildFault.Program(histos.program.ProgramError.Lock(missing)))                                   -> 1,
             fault(BuildFault.Program(histos.program.ProgramError.LockRead(path)))                                  -> 1,

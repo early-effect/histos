@@ -1086,6 +1086,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "a job timeout is between 1 and 360 minutes, not 2",
           "no sha256 is pinned for clang.tar.gz",
           "ship histos has a toolchain. One ship pins LLVM and links the clients.",
+          "the rendering ship has no commit. The launcher jar has no toolchain identity.",
         ),
         ciErrors.map(error => noted(error.diagnose)) == List(
           ("workflow.failed", "histos workflow --update"),
@@ -1102,6 +1103,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("workflow.failed", "histos workflow --update"),
           ("workflow.failed", "histos workflow --update"),
           ("workflow.failed", "histos workflow --update"),
+          ("workflow.failed", "histos workflow --update"),
         ),
       )
     ,
@@ -1109,11 +1111,10 @@ object MessageLawSpec extends ZIOSpecDefault:
       assertTrue(
         EnumLaw.covered(scriptErrors),
         scriptErrors.map(_.message) == List(
-          "launcher script does not match the ship: /work/repo",
+          "launcher script does not match the rendering ship: /work/repo",
           "no launcher script at /work/repo",
           read,
-          "the launcher script needs one ship version",
-          "launcher properties are missing histos.version",
+          "the rendering ship has no shim digest",
         ),
       )
     ,

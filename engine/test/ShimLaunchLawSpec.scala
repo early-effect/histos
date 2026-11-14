@@ -51,6 +51,23 @@ object ShimLaunchLawSpec extends ZIOSpecDefault:
           ran2.exists(_.args == List("--enable-native-access=ALL-UNNAMED", "-jar", toolJar, "compile")),
         )
     ,
+    test("server, bsp, mcp, and a client command record the toolchain version, not the parent's"):
+      val parent   = "histos 0.2.10"
+      val recorded = s"histos ${release.render}"
+      ZIO.scoped:
+        for
+          rig <- loopback
+          _   <- rig.publish(Published(List(Release(release, clients = true)), Nil))
+          _   <- rig.pin(release.render)
+          _   <- rig.install(release.render)
+          ran <- ZIO.foreach(List(List("server"), List("bsp"), List("mcp"), List("compile", "api"))): args =>
+            rig.launchWith(Map("HISTOS_VERSION" -> parent), args*).zip(rig.executed).map { (done, seen) =>
+              (args, done.exit, seen.map(_.version))
+            }
+        yield assertTrue(
+          ran.forall((_, exit, version) => exit == 0 && version.contains(recorded) && !version.contains(parent))
+        )
+    ,
     test("server, bsp, mcp, and no arguments stay on java -jar with a client installed"):
       ZIO.scoped:
         for

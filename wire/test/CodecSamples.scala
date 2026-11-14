@@ -806,14 +806,14 @@ object CodecSamples:
     CiError.JobTimeout(2),
     CiError.LlvmChecksum("clang.tar.gz"),
     CiError.SnapshotClients(ship),
+    CiError.NoShip,
   )
 
   val scriptErrors: List[ScriptError] = List(
     ScriptError.Drift(path),
     ScriptError.Missing(path),
     ScriptError.Io(io),
-    ScriptError.Revision,
-    ScriptError.Pin(LauncherError.Missing),
+    ScriptError.Shim,
   )
 
   val assembleErrors: List[AssembleError] = List(

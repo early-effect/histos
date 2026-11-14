@@ -46,7 +46,7 @@ object JobYaml:
   /** The loader adds the wiring's plugins after the build checked its jobs, so a graph fault can first show here. It
     * stays a [[BuildError]].
     */
-  def render(graph: ProjectGraph, defaultBranch: String): Either[CiError | BuildError, Rendered] =
+  def render(graph: ProjectGraph, defaultBranch: String)(using RenderingShip): Either[CiError | BuildError, Rendered] =
     JobCheck
       .arrange(graph)
       .left
@@ -64,7 +64,7 @@ object JobYaml:
         val owned = ownedFiles(graph, placed, defaultBranch)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
 
-  private def jobBlock(graph: ProjectGraph, item: Placed): List[String] =
+  private def jobBlock(graph: ProjectGraph, item: Placed)(using RenderingShip): List[String] =
     val body = item.render match
       case JobRender.Task(job)        => List(task(graph, item.plugin, job, None))
       case JobRender.Fan(job, rows)   => List(fan(graph, item.plugin, job, rows))
@@ -72,7 +72,11 @@ object JobYaml:
       case JobRender.Schedule(_, _)   => Nil
     body.map(_.mkString("\n"))
 
-  private def ownedFiles(graph: ProjectGraph, placed: List[Placed], defaultBranch: String): List[RenderedWorkflow] =
+  private def ownedFiles(
+      graph: ProjectGraph,
+      placed: List[Placed],
+      defaultBranch: String,
+  )(using RenderingShip): List[RenderedWorkflow] =
     val named = placed.collect:
       case item @ Placed(WorkflowFile.Named(name), _, _) => (name, item)
     named
@@ -86,7 +90,12 @@ object JobYaml:
       .map: (name, jobs) =>
         RenderedWorkflow(name, document(graph, name, jobs, defaultBranch))
 
-  private def document(graph: ProjectGraph, name: String, jobs: List[Placed], defaultBranch: String): String =
+  private def document(
+      graph: ProjectGraph,
+      name: String,
+      jobs: List[Placed],
+      defaultBranch: String,
+  )(using RenderingShip): String =
     val cron   = jobs.collectFirst { case Placed(_, _, JobRender.Schedule(expr, _)) => expr }
     val events = jobs.flatMap:
       case Placed(_, _, render) => eventsOf(render)
@@ -118,7 +127,7 @@ object JobYaml:
       plugin: PluginId,
       job: SiteArrange,
       shape: SiteShape,
-  ): List[List[String]] =
+  )(using RenderingShip): List[List[String]] =
     shape match
       case SiteShape.Dispatch     => Nil
       case SiteShape.Build        => List(taskLike(graph, plugin, job, upload = false))
@@ -130,7 +139,7 @@ object JobYaml:
       plugin: PluginId,
       job: TaskArrange,
       rows: Option[List[Target]],
-  ): List[String] =
+  )(using RenderingShip): List[String] =
     rows match
       case Some(targets) => fan(graph, plugin, job, targets)
       case None          =>
@@ -158,7 +167,7 @@ object JobYaml:
       plugin: PluginId,
       job: TaskArrange,
       rows: List[Target],
-  ): List[String] =
+  )(using RenderingShip): List[String] =
     stepJob(
       graph,
       plugin,
@@ -183,7 +192,7 @@ object JobYaml:
       plugin: PluginId,
       job: SiteArrange,
       upload: Boolean,
-  ): List[String] =
+  )(using RenderingShip): List[String] =
     val grants =
       if upload then job.permissions.copy(grants = job.permissions.grants + Grant.ActionsWrite)
       else job.permissions
@@ -223,7 +232,7 @@ object JobYaml:
       concurrency: Option[histos.plugin.Concurrency],
       upload: Option[String],
       matrix: List[Target],
-  ): List[String] =
+  )(using RenderingShip): List[String] =
     val thirdParty = pre.nonEmpty
     val keys       = matrix.flatMap(_.env.map(_._1)).distinct
     val own        = jobEnv(graph, env, secrets, thirdParty).filterNot { case (key, _) => keys.contains(key) }
@@ -239,7 +248,8 @@ object JobYaml:
       List("    permissions:") ++
       permissionLines(permissions) ++
       envLines(own, matrixEnv) ++
-      List("    steps:", s"      - uses: $Checkout", s"      - uses: $Setup") ++
+      List("    steps:", s"      - uses: $Checkout") ++
+      CiInstall.steps(graph) ++
       SupplyYaml.preflight(graph, name.value) ++
       pre.flatMap(action => actionStep(graph.ci, action)) ++
       List(s"      - run: ${quote(runOf(plugin, task))}") ++
@@ -268,7 +278,7 @@ object JobYaml:
       s"        uses: ${ActionPins.deployPages.line}",
     )
 
-  private def dispatch(graph: ProjectGraph, plugin: PluginId, job: SiteArrange): String =
+  private def dispatch(graph: ProjectGraph, plugin: PluginId, job: SiteArrange)(using RenderingShip): String =
     val run   = quote(runOf(plugin, job.task))
     val lines = List(
       "name: pages",
@@ -293,8 +303,7 @@ object JobYaml:
       "      pages: write",
       "    steps:",
       s"      - uses: $Checkout",
-      s"      - uses: $Setup",
-    ) ++ SupplyYaml.preflight(graph, "pages") ++ List(
+    ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "pages") ++ List(
       s"      - run: $run",
       s"      - uses: ${ActionPins.uploadPages.line}",
       "        with:",
@@ -483,7 +492,6 @@ object JobYaml:
       case PullType.Unlabeled   => "unlabeled"
 
   private val Checkout      = ActionPins.checkout.line
-  private val Setup         = "./.github/actions/setup"
   private val RunnerImage   = "ubuntu-26.04"
   private val OnDefaultPush =
     "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"

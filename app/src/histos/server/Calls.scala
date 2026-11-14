@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.assembly.{Assemble, AssemblyPath}
 import histos.cache.{CacheCleanMode, CacheForget, CacheVerify, ContentStore}
 import histos.build.BuildEvent
@@ -23,7 +23,7 @@ import histos.jdk.{Machine, Os}
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{ApiDigest, PluginArgs, PluginCoordinate, PluginRunError, PluginTaskId}
-import histos.publish.{IvyRoot, LauncherPin, LauncherScript, PublishRun, ReleaseError}
+import histos.publish.{IvyRoot, LauncherPin, LauncherScript, PublishedShim, PublishRun, ReleaseError, ScriptError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginRequest, PluginUpdate, Resolve, ResolveError}
 import histos.schedule.{CacheConfig, CacheError, CacheNamespace, RemoteCache}
 import histos.workspace.IoFailure
@@ -31,8 +31,18 @@ import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
-import histos.workflow.{CiBranch, CiError, Workflow, WorkflowAction}
-import histos.{BuildError, Module, Platform, ProjectGraph, ProjectName, Publication, Publishing, Sona}
+import histos.workflow.{CiBranch, CiError, RenderingShip, Workflow, WorkflowAction}
+import histos.{
+  BuildError,
+  Module,
+  Platform,
+  ProjectGraph,
+  ProjectName,
+  Publication,
+  Publishing,
+  Sona,
+  ToolchainIdentity,
+}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -599,8 +609,22 @@ object Calls:
       action: WorkflowAction,
       say: Say,
   ): IO[ServerError, Unit] =
+    (rendering zip shim).foldZIO(
+      why => fault(say, why),
+      (ship, sha) => workflow(repo, loaded, action, say, ship, sha),
+    )
+
+  /** The rendering ship and the shim digest are arguments. [[workflow]] reads both from the launcher jar. */
+  private[histos] def workflow(
+      repo: Path,
+      loaded: LoadedBuild,
+      action: WorkflowAction,
+      say: Say,
+      ship: RenderingShip,
+      sha: Sha256,
+  ): IO[ServerError, Unit] =
     sonaOf(loaded).flatMap(sona =>
-      workflowWork(repo, loaded.graph, sona, action).foldZIO(
+      workflowWork(repo, loaded.graph, sona, action, ship, sha).foldZIO(
         why => fault(say, why),
         file => told(say, file.toString) *> ok(say),
       )
@@ -638,6 +662,18 @@ object Calls:
       sona: Publishing,
       action: WorkflowAction,
   ): IO[BuildFault, Path] =
+    rendering.flatMap: ship =>
+      shim.flatMap: sha =>
+        workflowWork(repo, graph, sona, action, ship, sha)
+
+  private[histos] def workflowWork(
+      repo: Path,
+      graph: ProjectGraph,
+      sona: Publishing,
+      action: WorkflowAction,
+      ship: RenderingShip,
+      sha: Sha256,
+  ): IO[BuildFault, Path] =
     val present = action match
       case WorkflowAction.Check  => Workflow.present(repo).mapError(files)
       case WorkflowAction.Update => ZIO.unit
@@ -646,14 +682,28 @@ object Calls:
       .mapError(files)
       .flatMap: branch =>
         val rendered = action match
-          case WorkflowAction.Check  => Workflow.check(repo, graph, sona)(using branch).mapError(refused)
-          case WorkflowAction.Update => Workflow.update(repo, graph, sona)(using branch).mapError(refused)
+          case WorkflowAction.Check =>
+            Workflow.check(repo, graph, sona)(using branch, ship).mapError(refused)
+          case WorkflowAction.Update =>
+            Workflow.update(repo, graph, sona)(using branch, ship).mapError(refused)
         val scripts = action match
           case WorkflowAction.Check =>
-            LauncherScript.check(repo, graph).mapError(error => BuildFault.Workflow(WorkflowFault.Scripts(error)))
+            LauncherScript.check(repo, sha).mapError(scriptsFault)
           case WorkflowAction.Update =>
-            LauncherScript.update(repo, graph).mapError(error => BuildFault.Workflow(WorkflowFault.Scripts(error)))
+            LauncherScript.update(repo, sha).mapError(scriptsFault)
         rendered *> scripts.as(Workflow.path(repo))
+
+  private def rendering: IO[BuildFault, RenderingShip] =
+    ToolchainIdentity.loaded match
+      case None        => ZIO.fail(files(CiError.NoShip))
+      case Some(found) =>
+        ZIO.fromEither(RenderingShip.from(found.commit)).mapError(files)
+
+  private def shim: IO[BuildFault, Sha256] =
+    ZIO.fromEither(PublishedShim.load).mapError(scriptsFault)
+
+  private def scriptsFault(error: ScriptError): BuildFault =
+    BuildFault.Workflow(WorkflowFault.Scripts(error))
 
   private def files(error: CiError): BuildFault =
     BuildFault.Workflow(WorkflowFault.Files(error))
