@@ -1,6 +1,6 @@
 # Test audit
 
-This is the ledger for the Test audit item of [cli-work-plan.md](cli-work-plan.md) (row 49). Eight read-only reviewers read 1,401 laws in `api`, `wire`, `central`, `engine`, and `app`, and flagged 368. The audit and its fixes found 43 product bugs (B1 to B43), eleven decisions for Russ (D1 to D11), and eight shared seams (S1 to S8). Each row names a finding, the fix, and the pull request that owns it. A row is checked only when that pull request's proof earned it.
+This is the ledger for the Test audit item of [cli-work-plan.md](cli-work-plan.md) (row 49). Eight read-only reviewers read 1,401 laws in `api`, `wire`, `central`, `engine`, and `app`, and flagged 368. The audit and its fixes found 44 product bugs (B1 to B44), eleven decisions for Russ (D1 to D11), and eight shared seams (S1 to S8). Each row names a finding, the fix, and the pull request that owns it. A row is checked only when that pull request's proof earned it.
 
 ## The bar
 
@@ -166,6 +166,8 @@ Reproduce each bug with the smallest executable red/green check before fixing it
   - Green: the same law passed. `ScenarioSpec` is 17 passed in 23 s 20 ms.
 - [x] B43 A doctor fix's command could outlive its fix. `CommandRunner.started` started the child, then entered the cancelable wait whose cancel ends it, so an interruption between the two ended nothing. In CI the `CommandRunnerLawSpec` interrupt law's `sleep 600` child survived, the law's wall-clock `get` timed out, and the attached child held the suite's output open (B41), so the run hung. The child is now the resource of an `acquireReleaseWith`, so a started child is ended however its run ends. The law waits on the child's exit as an effect, bounded by the suite timeout, with no wall clock of its own. Owner: engine (`CommandRunnerLawSpec`).
   - Red: CI on #185, `java.util.concurrent.TimeoutException` at `CommandRunnerLawSpec.scala:58`. It did not reproduce on an idle machine, because the window is a scheduling gap. Green: the law passed `nonFlaky(25)`, attached and captured, then engine 719 and app 213.
+- [x] B44 `histos update` ran `version` while the previous driver's `.histos/server.json` was still on disk. The new driver tried to reboot that server. A record the old server did not answer, or a socket nobody was listening on, failed and left the record in place. Update now removes that record, and a socket path it names under the checkout or the home run directory, before it runs the new driver. Owner: engine (`ShimRetireLawSpec`).
+  - Red: `ShimRetireLawSpec` left the previous record in place after `version` was exec'd. Green: the record and its socket file are gone, and `version` still runs on the new driver.
 
 ## Decisions for Russ
 
