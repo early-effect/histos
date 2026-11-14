@@ -16,7 +16,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-      - uses: early-effect/histos/.github/actions/setup@aa4f8351e2072ba3215f2223c4ed16015c69158e # aa4f8351e2072ba3215f2223c4ed16015c69158e
+      - uses: early-effect/histos/.github/actions/setup@756b5118cec39f8ed00520f1e72e379b02ad3458 # 756b5118cec39f8ed00520f1e72e379b02ad3458
       - run: ./histos doctor --preflight client
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
@@ -68,7 +68,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@aa4f8351e2072ba3215f2223c4ed16015c69158e # aa4f8351e2072ba3215f2223c4ed16015c69158e
+      - uses: early-effect/histos/.github/actions/setup@756b5118cec39f8ed00520f1e72e379b02ad3458 # 756b5118cec39f8ed00520f1e72e379b02ad3458
       - run: ./histos doctor --preflight release-histos
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
@@ -138,14 +138,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@aa4f8351e2072ba3215f2223c4ed16015c69158e # aa4f8351e2072ba3215f2223c4ed16015c69158e
+      - uses: early-effect/histos/.github/actions/setup@756b5118cec39f8ed00520f1e72e379b02ad3458 # 756b5118cec39f8ed00520f1e72e379b02ad3458
       - run: ./histos doctor --preflight install
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist-in
       - run: |
           set -eu
-          version=0.3.0
+          version=0.3.1
           jar=dist-in/histos-jar/histos.jar
           linux=dist-in/client-linux-x86_64/histos-client
           mac=dist-in/client-macos-aarch64/histos-client

@@ -39,7 +39,7 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
   git worktree add -b histos/<item> ~/.grok/worktrees/early-effect-histos/<item> origin/main
   ```
 
-  Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
+  Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `0.3.0`, the release built from `756b511`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
 - **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D21.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
@@ -156,9 +156,9 @@ This is the sequence that worked twice. It needs Russ's yes in that session.
 1. Commit the layer. The snapshot coordinate is HEAD.
 2. Run `./histos publish snapshots`. That command packs the launcher, links the host client, and proves the pair before the Maven publish and before the `dist` upload. A failed proof is `PairError.Handshake` and nothing uploads.
 3. Check that the uploaded `<timestamp>-manifest.json` names the jar's sha256 and the host client's. A platform that was not linked is omitted. None at all is refused.
-4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
+4. Set `histos.version` in `build.properties` to the commit channel `0.3.1-<sha12>-SNAPSHOT`. Run `./histos workflow --update`. That enters the jar, rewrites `.bsp/histos.json`, and reboots a server on the previous driver.
 5. Commit the pin on top of the layer, then stack the next layer on it.
 
-D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator landed in #201. This pin was packed from that squash.
+D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator landed in #201.
 
-The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. That toolchain packs the launcher, links the host client, and proves the pair before it uploads. `workflow --check` compares the committed workflows and `./histos` to the jar this channel names. The setup action in those workflows is `early-effect/histos/.github/actions/setup@aa4f8351e2072ba3215f2223c4ed16015c69158e`.
+The pin is `0.3.0`, the release built from `756b511`. `workflow --check` compares the committed workflows and `./histos` to that jar. The setup action in those workflows is `early-effect/histos/.github/actions/setup@756b5118cec39f8ed00520f1e72e379b02ad3458`.
