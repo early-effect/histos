@@ -52,7 +52,6 @@ enum LocalPublishError:
       platform: Platform,
       error: AssemblyError,
   )
-  case MissingClient(ship: ShipName, path: Path)
   case Remote(error: RemoteError)
 
   def message: String = this match
@@ -92,8 +91,6 @@ enum LocalPublishError:
     case Runtime(error)                         => error.message
     case Pack(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
-    case MissingClient(ship, path) =>
-      s"${ship.value} builds clients on snapshots, and $path is not a file. The snapshots workflow downloads each client there."
     case Remote(error) => error.message
 
   def diagnose: Diagnostic = this match

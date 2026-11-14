@@ -23,13 +23,17 @@ import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
+
+import scala.util.Try
 
 import zio.{Chunk, IO, ZIO}
 
 object NativeKey:
-  /** Identity of a native link. The binary path is not part of it. The clang version, target, and main class are. Each
-    * classes directory contributes its product digest, so a comment keeps the key and a method body or a path constant
-    * moves it. `products` keeps that digest from colliding with another checksum of the same hex.
+  /** Identity of a native link. The binary path is not part of it. The clang version, target, main class, and optimize
+    * flag are. An unoptimized binary is not a hit for an optimized link. Each classes directory contributes its product
+    * digest, so a comment keeps the key and a method body or a path constant moves it. `products` keeps that digest
+    * from colliding with another checksum of the same hex.
     */
   def of(
       version: ScalaVersion,
@@ -38,14 +42,16 @@ object NativeKey:
       main: MainClass,
       products: List[Sha256],
       artifacts: List[Sha256],
+      optimize: Boolean,
   ): Sha256 =
+    val mode = if optimize then "optimize" else "no-optimize"
     val text =
       s"""${version.value}
          |${clang.value}
          |${target.value}
          |${main.binary}
          |stubs
-         |no-optimize
+         |$mode
          |products
          |${products.map(_.value).mkString("\n")}
          |${artifacts.map(_.value).mkString("\n")}
@@ -87,6 +93,7 @@ final case class NativeLinkRequest(
     jdk: JdkRuntime,
     main: MainClass,
     version: ScalaVersion,
+    optimize: Boolean = false,
 )
 
 object NativeLink:
@@ -96,7 +103,7 @@ object NativeLink:
       request: NativeLinkRequest,
       sourcesRoot: Path,
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Linked] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, optimize) =
       request
     for
       view <- ZIO.service[LockedTools]
@@ -117,6 +124,7 @@ object NativeLink:
         main,
         products,
         prints,
+        optimize,
       )
       binary <- restoreOr(
         key,
@@ -129,17 +137,19 @@ object NativeLink:
           jdk,
           toolchain,
           env,
+          optimize,
         ),
       )
     yield Linked(binary, key)
 
-  /** Link `.nir` that is already compiled. The native libraries are added after `classpath`.
+  /** Link `.nir` that is already compiled. The native libraries are added after `classpath`, and any other copy of
+    * those libraries is dropped first.
     */
   def linkClasspath(
       request: NativeLinkRequest,
       classpath: List[Path],
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Path] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, optimize) =
       request
     for
       view <- ZIO.service[LockedTools]
@@ -149,7 +159,7 @@ object NativeLink:
       clang    <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       prints   <- toolchainPrints(view, toolchain, libs)
       products <- productDigests(classpath)
-      key = NativeKey.of(version, clang.version, clang.target, main, products, prints)
+      key = NativeKey.of(version, clang.version, clang.target, main, products, prints, optimize)
       binary <- restoreOr(
         key,
         work,
@@ -161,6 +171,7 @@ object NativeLink:
           jdk,
           toolchain,
           env,
+          optimize,
         ),
       )
     yield binary
@@ -243,15 +254,47 @@ object NativeLink:
     )
 
   /** The toolchain appends its own native libraries. A resolved jar of the same library, at any revision, is dropped.
+    * The kit does not keep the original file name, so a jar whose manifest names the library is the same jar.
     */
-  private[native] def withoutLibraries(
+  private[histos] def withoutLibraries(
       classpath: List[Path],
       libraries: List[Path],
   ): List[Path] =
     val names = libraries.flatMap(libraryName).toSet
-    classpath.filterNot(path =>
-      Option(path.getFileName).exists(file => names.exists(name => file.toString.startsWith(s"$name-")))
-    )
+    classpath.filterNot(path => sameLibrary(path, names))
+
+  /** Drop the toolchain libraries before a kit is written. The link fetches the nightly and appends it.
+    */
+  private[histos] def withoutStandardLibraries(classpath: List[Path]): List[Path] =
+    classpath.filterNot(isStandardLibrary)
+
+  private def sameLibrary(path: Path, names: Set[String]): Boolean =
+    Option(path.getFileName).exists(file => names.exists(name => file.toString.startsWith(s"$name-"))) ||
+      isStandardLibrary(path)
+
+  private def isStandardLibrary(path: Path): Boolean =
+    manifestTitle(path).exists(NativeComponent.standardLibrary)
+
+  private def manifestTitle(path: Path): Option[String] =
+    val file = Option(path.getFileName).map(_.toString).getOrElse("")
+    if !file.endsWith(".jar") || !Files.isRegularFile(path) then None
+    else
+      Try {
+        val zip = new ZipFile(path.toFile)
+        try
+          Option(zip.getEntry("META-INF/MANIFEST.MF")) match
+            case None        => None
+            case Some(entry) =>
+              val input = zip.getInputStream(entry)
+              val text  =
+                try new String(input.readAllBytes(), StandardCharsets.UTF_8)
+                finally input.close()
+              text.linesIterator.map(_.trim).collectFirst {
+                case line if line.startsWith("Implementation-Title:") =>
+                  line.drop("Implementation-Title:".length).trim
+              }
+        finally zip.close()
+      }.toOption.flatten
 
   /** `nativelib_native0.5_3-0.5.12.jar` and the snapshot jar are one library. The revision starts at the first hyphen.
     */
@@ -281,6 +324,7 @@ object NativeLink:
       jdk: JdkRuntime,
       toolchain: NativeToolchain,
       env: Map[String, String],
+      optimize: Boolean,
   ): ZIO[LockedTools & LinkerStarts, NativeError, Path] =
     val bridgeRoot = work.resolve("bridge").resolve(toolchain.revision.value)
     val classes    = bridgeRoot.resolve("classes")
@@ -302,6 +346,7 @@ object NativeLink:
           clang.clang,
           clang.clangpp,
           classpath,
+          optimize,
         ),
       )
       _ <- JvmCompile

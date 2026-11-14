@@ -34,9 +34,6 @@ object QuickRecord:
       digest: Sha256,
   ): IO[QuickError, Unit] =
     val path = file(repo, module, version, platform, suite)
-    // Unlink first. A mode that forbids reading still lets the owner replace
-    // the record when the parent directory is writable, which is how a miss
-    // stores the next success.
     ZIO
       .attemptBlocking(Files.deleteIfExists(path))
       .mapError(_ => QuickError.Save(IoFailure(path, IoFault.Delete))) *>

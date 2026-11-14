@@ -49,7 +49,7 @@ enum CiError:
     case LlvmChecksum(archive) =>
       s"no sha256 is pinned for $archive"
     case SnapshotClients(ship) =>
-      s"ship ${ship.value} has a toolchain. One ship pins LLVM and links the clients."
+      s"two ships name a toolchain. ${ship.value} is one of them. One publish names one toolchain."
     case NoShip =>
       "the rendering ship has no commit. The launcher jar has no toolchain identity."
 

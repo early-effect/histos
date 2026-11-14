@@ -8,7 +8,7 @@ import histos.zinc.CompileFeed
 import histos.{PublishFault, PublishReceipt, PublishRequest, StagedDependency, StagedModule}
 import histos.ProjectGraph
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, StandardCopyOption}
 
 import scala.jdk.CollectionConverters.*
 
@@ -34,9 +34,10 @@ object PublishRun:
         root   <- ZIO.service[IvyRoot]
         names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
-        placed <- toolchain(repo, graph, staged, jdk, build, note)
+        placed <- toolchain(repo, graph, staged, jdk, note)
         lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
         _      <- installToolchain(repo, placed)
+        _      <- localAssets(repo, graph, staged, placed)
       yield Report(show(staged, lines))
 
   def snapshots(
@@ -59,7 +60,7 @@ object PublishRun:
           ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
         )
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, api, report, note)
-        _      <- toolchain(repo, graph, staged, jdk, build, note)
+        _      <- toolchain(repo, graph, staged, jdk, note)
         plans  <- ZIO
           .fromEither(DistChannel.plan(graph, staged.output.modules))
           .tapError(error => note(error.message))
@@ -94,7 +95,7 @@ object PublishRun:
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, api, report, note).mapError(
           ReleaseError.Stage(_)
         )
-        _      <- toolchain(repo, graph, staged, jdk, build, note).mapError(ReleaseError.Stage(_))
+        _      <- toolchain(repo, graph, staged, jdk, note).mapError(ReleaseError.Stage(_))
         pieces <- releasePieces(repo, staged, automatic, layer)
       yield ReleaseReport(
         staged.output.refused ++ pieces.refused,
@@ -125,18 +126,75 @@ object PublishRun:
   ): IO[AssetError, AssetReport] =
     AssetRun.publish(repo, graph, tokens, env)
 
-  /** Pack, link, and prove each staged toolchain ship. A ship with no `.toolchain` is skipped. */
+  /** Pack the launcher and compile the link kit for each staged toolchain ship. A ship with no `.toolchain` is skipped.
+    */
   private def toolchain(
       repo: Path,
       graph: ProjectGraph,
       staged: StagedTree,
       jdk: JdkRuntime,
-      build: histos.HistosBuild,
       note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, LocalPublishError, List[DistStock.Placed]] =
     DistStock
-      .prove(repo, graph, DistStock.asked(graph, staged.output.modules), jdk, build, note)
+      .prove(repo, graph, DistStock.asked(graph, staged.output.modules), jdk, note)
       .mapError(error => LocalPublishError.Stock(error.message))
+
+  /** `dist/install` is the local installer input: the manifest names the ivy coordinate `publish local` wrote. */
+  private def localAssets(
+      repo: Path,
+      graph: ProjectGraph,
+      staged: StagedTree,
+      placed: List[DistStock.Placed],
+  ): IO[LocalPublishError, Unit] =
+    placed match
+      case Nil => ZIO.unit
+      case _   =>
+        ZIO
+          .fromEither(launcherModule(graph, staged))
+          .flatMap: module =>
+            ZIO.foreachDiscard(placed)(item => writeAssets(repo, item, module))
+
+  private def launcherModule(
+      graph: ProjectGraph,
+      staged: StagedTree,
+  ): Either[LocalPublishError, PublishedModule] =
+    graph.catalog.ships.flatMap(_.toolchain.toList) match
+      case Nil         => Left(LocalPublishError.Stock("no toolchain ship was packed"))
+      case linked :: _ =>
+        staged.output.modules.find(item => item.module == linked.launcher) match
+          case Some(found) => Right(found)
+          case None        => Left(LocalPublishError.Stock("publish local did not stage the launcher"))
+
+  /** The manifest sha is the ivy jar the local installer copies. That file is the staged module jar. The assembly
+    * copied into the toolchain directory is a different zip, so hashing `placed.jar` would fail the installer's check.
+    */
+  private def writeAssets(
+      repo: Path,
+      placed: DistStock.Placed,
+      module: PublishedModule,
+  ): IO[LocalPublishError, Unit] =
+    module.jar match
+      case None =>
+        ZIO.fail(LocalPublishError.Stock("publish local did not stage a launcher jar"))
+      case Some(jar) =>
+        val install = repo.resolve("dist").resolve("install")
+        val name    = DistLayout.kit(placed.id)
+        ZIO
+          .attemptBlocking {
+            Files.createDirectories(install)
+            Files.copy(placed.kit, install.resolve(name), StandardCopyOption.REPLACE_EXISTING)
+            val jarSha = DistLayout.sha256(Files.readAllBytes(jar))
+            val kitSha = DistLayout.sha256(Files.readAllBytes(placed.kit))
+            val text   = DistLayout.manifestJson(
+              placed.id,
+              jarSha,
+              Some(name -> kitSha),
+              Some(DistLayout.IvyPin(module.group.value, module.artifact, module.revision)),
+            )
+            Files.writeString(install.resolve("manifest.json"), text)
+            ()
+          }
+          .mapError(_ => LocalPublishError.Io(install.toString))
 
   /** Install after the maven publish. An empty proof installs nothing and does not read a home. */
   private def installToolchain(repo: Path, placed: List[DistStock.Placed]): IO[LocalPublishError, Unit] =

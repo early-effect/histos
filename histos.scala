@@ -4,8 +4,7 @@ import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
   def graph =
-    val scala3 = scala"3.10.1"
-    // Scala Native publishes no 3.10.1 standard library or compiler plugin yet, so the Native modules stay on 3.10.0.
+    val scala3      = scala"3.10.1"
     val nativeScala = scala"3.10.0"
     val zio         = dep"dev.zio::zio:2.1.27"
     val zioTest     = zio.module("zio-test")
@@ -48,30 +47,23 @@ object build extends HistosBuild:
         scalaCompiler,
         scaladoc,
         dep"org.scala-sbt::zinc:2.0.5",
-        // Zinc still requests jars whose lazy vals call Unsafe.
         dep"org.scala-sbt::sbinary:0.6.0",
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
         dep"io.get-coursier::coursier:2.1.26",
         asm,
         asmTree,
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
-        // The stable Java API `histos fmt` loads scalafmt-dynamic-core through. The rest of scalafmt is a locked tool.
         dep"org.scalameta:scalafmt-interfaces:3.11.5",
-        // heddle has no gRPC, and the remote-execution stubs are not published.
         grpc,
         grpcNetty,
-        // scaladoc and flexmark still request Jackson and jsoup below the GHSA fixes.
         dep"com.fasterxml.jackson.core:jackson-annotations:2.22",
         jacksonCore,
         jacksonDatabind,
-        // A different organization, so this revision is its own root.
         dep"com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.4",
         jackson3,
         jackson3Bind,
-        // A different organization, so this revision is its own root.
         dep"tools.jackson.dataformat:jackson-dataformat-yaml:3.2.4",
         dep"org.jsoup:jsoup:1.24.1",
-        // gRPC 1.85.1 still requests guava 33.6.0-android, inside GHSA-xxph-c9ww-hj94.
         dep"com.google.guava:guava:33.8.0-jre",
       )
       .testDependencies(
@@ -95,7 +87,6 @@ object build extends HistosBuild:
         zio,
         heddleMcp,
         dep"dev.zio::zio-cli:0.8.2",
-        // zio-cli 0.8.2 still requests zio-process 0.7.1, whose lazy vals call Unsafe.
         dep"dev.zio::zio-process:0.8.1",
       )
       .testDependencies(
@@ -126,16 +117,13 @@ object build extends HistosBuild:
       )
       .supplyChain(
         SupplyChain(updates =
-          UpdatePolicy(author =
-            // The published driver compiles this file. It has App, and it does not have PrAuthor.histosDeps.
-            PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
-          )
+          UpdatePolicy(author = PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY")))
         )
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .scalafmt
       .docCheck(
-        ships(Ship("histos").next(0, 3, 2)(api, app).toolchain(launcher = app, client = client)),
+        ships(Ship("histos").next(0, 4, 0)(api, app).toolchain(launcher = app, client = client)),
         api,
         wire,
         client,

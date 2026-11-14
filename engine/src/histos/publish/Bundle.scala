@@ -150,7 +150,6 @@ object Bundle:
 
   private def open(stream: ZipOutputStream, path: BundlePath): Unit =
     val entry = new ZipEntry(path.name)
-    // The portal reads names and bytes. A moving timestamp would change the zip when the stage did not.
     entry.setTime(0L)
     stream.putNextEntry(entry)
 

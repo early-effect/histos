@@ -68,7 +68,6 @@ object CompileInputs:
       rows: List[CompileRow],
   ): IO[CompileError, Unit] =
     for
-      // File mtime. TestClock.instant arms a warning unless the test moves the clock.
       now <- zio.Clock.ClockLive.instant
       _   <- store.put(slot(analysis), encode(rows), now).mapError(CompileError.Stored(_))
     yield ()

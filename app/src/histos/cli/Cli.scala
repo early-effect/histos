@@ -55,6 +55,7 @@ import zio.json.*
 
 enum Command:
   case Version
+  case ToolchainClient
   case Graph
   case Run(id: TaskId, platform: Option[Platform])
   case Plugin(id: PluginTaskId, args: PluginArgs)
@@ -637,6 +638,8 @@ object Cli:
               )
             },
         )
+      case Command.ToolchainClient =>
+        toolchainClient
       case Command.Graph                  => graph(repo, apiJar)
       case Command.Run(id, platform)      => run(repo, apiJar, id, platform)
       case Command.Plugin(id, pluginArgs) =>
@@ -943,7 +946,6 @@ object Cli:
           ),
         ),
       reload = ZIO.fail(ServerError.NoServer),
-      // No server is up, so this process starts one, and its child runs as this process does.
       reboot = _ =>
         bootCall(repo, Daemon.spawn).flatMap { socket =>
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
@@ -2268,6 +2270,12 @@ object Cli:
       case Some(call) => use(call)
       case None       => ZIO.succeed(Completed(CliExit.Usage, "", "histos could not build that call", Playback.Held))
 
+  private def toolchainClient: URIO[Launched, Completed] =
+    histos.program.ClientLink.run.foldZIO(
+      error => ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held)),
+      _ => ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held)),
+    )
+
   private def route(repo: Path, command: Command): URIO[Launched, Completed] =
     command match
       case Command.Version =>
@@ -2275,6 +2283,8 @@ object Cli:
           error => ZIO.succeed(held("", CallResult.Fault(BuildFault.Launcher(error)))),
           text => attach(repo, Call.Version, ZIO.succeed(held(text, CallResult.reported()))),
         )
+      case Command.ToolchainClient =>
+        toolchainClient
       case Command.Graph =>
         attach(repo, Call.Graph, inProcessReady(repo)((api, machine) => withLoader(machine)(graphLocal(repo, api))))
       case Command.Run(_, _) =>

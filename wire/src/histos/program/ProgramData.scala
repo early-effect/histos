@@ -40,6 +40,7 @@ enum ProgramError:
   )
   case Work(path: Path)
   case Root(path: Path)
+  case Kit(detail: String)
 
   def message: String = this match
     case Tool(_, _, error)       => error.message
@@ -65,8 +66,9 @@ enum ProgramError:
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
     case MissingUpstream(module, dependency, version) =>
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} classes"
-    case Work(path) => s"could not prepare the run directory $path"
-    case Root(path) => s"could not read $path"
+    case Work(path)  => s"could not prepare the run directory $path"
+    case Root(path)  => s"could not read $path"
+    case Kit(detail) => s"could not write the client kit\n$detail"
 
   def diagnose: Diagnostic = this match
     case Absent(_, near) =>

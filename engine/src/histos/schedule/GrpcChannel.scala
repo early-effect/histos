@@ -101,15 +101,11 @@ private[schedule] object GrpcChannel:
           if once.compareAndSet(false, true) then
             timer.get.foreach(_.cancel(false))
             cb(result)
-        // A call ends as a read timeout once no frame has moved for `idle`. gRPC's own deadline is fixed for the whole
-        // call and would end a large blob that is still moving, so this timer re-arms on every frame sent or received:
-        // a unary call's one request frame makes `idle` its deadline, and a stream lives while its frames move.
         def moved(): Unit =
           if !once.get then later(stalled()).foreach(next => timer.getAndSet(Some(next)).foreach(_.cancel(false)))
         def stalled(): Unit =
           finish(ZIO.fail(RemoteError.Exchange(CacheExchange.ReadTimeout(host, port))))
           call.cancel("no frame moved", null)
-        // grpc-java never calls `onReady` on a call whose client sends one message, so only a client stream waits for it.
         val paced        = !method.getType.clientSendsOneMessage
         def send(): Unit =
           if !started.get || once.get || closed.get then ()
@@ -135,9 +131,6 @@ private[schedule] object GrpcChannel:
           override def onMessage(message: Chunk[Byte]): Unit =
             received.updateAndGet(message :: _)
             moved()
-            // The next server-streaming frame has to be asked for before this callback returns.
-            // Queueing it on the call executor lets a fast server finish the stream first, and
-            // grpc then drops the frame that was never requested.
             if more && !once.get then
               try call.request(1)
               catch case _: IllegalStateException => ()
@@ -151,9 +144,6 @@ private[schedule] object GrpcChannel:
             finish(result)
         on(exec):
           call.start(listener, new Metadata())
-          // Same order as grpc-java ClientCalls: request, then send, then halfClose.
-          // Unary and client-streaming ask for two so a second response is visible.
-          // Server-streaming asks for one, then one more from onMessage.
           try call.request(if more then 1 else 2)
           catch case _: IllegalStateException => ()
           started.set(true)

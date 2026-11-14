@@ -382,7 +382,6 @@ object HistosMcp:
                     ),
                     machine,
                   )
-                  // The standard streams are the protocol, so no person answers and no fix prints on them.
                   .provideSomeLayer[DoctorSurface.Reads](
                     ZLayer.succeed(histos.cli.Stdio.redirected) ++ histos.supply.CommandRunner.captured
                   )

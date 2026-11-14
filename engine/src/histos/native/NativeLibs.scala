@@ -97,6 +97,12 @@ object NativeComponent:
 
   def libraries(version: ScalaVersion): List[NativeComponent] =
     order.filter(component => component != NativeComponent.Scala3Lib || version.value.startsWith("3."))
+
+  /** `nativelib`, `clib`, and the rest of the toolchain jars. A dependency that publishes one of these is replaced by
+    * the nightly the module links.
+    */
+  def standardLibrary(title: String): Boolean =
+    order.exists(_.base == title)
 end NativeComponent
 
 object NativeClasspath:
@@ -296,8 +302,6 @@ object NativeRequests:
           Transitivity.Closure,
           origin,
         ),
-        // test-runner still requests a scala-library inside GHSA-8qv5-68g4-248j.
-        // The library is on the request repositories. The runner's origin does not publish it.
         ToolRoots.of(
           Dep.trusted("org.scala-lang", "scala-library", "2.13.18", DepKind.Java),
           version,

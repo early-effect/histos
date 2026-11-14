@@ -96,8 +96,7 @@ object SonaStock:
         module: StagedModule,
     ): ZIO[Publisher, PublishFault, String] =
       for
-        jar <- read(module.jar)
-        // The snapshot publisher writes the pom from the artifact. The read only checks the staged file is there.
+        jar     <- read(module.jar)
         _       <- read(module.pom)
         sources <- ZIO.foreach(module.sources)(read)
         javadoc <- ZIO.foreach(module.javadoc)(read)

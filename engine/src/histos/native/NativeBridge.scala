@@ -6,7 +6,14 @@ import java.nio.file.Path
 object NativeBridge:
   val MainName: String = "subprocess.NativeBridge"
 
-  def source(module: String, main: String, clang: Path, clangpp: Path, classpath: List[Path]): String =
+  def source(
+      module: String,
+      main: String,
+      clang: Path,
+      clangpp: Path,
+      classpath: List[Path],
+      optimize: Boolean,
+  ): String =
     val entries = classpath.map(path => s"""Path.of("${escape(path.toAbsolutePath.toString)}")""").mkString(", ")
     s"""package subprocess
        |
@@ -37,7 +44,7 @@ object NativeBridge:
        |            .withClang(Path.of("${escape(clang.toAbsolutePath.toString)}"))
        |            .withClangPP(Path.of("${escape(clangpp.toAbsolutePath.toString)}"))
        |            .withLinkStubs(true)
-       |            .withOptimize(false)
+       |            .withOptimize($optimize)
        |            .withMultithreading(true)
        |            .withCompileOptions(Seq("-Qunused-arguments"))
        |        )

@@ -2,8 +2,8 @@ package histos.program
 
 import java.nio.file.Path
 
-/** The native client binary, `histos-client`. `Program.install` copies it to `dist/histos-client`. A toolchain publish
-  * links it under `dist/clients` and installs that file beside the jar.
+/** The native client binary, `histos-client`. `Program.install` copies it to `dist/histos-client`. A published
+  * toolchain does not ship that binary. `toolchain client` links it beside the installed jar.
   */
 object ClientBinary:
   val moduleName: String = "client"

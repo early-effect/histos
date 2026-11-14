@@ -1,7 +1,7 @@
 #!/bin/sh
 # Histos user install. One script: the installer and the command on PATH.
-# It downloads a checksummed jar and, when the manifest has one, a native client.
-# It does not install a JDK, Coursier, or clang.
+# It downloads a checksummed jar and, when the manifest names one, a link kit.
+# It does not install a JDK, Coursier, or clang. A native client is optional and built on this machine.
 set -eu
 version=shim
 fail() { echo "histos: $*" >&2; exit 1; }
@@ -19,8 +19,6 @@ macOS: brew install --cask temurin@25
 Linux: https://adoptium.net/temurin/releases?version=25'
 wsl_guide='Histos runs on macOS and Linux. On Windows, use WSL. A native Windows build may come later.'
 home=${HISTOS_HOME:-$HOME/.histos}
-# `update` sets these. The no-client message names the newest release.
-newest_release=
 stable=no
 # ChannelRefresh.Default is Ttl(1 hour). every-call is ChannelRefresh.EveryCall.
 channel_ttl=3600
@@ -39,14 +37,6 @@ esac
 os=$(uname -s)
 case $os in
   MINGW*|MSYS*|CYGWIN*|Windows*) fail "$wsl_guide" ;;
-esac
-arch=$(uname -m)
-case "$os-$arch" in
-  Darwin-arm64) platform=macos-aarch64 ;;
-  Darwin-x86_64) platform=macos-x86_64 ;;
-  Linux-x86_64|Linux-amd64) platform=linux-x86_64 ;;
-  Linux-aarch64|Linux-arm64) platform=linux-aarch64 ;;
-  *) platform= ;;
 esac
 fetch() {
   url=$1
@@ -166,6 +156,11 @@ saved_channel() {
 }
 resolve_channel() {
   channel=$1
+  # Local assets already name one toolchain. There is no channel file to fetch.
+  if [ -n "${HISTOS_ASSETS:-}" ]; then
+    printf '%s' "$channel"
+    return 0
+  fi
   case $channel in
     *-SNAPSHOT)
       cache=$home/channels/$channel
@@ -316,7 +311,6 @@ next_pin() {
   pin=$1
   names=$(mktemp)
   dist_assets > "$names" || echo "histos: $dist does not list its assets. update keeps the line of $pin." >&2
-  newest_release=$(newest release < "$names" || true)
   if ! line=$(snapshot_line "$pin"); then
     next=$(newest release "$pin" < "$names" || printf '%s' "$pin")
     rm -f "$names"
@@ -392,61 +386,160 @@ write_pin() {
     printf 'histos.version=%s\n' "$1" > "$props"
   fi
 }
-# The client sha the manifest names for this platform. Fails when it names none.
-platform_client() {
-  [ -n "$platform" ] || return 1
-  named=$(json_string "$1" "$platform")
-  [ -n "$named" ] || return 1
-  printf '%s' "$named"
+ci_set() {
+  [ -n "${CI:-}" ] && [ "${CI}" != "false" ]
 }
-# A toolchain is ready when its jar and manifest are on disk and the client the manifest names for this platform is
-# executable. A ready toolchain runs without the network. A version's manifest never changes, so the copy is kept.
+stamp_matches() {
+  tool=$1
+  jar=$2
+  [ -f "$tool/client.stamp" ] || return 1
+  want=$(tr -d '[:space:]' < "$tool/client.stamp")
+  got=$(hash_of "$jar")
+  [ "$want" = "$got" ]
+}
+copy_asset() {
+  name=$1
+  dest=$2
+  src=${HISTOS_ASSETS}/$name
+  [ -f "$src" ] || fail "no $name under HISTOS_ASSETS. publish local writes dist/install"
+  mkdir -p "$(dirname "$dest")"
+  cp "$src" "$dest"
+}
+place_manifest() {
+  selected=$1
+  dest=$2
+  if [ -n "${HISTOS_ASSETS:-}" ]; then
+    copy_asset manifest.json "$dest"
+  else
+    fetch "$dist/$selected-manifest.json" "$dest"
+  fi
+}
+place_jar() {
+  manifest=$1
+  dest=$2
+  if [ -n "${HISTOS_ASSETS:-}" ]; then
+    org=$(json_string "$manifest" ivyOrganisation)
+    module=$(json_string "$manifest" ivyModule)
+    rev=$(json_string "$manifest" ivyRevision)
+    [ -n "$org" ] && [ -n "$module" ] && [ -n "$rev" ] || fail "local manifest has no ivy coordinate. publish local first"
+    ivy=${HISTOS_IVY:-$HOME/.ivy2/local}
+    src=$ivy/$org/$module/$rev/jars/$module.jar
+    [ -f "$src" ] || fail "no jar at $src. publish local first"
+    cp "$src" "$dest"
+  else
+    name=$(json_string "$manifest" jar)
+    [ -n "$name" ] || fail "manifest has no jar"
+    fetch "$dist/$name" "$dest"
+  fi
+}
+# A missing kit does not fail install. The jar still runs.
+place_kit() {
+  manifest=$1
+  dest=$2
+  name=$(json_string "$manifest" clientKit)
+  [ -n "$name" ] || return 0
+  sha=$(json_string "$manifest" clientKitSha256)
+  [ -n "$sha" ] || return 0
+  if [ -f "$dest" ] && ! sha_matches "$dest" "$sha"; then rm -f "$dest"; fi
+  if [ ! -f "$dest" ]; then
+    if [ -n "${HISTOS_ASSETS:-}" ]; then
+      src=${HISTOS_ASSETS}/$name
+      if [ ! -f "$src" ]; then
+        echo "histos: no client kit under HISTOS_ASSETS. histos toolchain client builds one after publish local." >&2
+        return 0
+      fi
+      cp "$src" "$dest"
+    elif ! fetch_ok "$dist/$name" "$dest"; then
+      echo "histos: could not fetch the client kit. java -jar will run." >&2
+      rm -f "$dest"
+      return 0
+    fi
+  fi
+  if ! sha_matches "$dest" "$sha"; then
+    echo "histos: client kit checksum did not match. java -jar will run." >&2
+    rm -f "$dest"
+  fi
+}
+# A toolchain is ready when its jar and manifest are on disk. The client is optional.
 toolchain_ready() {
   dir=$home/toolchains/$1
-  [ -f "$dir/histos.jar" ] && [ -f "$dir/manifest.json" ] || return 1
-  if platform_client "$dir/manifest.json" >/dev/null; then [ -x "$dir/histos-client" ]; fi
+  [ -f "$dir/histos.jar" ] && [ -f "$dir/manifest.json" ]
 }
-# Fetch what the toolchain directory is missing, and check the jar and the client against the manifest.
 ensure_toolchain() {
   selected=$1
   dir=$home/toolchains/$selected
   mkdir -p "$dir"
   manifest=$dir/manifest.json
   if [ ! -f "$manifest" ] || [ "$(json_string "$manifest" version)" != "$selected" ]; then
-    fetch "$dist/$selected-manifest.json" "$manifest"
+    place_manifest "$selected" "$manifest"
   fi
   [ "$(json_string "$manifest" version)" = "$selected" ] || fail "manifest version is not $selected"
-  jar_name=$(json_string "$manifest" jar)
+  # A local asset manifest can move while the version id stays. Replace it before the jar is checked.
+  if [ -n "${HISTOS_ASSETS:-}" ] && [ -f "${HISTOS_ASSETS}/manifest.json" ] && [ -f "$manifest" ]; then
+    asset_sha=$(json_string "${HISTOS_ASSETS}/manifest.json" jarSha256)
+    have_sha=$(json_string "$manifest" jarSha256)
+    if [ -n "$asset_sha" ] && [ "$asset_sha" != "$have_sha" ]; then
+      place_manifest "$selected" "$manifest"
+    fi
+  fi
   jar_sha=$(json_string "$manifest" jarSha256)
-  [ -n "$jar_name" ] && [ -n "$jar_sha" ] || fail "manifest has no jar"
+  [ -n "$(json_string "$manifest" jar)" ] && [ -n "$jar_sha" ] || fail "manifest has no jar"
   jar=$dir/histos.jar
   if [ -f "$jar" ] && ! sha_matches "$jar" "$jar_sha"; then rm -f "$jar"; fi
-  [ -f "$jar" ] || fetch "$dist/$jar_name" "$jar"
+  [ -f "$jar" ] || place_jar "$manifest" "$jar"
   verify_sha "$jar" "$jar_sha"
-  client=$dir/histos-client
-  origin=$dir/client.origin
-  if client_sha=$(platform_client "$manifest"); then
-    if [ ! -x "$client" ] || ! sha_matches "$client" "$client_sha"; then
-      fetched=$dir/histos-client.download
-      fetch "$dist/$selected-client-$platform" "$fetched"
-      verify_sha "$fetched" "$client_sha"
-      mv "$fetched" "$client"
-      chmod +x "$client"
-      printf 'prebuilt\n' > "$origin"
-    fi
-  else
-    rm -f "$client" "$origin"
-    echo "histos $selected has no prebuilt client for ${platform:-this platform}$(release_client). java -jar will run." >&2
-  fi
+  if ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
 }
-# "; <release> has one" when the newest release `update` saw names a client for this platform.
-release_client() {
-  [ -n "$newest_release" ] && [ -n "$platform" ] || return 0
-  listing=$(mktemp)
-  if fetch_ok "$dist/$newest_release-manifest.json" "$listing" && [ -n "$(json_string "$listing" "$platform")" ]; then
-    printf '; %s has one' "$newest_release"
+client_mode() {
+  mode=$1
+  if [ "$mode" = ask ]; then
+    case ${HISTOS_CLIENT:-} in
+      off|0|false|no) mode=no ;;
+      on|1|true|yes) mode=yes ;;
+    esac
   fi
-  rm -f "$listing"
+  if ci_set; then mode=no; fi
+  printf '%s' "$mode"
+}
+# Ask once per jar sha, from install and update only. A decline is remembered. CI never links.
+offer_client() {
+  dir=$1
+  mode=$(client_mode "$2")
+  [ "$mode" = no ] && return 0
+  [ -f "$dir/histos.jar" ] && [ -f "$dir/client-kit.zip" ] || return 0
+  jar=$dir/histos.jar
+  sha=$(hash_of "$jar")
+  if [ -x "$dir/histos-client" ] && stamp_matches "$dir" "$jar"; then return 0; fi
+  if [ -f "$dir/client.choice" ]; then
+    remembered=$(tr -d '[:space:]' < "$dir/client.choice")
+    [ "$remembered" = "$sha" ] && return 0
+  fi
+  version_name=$(json_string "$dir/manifest.json" version)
+  [ -n "$version_name" ] || version_name=histos
+  if [ "$mode" = ask ]; then
+    if [ -t 0 ] && [ -t 2 ]; then
+      printf '%s\n' \
+        "histos $version_name is installed." \
+        "A native client is optional. It starts compile, test, run, clean, and fmt without a JVM." \
+        "Building it uses clang 21 on this machine and takes a few minutes, once for this version." \
+        "Build it now? [Y/n]" >&2
+      answer=
+      read -r answer || answer=
+      case $answer in
+        n|N|no|NO) printf '%s\n' "$sha" > "$dir/client.choice"; return 0 ;;
+        *) mode=yes ;;
+      esac
+    else
+      echo "histos $version_name is installed. A native client is optional. Build one with: histos toolchain client" >&2
+      return 0
+    fi
+  fi
+  check_java
+  if "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client; then
+    printf '%s\n' "$sha" > "$dir/client.stamp"
+    rm -f "$dir/client.choice"
+  fi
+  return 0
 }
 exec_jar() {
   jar=$1
@@ -454,13 +547,11 @@ exec_jar() {
   shift 2
   check_java
   tool=$(dirname "$jar")
-  client=
-  if [ -x "$tool/histos-client" ]; then client=$tool/histos-client; fi
   use_jar=1
+  if ! ci_set && [ -x "$tool/histos-client" ] && stamp_matches "$tool" "$jar"; then use_jar=0; fi
   if [ "$#" -ge 1 ]; then
     case $1 in
-      server|bsp|mcp) use_jar=1 ;;
-      *) [ -n "$client" ] && use_jar=0 ;;
+      server|bsp|mcp|toolchain) use_jar=1 ;;
     esac
   fi
   HISTOS_JAVA=$java_bin
@@ -468,7 +559,7 @@ exec_jar() {
   HISTOS_VERSION="histos $version"
   export HISTOS_JAVA HISTOS_JAR HISTOS_VERSION
   if [ -n "$repo" ]; then HISTOS_ROOT=$repo; export HISTOS_ROOT; fi
-  if [ "$use_jar" -eq 0 ]; then exec "$client" "$@"; fi
+  if [ "$use_jar" -eq 0 ]; then exec "$tool/histos-client" "$@"; fi
   jvm_extra=
   if [ -n "$repo" ] && [ -f "$repo/.jvmopts" ]; then
     while IFS= read -r opt || [ -n "$opt" ]; do
@@ -557,16 +648,74 @@ histos help self"
         ;;
       install)
         shift
-        [ "$#" -eq 1 ] && [ -n "$1" ] || fail "usage: histos toolchain install <version>"
-        selected=$1
+        client_flag=ask
+        selected=
+        for flag in "$@"; do
+          case $flag in
+            --client)
+              [ "$client_flag" = ask ] || [ "$client_flag" = yes ] || fail "--client and --no-client are opposites. Pass one."
+              client_flag=yes
+              ;;
+            --no-client)
+              [ "$client_flag" = ask ] || [ "$client_flag" = no ] || fail "--client and --no-client are opposites. Pass one."
+              client_flag=no
+              ;;
+            -*) fail "unknown toolchain install flag: $flag" ;;
+            *)
+              [ -z "$selected" ] || fail "usage: histos toolchain install [--client|--no-client] <version>"
+              selected=$flag
+              ;;
+          esac
+        done
+        [ -n "$selected" ] || fail "usage: histos toolchain install [--client|--no-client] <version>"
         channel_refresh=every-call
         selected=$(resolve_channel "$selected")
         ensure_toolchain "$selected"
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
+        offer_client "$home/toolchains/$selected" "$client_flag"
         exit 0
+        ;;
+      client)
+        shift
+        [ "$#" -eq 0 ] || fail "usage: histos toolchain client"
+        ci_set && fail "CI uses the jar and does not build a native client"
+        repo=$(find_repo || true)
+        if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then
+          case $id in
+            ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
+          esac
+          dir=$home/toolchains/$id
+          [ -f "$dir/histos.jar" ] || fail "local toolchain $id is not installed"
+        else
+          if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
+            selected=$(resolve_channel "$pin")
+          else
+            current=$(read_default || true)
+            if [ -z "$current" ]; then
+              current=$(published_channel) || no_default
+              write_default "$current"
+            fi
+            selected=$(resolve_channel "$current")
+          fi
+          toolchain_ready "$selected" || ensure_toolchain "$selected"
+          dir=$home/toolchains/$selected
+        fi
+        if [ ! -f "$dir/client-kit.zip" ] && [ -f "$dir/manifest.json" ]; then
+          place_kit "$dir/manifest.json" "$dir/client-kit.zip"
+        fi
+        [ -f "$dir/client-kit.zip" ] || fail "no client kit in $dir"
+        check_java
+        jar=$dir/histos.jar
+        if "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client; then
+          hash_of "$jar" > "$dir/client.stamp"
+          rm -f "$dir/client.choice"
+          exit 0
+        fi
+        exit 1
         ;;
       *) fail "unknown command 'toolchain ${sub:-}'
 histos toolchain install <version>
+histos toolchain client
 histos toolchain list
 histos help toolchain" ;;
     esac
@@ -575,10 +724,19 @@ histos help toolchain" ;;
     shift
     make_default=no
     form=keep
+    client_flag=ask
     for flag in "$@"; do
       case $flag in
         --make-default) make_default=yes ;;
         --stable) stable=yes ;;
+        --client)
+          [ "$client_flag" = ask ] || [ "$client_flag" = yes ] || fail "--client and --no-client are opposites. Pass one."
+          client_flag=yes
+          ;;
+        --no-client)
+          [ "$client_flag" = ask ] || [ "$client_flag" = no ] || fail "--client and --no-client are opposites. Pass one."
+          client_flag=no
+          ;;
         --freeze|--follow)
           [ "$form" = keep ] || [ "$form" = "${flag#--}" ] || fail "--freeze and --follow are opposites. Pass one."
           form=${flag#--}
@@ -601,6 +759,7 @@ histos help toolchain" ;;
       write_default "$next"
       selected=$(resolve_channel "$next")
       ensure_toolchain "$selected"
+      offer_client "$home/toolchains/$selected" "$client_flag"
       exit 0
     fi
     selected=$(resolve_channel "$next")
@@ -615,6 +774,7 @@ histos help toolchain" ;;
       [ -f "$jar" ] || fail "local toolchain $id is not installed"
       version=$id
     fi
+    offer_client "$(dirname "$jar")" "$client_flag"
     # The previous record is gone before version runs, so the new driver does not talk to that server.
     retire_server "$repo"
     exec_jar "$jar" "$repo" version
