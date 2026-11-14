@@ -201,6 +201,9 @@ Each bug gets a law that fails on today's code, then the fix.
 - [x] D19 A Mac `publish snapshots` was going to link `linux-x86_64` by cross-compiling inside an arm64 container. Owner: engine (`DistStock`).
   - Russ: a publish links the host only. A Mac names `macos-aarch64`. A Linux machine names `linux-x86_64`. There is no container and no cross-build. Client files already under `dist/clients` are still uploaded. A laptop therefore names the host.
   - The Dist layer already does this. The container branch was not merged. No code change.
+- [x] D20 The generator pins `early-effect/histos/.github/actions/setup` to the rendering ship's commit. A squash merge does not keep a pull-request commit on `main`. Owner: engine (`CiInstall`).
+  - Russ: pin that action only to a commit already on `main`. Land the generator first. Pack the pin from the squash commit in a second pull request. The branch-only resolution check was not run.
+  - This pull request does not publish and does not change `histos.version`. The committed workflows stay the pin's render.
 
 ## Shared seams
 

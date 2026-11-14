@@ -205,8 +205,8 @@ Each item audits the files it touches against the Totality list and adds what it
 
 ## Risks
 
-- A remote action pinned at a commit that lives only on a merged pull-request branch has to keep resolving after the branch is deleted. The CI setup item proves it, or pins move to `main` commits only.
-- The ship row, dist layer, and CI setup items each pin a snapshot of their own commit before CI can compile `histos.scala`.
+- D20. The setup action is pinned only to a commit already on `main`. A branch-only SHA is not used. The branch-only resolution check was not run.
+- The ship row and the dist layer each pinned a snapshot of their own commit before CI could compile `histos.scala`. CI setup does not. The build file is unchanged, and this pull request stays on the current pin.
 - The ship row and dist layer items are the large ones. Either splits along pack, then link, then proof, if it outgrows one review.
 
 ## Checklist
@@ -312,8 +312,8 @@ The open items are written as agent-ready briefs, with their order, bindings, an
 - [x] **Container.** Dropped. D19: a publish links the host only. There is no container, no second main, and no cross-build. A Mac names `macos-aarch64` and a Linux machine names `linux-x86_64`. Client files already under `dist/clients` are still uploaded. Done:
   - The Dist layer already links the host only. The unpushed container link was not merged. A trial `publish snapshots` from that jar built the image and then failed before any upload: the container reported `no build file at /work/histos.scala` because the checkout copy lived in `java.io.tmpdir`.
   - No code change and no pin move.
-- [ ] **CI setup.** `Projects.ciSetup`, the inline `origin-head` step, `shim-<sha256>` on `dist`, and the bootstrap wrapper for every build. Ledger rows 13 to 15, 29, and 55 close. Proof: renders for both choices, the wrapper installing the pinned shim on loopback and refusing a checksum mismatch, and `init` and `new` writing it. Live: a remote action pinned at a branch-only commit still resolves after the branch is deleted. Pin move.
-  - The generator and the laws are in this commit. The committed `ci.yml`, `histos-snapshots.yml`, `histos-release.yml`, and `./histos` stay the pin's render. `./histos workflow --check` exited 0 against that pin. `./histos test api wire engine app`: api 202 on jvm and on native, wire 246 on jvm and on native, engine 754, app 215. `./histos fmt --check` and `./histos run doc` are clean. The live check is still open.
+- [ ] **CI setup.** `Projects.ciSetup`, the inline `origin-head` step, `shim-<sha256>` on `dist`, and the bootstrap wrapper for every build. Ledger rows 13 to 15, 29, and 55 close. Proof: renders for both choices, the wrapper installing the pinned shim on loopback and refusing a checksum mismatch, and `init` and `new` writing it. Pin move, packed from a commit already on `main` (D20).
+  - The generator and the laws are in this commit. The committed `ci.yml`, `histos-snapshots.yml`, `histos-release.yml`, and `./histos` stay the pin's render. `./histos workflow --check` exited 0 against that pin. `./histos test api wire engine app`: api 202 on jvm and on native, wire 246 on jvm and on native, engine 754, app 215. `./histos fmt --check` and `./histos run doc` are clean. D20: this pull request does not publish and does not move `histos.version`. The pin is packed from the squash commit once it is on `main`.
 - [x] **Grammar.** The verbs with flags, the removals the decisions name, `server` out of help, `Help` and MCP in step, and typed MCP arguments. Ledger rows 16, 18, 19, 21, 22, 23, 24, 33, and 51 close. Rows 17 and 20 stay open. `ReadmeLawSpec` refuses the removed words. Proof: `GrammarLawSpec`, `HelpLawSpec`, and `McpLawSpec` cover each new form and refuse each removed word with a typed error that names the replacement. Done:
   - `test --only`, `test --quick`, `clean --full`, and `publish local`, and the same forms under `preview`, replace `testOnly`, `testQuick`, `cleanFull`, and `publishLocal`. No alias.
   - `client` is removed. The error names `publish`. `launcher` and the MCP name `launcherUpdate` are removed. The error names `update`. Bare `toolchain` is removed. The error names `doctor`. `toolchain install` and `toolchain list` stay on the shim.

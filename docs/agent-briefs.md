@@ -19,10 +19,11 @@ These were given on 2026-11-13. They stand for every brief, and they replace the
   - `histos cache forget <namespace|module>` purges a bad entry.
   - `histos cache verify [module ...]` recompiles stored hits in a scratch directory and names any entry whose products differ.
   - `clean --full` stays the local recovery.
-- **D13, publishing.** Standing approval for `publish snapshots` from a layer's commit and for pinning that commit channel in the same pull request, by the sequence in "Pin moves". It never covers `publish release`, a tag, or `sonaRelease`.
+- **D13, publishing.** Standing approval for `publish snapshots` from a layer's commit and for pinning that commit channel in the same pull request, by the sequence in "Pin moves". D20 is the exception: a pin that writes the remote setup action is a second pull request, packed from a commit already on `main`. D13 never covers `publish release`, a tag, or `sonaRelease`.
 - **D14, merging.** The main agent merges its pull requests once CI is green on the current head and the test log has no `not advancing the test clock`. Stacks merge in order.
 - **D15, Container.** Superseded by D19. A publish does not cross-build the other platform.
 - **D19, host client.** A publish links the host only. A Mac names `macos-aarch64`. A Linux machine names `linux-x86_64`. There is no container and no cross-build. Client files already under `dist/clients` are still uploaded, which is how the workflow's macOS job feeds the Linux publish job. A laptop publish therefore names the host. Row 12 closes here. The current pin stays macOS-only, and a Linux job on it runs `java -jar`.
+- **D20, action pin.** The setup action is pinned only to a commit that is already on `main`. `workflow --update` writes `uses: early-effect/histos/.github/actions/setup@<the rendering ship's commit>`. A squash merge does not keep a pull-request commit on `main`. Land the generator with the committed workflows still the pin's render. After that squash is on `main`, pack from that commit and move the pin in a second pull request. The branch-only resolution check was not run. D13 still approves the snapshot and the pin. It does not approve packing that jar from a branch commit.
 - **D16, Scala Native 3.10.1.** At the start of a session, check whether a Scala Native nightly publishes both `scala3lib` and `nscplugin` for 3.10.1. If one does, move `api`, `wire`, and `client` to 3.10.1, with that nightly's `ToolCatalog` change and a pin move, as one pull request.
 - **D17, library gaps.** File one issue on heddle (server shutdown polls the clock, B11) and one on slayer (`stub` forces lambda parameter types). Draft each with its evidence, show Russ the text, and file it after his yes.
 - **D18, finished plans.** Read-through deletes a work plan whose items are all done. The README or a reference doc keeps what users need, and git history is the archive. Live plans (`cli-work-plan.md`, `cache-work-plan.md`, `scenario-work-plan.md`, `test-audit.md`, and this file) are made true at the tip.
@@ -40,14 +41,14 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
 
   Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
-- **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D20.
+- **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D21.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
 - **Format once.** Run bare `./histos fmt` after the edits (its ledger skips unchanged files), then `./histos fmt --check`. Do not format file by file.
 - **The proof for any pull request.** `./histos test api wire central engine app`, green on JVM and Native, with no `not advancing the test clock` in the output. `./histos workflow --check` and `./histos run doc` clean, because CI runs both, and the docs task fails on any scaladoc warning.
 - **After CI.** Read the test job's log for `not advancing the test clock`, and fix any hit in the next pull request.
 - **Docs teach the truth.** README, AGENTS.md, the plan, and scaladoc are corrected in the same pull request as the code they describe. `app/test/ReadmeLawSpec.scala` gates the README.
 - **Known hazards.**
-  - A pin move publishes a snapshot. D13 approves snapshots and pin moves. The sequence is in "Pin moves" below.
+  - A pin move publishes a snapshot. D13 approves snapshots and pin moves. D20: a pin that writes the remote setup action is packed from a commit already on `main`, and that pin is its own pull request. The sequence is in "Pin moves" below.
 
 ## Order
 
@@ -111,7 +112,7 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 ### CI setup
 
 - **Generator landed. The pin has not moved.** `Projects.ciSetup(CiSetup.Remote)` is the default and renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <that same commit>`. The comment is that commit, because the pin scan requires one and this action has no release tag. `CiSetup.Wrapper` renders pinned `actions/cache` steps and then the job's `./histos`, with no Histos action. `origin-head` is the inline step `git remote set-head origin --auto`. `shim-<sha256>` is uploaded beside `shim` and `shim.sha256`. The bootstrap wrapper installs that pinned asset, checks the sha256, and refuses a JDK older than `Toolchain.Floor` before the fetch. `init`, `new`, and `workflow --update` write it for every build. The shim sets `HISTOS_VERSION` for `server`, `bsp`, `mcp`, and a client command. E29 and B39 close against that code.
-- **Still open.** The committed workflows and `./histos` stay the pin's render, so the checklist box stays open. Live: a remote action pinned at a commit that lives only on a merged branch still has to resolve after that branch is deleted. That check is not a unit test and is not done.
+- **Still open.** The committed workflows and `./histos` stay the pin's render, so the checklist box stays open. D20: this pull request does not publish and does not move `histos.version`. The pin is packed from the squash commit once it is on `main`.
 
 ## Command-line track
 
@@ -159,5 +160,7 @@ This is the sequence that worked twice. It needs Russ's yes in that session.
 3. Check that the uploaded `<timestamp>-manifest.json` names the jar's sha256 and the host client's. A platform that was not linked is omitted. None at all is refused.
 4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
 5. Commit the pin on top of the layer, then stack the next layer on it.
+
+D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator lands first, with no publish and no change to `histos.version`.
 
 The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. That toolchain packs the launcher, links the host client, and proves the pair before it uploads. `workflow --check` compares the committed workflows and `./histos` to the jar this channel names.
