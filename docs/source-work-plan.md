@@ -136,7 +136,7 @@ A task runs on one of those classpaths. Stacking them, plugin loader as the pare
 
 ## Publish
 
-A library or an application pom cannot list a git library. Central cannot fetch the commit. `publish release` and `publish snapshots` refuse the module at load when a compile dependency is a git library. That is the ship rule in [release-work-plan.md](release-work-plan.md), applied to this origin: a published library depends on coordinates a Maven consumer can resolve.
+A library or an application pom cannot list a git library. Central cannot fetch the commit. `publish release` and `publish snapshots` refuse the module at load when a compile dependency is a git library. A published library depends on coordinates a Maven consumer can resolve.
 
 An unpublished module may take the edge. An assembly may pack the jar. `publish local`, compile, test, and run accept it.
 

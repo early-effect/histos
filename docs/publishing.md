@@ -2,7 +2,7 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row, as an example, is `ships(Ship("histos").next(0, 2, 3)(api, app))`. Editing this file does not upload it.
+This file is the decision. A catalog row, as an example, is `ships(Ship("histos").next(0, 2, 3)(api, app))`. Editing this file does not upload it.
 
 The number in `.next(...)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `<ship>-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `<ship>-<sha>-SNAPSHOT`. `publish snapshots` also writes the `<ship>-SNAPSHOT` pointer from any checkout. `publish local` writes that pointer only on the default branch. A release session publishes that number, and that command still requires `HISTOS_SESSION=release`.
 
@@ -41,14 +41,17 @@ val publishAll =
   publishLocal.flatMap(_ => publishSona)
 ```
 
-`publishAll` is composition, not the only legal program. A build that does not want local, or does not want Sonatype, does not write that `flatMap`. The same effect can go back into a layer:
+`publishAll` is composition, not the only legal program. A build that does not want local, or does not want Sonatype, does not write that `flatMap`. The build already has the layers:
 
 ```scala
-val sona: ULayer[Publishing] =
-  ZLayer.succeed(Publishing.fromEffect(publishSona))
+val local: ZLayer[LocalPublish, Nothing, Publishing] =
+  build.local
+
+val sona: ZLayer[SonaPublish, Nothing, Publishing] =
+  build.sona
 ```
 
-That is `ZLayer.succeed`. It is not a scoped layer that opens two stocks and chooses between them.
+`build.sona` is `Sona.layer(ReleaseMode.Automatic)`. It is not a layer that opens two stocks and chooses between them.
 
 ```scala
 trait Publishing:

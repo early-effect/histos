@@ -141,9 +141,7 @@ Each is one pull request with its red law. They touch different code, so they ca
 
 ## Read-through
 
-- **Goal.** README, AGENTS.md, `docs/self-host.md`, [next.md](next.md), [publishing.md](publishing.md), and [release-work-plan.md](release-work-plan.md) read against the code at the tip. Anything found is recorded in the ledger as a miss.
-- **Binds.** D18: a work plan whose items are all done is deleted, after the README or a reference doc keeps what users need. Candidates are `coverage-work-plan.md`, `format-work-plan.md`, `plugins-plan.md`, `release-work-plan.md`, `source-work-plan.md`, `site-publish-modes.md`, and `next.md`. Check each for open items before deleting it. Live plans are made true, and links to a deleted plan are fixed.
-- **Closes.** Ledger row 44: `cache-work-plan.md` still checks "TestStore" with the deleted `ModuleTestQuickSpec` as its proof.
+- **Closed.** README, AGENTS.md, `docs/self-host.md`, [next.md](next.md), and [publishing.md](publishing.md) were read against the tip. Rows 44 and 56 are the misses. `release-work-plan.md`, `format-work-plan.md`, `coverage-work-plan.md`, `plugins-plan.md`, and `site-publish-modes.md` are deleted. [next.md](next.md) and [source-work-plan.md](source-work-plan.md) stay: the first is what is still wanted, and the second has open items.
 
 ## Outside the plan
 
