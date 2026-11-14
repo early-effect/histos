@@ -155,6 +155,7 @@ import histos.zinc.{
   CompileError,
   CompileFeed,
   CompileInput,
+  CompilePulse,
   CompileProblem,
   CompileSeverity,
   CompiledCell,
@@ -667,6 +668,8 @@ private object WireSchemaEvent extends WireSchemaSupport:
   given Schema[CompileInput] = Schema.derived
 
   given Schema[KeyMiss] = Schema.derived
+
+  given Schema[CompilePulse] = Schema.derived
 
   given Schema[CompileFeed] = Schema.derived
 

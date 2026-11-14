@@ -148,6 +148,10 @@ final case class ProjectGraph private (
     coordinates: List[PluginCoordinate] = Nil,
     ciSetup: CiSetup = CiSetup.Remote,
 ):
+  /** Width of the longest project name. Compile and test lines pad the name to it. */
+  val moduleColumn: Int =
+    projects.iterator.map(_.name.value.length).maxOption.getOrElse(0)
+
   /** The wiring built these plugins. The rest of the graph is unchanged. */
   def withPlugins(registered: List[RegisteredPlugin]): ProjectGraph =
     copy(plugins = registered)

@@ -14,6 +14,7 @@ private[histos] trait Compilers:
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
       digest: Sha256,
       admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput]
@@ -34,14 +35,15 @@ private[histos] object Compilers:
             artifacts: CompilerArtifacts,
             extra: List[String],
             hear: CompileProblem => Unit,
+            onPulse: CompilePulse => Unit,
             digest: Sha256,
             admitted: UIO[Unit],
         ): IO[CompileError, CompileOutput] =
           ScalaSeries.of(request.toolchain.version) match
             case Some(ScalaSeries.Scala3) =>
-              scala3.offer(request, artifacts, extra, hear, digest, admitted)
+              scala3.offer(request, artifacts, extra, hear, onPulse, digest, admitted)
             case Some(ScalaSeries.Scala2(13)) =>
-              scala213.offer(request, artifacts, extra, hear, digest, admitted)
+              scala213.offer(request, artifacts, extra, hear, onPulse, digest, admitted)
             case _ => ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
 
         def openings: UIO[Int] =
@@ -73,6 +75,7 @@ private[histos] trait Scala3Compilers:
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
       digest: Sha256,
       admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput]
@@ -90,6 +93,7 @@ private[histos] trait Scala213Compilers:
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
       digest: Sha256,
       admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput]
@@ -124,6 +128,7 @@ private[zinc] final class SeriesCompilers(
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
       digest: Sha256,
       admitted: UIO[Unit],
   ): IO[CompileError, CompileOutput] =
@@ -131,7 +136,7 @@ private[zinc] final class SeriesCompilers(
       cancelled <- Ref.make(false)
       running   <- Promise.make[Nothing, Fiber[CompileError, CompileOutput]]
       reply     <- Promise.make[CompileError, CompileOutput]
-      work = CompileWork(request, artifacts, extra, hear, digest, admitted, reply, running, cancelled)
+      work = CompileWork(request, artifacts, extra, hear, onPulse, digest, admitted, reply, running, cancelled)
       result <- submit(work)
     yield result
 
@@ -158,9 +163,10 @@ private[zinc] final class SeriesCompilers(
           artifacts: CompilerArtifacts,
           extra: List[String],
           hear: CompileProblem => Unit,
+          onPulse: CompilePulse => Unit,
           digest: Sha256,
           admitted: UIO[Unit],
-      )            = self.offer(request, artifacts, extra, hear, digest, admitted)
+      )            = self.offer(request, artifacts, extra, hear, onPulse, digest, admitted)
       def openings = self.openings
       def drop     = self.drop
 
@@ -172,9 +178,10 @@ private[zinc] final class SeriesCompilers(
           artifacts: CompilerArtifacts,
           extra: List[String],
           hear: CompileProblem => Unit,
+          onPulse: CompilePulse => Unit,
           digest: Sha256,
           admitted: UIO[Unit],
-      )            = self.offer(request, artifacts, extra, hear, digest, admitted)
+      )            = self.offer(request, artifacts, extra, hear, onPulse, digest, admitted)
       def openings = self.openings
       def drop     = self.drop
 
@@ -300,7 +307,15 @@ private object Generation:
     ZIO.ifZIO(work.cancelled.get)(
       work.reply.interrupt.unit,
       pool
-        .compile(work.request, work.artifacts, work.extra, work.hear, work.digest, work.admitted)
+        .compile(
+          work.request,
+          work.artifacts,
+          work.extra,
+          work.hear,
+          work.digest,
+          work.admitted,
+          work.onPulse,
+        )
         .fork
         .flatMap { fiber =>
           work.running.succeed(fiber) *>
@@ -317,6 +332,7 @@ private final class CompileWork(
     val artifacts: CompilerArtifacts,
     val extra: List[String],
     val hear: CompileProblem => Unit,
+    val onPulse: CompilePulse => Unit,
     val digest: Sha256,
     val admitted: UIO[Unit],
     val reply: Promise[CompileError, CompileOutput],

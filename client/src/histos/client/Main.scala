@@ -107,7 +107,7 @@ object Main extends ZIOAppDefault:
           case Right(head) =>
             ready(head) match
               case Left(error) => Left(error)
-              case Right(_)    => frames(repo, socket, session.input)
+              case Right(_)    => frames(repo, socket, session.input, 0)
 
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match
@@ -119,20 +119,23 @@ object Main extends ZIOAppDefault:
       repo: Path,
       socket: Path,
       input: java.io.InputStream,
+      column: Int,
   ): Either[ServerError, Int] =
     Frame.take(input) match
       case Left(_)              => Left(ServerError.Io(histos.server.ServerIo.Read(socket)))
       case Right(None)          => Left(ServerError.Protocol)
       case Right(Some(payload)) =>
         payload.fromJson[Message] match
+          case Right(Message.Event(BuildEvent.Layout(width))) =>
+            frames(repo, socket, input, width)
           case Right(Message.Event(event)) =>
-            show(repo, event)
-            frames(repo, socket, input)
+            show(repo, event, column)
+            frames(repo, socket, input, column)
           case Right(Message.Done(result)) => Right(finish(result))
           case _                           => Left(ServerError.Protocol)
 
-  private def show(repo: Path, event: BuildEvent): Unit =
-    Show(repo, event).foreach:
+  private def show(repo: Path, event: BuildEvent, column: Int): Unit =
+    Show(repo, event, column).foreach:
       case CompileConsole.Line.Out(text) => System.out.println(text)
       case CompileConsole.Line.Err(text) => System.err.println(text)
 

@@ -25,6 +25,16 @@ final case class CompiledCell(
     classesWritten: Option[Int],
 )
 
+/** One incremental fact from a cell that is still compiling. A new fact is a case here.
+  */
+enum CompilePulse:
+  /** The compiler entered `name`. `source` is the file that entered it, when the compiler named one. */
+  case Phase(name: String, source: Option[String])
+
+  /** A later file entered a phase that names each file. */
+  case Source(phase: String, path: String)
+end CompilePulse
+
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not interleaved.
   */
 enum CompileFeed:
@@ -36,6 +46,7 @@ enum CompileFeed:
       problem: CompileProblem,
   )
   case Miss(module: ProjectName, version: ScalaVersion, platform: Platform, change: KeyMiss)
+  case Pulse(module: ProjectName, version: ScalaVersion, platform: Platform, pulse: CompilePulse)
   case Done(cell: CompiledCell)
   case Failed(error: GraphCompileError)
 

@@ -77,6 +77,7 @@ private[zinc] final class CompilerPool(
       hear: CompileProblem => Unit,
       digest: histos.jdk.Sha256,
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): IO[CompileError, CompileOutput] =
     val id = CompilerKey(
       request.toolchain.version,
@@ -96,7 +97,7 @@ private[zinc] final class CompilerPool(
             remembered.get.flatMap { known =>
               ZIO
                 .attemptBlockingInterrupt(
-                  JvmCompile.once(request, ready, extra, hear, digest, known)
+                  JvmCompile.once(request, ready, extra, hear, digest, known, onPulse)
                 )
                 .mapError(_ => CompileError.Io(IoFailure(request.classes, IoFault.Write)))
                 .flatMap(ZIO.fromEither)

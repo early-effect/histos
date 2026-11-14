@@ -509,7 +509,8 @@ object GraphCompile:
     val CellRun(plan, module, version, platform, upstreams, hold, offer, released) = run
     def tell(feed: CompileFeed): UIO[Unit]                                         =
       ZIO.attemptBlockingInterrupt(offer(feed)).orDie
-    val hear = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
+    val hear  = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
+    val pulse = (step: CompilePulse) => offer(CompileFeed.Pulse(module.name, version, platform, step))
     hold(module.name) *>
       sourceBase(plan.repo, module, plan.modules).flatMap:
         case None =>
@@ -520,6 +521,7 @@ object GraphCompile:
             compileOf(
               CellWork(plan, module, version, platform, base, upstreams),
               hear,
+              pulse,
             ).foldZIO(
               error =>
                 kept(error) match
@@ -596,6 +598,7 @@ object GraphCompile:
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
   ): ZIO[Fed, GraphCompileError, CellResult] =
     val CellWork(plan, module, version, platform, base, done) = work
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
@@ -656,6 +659,7 @@ object GraphCompile:
                     SemanticDb.argv(plan.repo, version) ++ planned.fold(List.empty[String])(_.argv),
                     hear,
                     plan.admitted(module.name),
+                    onPulse,
                   ).mapError(failed)
                 yield compiled
             _ <- forgetMeasurements(plan, version, platform, classes).mapError(failed)
@@ -738,14 +742,15 @@ object GraphCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val compiled =
       ZIO
         .fromEither(CellPlatform.of(work.module, request.toolchain.platform, work.plan.tools.catalog, work.plan.native))
         .flatMap:
-          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, admitted)
-          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear)
-          case native: CellPlatform.Native => NativeCompile.compile(request, native, extra, hear)
+          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, admitted, onPulse)
+          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear, onPulse)
+          case native: CellPlatform.Native => NativeCompile.compile(request, native, extra, hear, onPulse)
     compiled.provideSome[ContentStore & CompilerStarts & Compilers & RemoteCache](ZLayer.succeed(work.plan.tools))
 
   /** The cells [[UpstreamCells.read]] picks from the finished cells, each with the API digest its compile recorded. */

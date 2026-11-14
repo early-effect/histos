@@ -147,13 +147,15 @@ object Say:
       noted,
     )
 
-  def record(repo: Path, feeds: Ref[Chunk[Feed]]): Say =
-    new Say({
-      case Message.Event(event) =>
-        feeds.update(_ :+ Feed.Event(event)) *> histos.mcp.Notice.show(repo, event)
-      case Message.Done(result) => feeds.update(_ :+ Feed.Done(result))
-      case _                    => ZIO.unit
-    })
+  def record(repo: Path, feeds: Ref[Chunk[Feed]]): UIO[Say] =
+    Ref.make(0).map { column =>
+      new Say({
+        case Message.Event(event) =>
+          feeds.update(_ :+ Feed.Event(event)) *> histos.mcp.Notice.show(repo, column, event)
+        case Message.Done(result) => feeds.update(_ :+ Feed.Done(result))
+        case _                    => ZIO.unit
+      })
+    }
 
   private[histos] def wire(message: Message): String = message.toJson
 end Say
@@ -177,24 +179,25 @@ object Calls:
       say: Say,
       launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore & IvyRoot, ServerError, Unit] =
-    CompileConsole.open(repo).flatMap { console =>
-      reported(
-        repo,
-        say,
-        console,
-        PublishRun.local(
+    layout(say, graph) *>
+      CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        reported(
           repo,
-          graph,
-          build,
-          tokens,
-          jdk,
-          machine.env,
-          launcher,
-          feed => speak(say, console, feed).ignore,
-          hear(say),
-        ),
-      )
-    }
+          say,
+          console,
+          PublishRun.local(
+            repo,
+            graph,
+            build,
+            tokens,
+            jdk,
+            machine.env,
+            launcher,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+          ),
+        )
+      }
 
   def publishSnapshots(
       repo: Path,
@@ -206,24 +209,25 @@ object Calls:
       say: Say,
       launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
-    CompileConsole.open(repo).flatMap { console =>
-      reported(
-        repo,
-        say,
-        console,
-        PublishRun.snapshots(
+    layout(say, graph) *>
+      CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        reported(
           repo,
-          graph,
-          build,
-          tokens,
-          jdk,
-          machine.env,
-          launcher,
-          feed => speak(say, console, feed).ignore,
-          hear(say),
-        ),
-      )
-    }
+          say,
+          console,
+          PublishRun.snapshots(
+            repo,
+            graph,
+            build,
+            tokens,
+            jdk,
+            machine.env,
+            launcher,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+          ),
+        )
+      }
 
   def publishRelease(
       repo: Path,
@@ -236,25 +240,26 @@ object Calls:
       say: Say,
       launcher: ApiDigest,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
-    CompileConsole.open(repo).flatMap { console =>
-      released(
-        repo,
-        say,
-        console,
-        PublishRun.release(
+    layout(say, graph) *>
+      CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        released(
           repo,
-          graph,
-          build,
-          tokens,
-          jdk,
-          machine.env,
-          automatic,
-          launcher,
-          feed => speak(say, console, feed).ignore,
-          hear(say),
-        ),
-      )
-    }
+          say,
+          console,
+          PublishRun.release(
+            repo,
+            graph,
+            build,
+            tokens,
+            jdk,
+            machine.env,
+            automatic,
+            launcher,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+          ),
+        )
+      }
 
   def promote(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
     changed(say, PublishRun.promote(repo, machine.env, id, hear(say)))
@@ -832,10 +837,11 @@ object Calls:
     modules match
       case Nil   => reject(say, Rejection.AssemblyModules(assemblyNames(graph)))
       case asked =>
-        CompileConsole
-          .open(repo)
-          .flatMap: console =>
-            assembleNamed(repo, graph, jdk, machine, asked, say, console, Nil)
+        layout(say, graph) *>
+          CompileConsole
+            .open(repo, graph.moduleColumn)
+            .flatMap: console =>
+              assembleNamed(repo, graph, jdk, machine, asked, say, console, Nil)
 
   private def assembleNamed(
       repo: Path,
@@ -911,37 +917,38 @@ object Calls:
     Unit,
   ] =
     opened(say) { remote =>
-      CompileConsole.open(repo).flatMap { console =>
-        GraphCompile
-          .strict(
-            GraphCompile
-              .resident(
-                repo,
-                graph,
-                projects,
-                jdk,
-                NativeOrigin.read(machine.env),
-                None,
-              )
-          )
-          .provideSomeLayer(ZLayer.succeed(remote))
-          .mapZIO(feed => speak(say, console, feed))
-          .runDrain
-          .foldZIO(
-            {
-              case error: GraphCompileError =>
-                val result = Faults.compileStopped(error) match
-                  case Some(why) => CallResult.Fault(why)
-                  case None      => CallResult.reported(Cli.compileFailure(error))
+      layout(say, graph) *>
+        CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+          GraphCompile
+            .strict(
+              GraphCompile
+                .resident(
+                  repo,
+                  graph,
+                  projects,
+                  jdk,
+                  NativeOrigin.read(machine.env),
+                  None,
+                )
+            )
+            .provideSomeLayer(ZLayer.succeed(remote))
+            .mapZIO(feed => speak(say, console, feed))
+            .runDrain
+            .foldZIO(
+              {
+                case error: GraphCompileError =>
+                  val result = Faults.compileStopped(error) match
+                    case Some(why) => CallResult.Fault(why)
+                    case None      => CallResult.reported(Cli.compileFailure(error))
+                  console.announce(text => told(say, text)) *>
+                    finishNoted(repo, say, console, List(console.observation), result)
+                case error: ServerError => ZIO.fail(error)
+              },
+              _ =>
                 console.announce(text => told(say, text)) *>
-                  finishNoted(repo, say, console, List(console.observation), result)
-              case error: ServerError => ZIO.fail(error)
-            },
-            _ =>
-              console.announce(text => told(say, text)) *>
-                finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
-          )
-      }
+                  finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
+            )
+        }
     }
 
   def previewCompile(
@@ -1101,95 +1108,96 @@ object Calls:
     Unit,
   ] =
     opened(say) { remote =>
-      CompileConsole.open(repo).flatMap { console =>
-        CompileConsole.notes.flatMap { notes =>
-          Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
-            Ref.make(List.empty[String]).flatMap { missed =>
-              Ref.make(SuiteCount.empty).flatMap { totals =>
-                val close =
-                  console.announce(text => told(say, text)) *>
-                    notes.announce(text => told(say, text)) *>
-                    totals.get.flatMap { count =>
-                      ZIO.foreachDiscard(Lines.suites(count.passed, count.failed, count.cached, count.modules.size))(
-                        line => told(say, line)
-                      )
-                    }
-                val ran =
-                  for
-                    runtimes <- Runtimes.read(machine, graph.runnerTools.nodePath)
-                    _        <- ZIO
-                      .fromEither(histos.select.Selection.select(graph, projects))
-                      .mapError(ModuleTestError.Target(_))
-                    _ <- ModuleTest
-                      .sessionOn(
-                        TestRun(
-                          repo,
-                          graph,
-                          projects,
-                          jdk,
-                          runtimes,
-                          mode,
-                          patterns,
-                          (module, version, platform, facts) =>
-                            notes(module, version, platform, facts)
-                              .flatMap(line => told(say, line).ignore),
+      layout(say, graph) *>
+        CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+          CompileConsole.notes(graph.moduleColumn).flatMap { notes =>
+            Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
+              Ref.make(List.empty[String]).flatMap { missed =>
+                Ref.make(SuiteCount.empty).flatMap { totals =>
+                  val close =
+                    console.announce(text => told(say, text)) *>
+                      notes.announce(text => told(say, text)) *>
+                      totals.get.flatMap { count =>
+                        ZIO.foreachDiscard(Lines.suites(count.passed, count.failed, count.cached, count.modules.size))(
+                          line => told(say, line)
                         )
-                      )
-                      .provideSomeLayer(ZLayer.succeed(remote))
-                      .foreach {
-                        case SessionFeed.Compile(feed) =>
-                          feed match
-                            case CompileFeed.Failed(error) =>
-                              missed.update(_ :+ error.message) *> speak(say, console, feed)
-                            case _ => speak(say, console, feed)
-                        case SessionFeed.Test(feed) =>
-                          remember(totals, feed) *>
-                            logTest(repo, graph, feed) *>
-                            say(Message.Event(BuildEvent.Test(feed))) *>
-                            (feed match
-                              case TestFeed.Done(cell) => ranCells.update(_ :+ cell)
-                              case _                   => ZIO.unit)
                       }
-                    _             <- close
-                    compileErrors <- missed.get
-                    cells         <- ranCells.get
-                  yield CallResult.reported(compileErrors.mkString("\n"), cells)
-                ran.foldZIO(
-                  {
-                    case error: ServerError     => ZIO.fail(error)
-                    case error: ModuleTestError =>
-                      close *>
-                        missed.get.flatMap { compileErrors =>
-                          val summary = error match
-                            case ModuleTestError.NoneMatched(_) if compileErrors.nonEmpty =>
-                              compileErrors.mkString("\n")
-                            case other => other.message
-                          val result = Faults.testStopped(error) match
-                            case Some(why) => CallResult.Fault(why)
-                            case None      => CallResult.reported(summary)
-                          finishNoted(
+                  val ran =
+                    for
+                      runtimes <- Runtimes.read(machine, graph.runnerTools.nodePath)
+                      _        <- ZIO
+                        .fromEither(histos.select.Selection.select(graph, projects))
+                        .mapError(ModuleTestError.Target(_))
+                      _ <- ModuleTest
+                        .sessionOn(
+                          TestRun(
                             repo,
-                            say,
-                            console,
-                            List(console.observation, notes.observation),
-                            result,
+                            graph,
+                            projects,
+                            jdk,
+                            runtimes,
+                            mode,
+                            patterns,
+                            (module, version, platform, facts) =>
+                              notes(module, version, platform, facts)
+                                .flatMap(line => told(say, line).ignore),
                           )
+                        )
+                        .provideSomeLayer(ZLayer.succeed(remote))
+                        .foreach {
+                          case SessionFeed.Compile(feed) =>
+                            feed match
+                              case CompileFeed.Failed(error) =>
+                                missed.update(_ :+ error.message) *> speak(say, console, feed)
+                              case _ => speak(say, console, feed)
+                          case SessionFeed.Test(feed) =>
+                            remember(totals, feed) *>
+                              logTest(repo, graph, feed) *>
+                              say(Message.Event(BuildEvent.Test(feed))) *>
+                              (feed match
+                                case TestFeed.Done(cell) => ranCells.update(_ :+ cell)
+                                case _                   => ZIO.unit)
                         }
-                  },
-                  result =>
-                    finishNoted(
-                      repo,
-                      say,
-                      console,
-                      List(console.observation, notes.observation),
-                      result,
-                    ),
-                )
+                      _             <- close
+                      compileErrors <- missed.get
+                      cells         <- ranCells.get
+                    yield CallResult.reported(compileErrors.mkString("\n"), cells)
+                  ran.foldZIO(
+                    {
+                      case error: ServerError     => ZIO.fail(error)
+                      case error: ModuleTestError =>
+                        close *>
+                          missed.get.flatMap { compileErrors =>
+                            val summary = error match
+                              case ModuleTestError.NoneMatched(_) if compileErrors.nonEmpty =>
+                                compileErrors.mkString("\n")
+                              case other => other.message
+                            val result = Faults.testStopped(error) match
+                              case Some(why) => CallResult.Fault(why)
+                              case None      => CallResult.reported(summary)
+                            finishNoted(
+                              repo,
+                              say,
+                              console,
+                              List(console.observation, notes.observation),
+                              result,
+                            )
+                          }
+                    },
+                    result =>
+                      finishNoted(
+                        repo,
+                        say,
+                        console,
+                        List(console.observation, notes.observation),
+                        result,
+                      ),
+                  )
+                }
               }
             }
           }
         }
-      }
     }
 
   def cancel(
@@ -1286,6 +1294,9 @@ object Calls:
     (if full.startsWith(base) then base.relativize(full) else full).toString
       .replace('\\', '/')
 
+  private def layout(say: Say, graph: ProjectGraph): IO[ServerError, Unit] =
+    say(Message.Event(BuildEvent.Layout(graph.moduleColumn)))
+
   private def speak(
       say: Say,
       console: CompileConsole.Session,
@@ -1319,7 +1330,7 @@ object Calls:
         case TestFeed.Err(module, version, platform, _)    => (module, version, platform)
         case TestFeed.Done(cell)                           => (cell.module, cell.version, cell.platform)
         case TestFeed.Cached(module, version, platform, _) => (module, version, platform)
-      val lines = Show(repo, BuildEvent.Test(feed)).collect {
+      val lines = Show(repo, BuildEvent.Test(feed), graph.moduleColumn).collect {
         case CompileConsole.Line.Out(text) if text.nonEmpty => text
         case CompileConsole.Line.Err(text) if text.nonEmpty => text
       }

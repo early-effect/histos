@@ -791,53 +791,58 @@ object Cli:
       inner: Call,
       policy: WatchPolicy,
   ): URIO[Local, Completed] =
-    Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(ZIO.environment[Stdio]).flatMap { (result, io) =>
-      val printing = new Say({
-        case Message.Event(event) =>
-          CompileConsole.show(Show(repo, event), say, sayError).provideEnvironment(io)
-        case Message.Done(done) =>
-          val finished = done match
-            case CallResult.Reported(_) =>
-              Completed(CliExit.from(done), "", "", Playback.Heard)
-            case CallResult.Fault(fault) =>
-              Completed(
-                CliExit.from(done),
-                "",
-                FaultText.show(fault.diagnose),
-                Playback.Held,
-              )
-          result.set(finished)
-        case _ => ZIO.unit
-      })
-      val roots = ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
-        case Left(_)       => Watching.Watched(List(repo.resolve("histos.scala")), Set.empty)
-        case Right(loaded) => Watching.watched(repo, inner, loaded.graph)
+    Ref
+      .make(Completed(CliExit.Success, "", "", Playback.Held))
+      .flatMap { result =>
+        Ref.make(0).flatMap { column =>
+          ZIO.environment[Stdio].flatMap { io =>
+            val printing = new Say({
+              case Message.Event(event) =>
+                Show.follow(repo, column, event, say, sayError).provideEnvironment(io)
+              case Message.Done(done) =>
+                val finished = done match
+                  case CallResult.Reported(_) =>
+                    Completed(CliExit.from(done), "", "", Playback.Heard)
+                  case CallResult.Fault(fault) =>
+                    Completed(
+                      CliExit.from(done),
+                      "",
+                      FaultText.show(fault.diagnose),
+                      Playback.Held,
+                    )
+                result.set(finished)
+              case _ => ZIO.unit
+            })
+            val roots = ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
+              case Left(_)       => Watching.Watched(List(repo.resolve("histos.scala")), Set.empty)
+              case Right(loaded) => Watching.watched(repo, inner, loaded.graph)
+            }
+            val loop = policy match
+              case WatchPolicy.Restart =>
+                Watching.beside(
+                  printing,
+                  operate(repo, apiJar, inner, printing),
+                  roots,
+                  changed =>
+                    val compile = Watching.compileFor(inner)
+                    Ref
+                      .make(Option.empty[CallResult])
+                      .flatMap: finished =>
+                        operate(repo, apiJar, compile, printing.dropExitInto(finished)) *>
+                          finished.get.zip(roots).map((found, watched) => Watching.restarts(found, changed, watched)),
+                )
+              case WatchPolicy.After =>
+                Watching.session(repo, printing, operate(repo, apiJar, inner, printing.dropExit), roots)
+            loop.foldZIO(
+              error =>
+                ZIO.succeed(
+                  Completed(CliExit.Failed, "", error.message, Playback.Held)
+                ),
+              _ => result.get,
+            )
+          }
+        }
       }
-      val loop = policy match
-        case WatchPolicy.Restart =>
-          Watching.beside(
-            printing,
-            operate(repo, apiJar, inner, printing),
-            roots,
-            changed =>
-              val compile = Watching.compileFor(inner)
-              Ref
-                .make(Option.empty[CallResult])
-                .flatMap: finished =>
-                  operate(repo, apiJar, compile, printing.dropExitInto(finished)) *>
-                    finished.get.zip(roots).map((found, watched) => Watching.restarts(found, changed, watched)),
-          )
-        case WatchPolicy.After =>
-          Watching.session(repo, printing, operate(repo, apiJar, inner, printing.dropExit), roots)
-      loop
-        .foldZIO(
-          error =>
-            ZIO.succeed(
-              Completed(CliExit.Failed, "", error.message, Playback.Held)
-            ),
-          _ => result.get,
-        )
-    }
 
   /** The no-server path for one call. Watch uses [[operate]] and does not call `perform`. */
   private def locally(
@@ -849,35 +854,37 @@ object Cli:
       val machine = services.get[Machine]
       Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
         versionText(repo).orElseSucceed("").flatMap { shown =>
-          val build =
-            Build.here[Local](
-              repo,
-              apiJar,
-              machine,
-              runs,
-              track = false,
-              shown,
-              adopted(repo, apiJar, _),
-              cliEdges(repo, _),
-              heard(repo, _).provideEnvironment(services),
-            )
-          build
-            .perform(call)
-            .runCollect
-            .foldCauseZIO(
-              cause =>
-                if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Failed, "", "", Playback.Heard))
-                else
-                  cause.failureOrCause match
-                    case Left(error) =>
-                      ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
-                    case Right(rest) => ZIO.failCause(rest),
-              beats =>
-                val feeds = beats.map(Build.feed)
-                val done  = completed(repo, feeds)
-                if finished(feeds) then ZIO.succeed(done)
-                else sayError("the call did not finish").as(done),
-            )
+          Ref.make(0).flatMap { column =>
+            val build =
+              Build.here[Local](
+                repo,
+                apiJar,
+                machine,
+                runs,
+                track = false,
+                shown,
+                adopted(repo, apiJar, _),
+                cliEdges(repo, _),
+                heard(repo, column, _).provideEnvironment(services),
+              )
+            build
+              .perform(call)
+              .runCollect
+              .foldCauseZIO(
+                cause =>
+                  if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Failed, "", "", Playback.Heard))
+                  else
+                    cause.failureOrCause match
+                      case Left(error) =>
+                        ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
+                      case Right(rest) => ZIO.failCause(rest),
+                beats =>
+                  val feeds = beats.map(Build.feed)
+                  val done  = completed(repo, feeds)
+                  if finished(feeds) then ZIO.succeed(done)
+                  else sayError("the call did not finish").as(done),
+              )
+          }
         }
       }
     }
@@ -957,10 +964,10 @@ object Cli:
       compiled = ZIO.unit,
     )
 
-  private def heard(repo: Path, beat: Beat): URIO[Stdio, Unit] =
+  private def heard(repo: Path, column: Ref[Int], beat: Beat): URIO[Stdio, Unit] =
     beat match
       case Beat.Heard(event) =>
-        CompileConsole.show(Show(repo, event), say, sayError)
+        Show.follow(repo, column, event, say, sayError)
       case Beat.Finished(CallResult.Fault(fault)) =>
         val text = FaultText.show(fault.diagnose)
         if text.isEmpty then ZIO.unit else sayError(text)
@@ -1801,21 +1808,25 @@ object Cli:
       repo: Path,
       run: Say => ZIO[R, ServerError, Unit],
   ): URIO[R & Stdio, Completed] =
-    Ref.make(Chunk.empty[Feed]).zip(ZIO.environment[Stdio]).flatMap { (feeds, io) =>
-      run(speaking(repo, feeds, io)).foldCauseZIO(
-        cause =>
-          if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Failed, "", "", Playback.Heard))
-          else
-            cause.failureOrCause match
-              case Left(error) =>
-                ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
-              case Right(rest) => ZIO.failCause(rest),
-        _ =>
-          feeds.get.flatMap: chunk =>
-            val done = completed(repo, chunk)
-            if finished(chunk) then ZIO.succeed(done)
-            else sayError("the call did not finish").as(done),
-      )
+    Ref.make(Chunk.empty[Feed]).flatMap { feeds =>
+      Ref.make(0).flatMap { column =>
+        ZIO.environment[Stdio].flatMap { io =>
+          run(speaking(repo, feeds, column, io)).foldCauseZIO(
+            cause =>
+              if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Failed, "", "", Playback.Heard))
+              else
+                cause.failureOrCause match
+                  case Left(error) =>
+                    ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
+                  case Right(rest) => ZIO.failCause(rest),
+            _ =>
+              feeds.get.flatMap: chunk =>
+                val done = completed(repo, chunk)
+                if finished(chunk) then ZIO.succeed(done)
+                else sayError("the call did not finish").as(done),
+          )
+        }
+      }
     }
 
   private def finished(feeds: Chunk[Feed]): Boolean =
@@ -1826,10 +1837,15 @@ object Cli:
   /** Print, then append, so the line is on the console before the next message. A fault is printed here and marked
     * heard, so finish does not print it again.
     */
-  private def speaking(repo: Path, feeds: Ref[Chunk[Feed]], io: ZEnvironment[Stdio]): Say =
+  private def speaking(
+      repo: Path,
+      feeds: Ref[Chunk[Feed]],
+      column: Ref[Int],
+      io: ZEnvironment[Stdio],
+  ): Say =
     new Say({
       case Message.Event(event) =>
-        CompileConsole.show(Show(repo, event), say, sayError).provideEnvironment(io) *>
+        Show.follow(repo, column, event, say, sayError).provideEnvironment(io) *>
           feeds.update(_ :+ Feed.Event(event))
       case Message.Done(CallResult.Fault(fault)) =>
         val text  = FaultText.show(fault.diagnose)
@@ -2018,10 +2034,10 @@ object Cli:
       socket: java.nio.file.Path,
       call: Call,
   ): ZIO[Stdio, ServerError, Completed] =
-    zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
+    zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(Ref.make(0)).flatMap { (result, column) =>
       Build.attached(socket).perform(call).foreach {
         case Beat.Heard(event) =>
-          CompileConsole.show(Show(repo, event), say, sayError)
+          Show.follow(repo, column, event, say, sayError)
         case Beat.Finished(done) =>
           val finished = done match
             case CallResult.Reported(_) =>

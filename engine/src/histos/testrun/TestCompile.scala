@@ -35,6 +35,7 @@ import histos.zinc.{
   CompileError,
   CompileFacts,
   CompileProblem,
+  CompilePulse,
   CompileRequest,
   CompileToolchain,
   CompiledCell,
@@ -269,6 +270,7 @@ private[histos] object TestCompile:
       hear: CompileProblem => Unit,
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
     ModuleTestError,
@@ -305,6 +307,7 @@ private[histos] object TestCompile:
         native,
         SemanticDb.argv(repo, cell.version),
         hear,
+        onPulse,
       )
       _ <- onCompiled(facts)
       _ <- restoreMeasured(coverage, held, module.name, cell.version)
@@ -392,6 +395,7 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
   ): ZIO[
     LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
     ModuleTestError,
@@ -408,9 +412,12 @@ private[histos] object TestCompile:
         ZIO
           .fromEither(CellPlatform.of(module, request.toolchain.platform, tools.catalog, native))
           .flatMap:
-            case CellPlatform.Jvm            => keep(JvmCompile.compilePooled(request, extra, hear, ZIO.unit))
-            case js: CellPlatform.Js         => keep(ScalaJs.compile(request, js, extra, hear))
-            case native: CellPlatform.Native => keep(NativeCompile.compile(request, native, extra, hear))
+            case CellPlatform.Jvm =>
+              keep(JvmCompile.compilePooled(request, extra, hear, ZIO.unit, onPulse))
+            case js: CellPlatform.Js =>
+              keep(ScalaJs.compile(request, js, extra, hear, onPulse))
+            case native: CellPlatform.Native =>
+              keep(NativeCompile.compile(request, native, extra, hear, onPulse))
       compiled
         .mapBoth(
           error =>

@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.cli.Lines
 import histos.{Platform, ProjectName, ScalaVersion}
 
 /** One named compile input. The token is what a miss prints. */
@@ -47,8 +48,9 @@ object KeyMiss:
       version: ScalaVersion,
       platform: Platform,
       change: KeyMiss,
+      column: Int = 0,
   ): String =
-    val id = s"${module.value} ${version.value} ${platform.token}"
+    val id = Lines.begin(module, version, platform, column)
     change match
       case KeyMiss.NoPrior        => s"$id no prior key"
       case KeyMiss.Changed(Nil)   => id

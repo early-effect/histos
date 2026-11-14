@@ -7,7 +7,7 @@ import histos.cli.{CompileConsole, Show}
 
 import java.nio.file.Path
 
-import zio.{UIO, ZIO}
+import zio.{Ref, UIO, ZIO}
 import zio.json.*
 import zio.json.ast.Json
 import histos.report.WireJson.given JsonCodec[BuildEvent]
@@ -44,9 +44,9 @@ object Notice:
 
   def err(text: String): UIO[Unit] = line(Level.Error, text)
 
-  /** The rendered line, when it is not empty, then the event itself. */
-  def show(repo: Path, event: BuildEvent): UIO[Unit] =
-    CompileConsole.show(Show(repo, event), out, err) *> eventNote(event)
+  /** The rendered line, when it is not empty, then the event itself. A layout only updates `column`. */
+  def show(repo: Path, column: Ref[Int], event: BuildEvent): UIO[Unit] =
+    Show.follow(repo, column, event, out, err) *> eventNote(event)
 
   private def line(level: Level, text: String): UIO[Unit] =
     if text.isEmpty then ZIO.unit

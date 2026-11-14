@@ -26,6 +26,7 @@ import xsbti.compile.{
   AuxiliaryClassFiles,
   CompileAnalysis,
   CompileOrder,
+  CompileProgress,
   IncOptions,
   PerClasspathEntryLookup,
   PreviousResult,
@@ -173,13 +174,14 @@ object JvmCompile:
       request: CompileRequest,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[LockedTools, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else
       CompileReplay.isolated(
-        compilePrepared(request, CellPlatform.Jvm, Nil, extra, hear)
+        compilePrepared(request, CellPlatform.Jvm, Nil, extra, hear, onPulse)
           .provideSomeLayer[LockedTools & ContentStore & CompilerStarts](RemoteCache.off)
       )
 
@@ -189,6 +191,7 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
@@ -196,7 +199,7 @@ object JvmCompile:
     else if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
     else
       ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
-        invoke(request, CellPlatform.Jvm, extra, hear, None, admitted)
+        invoke(request, CellPlatform.Jvm, extra, hear, None, admitted, onPulse)
 
   /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the
     * compiler thread for each diagnostic.
@@ -207,8 +210,9 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[LockedTools & ContentStore & CompilerStarts & RemoteCache, CompileError, CompileOutput] =
-    ZIO.scoped(prepared(request, platform, plugins, extra, hear).provideSomeLayer(Compilers.live(1)))
+    ZIO.scoped(prepared(request, platform, plugins, extra, hear, onPulse).provideSomeLayer(Compilers.live(1)))
 
   private def prepared(
       request: CompileRequest,
@@ -216,10 +220,11 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, None, ZIO.unit))
+       else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, None, ZIO.unit, onPulse))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -355,12 +360,13 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => (),
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned(request)) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-         else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, Some(stdlib), ZIO.unit))
+         else invoke(request, platform, plugins.map(pluginArg) ++ extra, hear, Some(stdlib), ZIO.unit, onPulse))
 
   /** The key is [[CellTools.compile]]'s, the one recall checks. The request the compiler sees is that key's request. */
   private def invoke(
@@ -370,10 +376,11 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     hashSources(request.checkout, request.sources)
       .flatMap(digest => CellTools.compile(platform, request, digest))
-      .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted))
+      .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted, onPulse))
 
   private def drive(
       cell: CellTools,
@@ -382,6 +389,7 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val request = keyed.request
     val version = request.toolchain.version
@@ -405,6 +413,7 @@ object JvmCompile:
               keyed.rows,
               keyed.key,
               admitted,
+              onPulse,
             )
       case SeriesTools.Scala213(semanticdb) =>
         for
@@ -426,6 +435,7 @@ object JvmCompile:
             keyed.rows,
             keyed.key,
             admitted,
+            onPulse,
           )
         yield compiled
 
@@ -441,6 +451,7 @@ object JvmCompile:
       rows: List[CompileRow],
       key: Sha256,
       admitted: UIO[Unit],
+      onPulse: CompilePulse => Unit,
   ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     for
       store  <- ZIO.service[ContentStore]
@@ -454,7 +465,9 @@ object JvmCompile:
           for
             change  <- CompileInputs.explain(store, request.analysis, rows)
             written <- CompilerStarts.tick *>
-              ZIO.serviceWithZIO[Compilers](_.compile(request, artifacts, extra, hear, key, admitted))
+              ZIO.serviceWithZIO[Compilers](
+                _.compile(request, artifacts, extra, hear, onPulse, key, admitted)
+              )
             keep <- stable(request, rows)
             _    <- ZIO.when(keep)(
               CompileReplay.save(store, written.key, request) *>
@@ -485,10 +498,18 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       key: Sha256,
       known: Map[Path, Remembered],
+      onPulse: CompilePulse => Unit,
   ): Either[CompileError, (CompileOutput, Option[Remembered])] =
-    val zinc        = new IncrementalCompilerImpl
-    val converter   = MappedFileConverter.empty
-    val reporter    = CollectingReporter(hear)
+    val zinc      = new IncrementalCompilerImpl
+    val converter = MappedFileConverter.empty
+    val reporter  = CollectingReporter(hear)
+    val watching  = CellPulse(request.checkout, onPulse)
+    val progress  = new CompileProgress:
+      override def startUnit(phase: String, unitPath: String): Unit =
+        watching.start(phase, unitPath)
+
+      override def advance(current: Int, total: Int, prevPhase: String, nextPhase: String): Boolean =
+        true
     val ownClasses  = request.classes.toAbsolutePath.normalize
     val ownAnalysis = request.analysis.toAbsolutePath.normalize
     val lookup      = new PerClasspathEntryLookup:
@@ -505,7 +526,7 @@ object JvmCompile:
       prepared.cache,
       IncOptions.of().withAuxiliaryClassFiles(Array(ProductSiblings)),
       reporter,
-      None,
+      Some(progress),
       None,
       Array(new xsbti.T2[String, String]:
         def get1(): String = "histos.toolchain"
@@ -572,6 +593,7 @@ object JvmCompile:
     catch
       case _: xsbti.CompileFailed =>
         Left(CompileError.Failed(reporter.diagnostics))
+  end once
 
   /** Analysis of a `.histos/classes` classpath entry. A directory stamp does not change when a class file inside it
     * does, so the analysis is how a public descriptor change invalidates this compile. This compile's own classes

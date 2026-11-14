@@ -24,6 +24,7 @@ import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
   CompileProblem,
+  CompilePulse,
   CompileRequest,
   CompileToolchain,
   CompiledCell,
@@ -71,6 +72,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -95,6 +97,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         hear,
         onCompiled = noted,
+        onPulse = onPulse,
       )
       classes = TestCompile.testClasses(
         repo,
@@ -173,6 +176,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -247,6 +251,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         hear,
         onCompiled = noted,
+        onPulse = onPulse,
       )
       stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <-
@@ -287,6 +292,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -312,6 +318,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         hear,
         onCompiled = noted,
+        onPulse = onPulse,
       )
       classes = TestCompile.testClasses(
         repo,
@@ -387,6 +394,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -494,6 +502,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         hear,
         onCompiled = noted,
+        onPulse = onPulse,
       )
       stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
       stream <-
@@ -766,6 +775,7 @@ private[testrun] object SuiteLaunch:
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -788,6 +798,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         hear,
         onCompiled = noted,
+        onPulse = onPulse,
         coverage = coverage,
       )
       classes = TestCompile.testClasses(
@@ -847,6 +858,7 @@ private[testrun] object SuiteLaunch:
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -915,6 +927,7 @@ private[testrun] object SuiteLaunch:
             repositories,
             hear,
             onCompiled = noted,
+            onPulse = onPulse,
             coverage = coverage,
           )
           stamp <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)

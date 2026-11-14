@@ -5,6 +5,7 @@ import histos.zinc.{
   CompileError,
   CompileOutput,
   CompileProblem,
+  CompilePulse,
   CompileRequest,
   JsLibraryMiss,
   JvmCompile,
@@ -47,6 +48,7 @@ object ScalaJs:
       js: CellPlatform.Js,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -59,7 +61,7 @@ object ScalaJs:
       ScalaSeries.of(request.toolchain.version) match
         case Some(ScalaSeries.Scala3) =>
           library(request.toolchain.version, Some(js.revision)).flatMap: stdlib =>
-            JvmCompile.compileWith(request, js, stdlib, Nil, List("-scalajs") ++ extra, hear)
+            JvmCompile.compileWith(request, js, stdlib, Nil, List("-scalajs") ++ extra, hear, onPulse)
         case _ =>
           ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
 

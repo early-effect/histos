@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.report.{Diagnostic, ModuleTally, Observation, Tally}
-import histos.zinc.{CompileFacts, CompileFeed, KeyMiss, SourceCount}
+import histos.zinc.{CompileFacts, CompileFeed, CompilePulse, KeyMiss, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -15,14 +15,16 @@ object CompileConsole:
     case Out(text: String)
     case Err(text: String)
 
-  def lines(repo: Path, feed: CompileFeed): Chunk[Line] =
+  def lines(repo: Path, feed: CompileFeed, column: Int = 0): Chunk[Line] =
     feed match
       case CompileFeed.Began(module, version, platform) =>
-        Chunk(Line.Out(Lines.compiling(module, version, platform)))
+        Chunk(Line.Out(Lines.compiling(module, version, platform, column)))
       case CompileFeed.Diagnostic(module, version, platform, problem) =>
-        Chunk(Line.Err(Lines.cell(module, version, platform, Lines.diagnostic(repo, problem))))
+        Chunk(Line.Err(Lines.cell(module, version, platform, Lines.diagnostic(repo, problem), column)))
       case CompileFeed.Miss(module, version, platform, change) =>
-        Chunk(Line.Out(KeyMiss.line(module, version, platform, change)))
+        Chunk(Line.Out(KeyMiss.line(module, version, platform, change, column)))
+      case CompileFeed.Pulse(module, version, platform, pulse) =>
+        Chunk(Line.Out(Lines.cell(module, version, platform, pulseText(pulse), column)))
       case CompileFeed.Done(cell) =>
         Lines
           .outcome(
@@ -32,16 +34,17 @@ object CompileConsole:
             cell.changed,
             cell.sources,
             cell.classesWritten,
+            column,
           )
           .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
       case CompileFeed.Failed(error) =>
         Chunk(Line.Err(error.message))
 
-  def open(repo: Path): UIO[Session] =
-    Ref.make(Counts.empty).map(counts => new Session(repo, counts))
+  def open(repo: Path, column: Int = 0): UIO[Session] =
+    Ref.make(Counts.empty).map(counts => new Session(repo, counts, column))
 
-  def notes: UIO[Notes] =
-    Ref.make(Counts.empty).map(counts => new Notes(counts))
+  def notes(column: Int = 0): UIO[Notes] =
+    Ref.make(Counts.empty).map(counts => new Notes(counts, column))
 
   def show[R, E](
       lines: Chunk[Line],
@@ -52,13 +55,15 @@ object CompileConsole:
       case Line.Out(text) => out(text)
       case Line.Err(text) => err(text)
 
-  final class Session private[CompileConsole] (repo: Path, counts: Ref[Counts]):
+  final class Session private[CompileConsole] (repo: Path, counts: Ref[Counts], column: Int):
     def hear(feed: CompileFeed): UIO[Chunk[Line]] =
-      val shown = lines(repo, feed)
+      val shown = lines(repo, feed, column)
       feed match
         case CompileFeed.Began(_, _, _) =>
           ZIO.succeed(shown)
         case CompileFeed.Miss(_, _, _, _) =>
+          ZIO.succeed(shown)
+        case CompileFeed.Pulse(_, _, _, _) =>
           ZIO.succeed(shown)
         case CompileFeed.Diagnostic(_, _, _, problem) =>
           val (found, _) = Lines.heard(repo, problem)
@@ -96,7 +101,7 @@ object CompileConsole:
   end Session
 
   /** Test compiles. The same ref, read when the test run ends. */
-  final class Notes private[CompileConsole] (counts: Ref[Counts]):
+  final class Notes private[CompileConsole] (counts: Ref[Counts], column: Int):
     def apply(
         module: ProjectName,
         version: ScalaVersion,
@@ -121,6 +126,7 @@ object CompileConsole:
             facts.changed,
             facts.sources,
             facts.classesWritten,
+            column,
           )
         )
 
@@ -224,6 +230,12 @@ object CompileConsole:
           )
         )
   end Counts
+
+  private def pulseText(pulse: CompilePulse): String =
+    pulse match
+      case CompilePulse.Phase(name, Some(source)) => s"$name  $source"
+      case CompilePulse.Phase(name, None)         => name
+      case CompilePulse.Source(phase, path)       => s"$phase  $path"
 
   private def addFiles(sum: Files, sources: Option[SourceCount]): Files =
     (sum, sources) match

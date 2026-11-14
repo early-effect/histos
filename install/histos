@@ -525,6 +525,52 @@ client_mode() {
   if ci_set; then mode=no; fi
   printf '%s' "$mode"
 }
+# Reap the linker before joining the dot loop. kill -0 stays true until it is reaped.
+link_client() {
+  if ci_set; then return 1; fi
+  if [ -t 2 ]; then
+    link_client_dots "$1"
+  else
+    link_client_plain "$1"
+  fi
+}
+link_client_plain() {
+  jar=$1
+  printf '%s\n' "Linking the native client." >&2
+  link_status=0
+  "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client || link_status=$?
+  if [ "$link_status" -eq 0 ]; then
+    printf '%s\n' "Linked the native client." >&2
+  fi
+  return "$link_status"
+}
+link_client_dots() {
+  jar=$1
+  link_log=$(mktemp)
+  printf '%s' "Linking the native client" >&2
+  "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client >"$link_log" 2>&1 &
+  link_pid=$!
+  (
+    while kill -0 "$link_pid" 2>/dev/null; do
+      printf '.' >&2
+      sleep 1
+    done
+  ) &
+  link_dots=$!
+  trap 'kill "$link_pid" "$link_dots" 2>/dev/null || true; wait "$link_pid" 2>/dev/null || true; wait "$link_dots" 2>/dev/null || true; rm -f "$link_log"; trap - INT TERM; exit 130' INT TERM
+  link_status=0
+  wait "$link_pid" || link_status=$?
+  wait "$link_dots" 2>/dev/null || true
+  trap - INT TERM
+  printf '\n' >&2
+  if [ "$link_status" -eq 0 ]; then
+    printf '%s\n' "Linked the native client." >&2
+  else
+    cat "$link_log" >&2
+  fi
+  rm -f "$link_log"
+  return "$link_status"
+}
 # Ask once per jar sha, from install and update only. A decline is remembered. CI never links.
 offer_client() {
   dir=$1
@@ -559,7 +605,7 @@ offer_client() {
     fi
   fi
   check_java
-  if "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client; then
+  if link_client "$jar"; then
     printf '%s\n' "$sha" > "$dir/client.stamp"
     rm -f "$dir/client.choice"
   fi
@@ -733,7 +779,7 @@ histos help self"
         [ -f "$dir/client-kit.zip" ] || fail "no client kit in $dir"
         check_java
         jar=$dir/histos.jar
-        if "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" toolchain client; then
+        if link_client "$jar"; then
           hash_of "$jar" > "$dir/client.stamp"
           rm -f "$dir/client.choice"
           exit 0

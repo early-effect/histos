@@ -153,22 +153,24 @@ object Session:
       shown: String,
       socket: Path,
   ): ZIO[Env, TransportError, CallResult] =
-    Build
-      .attached(socket)
-      .perform(call)
-      .tap {
-        case Beat.Heard(event) => Notice.show(repo, event)
-        case Beat.Finished(_)  => ZIO.unit
-      }
-      .runCollect
-      .foldZIO(
-        {
-          case ServerError.Unreachable(_) =>
-            locally(repo, apiJar, machine, desk, call, shown)
-          case other => ZIO.fail(TransportError.Remote(other))
-        },
-        beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
-      )
+    Ref.make(0).flatMap { column =>
+      Build
+        .attached(socket)
+        .perform(call)
+        .tap {
+          case Beat.Heard(event) => Notice.show(repo, column, event)
+          case Beat.Finished(_)  => ZIO.unit
+        }
+        .runCollect
+        .foldZIO(
+          {
+            case ServerError.Unreachable(_) =>
+              locally(repo, apiJar, machine, desk, call, shown)
+            case other => ZIO.fail(TransportError.Remote(other))
+          },
+          beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
+        )
+    }
 
   /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */
   def deliver[R](call: ZIO[R, TransportError, CallResult]): ZIO[R, CallProblem, Report] =
@@ -229,23 +231,25 @@ object Session:
       call: Call,
       shown: String,
   ): ZIO[Env, TransportError, CallResult] =
-    val build =
-      Build.here[Env](
-        repo,
-        apiJar,
-        machine,
-        desk.runs,
-        track = true,
-        shown,
-        prepared(repo, apiJar, desk, _),
-        sessionEdges(repo, apiJar, machine, desk),
-        {
-          case Beat.Heard(event) => Notice.show(repo, event)
-          case Beat.Finished(_)  => ZIO.unit
-        },
-      )
-    build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
-      ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList))
+    Ref.make(0).flatMap { column =>
+      val build =
+        Build.here[Env](
+          repo,
+          apiJar,
+          machine,
+          desk.runs,
+          track = true,
+          shown,
+          prepared(repo, apiJar, desk, _),
+          sessionEdges(repo, apiJar, machine, desk),
+          {
+            case Beat.Heard(event) => Notice.show(repo, column, event)
+            case Beat.Finished(_)  => ZIO.unit
+          },
+        )
+      build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
+        ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList))
+      }
     }
 
   private def mergeLines(have: Chunk[String], more: Chunk[String]): Chunk[String] =

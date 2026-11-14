@@ -14,8 +14,9 @@ object Lines:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
+      column: Int = 0,
   ): String =
-    s"compiling ${module.value} ${version.value} ${token(platform)}"
+    cell(module, version, platform, "compiling", column)
 
   /** Unchanged names the reason. A changed cell prints only counts it has. */
   def outcome(
@@ -25,8 +26,9 @@ object Lines:
       changed: Boolean,
       sources: Option[SourceCount],
       classesWritten: Option[Int],
+      column: Int = 0,
   ): Option[String] =
-    val id     = s"${module.value} ${version.value} ${token(platform)}"
+    val id     = s"${named(module, column)} ${version.value} ${token(platform)}"
     val detail = counts(sources, classesWritten)
     if changed then detail.map(text => s"$id $text")
     else
@@ -44,8 +46,9 @@ object Lines:
       changed: Boolean,
       sources: Option[SourceCount],
       classesWritten: Option[Int],
+      column: Int = 0,
   ): String =
-    val id     = s"${module.value} ${version.value} ${token(platform)} test"
+    val id     = s"${named(module, column)} ${version.value} ${token(platform)} test"
     val detail = counts(sources, classesWritten)
     if changed then
       detail match
@@ -150,8 +153,9 @@ object Lines:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
+      column: Int = 0,
   ): String =
-    s"${module.value} ${version.value} ${token(platform)}"
+    s"${named(module, column)} ${version.value} ${token(platform)}"
 
   /** The cell, then the text. An empty text is just the cell.
     */
@@ -160,8 +164,9 @@ object Lines:
       version: ScalaVersion,
       platform: Platform,
       text: String,
+      column: Int = 0,
   ): String =
-    val id = begin(module, version, platform)
+    val id = begin(module, version, platform, column)
     if text.isEmpty then id else s"$id $text"
 
   /** Suite counts. Absent when this run did not test.
@@ -170,16 +175,23 @@ object Lines:
     if passed + failed + cached + modules == 0 then None
     else Some(s"tests passed: $passed failed: $failed cached: $cached modules: $modules")
 
-  def tested(cell: TestedCell): String =
-    s"${cell.module.value} ${cell.version.value} ${token(cell.platform)} ${cell.status.label}"
+  def tested(cell: TestedCell, column: Int = 0): String =
+    s"${named(cell.module, column)} ${cell.version.value} ${token(cell.platform)} ${cell.status.label}"
 
   def cached(
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
       suite: String,
+      column: Int = 0,
   ): String =
-    s"${module.value} ${version.value} ${token(platform)} $suite cached"
+    s"${named(module, column)} ${version.value} ${token(platform)} $suite cached"
+
+  /** `column` of 0 leaves the name as it is. A wider column pads on the right. */
+  private def named(name: ProjectName, column: Int): String =
+    val raw   = name.value
+    val extra = column - raw.length
+    if extra > 0 then raw + (" " * extra) else raw
 
   private def token(platform: Platform): String =
     platform match

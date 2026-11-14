@@ -1,6 +1,6 @@
 package histos.native
 
-import histos.zinc.{CellPlatform, CompileError, CompileOutput, CompileProblem, CompileRequest, JvmCompile}
+import histos.zinc.{CellPlatform, CompileError, CompileOutput, CompileProblem, CompilePulse, CompileRequest, JvmCompile}
 import histos.Platform
 import histos.resolve.LockedTools
 
@@ -17,6 +17,7 @@ object NativeCompile:
       native: CellPlatform.Native,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
+      onPulse: CompilePulse => Unit = _ => (),
   ): ZIO[
     LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.schedule.RemoteCache,
     CompileError,
@@ -39,5 +40,6 @@ object NativeCompile:
           List(libs.plugin),
           extra,
           hear,
+          onPulse,
         )
       yield compiled

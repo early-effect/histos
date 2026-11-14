@@ -154,6 +154,7 @@ import histos.zinc.{
   CompileError,
   CompileFeed,
   CompileInput,
+  CompilePulse,
   CompileProblem,
   CompileSeverity,
   CompiledCell,
@@ -645,6 +646,7 @@ private object WireEvent extends WireSupport:
   given JsonCodec[CompiledCell]    = JsonCodec.derived
   given JsonCodec[CompileInput]    = JsonCodec.derived
   given JsonCodec[KeyMiss]         = JsonCodec.derived
+  given JsonCodec[CompilePulse]    = JsonCodec.derived
   given JsonCodec[CompileFeed]     = JsonCodec.derived
   given JsonCodec[TestFeed]        = JsonCodec.derived
   given JsonCodec[BuildEvent]      = JsonCodec.derived

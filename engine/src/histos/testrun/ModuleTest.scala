@@ -23,6 +23,7 @@ import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
   CompileProblem,
+  CompilePulse,
   CompileRequest,
   CompileToolchain,
   CompiledCell,
@@ -189,7 +190,9 @@ object ModuleTest:
         else
           ZStream
             .fromIterable(cells)
-            .flatMapPar(Parallelism.default.process)(cell => cellStream(asked, cell, lock, matched, _ => ())) ++ gate
+            .flatMapPar(Parallelism.default.process)(cell =>
+              cellStream(asked, cell, lock, matched, _ => (), _ => ())
+            ) ++ gate
 
   /** Compile feeds, and a test cell as soon as its own compile is done. At most `process` tests run at once.
     */
@@ -327,12 +330,18 @@ object ModuleTest:
               histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
             )
           )
+        val pulse = (step: CompilePulse) =>
+          offer(
+            SessionFeed.Compile(
+              histos.zinc.CompileFeed.Pulse(cell.module, cell.version, cell.platform, step)
+            )
+          )
         def stop(cause: Option[zio.Cause[ModuleTestError]]): UIO[Unit] =
           val ended = cause match
             case Some(found) => ZIO.failCause(found.map(Some(_)))
             case None        => ZIO.fail(None)
           ZIO.attemptBlockingInterrupt(emit(ended)).orDie
-        cellStream(asked, cell, lock, matched, hear)
+        cellStream(asked, cell, lock, matched, hear, pulse)
           .runForeach(item => ZIO.attemptBlockingInterrupt(offer(SessionFeed.Test(item))).orDie)
           .foldCauseZIO(
             cause => stop(Some(cause)),
@@ -349,6 +358,7 @@ object ModuleTest:
       lock: DependencyLock,
       matched: Ref[Boolean],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
   ): ZStream[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -371,6 +381,7 @@ object ModuleTest:
         onTestCompile,
         coverage,
         hear,
+        onPulse,
       ).map(stream => watch(matched, stream))
     )
 
@@ -423,6 +434,7 @@ object ModuleTest:
       ) => UIO[Unit],
       coverage: Option[histos.coverage.CoverageCompile],
       hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
       histos.schedule.RemoteCache,
@@ -472,6 +484,7 @@ object ModuleTest:
                         note,
                         coverage,
                         hear,
+                        onPulse,
                       )
                     case Platform.Js =>
                       SuiteLaunch.runJs(
@@ -488,6 +501,7 @@ object ModuleTest:
                         mode,
                         note,
                         hear,
+                        onPulse,
                       )
                     case Platform.Native =>
                       SuiteLaunch.runNative(
@@ -504,6 +518,7 @@ object ModuleTest:
                         mode,
                         note,
                         hear,
+                        onPulse,
                       )
               case (_, None, provider) =>
                 val framework = provider.getOrElse(TestProvider.Zio)
@@ -532,6 +547,7 @@ object ModuleTest:
                       note,
                       coverage,
                       hear,
+                      onPulse,
                     )
                   case Platform.Js =>
                     SuiteLaunch.runJsProvider(
@@ -549,6 +565,7 @@ object ModuleTest:
                       mode,
                       note,
                       hear,
+                      onPulse,
                     )
                   case Platform.Native =>
                     SuiteLaunch.runNativeProvider(
@@ -566,6 +583,7 @@ object ModuleTest:
                       mode,
                       note,
                       hear,
+                      onPulse,
                     )
             val executes = sources.nonEmpty && (module.test match
               case Some(main) => SuiteMatch.allows(patterns, main.value)

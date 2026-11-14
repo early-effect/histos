@@ -625,10 +625,11 @@ object Bsp:
                         mainUri(repo, module.value, version, chosen),
                         problem,
                       )
-                    case histos.zinc.CompileFeed.Began(_, _, _)   => ZIO.unit
-                    case histos.zinc.CompileFeed.Miss(_, _, _, _) => ZIO.unit
-                    case histos.zinc.CompileFeed.Done(_)          => ZIO.unit
-                    case histos.zinc.CompileFeed.Failed(_)        => failed.set(true)
+                    case histos.zinc.CompileFeed.Began(_, _, _)    => ZIO.unit
+                    case histos.zinc.CompileFeed.Miss(_, _, _, _)  => ZIO.unit
+                    case histos.zinc.CompileFeed.Pulse(_, _, _, _) => ZIO.unit
+                    case histos.zinc.CompileFeed.Done(_)           => ZIO.unit
+                    case histos.zinc.CompileFeed.Failed(_)         => failed.set(true)
                   } *> failed.get
             }
           ran.either.flatMap {
