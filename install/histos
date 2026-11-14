@@ -5,6 +5,28 @@
 set -eu
 version=shim
 fail() { echo "histos: $*" >&2; exit 1; }
+# selected is the pin this command resolved. local_id is the id in .histos/toolchain, or empty.
+# update runs selected. Any other command runs local_id when it is set.
+driver_id() {
+  command_name=$1
+  selected=$2
+  local_id=$3
+  case $command_name in
+    update) printf '%s' "$selected" ;;
+    *)
+      if [ -n "$local_id" ]; then printf '%s' "$local_id"
+      else printf '%s' "$selected"
+      fi
+      ;;
+  esac
+}
+# Dry run of driver_id. No JDK, no fetch, no install.
+if [ "${1:-}" = --driver-id ]; then
+  [ "$#" -eq 4 ] || fail "usage: histos --driver-id <command> <selected> <local>"
+  driver_id "$2" "$3" "$4"
+  printf '\n'
+  exit 0
+fi
 hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -682,12 +704,15 @@ histos help self"
         [ "$#" -eq 0 ] || fail "usage: histos toolchain client"
         ci_set && fail "CI uses the jar and does not build a native client"
         repo=$(find_repo || true)
-        if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then
-          case $id in
-            ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
+        local_id=
+        if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then local_id=$id; fi
+        picked=$(driver_id client "" "$local_id")
+        if [ -n "$picked" ]; then
+          case $picked in
+            .*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
           esac
-          dir=$home/toolchains/$id
-          [ -f "$dir/histos.jar" ] || fail "local toolchain $id is not installed"
+          dir=$home/toolchains/$picked
+          [ -f "$dir/histos.jar" ] || fail "local toolchain $picked is not installed"
         else
           if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
             selected=$(resolve_channel "$pin")
@@ -765,17 +790,11 @@ histos help toolchain" ;;
       exit 0
     fi
     selected=$(resolve_channel "$next")
-    ensure_toolchain "$selected"
-    version=$selected
-    jar=$home/toolchains/$selected/histos.jar
-    if id=$(read_toolchain "$repo"); then
-      case $id in
-        ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
-      esac
-      jar=$home/toolchains/$id/histos.jar
-      [ -f "$jar" ] || fail "local toolchain $id is not installed"
-      version=$id
-    fi
+    local_id=
+    if id=$(read_toolchain "$repo"); then local_id=$id; fi
+    version=$(driver_id update "$selected" "$local_id")
+    ensure_toolchain "$version"
+    jar=$home/toolchains/$version/histos.jar
     offer_client "$(dirname "$jar")" "$client_flag"
     # The previous record is gone before version runs, so the new driver does not talk to that server.
     retire_server "$repo"
@@ -783,13 +802,17 @@ histos help toolchain" ;;
     ;;
 esac
 repo=$(find_repo || true)
-if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then
-  case $id in
-    ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
+local_id=
+if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then local_id=$id; fi
+# An empty result means this command does not keep a local toolchain, so the pin is resolved below.
+picked=$(driver_id "${1:-}" "" "$local_id")
+if [ -n "$picked" ]; then
+  case $picked in
+    .*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
   esac
-  jar=$home/toolchains/$id/histos.jar
-  [ -f "$jar" ] || fail "local toolchain $id is not installed"
-  version=$id
+  jar=$home/toolchains/$picked/histos.jar
+  [ -f "$jar" ] || fail "local toolchain $picked is not installed"
+  version=$picked
   exec_jar "$jar" "$repo" "$@"
 fi
 if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
