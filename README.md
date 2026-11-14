@@ -226,7 +226,7 @@ The default layer is `Sona.layer(ReleaseMode.Automatic)`, which publishes and wa
 
 `histos publish assets` uploads the file an assembly names when its deployment is `VALIDATED` or `PUBLISHED` and the GitHub release for that tag exists. It needs `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
 
-`histos bump [--major | --minor | --patch] [ship ...]` moves `.next` past the newest stable version Coursier lists, when that stable has caught `.next`. The default is the next patch. It does not change the pin. `doctor` warns `ship.should-bump` when the number is already released and `ship.pin` when the pin trails a published Histos release.
+`histos bump [--major | --minor | --patch] [ship ...]` refreshes published version metadata on every invocation. A Maven stable wins over ivy2 local. It moves `.next` past that stable only when the stable has caught `.next`; an ahead catalog stays unchanged. A failed refresh cannot reuse stale cached metadata as a remote answer. The default is the next patch. It does not change the pin. `doctor` warns `ship.should-bump` when the number is already released and `ship.pin` when the pin trails a published Histos release.
 
 ## Editors
 

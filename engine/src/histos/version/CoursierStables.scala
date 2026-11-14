@@ -7,14 +7,26 @@ import histos.Resolver
 import zio.{IO, ZIO}
 
 /** `coursier.Versions` lists each repository beside the versions it found. Ivy2 local is always asked. A maven
-  * repository is asked only when this build resolves from it. An empty resolver list is Central.
+  * repository is asked only when this build resolves from it. An empty resolver list is Central. Metadata is downloaded
+  * on every lookup; a failed refresh cannot answer with stale cached metadata.
   *
   * `eitherResult` blocks on Coursier's `Task`, which is a `Future`. The failure becomes [[BumpFault]] here.
   */
 object CoursierStables:
   def list(module: MavenModule, resolvers: List[Resolver]): IO[BumpFault, List[ListedStable]] =
+    list(
+      module,
+      coursier.cache.FileCache().withLocation(coursier.cache.CacheDefaults.location.toString),
+      repositories(resolvers),
+    )
+
+  private[version] def list(
+      module: MavenModule,
+      cache: => coursier.cache.FileCache[coursier.util.Task],
+      repositories: => Seq[coursier.core.Repository],
+  ): IO[BumpFault, List[ListedStable]] =
     ZIO
-      .attemptBlockingInterrupt(ask(module, resolvers))
+      .attemptBlockingInterrupt(ask(module, cache, repositories))
       .mapError(_ => BumpFault.Unanswered(coordinate(module)))
       .flatMap:
         case Left(_)       => ZIO.fail(BumpFault.Unanswered(coordinate(module)))
@@ -37,15 +49,17 @@ object CoursierStables:
 
   private def ask(
       module: MavenModule,
-      resolvers: List[Resolver],
+      cache: coursier.cache.FileCache[coursier.util.Task],
+      repositories: Seq[coursier.core.Repository],
   ): Either[coursier.error.CoursierError, coursier.Versions.Result] =
-    val cache = coursier.cache.FileCache().withLocation(coursier.cache.CacheDefaults.location.toString)
     coursier
-      .Versions(cache)
+      .Versions(
+        cache.copy(cachePolicies = Seq(coursier.cache.CachePolicy.ForceDownload), allowCacheSubstitution = false)
+      )
       .withModule(
         coursier.Module(coursier.Organization(module.group.value), coursier.ModuleName(module.artifact.value))
       )
-      .copy(repositories = repositories(resolvers))
+      .copy(repositories = repositories)
       .noMirrors
       .eitherResult()
 
