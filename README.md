@@ -301,7 +301,7 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 
 ## Building Histos
 
-Histos builds itself. The ship is `Ship("histos").next(0, 4, 0)(api, app).toolchain(launcher = app, client = client)`.
+Histos builds itself. The ship is `Ship("histos").next(0, 4, 1)(api, app).toolchain(launcher = app, client = client)`.
 
 `histos.version` in `build.properties` is the published Histos that CI installs. Each job runs `./histos` on that jar. `histos.scala` is compiled against the api packed inside the running jar, so a change that adds build API this file uses needs a pin that already has it. `.histos/toolchain`, written by `publish local`, wins over the pin for every command except `update`. Delete that file to return to the pin.
 
