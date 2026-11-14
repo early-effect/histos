@@ -39,7 +39,7 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
   git worktree add -b histos/<item> ~/.grok/worktrees/early-effect-histos/<item> origin/main
   ```
 
-  Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
+  Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
 - **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D21.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
@@ -112,7 +112,7 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 ### CI setup
 
 - **Generator landed. The pin has not moved.** `Projects.ciSetup(CiSetup.Remote)` is the default and renders `early-effect/histos/.github/actions/setup@<full commit of the rendering ship> # <that same commit>`. The comment is that commit, because the pin scan requires one and this action has no release tag. `CiSetup.Wrapper` renders pinned `actions/cache` steps and then the job's `./histos`, with no Histos action. `origin-head` is the inline step `git remote set-head origin --auto`. `shim-<sha256>` is uploaded beside `shim` and `shim.sha256`. The bootstrap wrapper installs that pinned asset, checks the sha256, and refuses a JDK older than `Toolchain.Floor` before the fetch. `init`, `new`, and `workflow --update` write it for every build. The shim sets `HISTOS_VERSION` for `server`, `bsp`, `mcp`, and a client command. E29 and B39 close against that code.
-- **Still open.** The committed workflows and `./histos` stay the pin's render, so the checklist box stays open. D20: this pull request does not publish and does not move `histos.version`. The pin is packed from the squash commit once it is on `main`.
+- **Closed.** D20: the pin was packed from `aa4f835`, which is on `main`. Channel `0.3.0-aa4f8351e207-SNAPSHOT`, timestamp `0.3.0-aa4f8351e207-20261114.015759-1`. Manifest `jarSha256` is `c6c4d60307e8dad7b5c25e372ef04e85c70816ff912ea518111fb3948528e7c9`. The only client is `macos-aarch64`. `workflow --update` rewrote the workflows and `./histos`. `./histos workflow --check` exited 0.
 
 ## Command-line track
 
@@ -161,6 +161,6 @@ This is the sequence that worked twice. It needs Russ's yes in that session.
 4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
 5. Commit the pin on top of the layer, then stack the next layer on it.
 
-D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator lands first, with no publish and no change to `histos.version`.
+D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator landed in #201. This pin was packed from that squash.
 
-The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. That toolchain packs the launcher, links the host client, and proves the pair before it uploads. `workflow --check` compares the committed workflows and `./histos` to the jar this channel names.
+The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. That toolchain packs the launcher, links the host client, and proves the pair before it uploads. `workflow --check` compares the committed workflows and `./histos` to the jar this channel names. The setup action in those workflows is `early-effect/histos/.github/actions/setup@aa4f8351e2072ba3215f2223c4ed16015c69158e`.

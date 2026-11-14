@@ -203,7 +203,7 @@ Each bug gets a law that fails on today's code, then the fix.
   - The Dist layer already does this. The container branch was not merged. No code change.
 - [x] D20 The generator pins `early-effect/histos/.github/actions/setup` to the rendering ship's commit. A squash merge does not keep a pull-request commit on `main`. Owner: engine (`CiInstall`).
   - Russ: pin that action only to a commit already on `main`. Land the generator first. Pack the pin from the squash commit in a second pull request. The branch-only resolution check was not run.
-  - This pull request does not publish and does not change `histos.version`. The committed workflows stay the pin's render.
+  - The generator pull request did not publish. The pin is `0.3.0-aa4f8351e207-SNAPSHOT`, packed from `aa4f835` on `main`.
 
 ## Shared seams
 

@@ -25,7 +25,7 @@ Histos is pre-release. The API breaks when that makes it more honest. What we st
 
 Histos runs on macOS and Linux. On Windows, use WSL.
 
-Histos does not install a JDK, Node, or clang. It needs JDK 25 or newer. The checkout script the generator writes refuses an older JDK before it downloads the shim, and the shim refuses an older `java` with the install guide. The `./histos` committed in this repository is still the pin's script until the pin moves. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
+Histos does not install a JDK, Node, or clang. It needs JDK 25 or newer. The checkout script the generator writes refuses an older JDK before it downloads the shim, and the shim refuses an older `java` with the install guide. The `./histos` committed in this repository is that wrapper. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
 
 One POSIX script is the installer and the command:
 
@@ -190,7 +190,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 - `dependency-snapshot` submits the dependency graph on a push to the default branch.
 - Plugin jobs (`TaskJob`, `SiteJob`). Each runs one task of the plugin that contributes it.
 
-The generator installs Histos with `early-effect/histos/.github/actions/setup` at the full commit of the rendering ship. The comment on that line is the same commit. That action runs `install/histos` from the same ref. `Projects.ciSetup(CiSetup.Wrapper)` is the other choice: pinned `actions/cache` steps for `~/.histos/toolchains` and the Coursier cache, then the job's own command, and no Histos action. Jobs that read the default branch run `git remote set-head origin --auto` after checkout. The committed workflows in this repository are still the pin's render. They use `./.github/actions/setup` and `./.github/actions/origin-head` until the pin moves (see [Known gaps](#known-gaps)). Node and LLVM are installed only in jobs that need them: the test job for the modules it runs, `scaladoc` for the build's JavaScript and native modules, and `cache-seed` for every module. Playwright, and Node with it, is installed in those jobs whenever the build names a Playwright revision.
+The generator installs Histos with `early-effect/histos/.github/actions/setup` at the full commit of the rendering ship. The comment on that line is the same commit. That action runs `install/histos` from the same ref. `Projects.ciSetup(CiSetup.Wrapper)` is the other choice: pinned `actions/cache` steps for `~/.histos/toolchains` and the Coursier cache, then the job's own command, and no Histos action. Jobs that read the default branch run `git remote set-head origin --auto` after checkout. The committed workflows in this repository are that render, pinned at `aa4f835` (D20). Node and LLVM are installed only in jobs that need them: the test job for the modules it runs, `scaladoc` for the build's JavaScript and native modules, and `cache-seed` for every module. Playwright, and Node with it, is installed in those jobs whenever the build names a Playwright revision.
 
 A `SiteJob` publishes one directory. `Automatic` deploys from a `pages` job on a push to the default branch, `Manual` writes `histos-pages.yml` for a person to dispatch, and `Both` (the default) does both.
 
@@ -289,12 +289,6 @@ A file that points at a missing or too-old home fails, and Histos does not pick 
 A plugin is a service, and the layer provides it. The contract is [plugins.md](docs/plugins.md). A command name the grammar owns is reserved. `acp` is reserved and has no command.
 
 A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar.
-
-## Known gaps
-
-These are true today and tracked:
-
-- The generator renders `early-effect/histos/.github/actions/setup` at the rendering ship's full commit, with that same commit as the comment. The committed `ci.yml`, `histos-snapshots.yml`, and `histos-release.yml` are still the pin's render, which uses `./.github/actions/setup` and `./.github/actions/origin-head`, until the pin moves. Whether that `uses` line still resolves after the branch that published the commit is deleted is not proved. [cli-work-plan.md](docs/cli-work-plan.md)
 
 ## Building Histos
 
