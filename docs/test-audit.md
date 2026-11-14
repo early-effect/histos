@@ -197,6 +197,9 @@ Each bug gets a law that fails on today's code, then the fix.
   - Russ: yes, read the newest cell no newer than the module.
   - A module whose upstream has no cell at its own version, and whose candidate cells hold no TASTy yet, reads the newest declared cell no newer than itself. Before, the compile refused with `MissingUpstream`, and BSP and scaladoc read a cell at the module's own version. That happens on an editor import before the first compile, and for an upstream with no main sources. The recommendation is yes: Metals gets the classpath the first compile will use, a test-only upstream compiles, and an upstream that only declares newer cells is still `MissingUpstream`.
   - The TASTy reader, a class loader over the module's own `tasty-core`, opens only when some upstream has Scala 3 cells and none at the module's exact version. Before, the compile opened it for every Scala 3 cell with an upstream. The recommendation is yes: an exact cell never reads a header, so the reader was work the answer did not use, and BSP, scaladoc, preview, and the other B35 readers of a single-version build do not load the compiler to answer.
+- [x] D19 A Mac `publish snapshots` was going to link `linux-x86_64` by cross-compiling inside an arm64 container. Owner: engine (`DistStock`).
+  - Russ: a publish links the host only. A Mac names `macos-aarch64`. A Linux machine names `linux-x86_64`. There is no container and no cross-build. Client files already under `dist/clients` are still uploaded. A laptop therefore names the host.
+  - The Dist layer already does this. The container branch was not merged. No code change.
 
 ## Shared seams
 

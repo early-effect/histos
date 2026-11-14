@@ -21,7 +21,8 @@ These were given on 2026-11-13. They stand for every brief, and they replace the
   - `clean --full` stays the local recovery.
 - **D13, publishing.** Standing approval for `publish snapshots` from a layer's commit and for pinning that commit channel in the same pull request, by the sequence in "Pin moves". It never covers `publish release`, a tag, or `sonaRelease`.
 - **D14, merging.** The main agent merges its pull requests once CI is green on the current head and the test log has no `not advancing the test clock`. Stacks merge in order.
-- **D15, Container.** Make linux-x86_64 work from the Mac. Linux can cross-build, so prefer a cross-compile inside the arm64 container (clang targeting x86_64 against an x86_64 sysroot) over emulating the whole container. Only if that cannot work, a laptop snapshot keeps naming macOS only, and the Linux client comes from the CI publish job on a Linux runner. Record which way row 12 closed.
+- **D15, Container.** Superseded by D19. A publish does not cross-build the other platform.
+- **D19, host client.** A publish links the host only. A Mac names `macos-aarch64`. A Linux machine names `linux-x86_64`. There is no container and no cross-build. Client files already under `dist/clients` are still uploaded, which is how the workflow's macOS job feeds the Linux publish job. A laptop publish therefore names the host. Row 12 closes here. The current pin stays macOS-only, and a Linux job on it runs `java -jar`.
 - **D16, Scala Native 3.10.1.** At the start of a session, check whether a Scala Native nightly publishes both `scala3lib` and `nscplugin` for 3.10.1. If one does, move `api`, `wire`, and `client` to 3.10.1, with that nightly's `ToolCatalog` change and a pin move, as one pull request.
 - **D17, library gaps.** File one issue on heddle (server shutdown polls the clock, B11) and one on slayer (`stub` forces lambda parameter types). Draft each with its evidence, show Russ the text, and file it after his yes.
 - **D18, finished plans.** Read-through deletes a work plan whose items are all done. The README or a reference doc keeps what users need, and git history is the archive. Live plans (`cli-work-plan.md`, `cache-work-plan.md`, `scenario-work-plan.md`, `test-audit.md`, and this file) are made true at the tip.
@@ -39,7 +40,7 @@ These apply to every agent, on top of AGENTS.md and the zio-architect ethos.
 
   Copy `AGENTS.md` into the worktree. Do not link `dist/histos.jar`, and do not write `.histos/assembly.sha256` or `.histos/allow-drift`. `./histos` execs `~/.histos/bin/histos`. The shim uses `.histos/toolchain` when that file names an installed toolchain, and otherwise the channel in `build.properties`. The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. A command that must run a jar packed from the worktree is `java -jar` on that jar. `publish local` installs it and writes `.histos/toolchain`.
 - **Bugs first.** A product bug gets a law that fails on today's code, with the red output captured, then the fix, then green. Record it in [test-audit.md](test-audit.md) under "Product bugs". The next free number is B44; take the next free one when you add a row, and say so in the report.
-- **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D19.
+- **Decisions are Russ's.** A change to what the product does that "Russ's answers" do not cover is a question for Russ before it is code. Record the answer in [test-audit.md](test-audit.md) under "Decisions for Russ". The next free number is D20.
 - **No wall clock in a law.** Use TestClock, Promise gates, and effects that complete. `withLiveClock` only where real time is the subject, with a comment saying which timer needs it. No `Thread.sleep`, no polling loops, no yield counts.
 - **Format once.** Run bare `./histos fmt` after the edits (its ledger skips unchanged files), then `./histos fmt --check`. Do not format file by file.
 - **The proof for any pull request.** `./histos test api wire central engine app`, green on JVM and Native, with no `not advancing the test clock` in the output. `./histos workflow --check` and `./histos run doc` clean, because CI runs both, and the docs task fails on any scaladoc warning.
@@ -55,7 +56,7 @@ Three tracks can run side by side. Within a track, one brief at a time, because 
 | Track | Briefs, in order | Pin move |
 | --- | --- | --- |
 | Cache | Repo-relative sources, then Link cache, then Remote cache | no |
-| Toolchain | Ship row, then Dist layer, then Container, then CI setup | each one |
+| Toolchain | Ship row, then Dist layer, then CI setup | each one |
 | Command line | Grammar | only if the rendered workflow changes |
 | Small fixes | Closed. B40 closed with Link cache. B41, B42, and row 50 are closed | no |
 
@@ -105,11 +106,7 @@ Each brief here changes text the pin renders or build API the pin compiles, so e
 
 ### Container
 
-- **Goal.** A Mac links `linux-x86_64` in a container through `docker` or `podman`, held in a scope so the container is removed on interruption. The image is pinned by digest and has a JDK 25. The container gets a copy of HEAD and runs the Linux pair proof. A second main class in the launcher jar does the link, so the grammar gains no verb.
-- **Closes.** Ledger row 12: a laptop publish names only `macos-aarch64`.
-- **This machine.** Docker 29 through colima is installed, with a `linux/arm64` server.
-- **Binds.** D15: cross-compile `x86_64` from the arm64 container first (clang targeting x86_64 against an x86_64 sysroot). Emulating the whole container is the second choice. If neither works, the Linux client comes from the CI publish job, and the brief records that.
-- **Proof.** A fake runtime covers the commands it runs, cleanup on interruption, and the `ContainerError` mapping. Manual: a Mac `publish snapshots` whose manifest names both platforms, then pin it.
+- **Closed, not built.** D19: a publish links the host only. The cross-build container is dropped. A laptop names the host platform. The snapshot and release workflows still link each platform on its own runner. No pin move.
 
 ### CI setup
 
