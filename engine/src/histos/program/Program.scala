@@ -96,6 +96,26 @@ object Program:
   ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
     link(repo, graph, ClientBinary.moduleName, ClientBinary.destination(repo), jdk, runtimes, report)
 
+  /** Compile `moduleName` to NIR and zip that classpath. Does not call clang. */
+  def exportKit(
+      repo: Path,
+      graph: ProjectGraph,
+      moduleName: String,
+      destination: Path,
+      jdk: JdkRuntime,
+      runtimes: Runtimes,
+      report: CompileFeed => UIO[Unit],
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
+    for
+      ready <- prepare(repo, graph, moduleName, jdk, runtimes, report)
+      paths <- kitClasspath(repo, graph, ready)
+      major <- nativeMajor(ready.module, ready.cell.version)
+      native = ready.module.nativeVersion.getOrElse(ready.tools.catalog.native.revision)
+      written <- ClientKit
+        .write(destination, ClientKit(ready.binary, major, ready.cell.version, native, paths))
+        .mapError(error => ProgramError.Kit(error.message))
+    yield written
+
   /** Link `moduleName` and copy the binary to `destination`. Does not start it. */
   def link(
       repo: Path,
@@ -106,6 +126,37 @@ object Program:
       runtimes: Runtimes,
       report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Path] =
+    prepare(repo, graph, moduleName, jdk, runtimes, report).flatMap: ready =>
+      linkClient(
+        repo,
+        graph,
+        ready.module,
+        ready.cell,
+        ready.lock,
+        jdk,
+        ready.binary,
+        runtimes,
+        ready.store,
+        destination,
+      ).provideSomeLayer[Resolve & RemoteCache](zio.ZLayer.succeed(ready.tools))
+
+  private final case class Prepared(
+      module: Module,
+      cell: histos.zinc.CompiledCell,
+      binary: Binary,
+      lock: DependencyLock,
+      tools: LockedTools,
+      store: ContentStore,
+  )
+
+  private def prepare(
+      repo: Path,
+      graph: ProjectGraph,
+      moduleName: String,
+      jdk: JdkRuntime,
+      runtimes: Runtimes,
+      report: CompileFeed => UIO[Unit],
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, Prepared] =
     for
       module   <- ZIO.fromEither(locate(graph, moduleName))
       main     <- ZIO.fromEither(module.application.toRight(ProgramError.NoMain(module.name)))
@@ -123,12 +174,9 @@ object Program:
           report,
         )
         .mapError(ProgramError.Compile(_))
-      cells = compiled.filter(cell => cell.module == module.name && cell.platform == Platform.Native)
-      linked <- cells match
-        case cell :: Nil =>
-          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes, store, destination)
-            .provideSomeLayer[Resolve & RemoteCache](zio.ZLayer.succeed(tools))
-        case _ =>
+      cell <- compiled.filter(cell => cell.module == module.name && cell.platform == Platform.Native) match
+        case cell :: Nil => ZIO.succeed(cell)
+        case _           =>
           module.versions.all match
             case version :: _ =>
               ZIO.fail(
@@ -140,7 +188,17 @@ object Program:
                 )
               )
             case Nil => ZIO.fail(ProgramError.Absent(moduleName))
-    yield linked
+    yield Prepared(module, cell, binary, lock, tools, store)
+
+  private def kitClasspath(
+      repo: Path,
+      graph: ProjectGraph,
+      ready: Prepared,
+  ): ZIO[Resolve, ProgramError, List[Path]] =
+    val modules      = graph.projects.collect { case item: Module => item }
+    val repositories = BuildResolvers(graph.resolvers)
+    classpath(repo, modules, ready.module, ready.cell, ready.lock, repositories)
+      .provideSomeLayer[Resolve](zio.ZLayer.succeed(ready.tools))
 
   private def linkClient(
       repo: Path,

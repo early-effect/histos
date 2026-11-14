@@ -27,9 +27,10 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, ZIO}
 
 object NativeKey:
-  /** Identity of a native link. The binary path is not part of it. The clang version, target, and main class are. Each
-    * classes directory contributes its product digest, so a comment keeps the key and a method body or a path constant
-    * moves it. `products` keeps that digest from colliding with another checksum of the same hex.
+  /** Identity of a native link. The binary path is not part of it. The clang version, target, main class, and optimize
+    * flag are. An unoptimized binary is not a hit for an optimized link. Each classes directory contributes its product
+    * digest, so a comment keeps the key and a method body or a path constant moves it. `products` keeps that digest
+    * from colliding with another checksum of the same hex.
     */
   def of(
       version: ScalaVersion,
@@ -38,14 +39,16 @@ object NativeKey:
       main: MainClass,
       products: List[Sha256],
       artifacts: List[Sha256],
+      optimize: Boolean,
   ): Sha256 =
+    val mode = if optimize then "optimize" else "no-optimize"
     val text =
       s"""${version.value}
          |${clang.value}
          |${target.value}
          |${main.binary}
          |stubs
-         |no-optimize
+         |$mode
          |products
          |${products.map(_.value).mkString("\n")}
          |${artifacts.map(_.value).mkString("\n")}
@@ -87,6 +90,7 @@ final case class NativeLinkRequest(
     jdk: JdkRuntime,
     main: MainClass,
     version: ScalaVersion,
+    optimize: Boolean = false,
 )
 
 object NativeLink:
@@ -96,7 +100,7 @@ object NativeLink:
       request: NativeLinkRequest,
       sourcesRoot: Path,
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Linked] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, optimize) =
       request
     for
       view <- ZIO.service[LockedTools]
@@ -117,6 +121,7 @@ object NativeLink:
         main,
         products,
         prints,
+        optimize,
       )
       binary <- restoreOr(
         key,
@@ -129,6 +134,7 @@ object NativeLink:
           jdk,
           toolchain,
           env,
+          optimize,
         ),
       )
     yield Linked(binary, key)
@@ -139,7 +145,7 @@ object NativeLink:
       request: NativeLinkRequest,
       classpath: List[Path],
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, NativeError, Path] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, optimize) =
       request
     for
       view <- ZIO.service[LockedTools]
@@ -149,7 +155,7 @@ object NativeLink:
       clang    <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       prints   <- toolchainPrints(view, toolchain, libs)
       products <- productDigests(classpath)
-      key = NativeKey.of(version, clang.version, clang.target, main, products, prints)
+      key = NativeKey.of(version, clang.version, clang.target, main, products, prints, optimize)
       binary <- restoreOr(
         key,
         work,
@@ -161,6 +167,7 @@ object NativeLink:
           jdk,
           toolchain,
           env,
+          optimize,
         ),
       )
     yield binary
@@ -281,6 +288,7 @@ object NativeLink:
       jdk: JdkRuntime,
       toolchain: NativeToolchain,
       env: Map[String, String],
+      optimize: Boolean,
   ): ZIO[LockedTools & LinkerStarts, NativeError, Path] =
     val bridgeRoot = work.resolve("bridge").resolve(toolchain.revision.value)
     val classes    = bridgeRoot.resolve("classes")
@@ -302,6 +310,7 @@ object NativeLink:
           clang.clang,
           clang.clangpp,
           classpath,
+          optimize,
         ),
       )
       _ <- JvmCompile

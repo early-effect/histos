@@ -880,7 +880,6 @@ private[testrun] object SuiteLaunch:
               .map: work =>
                 val note =
                   ProviderNote(provider.framework.value, classes, selected)
-                // The runner is the program, so it precedes the test classes. Those classes can contain another subprocess.Provider.
                 session(
                   module.name,
                   cell.version,

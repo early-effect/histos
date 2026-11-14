@@ -326,7 +326,6 @@ object SuiteStamp:
         ,
         ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES,
       )
-    // ClassReader indexes off the end of a short class file.
     catch
       case _: IllegalArgumentException | _: IndexOutOfBoundsException | _: org.objectweb.asm.LimitExceededException =>
         fail(StampError.Class(path))

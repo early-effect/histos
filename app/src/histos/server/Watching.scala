@@ -37,7 +37,6 @@ object Watching:
             start: Option[SourceWatch.Snapshot],
             running: Option[zio.Fiber[ServerError, Unit]],
         ): ZIO[R & zio.Scope, ServerError, Unit] =
-          // The child outlives one cycle, so a refused change can leave it running. Cancelling the watch interrupts it.
           val fiber = running match
             case Some(live) => ZIO.succeed(live)
             case None       => run.forkScoped
@@ -123,7 +122,6 @@ object Watching:
           run *>
           running.set(false) *>
           roots.flatMap { watched =>
-            // The baseline is taken before the line. A save during the walk is not the change that woke the watch.
             SourceWatch
               .take(watched.paths, watched.excluded)
               .foldZIO(

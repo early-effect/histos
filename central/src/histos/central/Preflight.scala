@@ -111,7 +111,6 @@ object Preflight:
     private def trusted(url: Url): Registry = url
   end Registry
 
-  // The extension lives on the nested opaque type. Calls in this object do not see it otherwise.
   import Registry.root
 
   final case class Hosts(repo1: Registry, keyserver: Registry)

@@ -296,8 +296,6 @@ object NativeRequests:
           Transitivity.Closure,
           origin,
         ),
-        // test-runner still requests a scala-library inside GHSA-8qv5-68g4-248j.
-        // The library is on the request repositories. The runner's origin does not publish it.
         ToolRoots.of(
           Dep.trusted("org.scala-lang", "scala-library", "2.13.18", DepKind.Java),
           version,

@@ -260,7 +260,6 @@ object JsRequests:
         None,
       )
     )
-    // Environment roots participate in drift, so the same linker revision can serve different environments.
     ToolRequest(
       ToolId(ToolRole.JsSuite, version, ToolVariant.Suite(revision, env)),
       roots,

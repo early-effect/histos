@@ -1,7 +1,6 @@
 package histos.publish
 
-import histos.jdk.{Sha256, Sha256Digest}
-import histos.program.ClientBinary
+import histos.jdk.Sha256Digest
 
 import zio.Chunk
 
@@ -13,11 +12,10 @@ object DistLayout:
   /** `shim-<sha256>`. The bytes at this name do not move. */
   def pinnedShim(sha: String): String = s"shim-$sha"
 
-  /** The workflow uploads each linked client as `client-<platform>`. */
-  val ClientArtifact: String = "client-"
+  /** `dist/client-kit.zip` in the checkout. Publish compiles it and does not link it. */
+  val BuiltKit: String = "dist/client-kit.zip"
 
-  /** Where the snapshots workflow downloads those artifacts, and where `publish snapshots` reads them. */
-  val BuiltClients: String = "dist/clients"
+  val KitFile: String = "client-kit.zip"
 
   def channel(name: String): String = s"channel-$name"
 
@@ -25,27 +23,35 @@ object DistLayout:
 
   def jar(version: String): String = s"$version-histos.jar"
 
-  def client(version: String, platform: DistPlatform): String = s"$version-client-${platform.token}"
+  def kit(version: String): String = s"$version-client-kit.zip"
 
-  /** `dist/clients/client-<platform>/histos-client`, relative to the repository. */
-  def builtClient(platform: DistPlatform): String =
-    s"$BuiltClients/$ClientArtifact${platform.token}/${ClientBinary.fileName}"
+  final case class IvyPin(organisation: String, module: String, revision: String)
 
+  /** `kit` is the asset name and its sha. `ivy` is only on the manifest `publish local` writes for a local installer.
+    */
   def manifestJson(
       version: String,
       jarSha256: String,
-      clients: List[(DistPlatform, String)],
+      kit: Option[(String, String)],
+      ivy: Option[IvyPin] = None,
   ): String =
-    val rows = clients.sortBy(_._1.token).map { (platform, sha) =>
-      s"""    "${platform.token}": "$sha""""
-    }
+    val kitLines = kit match
+      case None              => ""
+      case Some((name, sha)) =>
+        s""",
+           |  "clientKit": "$name",
+           |  "clientKitSha256": "$sha"""".stripMargin
+    val ivyLines = ivy match
+      case None      => ""
+      case Some(pin) =>
+        s""",
+           |  "ivyOrganisation": "${pin.organisation}",
+           |  "ivyModule": "${pin.module}",
+           |  "ivyRevision": "${pin.revision}"""".stripMargin
     s"""{
        |  "version": "$version",
        |  "jar": "${jar(version)}",
-       |  "jarSha256": "$jarSha256",
-       |  "clients": {
-       |${rows.mkString(",\n")}
-       |  }
+       |  "jarSha256": "$jarSha256"$kitLines$ivyLines
        |}
        |""".stripMargin
 

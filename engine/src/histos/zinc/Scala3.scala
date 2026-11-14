@@ -267,8 +267,6 @@ object CompilerRequests:
         None,
       )
     )
-    // scala3-compiler still requests a jline-reader inside GHSA-5q95-hrpc-m3w3.
-    // It also requests jline-terminal-jni, which the patched reader does not bring forward.
     val pinned =
       if scala3 then
         List("jline-reader", "jline-terminal-jni").map(name =>

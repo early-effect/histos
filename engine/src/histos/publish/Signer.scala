@@ -123,7 +123,6 @@ object Signer:
     want == fingerprint || (want.length == 16 && fingerprint.takeRight(16) == want)
 
   private def unlock(key: PGPSecretKey, passphrase: String): Either[SignerError, Signer] =
-    // Passed into each JCA call. Registering it would publish the provider on the JVM.
     val provider  = new BouncyCastleProvider()
     val encrypted = key.getKeyEncryptionAlgorithm != SymmetricKeyAlgorithmTags.NULL
     val decryptor =

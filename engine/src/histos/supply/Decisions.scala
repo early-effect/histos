@@ -281,8 +281,6 @@ object PrFlow:
           else List(GhCall.UpdateRef(kept.branch, kept.main, create))
         val commits = kept.policy.signing match
           case CommitSigning.ApiSigned =>
-            // UpdateRef points the branch at main. GhRun replaces every later
-            // expectedHeadOid with the oid createCommitOnBranch just returned.
             kept.changes.map: change =>
               GhCall.CommitOnBranch(kept.branch, kept.main, s"deps: ${change.kind}", change.files)
           case CommitSigning.GitPush(_) =>

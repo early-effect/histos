@@ -106,7 +106,6 @@ object Layout:
         s"\n    <exclusions>\n$rows\n    </exclusions>"
 
   private def license(license: License): String =
-    // Central requires the license to be distributed with the repository.
     s"""  <licenses>
        |    <license>
        |      <name>${xml(license.name.value)}</name>
@@ -124,7 +123,6 @@ object Layout:
        |  </developers>""".stripMargin
 
   private def scm(scm: Scm): String =
-    // Central requires a developer connection. One written connection fills both.
     val connection = xml(scm.connection.value)
     s"""  <scm>
        |    <url>${xml(scm.url.value)}</url>

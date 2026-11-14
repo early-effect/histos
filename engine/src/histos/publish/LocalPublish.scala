@@ -133,15 +133,12 @@ object LocalPublish:
               case Nil => ZIO.fail(LocalPublishError.NothingToPublish)
               case _   => ZIO.succeed(PublishOutput(Nil, Nil, chosen.held, Nil))
           case plans if write == PublishWrite.Release && !plans.exists(plan => releaseRevision(plan.revision)) =>
-            // No release coordinate is compiled. Selection still runs when another ship is a release, so a
-            // snapshot dependency can refuse that ship.
             val members = plans.flatMap(_.members).toSet
             ZIO.succeed(PublishOutput(Nil, Nil, chosen.held, snapshotNotes(plans, members)))
           case plans =>
             ZIO
               .fromEither(choose(graph, names, plans))
               .flatMap: picked =>
-                // The snapshot ship stays writable so a dependent is refused, then it is not staged.
                 val (live, notes) = write match
                   case PublishWrite.Release => releaseShips(plans, picked)
                   case _                    => (picked, Nil)

@@ -130,7 +130,6 @@ object Grammar:
     CliCommand("release", Options.boolean("automatic"), Args.text("token").*).map { case (automatic, names) =>
       val raw    = names.toList
       val tokens = raw.filterNot(_ == "--automatic")
-      // An option is read only while it is the next token. A flag after a ship stays in the args.
       Wire.PublishRelease(automatic || raw.exists(_ == "--automatic"), tokens)
     }
   private val publishPromote =

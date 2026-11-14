@@ -233,7 +233,6 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given [A: Schema]: Schema[::[A]] =
     Schema.of(SchemaDoc.Array(summon[Schema[A]].doc))
 
-  // NonEmptyChunk is not one of heddle's deferred collections, so this cycle is a Ref.
   given Schema[NonEmptyChunk[GraphCompileError]] =
     Schema.of(SchemaDoc.Array(SchemaDoc.Ref("GraphCompileError")))
 
@@ -359,7 +358,6 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[ReleaseError] = Schema.derived
   given Schema[Reject]       = Schema.derived
 
-  // Config.Error carries Cause, which is not a derivable ADT. The document is the wire enum.
   given Schema[Config.Error] =
     new Schema[Config.Error]:
       def doc: SchemaDoc                  = summon[Schema[ConfigError]].doc

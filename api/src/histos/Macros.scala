@@ -370,7 +370,6 @@ private object BuilderMacro:
     val union = unite(distinct(read(platform) :: readAll(platforms)))
     union.asType match
       case '[p] =>
-        // Expr is invariant. asExprOf checks the wider type and keeps the tree, so the call site still sees `p`.
         '{
           ModuleDef.make[p](
             $name,

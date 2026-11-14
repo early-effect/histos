@@ -123,10 +123,9 @@ object CompileReplay:
     for
       id    <- keyed(key)
       bytes <- ZIO.fromEither(archive(request))
-      // File mtime. TestClock.instant arms a warning unless the test moves the clock.
-      now <- zio.Clock.ClockLive.instant
-      _   <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
-      _   <- stamp(request, key)
+      now   <- zio.Clock.ClockLive.instant
+      _     <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
+      _     <- stamp(request, key)
     yield ()
 
   /** A restored Native product with class files and no NIR is not a hit. The blob and the on-disk marker go, so the

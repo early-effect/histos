@@ -943,7 +943,6 @@ object Cli:
           ),
         ),
       reload = ZIO.fail(ServerError.NoServer),
-      // No server is up, so this process starts one, and its child runs as this process does.
       reboot = _ =>
         bootCall(repo, Daemon.spawn).flatMap { socket =>
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
