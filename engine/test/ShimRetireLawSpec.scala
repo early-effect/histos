@@ -11,9 +11,9 @@ import zio.test.*
 
 import ShimRig.*
 
-/** `histos update` retires a server record an older driver left behind before it runs the new driver. The socket the
-  * record names is not listening. The client the rig serves records the exec and does not touch the record, and the
-  * shim execs that client, so a record that survives is one the new driver was started against.
+/** `histos update` retires a server record an older driver left behind, and the socket file that record names, before
+  * it runs the new driver. The client the rig serves records the exec and does not touch either file, and the shim
+  * execs that client, so a file that survives is one the new driver was started against.
   */
 object ShimRetireLawSpec extends ZIOSpecDefault:
   def spec = suite("shim retire laws")(
@@ -37,6 +37,7 @@ object ShimRetireLawSpec extends ZIOSpecDefault:
             )
           )
           _      <- Workspace.writeString(record, body).mapError(ShimFault.Io(_))
+          _      <- Workspace.writeString(socket, "").mapError(ShimFault.Io(_))
           ran    <- rig.update()
           choice <- rig.choice
           exec   <- rig.executed

@@ -131,7 +131,7 @@ object Help:
       "update",
       "toolchain",
       "histos update",
-      "Move the selected Histos version. The installed shim runs this. Inside a project it then runs version, which rewrites the BSP connection and reboots a server on another driver.",
+      "Move the selected Histos version. The installed shim runs this. Inside a project it removes the previous server record, then runs version, which rewrites the BSP connection.",
     ),
     Entry("self", "toolchain", "histos self update", "Replace the shim when the published hash differs."),
     Entry("bsp", "server", "histos bsp", "Speak the build server protocol."),
