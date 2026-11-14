@@ -64,7 +64,7 @@ object ToolchainExplain:
       |Add the missing field on the build. The call is .runnerTools(RunnerTools(node, llvm, playwright)). node is Some(NodeFloor(25)) when any module is Js. llvm is Some(ToolRevision("<ClangMajor>.0.0")) when any module is Native. The revision's major is the modules' ClangMajor. The finding prints the call with the values filled in.""".stripMargin
 
   val local: String =
-    """`.histos/toolchain` names the toolchain `publish local` installed under the user home. The shim runs that toolchain instead of the pin in build.properties. When the packed commit is not this checkout, or the tree was dirty when it was packed, this check warns and the command still runs.
+    """`.histos/toolchain` names the toolchain `publish local` installed under the user home. The shim runs that toolchain instead of the pin in build.properties, except `update`, which runs the pin it just wrote. When the packed commit is not this checkout, or the tree was dirty when it was packed, this check warns and the command still runs.
       |
       |Delete `.histos/toolchain` to run the pin again. The tracked pin does not change. `publish local` from this checkout writes a toolchain built from this commit.""".stripMargin
 

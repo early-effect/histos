@@ -45,7 +45,7 @@ A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its m
 
 A native client is optional. On a terminal, `toolchain install` and `update` ask once per jar whether to build `histos-client` on this machine. Enter means yes. Answering `n` is remembered for that jar, and later commands do not ask. `histos toolchain client` builds it later. `--client` builds without asking, and `--no-client` skips. With no terminal and CI unset, install prints one line that names `histos toolchain client` and does not link. In CI the shim always runs `java -jar`, even when a client is already on disk. Building the client needs clang 21 on `PATH` and takes a few minutes, once for that jar. A missing clang, a missing kit, or a failed link still leaves the jar installed. Histos does not install clang.
 
-A checkout may name a local toolchain in `.histos/toolchain`. The file is one path segment, the id `publish local` installed under `~/.histos/toolchains/<id>` with its jar and a manifest. The shim uses that directory and does not fetch. A missing jar fails. Delete the file to return to the pin. The tracked pin does not change.
+A checkout may name a local toolchain in `.histos/toolchain`. The file is one path segment, the id `publish local` installed under `~/.histos/toolchains/<id>` with its jar and a manifest. Every command except `update` uses that directory and does not fetch. `update` resolves the pin, writes it, and runs that pin: the version it prints and the client it offers are that pin. A missing jar fails when a command runs the local id. Delete the file to return to the pin. The tracked pin does not change.
 
 A project pins its toolchain in `build.properties`:
 
@@ -169,7 +169,7 @@ A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` let
 
 ### Information
 
-`histos version` prints the toolchain this command runs, then the server's version when a server is up. The pin prints as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. A checkout with `.histos/toolchain` prints that local id instead. A local toolchain built from another commit, or from a dirty tree, prints one warning on stderr and the command runs. The line is `local toolchain built from <commit> (dirty); this checkout is <head>`, and the dirty word is omitted when the pack was clean. `histos doctor` reports that same line as `toolchain.local`, a warning, so the exit stays 0. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos observe` prints the stored compile tally. The JDK, Node, and clang lines are on `histos doctor` (below).
+`histos version` prints the toolchain this command runs, then the server's version when a server is up. The pin prints as the shim resolved it, so a `-SNAPSHOT` pointer prints its timestamp. A checkout with `.histos/toolchain` prints that local id instead. `update` prints the pin it just resolved. A local toolchain built from another commit, or from a dirty tree, prints one warning on stderr and the command runs. The line is `local toolchain built from <commit> (dirty); this checkout is <head>`, and the dirty word is omitted when the pack was clean. `histos doctor` reports that same line as `toolchain.local`, a warning, so the exit stays 0. `histos graph` prints each module with its platforms and Scala versions, each aggregate with its members, and each plugin. `histos observe` prints the stored compile tally. The JDK, Node, and clang lines are on `histos doctor` (below).
 
 ### Dependencies
 
@@ -303,7 +303,7 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 
 Histos builds itself. The ship is `Ship("histos").next(0, 4, 0)(api, app).toolchain(launcher = app, client = client)`.
 
-`histos.version` in `build.properties` is the published Histos that CI installs. Each job runs `./histos` on that jar. `histos.scala` is compiled against the api packed inside the running jar, so a change that adds build API this file uses needs a pin that already has it. `.histos/toolchain`, written by `publish local`, wins over the pin. Delete that file to return to the pin.
+`histos.version` in `build.properties` is the published Histos that CI installs. Each job runs `./histos` on that jar. `histos.scala` is compiled against the api packed inside the running jar, so a change that adds build API this file uses needs a pin that already has it. `.histos/toolchain`, written by `publish local`, wins over the pin for every command except `update`. Delete that file to return to the pin.
 
 `histos publish local` packs the launcher, compiles the client kit, installs both under `~/.histos/toolchains/<id>`, and writes `.histos/toolchain`. It does not link `histos-client`. `histos assembly app` writes `dist/histos.jar` and does not install a toolchain. `histos portal` rehearses a release.
 
