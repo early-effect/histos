@@ -129,10 +129,62 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
           ran <- rig.update()
           default <- rig.default
           pin     <- rig.pinned
+          ranExec <- rig.executed
         yield assertTrue(
           ran.exit == 0,
           default == LauncherChoice.Revision(build021.channel, build021.render),
           !pin,
+          ranExec.isEmpty,
+        )
+    ,
+    test("inside a project, update runs version on the new driver"):
+      ZIO.scoped:
+        val older = Release(line020, clients = true)
+        val newer = Release(release021, clients = true)
+        for
+          rig    <- loopback
+          _      <- rig.publish(Published(List(older, newer), Nil))
+          _      <- rig.pin(line020.render)
+          ran    <- rig.update()
+          choice <- rig.choice
+          exec   <- rig.executed
+          jar = rig.toolchain(release021.render).resolve("histos.jar").toString
+        yield assertTrue(
+          ran.exit == 0,
+          choice == LauncherChoice.Release(release021),
+          exec.exists: hit =>
+            hit.program.startsWith("client-") &&
+              hit.version == s"histos ${release021.render}" &&
+              hit.jar == jar &&
+              hit.args == List("version"),
+        )
+    ,
+    test("a local toolchain stays the driver while the pin moves"):
+      ZIO.scoped:
+        val older = Release(line020, clients = true)
+        val newer = Release(release021, clients = true)
+        for
+          rig <- loopback
+          _   <- rig.publish(Published(List(older, newer), Nil))
+          _   <- rig.pin(line020.render)
+          _   <- rig.install(line020.render)
+          home = rig.project.resolve(".histos")
+          _ <- Workspace.createDirectories(home).mapError(ShimFault.Io(_))
+          _ <- Workspace
+            .writeString(home.resolve("toolchain"), s"${line020.render}\n")
+            .mapError(ShimFault.Io(_))
+          ran    <- rig.update()
+          choice <- rig.choice
+          exec   <- rig.executed
+          jar = rig.toolchain(line020.render).resolve("histos.jar").toString
+        yield assertTrue(
+          ran.exit == 0,
+          choice == LauncherChoice.Release(release021),
+          exec.exists: hit =>
+            hit.program.startsWith("client-") &&
+              hit.version == s"histos ${line020.render}" &&
+              hit.jar == jar &&
+              hit.args == List("version"),
         ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.samples(4)
 

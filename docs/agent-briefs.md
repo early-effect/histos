@@ -156,7 +156,7 @@ This is the sequence that worked twice. It needs Russ's yes in that session.
 1. Commit the layer. The snapshot coordinate is HEAD.
 2. Run `./histos publish snapshots`. That command packs the launcher, links the host client, and proves the pair before the Maven publish and before the `dist` upload. A failed proof is `PairError.Handshake` and nothing uploads.
 3. Check that the uploaded `<timestamp>-manifest.json` names the jar's sha256 and the host client's. A platform that was not linked is omitted. None at all is refused.
-4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Stop the server, run one command so the server rewrites `.bsp/histos.json`, and run `./histos workflow --update`.
+4. Set `histos.version` in `build.properties` to the commit channel `0.3.0-<sha12>-SNAPSHOT`. Run `./histos workflow --update`. That enters the jar, rewrites `.bsp/histos.json`, and reboots a server on the previous driver. `histos update` does the same refresh after it moves a pin. A hand edit does not.
 5. Commit the pin on top of the layer, then stack the next layer on it.
 
 D20. When the render names the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request. The CI setup generator landed in #201. This pin was packed from that squash.
