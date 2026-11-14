@@ -8,7 +8,7 @@ sbt scripted is a text file of `>` and `$` lines because an sbt plugin has no ot
 
 The stamp test that #132 deleted was already a scenario. The copying is the problem, not the missing script language.
 
-Scenarios live in this repository's tests. [Scenario](../engine/test/Scenario.scala) is the code. [ScenarioSpec](../engine/test/ScenarioSpec.scala) is the proof. The same Scala API is what a plugin author gets later, when someone outside this repo needs it. Nothing is published in this work. There is no second language.
+Scenarios live in this repository's tests. [Scenario](../engine/test/Scenario.scala) is the code. [ScenarioSpec](../engine/test/ScenarioSpec.scala) is the proof. Select and reuse sufficient proof under [The bar](test-audit.md#the-bar). The same Scala API is what a plugin author gets later, when someone outside this repo needs it. Nothing is published in this work. There is no second language.
 
 ## What a scenario is
 
@@ -40,7 +40,7 @@ A file with the same repo-relative path and the same bytes is the same input, wh
 
 ## Checklist
 
-Finish one item and prove it before the next. The proof is the suite the item names.
+Follow dependency order and reuse the suite the item names when it supplies sufficient proof. Follow the integration gates in [The bar](test-audit.md#the-bar) while dependent implementation proceeds.
 
 - [x] **Scenario.** #132 deleted the harness. It is back on today's engine. `Scenario.open` is one store and a compiler-start count. `checkout(build)` is a work tree whose lock pins that build's cells and this repository's locked tools. `write` puts a file in it, and `clean` is `./histos clean` there. `compile` and `test` run that checkout against the scenario store. Only `compile` counts starts: a test run's compiles keep their own count. On that engine two checkouts of the same bytes missed, because the source row included the absolute path, and the wiped checkout restored without a third compiler start. A quick hit stays in that checkout: the second checkout stores the same fingerprint and still runs, and that fingerprint is not a blob. Proof: `./histos testOnly --module engine 'histos.ScenarioSpec'` (2 passed).
 

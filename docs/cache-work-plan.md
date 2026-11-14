@@ -20,7 +20,7 @@ A task that makes a command faster while skipping a real change has failed. A ta
 
 Histos caches compile, package, and link as content-addressed actions. A hit means the declared inputs and the toolchain identity matched. A miss names the input that changed. GitHub `actions/cache` stores tools. It does not store products.
 
-This file is the decision. The checklist below is the work. Top to bottom. Finish one item and prove it before starting the next. The proof is the suite that item names, run with `./histos test` for the modules it touches. Tests bind loopback. They do not call Central, GitHub, or a keyserver. No item cuts a release.
+This file is the decision. The checklist below is the work, in dependency order. Select and reuse sufficient proof under [The bar](test-audit.md#the-bar), including the item's named suite. Follow that section's integration gates while dependent implementation proceeds. Final runtime verification follows [Every brief](agent-briefs.md#every-brief). Tests bind loopback. They do not call Central, GitHub, or a keyserver. No item cuts a release.
 
 sbt 2 plus zipx is the thing this has to beat, and the bench is where that is shown. Two habits of that setup stay out of Histos. An epoch plus a restore-key prefix, where the last prefix drops the epoch and can restore a stale snapshot. And one blob of `~/.sbt`, `~/.cache/sbt`, and Coursier under a branch-scoped quota, which cannot say that a single link is unchanged.
 

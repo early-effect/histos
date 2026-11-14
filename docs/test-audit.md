@@ -4,14 +4,20 @@ This is the ledger for the Test audit item of [cli-work-plan.md](cli-work-plan.m
 
 ## The bar
 
-A law earns its place when it:
+Choose the smallest sufficient evidence for the change's material risks. Reuse existing automated integration coverage before adding tests. An automated test earns its place when it:
 
 - asserts a property a user or this repository depends on
 - fails when that property breaks (shown against a broken implementation where that is cheap)
 - is deterministic: no wall-clock race, no yield-count wait, no port that another process can take
-- is hermetic: no network, no write outside the law's own directory, no read of the developer's home, git config, or PATH
+- is hermetic: loopback only, writes within its own directory, no read of the developer's home, git config, or PATH
 
-A law that tests ZIO, zio-json, the JDK, or Scala is deleted. A law that restates the code it calls (the same `match`, a constructor's arguments read back, an enum's `values`) is deleted or rewritten against literals. A duplicate is merged into the law that keeps the stronger assert.
+Use the existing [Scenario](scenario-work-plan.md) harness for cache/build interactions, asserting feeds, files, keys, and actual compiler/linker activity. A meaningful example or CLI run can prove a current public outcome when it uses the artifact built from the changed code and checks that outcome. Keep actual CLI runs outside Scenario. Dogfood, ship-pair verification before upload, and the comparative performance bench retain their separate gates.
+
+Add unit or property tests only for important failure paths or input spaces the existing proof leaves uncovered. Important regressions need durable automated assertions; existing integration coverage can supply them. Preserve Scenario and CellTools identity properties, cache integrity/invalidation/namespace isolation, concurrency/interruption, resource cleanup, and hermetic loopback protections.
+
+Classify tests by the behavior they execute and observe. Within task-owned tests or defects blocking the current proof, delete checks of ZIO, zio-json, the JDK, or Scala alone; replace restated implementations with behavioral assertions and merge duplicates into the stronger check. Leave unrelated tests alone.
+
+An integration proof within the current approved deliverable can close dependent items. Name its owner, command, and completion gate before proceeding. Keep dependency order, allow implementation needed to reach that gate, and leave proof boxes open until the assembled check passes. The work remains unfinished until that gate passes.
 
 Verdicts: **DELETE**, **MERGE**, **REWRITE**, **WEAK** (the assert cannot fail on the property in the name), **HOST** (reads or writes the machine outside the law), **FLAKY** (passes or fails on unchanged code).
 
@@ -30,7 +36,7 @@ Each is one layer of the stack, in this order.
 
 ## Product bugs
 
-Each bug gets a law that fails on today's code, then the fix.
+Reproduce each bug with the smallest executable red/green check before fixing it, then reuse that check. Important regressions need durable automated assertions; existing integration coverage can supply them.
 
 - [x] B1 `Cond.Not` renders `!github.event_name == 'push'`. GitHub reads that as `(!github.event_name) == 'push'`, which is always false, so a job that negates an event, input, or branch never runs. `Not` renders `!(…)` always. Owner: engine A-L (`JobCondLawSpec`), and api checks `JobCheckLawSpec:108`.
   - Red: `JobCondLawSpec` rendered `if: "!github.event_name == 'push'"`. Green: `if: "!(github.event_name == 'push')"`, 3 passed. This repository's build renders no `Not`, so its workflows did not move, and `./histos workflow --check` is clean.
