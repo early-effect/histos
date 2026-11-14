@@ -7,7 +7,7 @@ import heddle.client.Client
 import heddle.http.{Body, FormField, Method, Path, QueryParams, Request, Response, Scheme, Url}
 import heddle.http.header.{BasicCredentials, Headers}
 
-import zio.{Chunk, Config, Duration, IO, UIO, ZIO, ZLayer, durationInt}
+import zio.*
 
 /** Hold polls until `VALIDATED`. Automatic polls until `PUBLISHED`. */
 enum ReleaseMode:
@@ -112,6 +112,11 @@ object Portal:
   /** How long a post or a status read may sit before the next progress line. */
   private[central] val keepEvery: Duration = 30.seconds
 
+  /** Consecutive gateway answers on a status poll. An upload, promote, or drop is not retried: that 502 may already
+    * have been accepted.
+    */
+  private[central] val gatewayWait: Duration = 10.minutes
+
   private[central] enum PollChange:
     case Same, Changed
 
@@ -123,6 +128,19 @@ object Portal:
       case PollChange.Changed                          => (PollNote.Say, 0)
       case PollChange.Same if quiet + 1 >= reportEvery => (PollNote.Say, 0)
       case PollChange.Same                             => (PollNote.Wait, quiet + 1)
+
+  /** 502, 503, and 504. A 500 is the portal's own refusal and is not retried. */
+  private[central] def gateway(code: Int): Boolean =
+    code == 502 || code == 503 || code == 504
+
+  private[central] enum Gateway:
+    case Again(waited: Duration)
+    case Stop
+
+  /** `waited + step` is another try while it is still within `limit`. The try that passes `limit` stops. */
+  private[central] def gatewaySpend(waited: Duration, step: Duration, limit: Duration): Gateway =
+    val next = waited + step
+    if next > limit then Gateway.Stop else Gateway.Again(next)
 
   /** Say `line` after `keepEvery`, and again on that period, until `body` finishes. A fast body says nothing. */
   def keep[R, E, A](note: String => UIO[Unit], line: String)(body: ZIO[R, E, A]): ZIO[R, E, A] =
@@ -179,27 +197,49 @@ private final class PortalClient(
     }
 
   private def until(id: DeploymentId, ready: DeploymentState): IO[PortalError, DeploymentState] =
-    poll(id, ready, None, 0)
+    poll(id, ready, None, 0, Duration.Zero, blip = false)
 
   private def poll(
       id: DeploymentId,
       ready: DeploymentState,
       previous: Option[DeploymentState],
       quiet: Int,
+      waited: Duration,
+      blip: Boolean,
   ): IO[PortalError, DeploymentState] =
-    state(id).flatMap { found =>
-      val change = previous match
-        case Some(seen) if seen == found => Portal.PollChange.Same
-        case _                           => Portal.PollChange.Changed
-      val (decision, next) = Portal.beat(quiet, change)
-      val spoken           = decision match
-        case Portal.PollNote.Say  => note(progress(id, found, ready))
-        case Portal.PollNote.Wait => ZIO.unit
-      spoken *>
-        (if found == DeploymentState.Failed then ZIO.fail(PortalError.Failed(id))
-         else if found == ready then ZIO.succeed(found)
-         else ZIO.sleep(Portal.interval) *> poll(id, ready, Some(found), next))
-    }
+    state(id).foldZIO(
+      {
+        case PortalError.Status(code) if Portal.gateway(code) =>
+          Portal.gatewaySpend(waited, Portal.interval, Portal.gatewayWait) match
+            case Portal.Gateway.Stop =>
+              val failed = PortalError.Status(code)
+              note(failed.message) *> ZIO.fail(failed)
+            case Portal.Gateway.Again(nextWait) =>
+              val change                = if blip then Portal.PollChange.Same else Portal.PollChange.Changed
+              val (decision, nextQuiet) = Portal.beat(quiet, change)
+              val spoken                = decision match
+                case Portal.PollNote.Say  => note(s"portal ${id.value} answered HTTP $code, retrying")
+                case Portal.PollNote.Wait => ZIO.unit
+              spoken *>
+                ZIO.sleep(Portal.interval) *>
+                poll(id, ready, previous, nextQuiet, nextWait, blip = true)
+        case other => note(other.message) *> ZIO.fail(other)
+      },
+      found =>
+        val change = previous match
+          case Some(seen) if seen == found => Portal.PollChange.Same
+          case _                           => Portal.PollChange.Changed
+        val (decision, next) = Portal.beat(quiet, change)
+        val spoken           = decision match
+          case Portal.PollNote.Say  => note(progress(id, found, ready))
+          case Portal.PollNote.Wait => ZIO.unit
+        spoken *>
+          (if found == DeploymentState.Failed then ZIO.fail(PortalError.Failed(id))
+           else if found == ready then ZIO.succeed(found)
+           else
+             ZIO.sleep(Portal.interval) *>
+               poll(id, ready, Some(found), next, Duration.Zero, blip = false)),
+    )
 
   private def progress(id: DeploymentId, found: DeploymentState, ready: DeploymentState): String =
     val token = wire(found)
@@ -229,7 +269,7 @@ private final class PortalClient(
       case None => ZIO.fail(PortalError.Unnamed)
 
   private def state(id: DeploymentId): IO[PortalError, DeploymentState] =
-    Portal.keep(note, s"reading portal ${id.value}")(fetched(id)).tapError(error => note(error.message))
+    Portal.keep(note, s"reading portal ${id.value}")(fetched(id))
 
   private def fetched(id: DeploymentId): IO[PortalError, DeploymentState] =
     val url = (base.root / "api" / "v1" / "publisher" / "status")
