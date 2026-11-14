@@ -1,6 +1,6 @@
 # How Histos builds Histos
 
-This is how the machinery works today. The toolchain is on the ship row, `Ship("histos").next(0, 3, 0)(api, app).toolchain(launcher = app, client = client)`. `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before anything uploads. `assembly` is the fat-jar verb and takes module names. It does not install a toolchain. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
+This is how the machinery works today. The toolchain is on the ship row, `Ship("histos").next(0, 3, 1)(api, app).toolchain(launcher = app, client = client)`. `publish local`, `publish snapshots`, and `publish release` pack the launcher, link the host client, and prove the pair before anything uploads. `assembly` is the fat-jar verb and takes module names. It does not install a toolchain. `histos client` is removed, and the error names `publish`. `histos launcher` is removed, and the error names `update`. `portal` stays.
 
 ## The pin is the builder
 
@@ -15,7 +15,7 @@ The pin moves through a pull request:
 
 D20. When `workflow --update` would write the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request.
 
-The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. A laptop publish stays host-only, so a Linux job on this pin runs `java -jar`. `./histos` installs `shim-<sha256>` when the user shim is missing, then execs it. The shim reads `.histos/toolchain` when it is set and otherwise this channel.
+The pin is `0.3.0`, the release built from `756b511`. That release is on Central and on `dist`. The manifest names the jar, `linux-x86_64`, and `macos-aarch64`. `./histos` installs `shim-<sha256>` when the user shim is missing, then execs it. The shim reads `.histos/toolchain` when it is set and otherwise this pin. The setup action in the committed workflows is `early-effect/histos/.github/actions/setup@756b5118cec39f8ed00520f1e72e379b02ad3458`.
 
 ## Fetch the lock before the suite
 
