@@ -69,7 +69,7 @@ The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./
 
 ## The other self-host commands
 
-- `histos launcher` is removed. The error names `update`, which moves the pin. Inside a project it rewrites `build.properties`. Outside one it rewrites `~/.histos/default`.
+- `histos launcher` is removed. The error names `update`, which moves the pin. Inside a project it rewrites `build.properties`, then runs `version` on the driver the next command would use. That rewrites `.bsp/histos.json` and reboots a server whose driver does not match. Outside a project it rewrites `~/.histos/default` and stops.
 - `histos portal` binds a loopback Central portal and prints its base url. Set `HISTOS_PORTAL` to that url to rehearse a release. It needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 
-`.bsp/histos.json` is tracked. Its `version` is the pin line, and a command rewrites it when the pin changes.
+`.bsp/histos.json` is tracked. Its `version` is the pin line. `histos update` rewrites it and reboots a server on another driver. A running `bsp` rewrites it when the build files change.

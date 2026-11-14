@@ -59,7 +59,7 @@ The shim answers four commands itself:
 - `histos toolchain install 0.2.10` installs one version and checks every file it already has. It records that version as the default when none is set.
 - `histos toolchain list` prints the installed versions.
 - `histos self update` replaces the shim when the published one differs.
-- `histos update` moves the pin. Inside a project it rewrites `build.properties`. Outside one it rewrites `~/.histos/default`. `--make-default` writes both.
+- `histos update` moves the pin. Inside a project it rewrites `build.properties`, then runs `version` on the driver the next command would use. That rewrites `.bsp/histos.json` and reboots a server whose driver does not match. Outside a project it rewrites `~/.histos/default` and stops. `--make-default` writes both.
 
 `update` moves a release pin to the newest release and a snapshot pin to the newest snapshot line at or above its own. It keeps the pin's form: `--freeze` writes a timestamp and `--follow` writes a pointer. When a release has passed a snapshot pin, `update` asks on a terminal whether to switch, and `--stable` answers yes. Outside CI, a command on the JVM prints a notice when a published release has passed the project's pin. It asks Central at most once a day.
 
@@ -230,7 +230,7 @@ The default layer is `Sona.layer(ReleaseMode.Automatic)`, which publishes and wa
 
 ## Editors
 
-Metals speaks BSP 2.2 to Histos. Open the project and import the build. Metals reads `.bsp/histos.json` and starts its `argv` (`./histos bsp` when the project has the script, `histos bsp` otherwise). A command rewrites that file when the pin changes, and a running `bsp` rewrites it when the build files change, which Metals treats as a build change.
+Metals speaks BSP 2.2 to Histos. Open the project and import the build. Metals reads `.bsp/histos.json` and starts its `argv` (`./histos bsp` when the project has the script, `histos bsp` otherwise). `histos update` rewrites that file from the pin and reboots a server on another driver. A running `bsp` rewrites it when the build files change, which Metals treats as a build change.
 
 One target is one cell: a module, a Scala version, a platform, and `main`, or `test` when the cell has test sources. `histos.scala` is its own target. Scala 3 targets compile with `-Xsemanticdb` and `-sourceroot`, and Scala 2 targets with the semanticdb plugin. Diagnostics arrive as `build/publishDiagnostics`, or `build/logMessage` when a problem has no position.
 

@@ -127,7 +127,12 @@ object Help:
       "histos toolchain list",
       "Print installed toolchains. The installed shim runs this.",
     ),
-    Entry("update", "toolchain", "histos update", "Move the selected Histos version. The installed shim runs this."),
+    Entry(
+      "update",
+      "toolchain",
+      "histos update",
+      "Move the selected Histos version. The installed shim runs this. Inside a project it then runs version, which rewrites the BSP connection and reboots a server on another driver.",
+    ),
     Entry("self", "toolchain", "histos self update", "Replace the shim when the published hash differs."),
     Entry("bsp", "server", "histos bsp", "Speak the build server protocol."),
     Entry("mcp", "server", "histos mcp", "Speak the MCP server."),

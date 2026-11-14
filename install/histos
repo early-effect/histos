@@ -564,10 +564,24 @@ histos help toolchain" ;;
       fi
       next_pin "$current"
       write_default "$next"
+      selected=$(resolve_channel "$next")
+      ensure_toolchain "$selected"
+      exit 0
     fi
     selected=$(resolve_channel "$next")
     ensure_toolchain "$selected"
-    exit 0
+    # version enters the jar. That rewrites .bsp/histos.json from the pin and reboots a server on another driver.
+    version=$selected
+    jar=$home/toolchains/$selected/histos.jar
+    if id=$(read_toolchain "$repo"); then
+      case $id in
+        ""|.*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
+      esac
+      jar=$home/toolchains/$id/histos.jar
+      [ -f "$jar" ] || fail "local toolchain $id is not installed"
+      version=$id
+    fi
+    exec_jar "$jar" "$repo" version
     ;;
 esac
 repo=$(find_repo || true)
