@@ -19,7 +19,7 @@ flowchart TD
 
 A command goes to a warm JVM server for its project, and starts one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
 
-Histos is pre-release. The API breaks when that makes it more honest. What we still intend is [next](docs/next.md).
+This is a 0.x release. The API breaks when that makes it more honest. What we still intend is [next](docs/next.md).
 
 ## Install
 

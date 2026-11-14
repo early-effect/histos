@@ -6,11 +6,11 @@ The terminal, the server, and the agent share one request. Histos refuses to ins
 
 The build file rejects a setting for a platform the module does not build. Compile, test, run, package, and the editor call the same engine paths. A bad name, a bad pattern, and a bad flag are one typed error. Preview names the sources a compile would rebuild and the suites a quick run would skip, and it says when it does not know. A generated workflow names the tools the graph declared.
 
-Publishing is [publishing.md](publishing.md). A catalog row, as an example, is `ships(Ship("histos").next(0, 2, 3)(api, app))`. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here.
+Publishing is [publishing.md](publishing.md). A catalog row, as an example, is `ships(Ship("histos").next(0, 2, 3)(api, app))`.
 
 The cache is why this tool exists. The decisions and the checklist are in [cache-work-plan.md](cache-work-plan.md).
 
-Formatting is a locked tool like the compiler. `histos fmt` runs the scalafmt the configuration names, and nothing needs to be installed for it. The decisions and the checklist are in [format-work-plan.md](format-work-plan.md).
+Formatting is a locked tool like the compiler. `histos fmt` runs the scalafmt the configuration names, and nothing needs to be installed for it.
 
 A module can compile against another checkout. A library can be built from a git commit instead of fetched from Central. The lock names the commit. A branch is an update input. The decisions are in [source-work-plan.md](source-work-plan.md).
 
