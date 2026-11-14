@@ -13,7 +13,7 @@ The pin moves through a pull request:
 3. Pin the commit channel, `<ship>-<sha>-SNAPSHOT`, in `build.properties`.
 4. Push.
 
-The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. Linux is absent until Container. `./histos` execs the user shim, which reads `.histos/toolchain` when it is set and otherwise this channel.
+The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. A laptop publish stays host-only, so a Linux job on this pin runs `java -jar`. `./histos` execs the user shim, which reads `.histos/toolchain` when it is set and otherwise this channel.
 
 ## Fetch the lock before the suite
 
@@ -56,7 +56,7 @@ The successor starts with the requester's `HISTOS_VERSION`. An inherited `HISTOS
 - `<timestamp>-histos.jar`
 - `<timestamp>-client-<platform>` for each file under `dist/clients/client-<platform>/histos-client`
 
-The ship names `.toolchain(launcher = app, client = client)`. This layer links the host only. A platform that was not linked is omitted from the manifest, and none at all is refused before a token. A Mac publish names `macos-aarch64`. Linux waits for the container item, so a Linux job on that pin runs `java -jar`. The proof runs before the upload. `PairError.Handshake` refuses the Maven publish and the `dist` upload. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
+The ship names `.toolchain(launcher = app, client = client)`. This layer links the host only. A platform that was not linked is omitted from the manifest, and none at all is refused before a token. A Mac publish names `macos-aarch64`. A Linux publish names `linux-x86_64`. A laptop does not cross-build the other platform, so a Linux job on this pin runs `java -jar`. The proof runs before the upload. `PairError.Handshake` refuses the Maven publish and the `dist` upload. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
 
 The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./histos publish local` and uploads `client-macos-aarch64`, then a publish job that needs that job, downloads `client-*`, installs Linux LLVM, and runs `./histos publish snapshots`. The committed workflow stays the pin's render until the pin moves, because `workflow --check` compares the file to the pin. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
 
