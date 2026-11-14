@@ -1,3 +1,4 @@
+.DS_Store
 .scala-build/
 .bsp/*
 !.bsp/histos.json
