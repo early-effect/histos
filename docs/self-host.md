@@ -13,7 +13,9 @@ The pin moves through a pull request:
 3. Pin the commit channel, `<ship>-<sha>-SNAPSHOT`, in `build.properties`.
 4. Push.
 
-The pin is `e63ffcc`, channel `0.3.0-e63ffcc0142a-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. A laptop publish stays host-only, so a Linux job on this pin runs `java -jar`. `./histos` execs the user shim, which reads `.histos/toolchain` when it is set and otherwise this channel.
+D20. When `workflow --update` would write the remote setup action, steps 2 and 4 run from a commit that is already on `main`, and the pin is its own pull request.
+
+The pin is `aa4f835`, channel `0.3.0-aa4f8351e207-SNAPSHOT`. `publish snapshots` of that commit packed the launcher, linked the macOS client, proved the pair, and uploaded. The manifest names that jar and `macos-aarch64` only. A laptop publish stays host-only, so a Linux job on this pin runs `java -jar`. `./histos` installs `shim-<sha256>` when the user shim is missing, then execs it. The shim reads `.histos/toolchain` when it is set and otherwise this channel.
 
 ## Fetch the lock before the suite
 
@@ -27,7 +29,7 @@ The install is `~/.histos/toolchains/<id>/`: `histos.jar`, this platform's `hist
 
 `./histos assembly <module>` still writes that module's asset. For this repository `app`'s asset is `dist/histos.jar`. When `app` is the ship's launcher, a pack writes the ship's library members at `bootstrap/histos-api.jar` and `META-INF/histos/toolchain.json`: the ship coordinate, the full commit, and whether the tree was dirty. When the checkout has `install/histos`, the same pack writes `META-INF/histos/shim.sha256`, the digest the bootstrap wrapper installs. No source file carries the commit. Nothing writes `.histos/assembly.sha256`. The checkout script does not launch `dist/histos.jar`. An empty argument list is an error that names the assembly modules.
 
-`./histos` is the bootstrap wrapper `workflow --update` writes for every build, including one with no assembly module. When `~/.histos/bin/histos` is missing it refuses a JDK older than `Toolchain.Floor`, installs `shim-<sha256>` from `dist`, checks that sha256, and execs the shim. It does not fetch `shim` or `shim.sha256`. The shim chooses the local toolchain or the pin and sets `HISTOS_VERSION`. The committed `./histos` in this repository stays the pin's script until the pin moves, because `workflow --check` compares the file to the pin.
+`./histos` is the bootstrap wrapper `workflow --update` writes for every build, including one with no assembly module. When `~/.histos/bin/histos` is missing it refuses a JDK older than `Toolchain.Floor`, installs `shim-<sha256>` from `dist`, checks that sha256, and execs the shim. It does not fetch `shim` or `shim.sha256`. The shim chooses the local toolchain or the pin and sets `HISTOS_VERSION`. The committed `./histos` in this repository is that wrapper. `workflow --check` compares the file to the pin.
 
 There is no `client` command and no `launcher` command. A removed `./histos client` names `publish`. A removed `./histos launcher` names `update`.
 
@@ -59,11 +61,11 @@ The successor starts with the requester's `HISTOS_VERSION`. An inherited `HISTOS
 
 The ship names `.toolchain(launcher = app, client = client)`. This layer links the host only. A platform that was not linked is omitted from the manifest, and none at all is refused before a token. A Mac publish names `macos-aarch64`. A Linux publish names `linux-x86_64`. A laptop does not cross-build the other platform, so a Linux job on this pin runs `java -jar`. The proof runs before the upload. `PairError.Handshake` refuses the Maven publish and the `dist` upload. The token is `GITHUB_TOKEN` or `gh auth token`, and the repository is `GITHUB_REPOSITORY` or the origin remote.
 
-The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./histos publish local` and uploads `client-macos-aarch64`, then a publish job that needs that job, downloads `client-*`, installs Linux LLVM, and runs `./histos publish snapshots`. The committed workflow stays the pin's render until the pin moves, because `workflow --check` compares the file to the pin. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
+The generator renders `histos-snapshots.yml` as one `macos-26` job that runs `./histos publish local` and uploads `client-macos-aarch64`, then a publish job that needs that job, downloads `client-*`, installs Linux LLVM, and runs `./histos publish snapshots`. The committed workflow is the pin's render. `workflow --check` compares the file to the pin. A ship with no `.toolchain` publishes no client. A laptop publish also moves the shared pointer.
 
 ## Releases
 
-`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The generator, for a toolchain ship, renders a `macos-26` client job that runs `./histos publish local`, then a release job that needs it, installs Linux LLVM, runs `./histos publish release` (which proves the pair before the portal upload), and uploads the jar, `shim-<sha256>`, `shim`, `shim.sha256`, and the Linux client. The committed workflow stays the pin's render until the pin moves. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The generator, for a toolchain ship, renders a `macos-26` client job that runs `./histos publish local`, then a release job that needs it, installs Linux LLVM, runs `./histos publish release` (which proves the pair before the portal upload), and uploads the jar, `shim-<sha256>`, `shim`, `shim.sha256`, and the Linux client. The committed workflow is the pin's render. `workflow --check` compares the file to the pin. A ship with no `.toolchain` publishes no client. After the release is on Central, `histos bump` moves `.next`.
 
 ## The other self-host commands
 
