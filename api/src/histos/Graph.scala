@@ -299,9 +299,10 @@ object Projects:
   /** How generated workflows install Histos. Omission is [[CiSetup.Remote]]. */
   def ciSetup(value: CiSetup): Organized = Organized.empty.ciSetup(value)
 
-  /** Console colors for compile, test, and doctor. Omission is [[Theme.standard]]. A dependency's [[Theme]] is applied
-    * the same way: pass the value here. Depending on the jar does not restyle the console. [[histos.theme.Color.rgb]]
-    * is truecolor when the client allows it, and a named color stays that name at every depth.
+  /** Console colors for compile, test, and doctor. Omission is [[histos.theme.Theme.standard]]. A dependency's
+    * [[histos.theme.Theme]] is applied the same way: pass the value here. Depending on the jar does not restyle the
+    * console. [[histos.theme.Color.rgb]] is truecolor when the client allows it, and a named color stays that name at
+    * every depth.
     */
   def theme(value: Theme): Organized = Organized.empty.theme(value)
 
@@ -1037,7 +1038,7 @@ final class Organized private (settings: Organized.Settings):
   /** How generated workflows install Histos. A second call replaces the choice. Omission is [[CiSetup.Remote]]. */
   def ciSetup(value: CiSetup): Organized = Organized(settings.copy(ciSetup = value))
 
-  /** Replaces the console theme. A second call replaces it. Omission is [[Theme.standard]]. */
+  /** Replaces the console theme. A second call replaces it. Omission is [[histos.theme.Theme.standard]]. */
   def theme(value: Theme): Organized = Organized(settings.copy(theme = value))
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
