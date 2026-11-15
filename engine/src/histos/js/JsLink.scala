@@ -34,6 +34,7 @@ final case class JsLinkRequest(
     kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
     revision: Option[histos.JsVersion] = None,
     initialize: Boolean = true,
+    arguments: List[String] = Nil,
 )
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
@@ -46,13 +47,13 @@ object JsLink:
   def link(
       request: JsLinkRequest
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, JsLinkError, JsLinked] =
-    val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize) =
+    val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize, arguments) =
       request
     for
       view <- ZIO.service[LockedTools]
       selected = revision.getOrElse(view.catalog.js.revision)
       digests <- productsOf(classpath)
-      key = JsKey.of(version, selected, kind, main, digests, initialize)
+      key = JsKey.of(version, selected, kind, main, digests, initialize, arguments)
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
       _      <- ProductCache.stage(remote, store, key).mapError(carried)
@@ -77,7 +78,7 @@ object JsLink:
       request: JsLinkRequest,
       selected: histos.JsVersion,
   ): ZIO[LockedTools & LinkerStarts, JsLinkError, Path] =
-    val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize) =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize, arguments) =
       request
     val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
@@ -137,7 +138,8 @@ object JsLink:
               "JS_OUT"       -> output.toAbsolutePath.toString,
               "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
               "JS_MODULE"    -> kind.token,
-            ) ++ (if initialize then Map("JS_MAIN" -> main.binary) else Map.empty),
+            ) ++ (if initialize then Map("JS_MAIN" -> main.binary) else Map.empty)
+              ++ (if arguments.isEmpty then Map.empty else Map("JS_ARGS" -> JsKey.encoded(arguments))),
           )
         )
         .mapError(error => JsLinkError.Linker(error.message))
@@ -187,7 +189,23 @@ object JsLink:
       |    val linker = StandardImpl.linker(config)
       |    val containers = Await.result(PathIRContainer.fromClasspath(classpath), Duration.Inf)._1
       |    val ir = Await.result(StandardImpl.irFileCache().newCache.cached(containers), Duration.Inf)
-      |    val init = mainClass.toSeq.map(name => ModuleInitializer.mainMethodWithArgs(name, "main"))
+      |    val userArgs = sys.env.get("JS_ARGS") match {
+      |      case Some(encoded) =>
+      |        val lines = encoded.split("\n", -1).toList
+      |        lines match {
+      |          case countText :: rest =>
+      |            val count = scala.util.Try(countText.toInt).toOption.getOrElse(0)
+      |            rest.take(count).map { line =>
+      |              new String(java.util.Base64.getDecoder.decode(line), java.nio.charset.StandardCharsets.UTF_8)
+      |            }
+      |          case Nil => Nil
+      |        }
+      |      case None => Nil
+      |    }
+      |    val init = mainClass.toSeq.map { name =>
+      |      if (userArgs.isEmpty) ModuleInitializer.mainMethodWithArgs(name, "main")
+      |      else ModuleInitializer.mainMethodWithArgs(name, "main", userArgs)
+      |    }
       |    val report = Await.result(linker.link(ir, init, PathOutputDirectory(output), logger), Duration.Inf)
       |    report.publicModules.headOption.map(_.jsFileName) match {
       |      case Some(name) =>

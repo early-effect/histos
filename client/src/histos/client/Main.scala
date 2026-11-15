@@ -4,15 +4,17 @@ import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
-import histos.server.{Call, Message, ServerError, ServerFile, ServerStamp, Successor}
+import histos.server.{Call, Message, RunBytes, RunLaunch, ServerError, ServerFile, ServerStamp, Successor}
 import histos.report.CallResult
 
 import java.nio.file.{Files, Path, StandardOpenOption}
 
-import scala.annotation.tailrec
+import scala.jdk.CollectionConverters.*
 import scala.scalanative.libc.signal
+import scala.scalanative.libc.stdlib
 import scala.scalanative.posix.unistd
-import scala.scalanative.unsafe.CInt
+import scala.scalanative.unsafe.{CInt, Ptr}
+import scala.scalanative.unsigned.*
 
 import zio.json.*
 import zio.{ExitCode, IO, Runtime, Scope, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer, durationInt}
@@ -25,6 +27,16 @@ import zio.{ExitCode, IO, Runtime, Scope, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer
   * SIGTERM do the same.
   */
 object Main extends ZIOAppDefault:
+  private val interruptNote: Ptr[Byte] =
+    val note = stdlib.malloc(1.toCSize)
+    if note != null then note(0) = 'I'.toByte
+    note
+
+  @volatile private var armed           = false
+  @volatile private var pass            = false
+  @volatile private var hits            = 0
+  @volatile private var wakeWrite: CInt = -1
+
   signal.signal(signal.SIGINT, onSignal(_))
   signal.signal(signal.SIGTERM, onSignal(_))
 
@@ -37,8 +49,27 @@ object Main extends ZIOAppDefault:
       leave(fatal.exit.code, Some(fatal.line))
       Runtime.defaultReportFatal(thrown)
 
+  /** `SIGTERM` always ends the process. The first `SIGINT` during a run is a frame. The second ends the process. While
+    * this process is waiting on the jar, `SIGINT` belongs to that jar.
+    */
   private def onSignal(sig: CInt): Unit =
-    unistd._exit((128 + sig).toInt)
+    if sig == signal.SIGTERM then unistd._exit((128 + sig).toInt)
+    else if pass then ()
+    else if !armed || wakeWrite < 0 || interruptNote == null then unistd._exit((128 + sig).toInt)
+    else
+      hits += 1
+      if hits >= 2 then unistd._exit(130)
+      else unistd.write(wakeWrite, interruptNote, 1.toCSize)
+
+  /** The stdin relay calls these around a program run. A signal handler only writes the interrupt byte. */
+  private[client] def arm(fd: CInt): Unit =
+    wakeWrite = fd
+    hits = 0
+    armed = true
+
+  private[client] def disarm(): Unit =
+    armed = false
+    wakeWrite = -1
 
   override def run =
     for
@@ -46,8 +77,10 @@ object Main extends ZIOAppDefault:
       raw    = args.toList
       peeled = ColorFlag.peel(raw)
       code <- Batch.parse(peeled.args) match
-        case None       => jvm(raw)
-        case Some(call) => batch(call, seen(peeled))
+        case None                                           => jvm(raw)
+        case Some(Batch.Parsed.Ready(call))                 => batch(call, seen(peeled))
+        case Some(Batch.Parsed.Program(id, platform, argv)) =>
+          batch(Call.Run(id, platform, shell, argv), seen(peeled))
     yield ExitCode(code)
 
   /** A terminal and an unset `NO_COLOR` take color. `--truecolor` does not turn color on. */
@@ -59,6 +92,14 @@ object Main extends ZIOAppDefault:
       Paint.decide(peeled.color, terminal, noColor),
       Paint.depth(peeled.truecolor, colorTerm),
     )
+
+  /** This process's environment and working directory. The program's streams stay pipes. */
+  private def shell: RunLaunch.Shell =
+    RunLaunch.Shell(environment, Path.of("").toAbsolutePath)
+
+  private def environment: Map[String, String] =
+    val raw = System.getenv()
+    if raw == null then Map.empty else raw.asScala.toMap
 
   private def batch(call: Call, appearance: Appearance): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
@@ -100,10 +141,7 @@ object Main extends ZIOAppDefault:
     ZIO
       .acquireRelease(UnixPipe.connect(socket))(session => ZIO.succeed(session.close()))
       .flatMap: session =>
-        ZIO
-          .attemptBlocking(drive(repo, socket, session, call, appearance))
-          .mapError(_ => ServerError.Io(histos.server.ServerIo.Read(socket)))
-          .flatMap(ZIO.fromEither)
+        drive(repo, socket, session, call, appearance).flatMap(ZIO.fromEither)
 
   private def drive(
       repo: Path,
@@ -111,33 +149,41 @@ object Main extends ZIOAppDefault:
       session: UnixPipe.Session,
       call: Call,
       appearance: Appearance,
-  ): Either[ServerError, Int] =
-    Frame.put(session.output, call.toJson) match
-      case Left(_)  => Left(ServerError.Io(histos.server.ServerIo.Write(socket)))
+  ): ZIO[Scope, Nothing, Either[ServerError, Int]] =
+    ZIO.attemptBlocking(Frame.put(session.output, call.toJson)).orDie.flatMap {
+      case Left(_)  => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Write(socket))))
       case Right(_) =>
-        Frame.take(session.input) match
-          case Left(_)     => Left(ServerError.Io(histos.server.ServerIo.Read(socket)))
+        ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
+          case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
           case Right(head) =>
             ready(head) match
-              case Left(error) => Left(error)
-              case Right(_)    => frames(repo, socket, session.input, Show.start, appearance)
+              case Left(error) => ZIO.succeed(Left(error))
+              case Right(_)    =>
+                copyInput(call, session.output) *> frames(repo, socket, session.input, Show.start, appearance)
+        }
+    }
+
+  /** Stdin frames start after the call is written, so this fiber is the socket's only writer. */
+  private def copyInput(call: Call, output: java.io.OutputStream): ZIO[Scope, Nothing, Unit] =
+    call match
+      case Call.Run(_, _, _, _) | Call.Watch(Call.Run(_, _, _, _), _) => StdinRelay.attach(output)
+      case _                                                          => ZIO.unit
 
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match
       case Some(Message.Ready) => Right(())
       case _                   => Left(ServerError.Protocol)
 
-  @tailrec
   private def frames(
       repo: Path,
       socket: Path,
       input: java.io.InputStream,
       shown: Show.Shown,
       appearance: Appearance,
-  ): Either[ServerError, Int] =
-    Frame.take(input) match
-      case Left(_)              => Left(ServerError.Io(histos.server.ServerIo.Read(socket)))
-      case Right(None)          => Left(ServerError.Protocol)
+  ): ZIO[Any, Nothing, Either[ServerError, Int]] =
+    ZIO.attemptBlocking(Frame.take(input)).orDie.flatMap {
+      case Left(_)              => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
+      case Right(None)          => ZIO.succeed(Left(ServerError.Protocol))
       case Right(Some(payload)) =>
         payload.fromJson[Message] match
           case Right(Message.Event(BuildEvent.Layout(width))) =>
@@ -145,10 +191,19 @@ object Main extends ZIOAppDefault:
           case Right(Message.Event(BuildEvent.Theme(value))) =>
             frames(repo, socket, input, shown.copy(theme = value.orElse(histos.theme.Theme.standard)), appearance)
           case Right(Message.Event(event)) =>
-            show(repo, event, shown, appearance)
-            frames(repo, socket, input, shown, appearance)
-          case Right(Message.Done(result)) => Right(finish(result))
-          case _                           => Left(ServerError.Protocol)
+            ZIO.succeed(show(repo, event, shown, appearance)) *>
+              frames(repo, socket, input, shown, appearance)
+          case Right(Message.Output(encoded)) =>
+            RunBytes.decode(encoded) match
+              case Some(bytes) =>
+                ZIO.succeed {
+                  System.out.write(bytes.toArray)
+                  System.out.flush()
+                } *> frames(repo, socket, input, shown, appearance)
+              case None => ZIO.succeed(Left(ServerError.Protocol))
+          case Right(Message.Done(result)) => ZIO.succeed(Right(finish(result)))
+          case _                           => ZIO.succeed(Left(ServerError.Protocol))
+    }
 
   private def show(repo: Path, event: BuildEvent, shown: Show.Shown, appearance: Appearance): Unit =
     Show(repo, event, shown.column).foreach:
@@ -317,7 +372,9 @@ object Main extends ZIOAppDefault:
           case None       => 1
           case Some(path) =>
             val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: path :: args
-            new ProcessBuilder(command*).inheritIO().start().waitFor()
+            pass = true
+            try new ProcessBuilder(command*).inheritIO().start().waitFor()
+            finally pass = false
       }
       .orElseSucceed(1)
       .map(halt)

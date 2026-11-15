@@ -114,6 +114,9 @@ object HistosMcp:
       platform: Option[String] = None,
       texts: List[NamedArg] = Nil,
       flags: List[String] = Nil,
+      env: List[NamedArg] = Nil,
+      directory: Option[String] = None,
+      args: List[String] = Nil,
   ) derives Schema,
         JsonCodec
   final case class CancelArgs(id: String) derives Schema, JsonCodec
@@ -274,15 +277,32 @@ object HistosMcp:
       listed  <- base.tool[NoArgs](Names.graph, "Show the project graph")(_ => ask(Call.Graph))
       running <- listed.tool[RunArgs](
         Names.run,
-        "Run a main, or inspect, versions, or a plugin task. platform is jvm, js, or native. texts and flags are the plugin arguments.",
+        "Run a main, or inspect, versions, or a plugin task. platform is jvm, js, or native. texts and flags are the plugin arguments. env overlays the server environment and is omitted as empty. directory must already exist inside the repo, and an omitted directory stays under .histos/run. args are the program arguments. stdin is not attached.",
       )(args =>
+        val asked = arguments(args.texts, args.flags).left
+          .map(BuildFault.Rejected(_))
+          .flatMap(parsed => programDirectory(args.directory).map(dir => (parsed, overlay(args.env), dir, args.args)))
         ZIO
-          .fromEither(
-            arguments(args.texts, args.flags).left
-              .map(BuildFault.Rejected(_))
-              .flatMap(parsed => Session.runCall(args.id, args.platform, parsed))
-          )
+          .fromEither(asked)
           .mapError(Session.CallProblem.Fault(_))
+          .flatMap { (parsed, env, directory, argv) =>
+            directory match
+              case None =>
+                ZIO
+                  .fromEither(Session.runCall(args.id, args.platform, parsed, env, None, argv))
+                  .mapError(Session.CallProblem.Fault(_))
+              case Some(path) =>
+                histos.program.RunDirectory
+                  .accept(repo, path)
+                  .mapError(fault =>
+                    Session.CallProblem.Fault(BuildFault.Program(histos.program.ProgramError.Directory(fault)))
+                  )
+                  .flatMap(real =>
+                    ZIO
+                      .fromEither(Session.runCall(args.id, args.platform, parsed, env, Some(real), argv))
+                      .mapError(Session.CallProblem.Fault(_))
+                  )
+          }
           .flatMap(ask)
       )
       stopped <- running.tool[CancelArgs](Names.cancel, "Cancel a run")(args =>
@@ -565,6 +585,17 @@ object HistosMcp:
         have    <- acc
         pattern <- SuitePattern.from(token).left.map(Rejection.SuitePattern(_))
       yield have :+ pattern
+
+  private def overlay(named: List[NamedArg]): Map[String, String] =
+    named.foldLeft(Map.empty[String, String])((acc, item) => acc.updated(item.name, item.value))
+
+  /** A relative directory is resolved against the repo by [[histos.program.RunDirectory.accept]]. */
+  private def programDirectory(raw: Option[String]): Either[BuildFault, Option[Path]] =
+    raw match
+      case None       => Right(None)
+      case Some(text) =>
+        try Right(Some(Path.of(text)))
+        catch case _: java.nio.file.InvalidPathException => Left(BuildFault.Rejected(Rejection.Watch(text)))
 
   private def arguments(
       texts: List[NamedArg],

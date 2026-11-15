@@ -40,7 +40,11 @@ final case class ChildRequest(
     main: MainClass,
     work: Path,
     environment: Map[String, String] = Map.empty,
-)
+    directory: Option[Path] = None,
+    arguments: List[String] = Nil,
+):
+  /** Scratch stays `work`. The process directory is `directory` when the caller named one. */
+  def cwd: Path = directory.getOrElse(work)
 
 final case class ChildOutcome(
     exit: ProcessExit,
@@ -53,6 +57,7 @@ final case class ChildOutcome(
 enum ChildEvent:
   case Out(text: String)
   case Err(text: String)
+  case Bytes(data: Chunk[Byte])
   case Exited(code: ProcessExit)
 
 object ChildProcess:
@@ -82,10 +87,13 @@ object ChildProcess:
       |      linker.defaultLookup().find("setpgid").orElseThrow(),
       |      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT)
       |    ).invokeExact(0, 0);
-      |    Files.writeString(Path.of("group"), Integer.toString(group));
+      |    if (args.length < 2) System.exit(2);
+      |    String groupFile = args[0];
+      |    String mainClass = args[1];
+      |    String[] user = java.util.Arrays.copyOfRange(args, 2, args.length);
+      |    Files.writeString(Path.of(groupFile), Integer.toString(group));
       |    if (group != 0) System.exit(3);
-      |    if (args.length != 1) System.exit(2);
-      |    Class.forName(args[0]).getMethod("main", String[].class).invoke(null, (Object) new String[0]);
+      |    Class.forName(mainClass).getMethod("main", String[].class).invoke(null, (Object) user);
       |  }
       |}
       |""".stripMargin
@@ -94,7 +102,10 @@ object ChildProcess:
     * request's map. The stream waits for the process, then drains for [[Drain]]. Interrupt, and an orphan, end the
     * process group and every descendant.
     */
-  def events(request: ChildRequest): ZStream[Any, ChildError, ChildEvent] =
+  def events(
+      request: ChildRequest,
+      relay: RunRelay = RunRelay.Closed,
+  ): ZStream[Any, ChildError, ChildEvent] =
     if request.platform != Platform.Jvm then ZStream.fail(ChildError.UnsupportedPlatform(request.platform))
     else
       ZStream.unwrapScoped {
@@ -103,6 +114,7 @@ object ChildProcess:
           compiler <- ZIO.fromEither(javac(request.java))
           entry    <- bootstrap(request.work, compiler)
           child    <- spawn(start(request, entry), Group.Own)
+          _        <- pump(child.process, relay).forkScoped
         yield attend(child, finish(request, child.process), Group.Own)
       }
 
@@ -115,6 +127,7 @@ object ChildProcess:
       argv: List[String],
       work: Path,
       environment: Map[String, String],
+      relay: RunRelay = RunRelay.Closed,
   ): ZStream[Any, ChildError, ChildEvent] =
     argv match
       case Nil => ZStream.fail(ChildError.NoProgram)
@@ -124,10 +137,8 @@ object ChildProcess:
             _       <- directory(work, ChildError.Work(work))
             java    <- runningJava
             classes <- launcher(java)
-            child   <- spawn(
-              startCommand(java, classes, argv, work, environment),
-              Group.Own,
-            )
+            child   <- spawn(startCommand(java, classes, argv, work, environment), Group.Own)
+            _       <- pump(child.process, relay).forkScoped
           yield attend(child, wait(child.process), Group.Own)
 
   /** Collect [[events]] for a caller that wants the text after the process ends.
@@ -163,8 +174,10 @@ object ChildProcess:
 
   private def capture(have: Captured, event: ChildEvent): Captured =
     event match
-      case ChildEvent.Out(text)    => have.copy(heard = have.heard.withOut(text))
-      case ChildEvent.Err(text)    => have.copy(heard = have.heard.withErr(text))
+      case ChildEvent.Out(text)   => have.copy(heard = have.heard.withOut(text))
+      case ChildEvent.Err(text)   => have.copy(heard = have.heard.withErr(text))
+      case ChildEvent.Bytes(data) =>
+        have.copy(heard = have.heard.withOut(new String(data.toArray, StandardCharsets.UTF_8)))
       case ChildEvent.Exited(code) => have.copy(exit = Some(code))
 
   /** Only a child can make itself a group leader once it has exec'd. The JVM bootstrap does.
@@ -280,6 +293,9 @@ object ChildProcess:
       )
       _ <- ZIO.foreachDiscard(request.classpath.artifacts)(path => present(path, ChildError.Artifact(path)))
       _ <- empty(request.work)
+      _ <- ZIO.whenDiscard(request.cwd != request.work)(
+        directory(request.cwd, ChildError.Start(request.cwd.toString))
+      )
     yield ()
 
   /** A classpath entry is a jar or a classes directory. Main classes are a directory.
@@ -387,18 +403,20 @@ object ChildProcess:
       |  private Exec() {}
       |
       |  public static void main(String[] args) throws Throwable {
+      |    if (args.length < 1) System.exit(3);
+      |    String[] program = args;
       |    Linker linker = Linker.nativeLinker();
       |    int group = (int) linker.downcallHandle(
       |      linker.defaultLookup().find("setpgid").orElseThrow(),
       |      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT)
       |    ).invokeExact(0, 0);
-      |    if (group != 0 || args.length == 0) System.exit(3);
+      |    if (group != 0) System.exit(3);
       |    try (Arena arena = Arena.ofConfined()) {
-      |      MemorySegment argv = arena.allocate(ValueLayout.ADDRESS, args.length + 1L);
-      |      for (int i = 0; i < args.length; i++) {
-      |        argv.setAtIndex(ValueLayout.ADDRESS, i, arena.allocateFrom(args[i]));
+      |      MemorySegment argv = arena.allocate(ValueLayout.ADDRESS, program.length + 1L);
+      |      for (int i = 0; i < program.length; i++) {
+      |        argv.setAtIndex(ValueLayout.ADDRESS, i, arena.allocateFrom(program[i]));
       |      }
-      |      argv.setAtIndex(ValueLayout.ADDRESS, args.length, MemorySegment.NULL);
+      |      argv.setAtIndex(ValueLayout.ADDRESS, program.length, MemorySegment.NULL);
       |      int ran = (int) linker.downcallHandle(
       |        linker.defaultLookup().find("execvp").orElseThrow(),
       |        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS)
@@ -498,6 +516,30 @@ object ChildProcess:
           )
           .unit
 
+  /** `Closed` leaves stdin open. An open relay copies bytes, then closes the pipe on end. */
+  private def pump(process: Process, relay: RunRelay): UIO[Unit] =
+    relay match
+      case RunRelay.Closed     => ZIO.unit
+      case RunRelay.Open(take) =>
+        def loop(open: Boolean): UIO[Unit] =
+          take.flatMap:
+            case None                                 => ZIO.unit
+            case Some(RelayCommand.Stdin(_)) if !open => loop(open)
+            case Some(RelayCommand.Stdin(bytes))      =>
+              ZIO.attemptBlocking {
+                val out = process.getOutputStream
+                out.write(bytes.toArray)
+                out.flush()
+              }.ignore *> loop(open)
+            case Some(RelayCommand.End) =>
+              ZIO.attemptBlocking(process.getOutputStream.close()).ignore *> loop(false)
+            case Some(RelayCommand.Interrupt) =>
+              ZIO.attempt {
+                val pid = process.pid()
+                if pid > 0 && pid <= Int.MaxValue then Posix.signalGroup(pid.toInt, Posix.SigInt)
+              }.ignore *> loop(open)
+        loop(true)
+
   private def startCommand(
       java: Path,
       classes: Path,
@@ -519,23 +561,22 @@ object ChildProcess:
       }
       .mapError(_ => ChildError.Start(java.toString))
 
-  private def start(
-      request: ChildRequest,
-      entry: Path,
-  ): IO[ChildError, Process] =
+  private def start(request: ChildRequest, entry: Path): IO[ChildError, Process] =
     ZIO
       .attemptBlocking {
         val entries = entry :: request.classpath.entries
+        val group   = request.work.resolve("group").toAbsolutePath.toString
         val command = List(
           request.java.toString,
           Toolchain.NativeAccess,
           "-cp",
           entries.map(_.toString).mkString(java.io.File.pathSeparator),
           EntryClass.binary,
+          group,
           request.main.binary,
-        )
+        ) ++ request.arguments
         val builder = new ProcessBuilder(command.asJava)
-        builder.directory(request.work.toFile)
+        builder.directory(request.cwd.toFile)
         val env = builder.environment()
         env.clear()
         request.environment.foreach((key, value) => env.put(key, value))

@@ -30,6 +30,7 @@ final case class JsRunRequest(
     jdk: JdkRuntime,
     processEnv: Map[String, String],
     node: NodeBinary,
+    directory: Option[Path] = None,
 )
 
 /** Start a linked script in the module's JavaScript environment. The engine does not load a `JSEnv`.
@@ -38,10 +39,10 @@ object JsRun:
   private val SuiteMain: String = "subprocess.JsRun"
 
   def start(request: JsRunRequest): ZIO[LockedTools, JsRunError, ChildRequest] =
-    val JsRunRequest(env, kind, script, work, jdk, processEnv, node) = request
-    val bridgeRoot                                                   = work.resolve("js-run")
-    val classes                                                      = bridgeRoot.resolve("classes")
-    val source                                                       =
+    val JsRunRequest(env, kind, script, work, jdk, processEnv, node, directory) = request
+    val bridgeRoot                                                              = work.resolve("js-run")
+    val classes                                                                 = bridgeRoot.resolve("classes")
+    val source                                                                  =
       bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
     val child = work.resolve("js-run-child")
     for
@@ -79,10 +80,22 @@ object JsRun:
       ChildClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
-      processEnv ++ nodeEnv(env, node) ++ Map(
-        "JS_SCRIPT" -> script.toAbsolutePath.toString,
-        "JS_MODULE" -> kind.token,
-      ),
+      runEnvironment(processEnv, env, node, script, kind),
+      directory = directory,
+    )
+
+  /** Program variables first. The bridge keys win: `JS_NODE`, `JS_SCRIPT`, `JS_MODULE`, and `PLAYWRIGHT_NODEJS_PATH`.
+    */
+  private[js] def runEnvironment(
+      processEnv: Map[String, String],
+      env: JsEnv,
+      node: NodeBinary,
+      script: Path,
+      kind: JsModuleKind,
+  ): Map[String, String] =
+    processEnv ++ nodeEnv(env, node) ++ Map(
+      "JS_SCRIPT" -> script.toAbsolutePath.toString,
+      "JS_MODULE" -> kind.token,
     )
 
   /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright driver reads `PLAYWRIGHT_NODEJS_PATH`.

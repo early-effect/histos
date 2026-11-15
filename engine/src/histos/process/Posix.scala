@@ -8,9 +8,13 @@ import scala.jdk.OptionConverters.*
 /** `setpgid` and `kill` from libc. A negative pid is the process group, which is how cancel reaches children. */
 private[process] object Posix:
   val SigKill: Int = 9
+  val SigInt: Int  = 2
 
   def killGroup(pid: Int): Either[GroupOp, Int] =
     call("kill", -pid, SigKill)
+
+  def signalGroup(pid: Int, signal: Int): Either[GroupOp, Int] =
+    call("kill", -pid, signal)
 
   private def call(name: String, a: Int, b: Int): Either[GroupOp, Int] =
     handle(name).flatMap: method =>

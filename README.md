@@ -143,7 +143,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `histos compile [project ...]` compiles the named projects, or every module. An aggregate expands to its modules.
 
-`histos run <name> [jvm|js|native]` runs a module's main. `histos run inspect` prints the project names, `histos run versions` prints the version decision, `histos run doc` writes scaladoc, and `histos run <plugin>/<task>` runs a plugin task. `run` passes no program arguments.
+`histos run <name> [jvm|js|native] [-- arg ...]` runs a module's main. Tokens after `--` are the program's arguments, and an absent `--` passes none. `jvm`, `js`, and `native` before `--` name the platform. The program sees the caller's environment and working directory. Its standard input is the caller's, copied as a pipe, and Ctrl-C is delivered to the program. `histos run inspect` prints the project names, `histos run versions` prints the version decision, `histos run doc` writes scaladoc, and `histos run <plugin>/<task>` runs a plugin task. A task does not take program arguments.
 
 `histos clean [project ...]` deletes products. No name wipes every product root under `.histos`, including the scaladoc and coverage output, without reading the build. A name wipes that module, and an aggregate expands. `histos clean --full` wipes the products, removes this project's keep file from the content store, and then deletes every store entry no remaining project keeps. It takes no project.
 

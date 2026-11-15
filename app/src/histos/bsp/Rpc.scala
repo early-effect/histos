@@ -62,6 +62,7 @@ object Rpc:
   final case class Capabilities(
       compileProvider: CompileProvider,
       dependencySourcesProvider: Boolean,
+      inverseSourcesProvider: Boolean,
       jvmRunEnvironmentProvider: Boolean,
       jvmTestEnvironmentProvider: Boolean,
       buildTargetChangedProvider: Boolean,
@@ -188,6 +189,9 @@ object Rpc:
   ) derives JsonCodec
   final case class JvmEnvironmentResult(items: List[JvmEnvironmentItem]) derives JsonCodec
 
+  final case class InverseSourcesParams(textDocument: TextDocument) derives JsonCodec
+  final case class InverseSourcesResult(targets: List[TargetId]) derives JsonCodec
+
   final case class RpcNote[A](jsonrpc: String, method: String, params: A)
 
   object RpcNote:
@@ -224,6 +228,11 @@ object Rpc:
     params match
       case None       => Left(ParamsDecode.Missing)
       case Some(json) => json.as[CompileParams].left.map(_ => ParamsDecode.Rejected)
+
+  def inverseParams(params: Option[Json]): Either[ParamsDecode, InverseSourcesParams] =
+    params match
+      case None       => Left(ParamsDecode.Missing)
+      case Some(json) => json.as[InverseSourcesParams].left.map(_ => ParamsDecode.Rejected)
 
   final case class CancelParams(id: RpcId) derives JsonCodec
 

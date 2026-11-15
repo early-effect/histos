@@ -17,6 +17,7 @@ import zio.{Chunk, Fiber, Ref, UIO, ZIO}
 /** One item from a running call. A fault is [[Beat.Finished]]. The stream fails when the call never produced one. */
 enum Beat:
   case Heard(event: BuildEvent)
+  case Bytes(data: Chunk[Byte])
   case Finished(result: CallResult)
 
 /** Local and remote execution of one [[histos.server.Call]]. The listener on a local build runs as the call produces,
@@ -32,14 +33,30 @@ object Build:
   def feed(beat: Beat): Feed =
     beat match
       case Beat.Heard(event)     => Feed.Event(event)
+      case Beat.Bytes(data)      => Feed.Output(data)
       case Beat.Finished(result) => Feed.Done(result)
+
+  private def locally[R, E](
+      input: Boolean,
+      use: histos.process.RunRelay => ZIO[R, E, Unit],
+  ): ZIO[R, E, Unit] =
+    if input then ZIO.scoped(histos.process.LiveInput.open.flatMap(use))
+    else use(histos.process.RunRelay.Closed)
+
+  def write(bytes: Chunk[Byte]): UIO[Unit] =
+    ZIO.attemptBlocking {
+      val out = java.lang.System.out
+      out.write(bytes.toArray)
+      out.flush()
+    }.ignore
 
   def attached(socket: Path): Build[Any] =
     new Build[Any]:
       def perform(call: Call): ZStream[Any, ServerError, Beat] =
         Client.talk(socket, call).map {
-          case Feed.Event(event) => Beat.Heard(event)
-          case Feed.Done(result) => Beat.Finished(result)
+          case Feed.Event(event)  => Beat.Heard(event)
+          case Feed.Output(bytes) => Beat.Bytes(bytes)
+          case Feed.Done(result)  => Beat.Finished(result)
         }
 
   def here[R <: Resolve & Loader & ContentStore & IvyRoot](
@@ -52,6 +69,7 @@ object Build:
       adopt: Call => ZIO[R, ServerError, Either[BuildFault, Option[LoadedBuild]]],
       edges: Say => Perform.Edges[R],
       hear: Beat => UIO[Unit],
+      input: Boolean = false,
   ): Build[R] =
     new Build[R]:
       def perform(call: Call): ZStream[R, ServerError, Beat] =
@@ -64,10 +82,16 @@ object Build:
               case Message.Event(event) =>
                 val beat = Beat.Heard(event)
                 heard.update(_ :+ beat) *> hear(beat)
+              case Message.Output(encoded) =>
+                histos.server.RunBytes.decode(encoded) match
+                  case Some(bytes) =>
+                    val beat = Beat.Bytes(bytes)
+                    heard.update(_ :+ beat) *> hear(beat)
+                  case None => ZIO.unit
               case Message.Done(found) =>
                 val beat = Beat.Finished(found)
                 heard.update(_ :+ beat) *> hear(beat)
-              case _ => ZIO.unit
+              case Message.Ready | Message.Marker(_) => ZIO.unit
             })
             _ <- adopt(call).flatMap { loaded =>
               val mode = loaded match
@@ -79,9 +103,13 @@ object Build:
                 .flatMap { report =>
                   histos.zinc.CompileMemo.provide(
                     histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                      Perform
-                        .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
-                        .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                      locally(
+                        input,
+                        relay =>
+                          Perform
+                            .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say), relay)
+                            .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live),
+                      )
                     )
                   )
                 }

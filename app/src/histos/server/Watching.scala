@@ -48,15 +48,21 @@ object Watching:
               origin  <- baseline(say, watched, start)
               woke    <- poll(say, watched, origin).race(done.await.as(List.empty[Path]))
               stay    <- held(child, woke, again)
-              _       <- ZIO.unless(stay)(child.interrupt)
-              next    <- remember(child, stay)
-              _       <- roots.flatMap: held =>
-                SourceWatch
-                  .take(held.paths, held.excluded)
-                  .foldZIO(
-                    error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
-                    now => cycle(Some(now), next),
-                  )
+              _       <- stay match
+                case Beside.Stop => ZIO.unit
+                case other       =>
+                  val keep = other == Beside.Keep
+                  for
+                    _    <- ZIO.unless(keep)(child.interrupt)
+                    next <- remember(child, keep)
+                    _    <- roots.flatMap: watched =>
+                      SourceWatch
+                        .take(watched.paths, watched.excluded)
+                        .foldZIO(
+                          error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
+                          now => cycle(Some(now), next),
+                        )
+                  yield ()
             yield ()
         ZIO
           .scoped(cycle(None, None))
@@ -98,17 +104,20 @@ object Watching:
         paths => ZIO.succeed(paths),
       )
 
-  /** A program that finished is not kept. A source change is kept when `again` says the running program stays. */
+  private enum Beside:
+    case Keep, Restart, Stop
+
+  /** A finished program ends the session. A source change restarts it when `again` says so. */
   private def held[R, E](
       fiber: zio.Fiber[E, Unit],
       woke: List[Path],
       again: List[Path] => ZIO[R, E, Boolean],
-  ): ZIO[R, E, Boolean] =
+  ): ZIO[R, E, Beside] =
     if woke.isEmpty then
       fiber.await.flatMap:
-        case Exit.Success(_)     => ZIO.succeed(false)
+        case Exit.Success(_)     => ZIO.succeed(Beside.Stop)
         case Exit.Failure(cause) => ZIO.failCause(cause)
-    else again(woke).map(!_)
+    else again(woke).map(replace => if replace then Beside.Restart else Beside.Keep)
 
   def session[R](
       repo: Path,
@@ -163,7 +172,7 @@ object Watching:
   /** The compile a restart runs before it touches the program: the program's module, or the build. */
   def compileFor(call: Call): Call =
     call match
-      case Call.Run(id, _) =>
+      case Call.Run(id, _, _, _) =>
         ProjectName.from(id) match
           case Right(name) => Call.Compile(List(name))
           case Left(_)     => Call.Compile(Nil)
@@ -254,6 +263,6 @@ object Watching:
       case Call.PreviewClean(names, _)          => listed(names)
       case Call.Clean(names, _)                 => listed(names)
       case Call.PreviewRun(id, _)               => one(id)
-      case Call.Run(id, _)                      => one(id)
+      case Call.Run(id, _, _, _)                => one(id)
       case _                                    => WatchNames.Every
 end Watching

@@ -998,8 +998,17 @@ private[testrun] object SuiteLaunch:
       event: ChildEvent,
   ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case ChildEvent.Out(text)    => ZIO.succeed(TestFeed.Out(module, version, platform, text))
-      case ChildEvent.Err(text)    => ZIO.succeed(TestFeed.Err(module, version, platform, text))
+      case ChildEvent.Out(text)   => ZIO.succeed(TestFeed.Out(module, version, platform, text))
+      case ChildEvent.Err(text)   => ZIO.succeed(TestFeed.Err(module, version, platform, text))
+      case ChildEvent.Bytes(data) =>
+        ZIO.succeed(
+          TestFeed.Out(
+            module,
+            version,
+            platform,
+            new String(data.toArray, java.nio.charset.StandardCharsets.UTF_8),
+          )
+        )
       case ChildEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
