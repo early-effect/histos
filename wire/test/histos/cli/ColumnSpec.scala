@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.build.BuildEvent
+import histos.theme.Role
 import histos.zinc.{CompileFeed, CompilePulse}
 import histos.{Platform, ProjectName, ScalaVersion}
 
@@ -44,7 +45,11 @@ object ColumnSpec extends ZIOSpecDefault:
         column,
       )
       assertTrue(
-        line == Chunk(CompileConsole.Line.Out("engine 3.10.1 jvm typer  zinc/GraphCompile.scala"))
+        line.map(_.text) == Chunk("engine 3.10.1 jvm typer  zinc/GraphCompile.scala"),
+        line.flatMap(_.spans).exists {
+          case Part.Mark(text, Role.Pulse) => text == "typer  zinc/GraphCompile.scala"
+          case _                           => false
+        },
       )
     },
     test("a layout in the transcript pads the lines") {

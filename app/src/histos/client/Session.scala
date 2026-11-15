@@ -2,7 +2,7 @@ package histos.client
 
 import histos.ApiClock
 import histos.build.{Beat, Build, BuildEvent}
-import histos.cli.{Cli, Operation, Show}
+import histos.cli.{Cli, Depth, Operation, Show}
 import histos.jdk.Machine
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.mcp.Notice
@@ -74,6 +74,7 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
+      paint: Option[Depth] = None,
   ): ZIO[Env, TransportError, CallResult] =
     Cli
       .versionText(repo)
@@ -82,7 +83,7 @@ object Session:
           case absent: LauncherError.Absent =>
             call match
               case Call.Version => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(absent)))
-              case _            => locally(repo, apiJar, machine, desk, call, "")
+              case _            => locally(repo, apiJar, machine, desk, call, "", paint)
           case error =>
             ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
         },
@@ -103,16 +104,17 @@ object Session:
                           case Some(_) if rebooting(call) =>
                             withProcess(repo, call, CallResult.reported())
                           case Some(fresh) =>
-                            ask(repo, apiJar, machine, desk, call, text, fresh).flatMap(withProcess(repo, call, _))
+                            ask(repo, apiJar, machine, desk, call, text, fresh, paint)
+                              .flatMap(withProcess(repo, call, _))
                           case None =>
                             ZIO.fail(TransportError.Remote(ApiClock.restart(socket, text, was)))
                         }
                     }
                 case Decision.Open(socket) =>
-                  drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
+                  drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket, paint)
                     .flatMap(withProcess(repo, call, _))
                 case Decision.Absent =>
-                  locally(repo, apiJar, machine, desk, call, text).flatMap(withProcess(repo, call, _))
+                  locally(repo, apiJar, machine, desk, call, text, paint).flatMap(withProcess(repo, call, _))
               }
           },
       )
@@ -152,23 +154,24 @@ object Session:
       call: Call,
       shown: String,
       socket: Path,
+      paint: Option[Depth],
   ): ZIO[Env, TransportError, CallResult] =
-    Ref.make(0).flatMap { column =>
+    Ref.make(Show.start).flatMap { frame =>
       Build
         .attached(socket)
         .perform(call)
         .tap {
-          case Beat.Heard(event) => Notice.show(repo, column, event)
+          case Beat.Heard(event) => Notice.show(repo, frame, event)
           case Beat.Finished(_)  => ZIO.unit
         }
         .runCollect
         .foldZIO(
           {
             case ServerError.Unreachable(_) =>
-              locally(repo, apiJar, machine, desk, call, shown)
+              locally(repo, apiJar, machine, desk, call, shown, paint)
             case other => ZIO.fail(TransportError.Remote(other))
           },
-          beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
+          beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList, paint)),
         )
     }
 
@@ -207,9 +210,11 @@ object Session:
             case None         => Right(Call.Run(id, None))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
-  def spoken(repo: Path, feeds: List[Feed]): Either[TransportError, CallResult] =
+  def spoken(repo: Path, feeds: List[Feed], paint: Option[Depth] = None): Either[TransportError, CallResult] =
     val events          = Chunk.fromIterable(feeds.collect { case Feed.Event(event) => event })
-    val (out, errLines) = Show.transcript(repo, events)
+    val (out, errLines) = paint match
+      case None        => Show.transcript(repo, events)
+      case Some(depth) => Show.colored(repo, events, depth)
     feeds.reverse.collectFirst { case Feed.Done(result) => result } match
       case None                              => Left(TransportError.DidNotFinish)
       case Some(fault @ CallResult.Fault(_)) => Right(fault)
@@ -230,8 +235,9 @@ object Session:
       desk: Desk,
       call: Call,
       shown: String,
+      paint: Option[Depth],
   ): ZIO[Env, TransportError, CallResult] =
-    Ref.make(0).flatMap { column =>
+    Ref.make(Show.start).flatMap { frame =>
       val build =
         Build.here[Env](
           repo,
@@ -243,12 +249,12 @@ object Session:
           prepared(repo, apiJar, desk, _),
           sessionEdges(repo, apiJar, machine, desk),
           {
-            case Beat.Heard(event) => Notice.show(repo, column, event)
+            case Beat.Heard(event) => Notice.show(repo, frame, event)
             case Beat.Finished(_)  => ZIO.unit
           },
         )
       build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
-        ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList))
+        ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList, paint))
       }
     }
 

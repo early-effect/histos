@@ -638,6 +638,7 @@ end WireCall
 private object WireEvent extends WireSupport:
   import WireLeaves.given
   import WireBuild.given
+  import histos.theme.ThemeJson.given
 
   given JsonCodec[CompileSeverity] = JsonCodec.derived
   given JsonCodec[PositionBase]    = JsonCodec.derived

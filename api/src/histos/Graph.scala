@@ -15,6 +15,7 @@ import histos.plugin.{
   TaskName,
 }
 import histos.supply.SupplyChain
+import histos.theme.Theme
 import histos.version.Catalog
 
 import _root_.scala.util.control.NonFatal
@@ -147,6 +148,7 @@ final case class ProjectGraph private (
     formatting: Formatting = Formatting.Off,
     coordinates: List[PluginCoordinate] = Nil,
     ciSetup: CiSetup = CiSetup.Remote,
+    theme: Theme = Theme.standard,
 ):
   /** Width of the longest project name. Compile and test lines pad the name to it. */
   val moduleColumn: Int =
@@ -218,6 +220,7 @@ object ProjectGraph:
       formatting: Formatting = Formatting.Off,
       coordinates: List[PluginCoordinate] = Nil,
       ciSetup: CiSetup = CiSetup.Remote,
+      theme: Theme = Theme.standard,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -240,6 +243,7 @@ object ProjectGraph:
       formatting,
       coordinates,
       ciSetup,
+      theme,
     )
 end ProjectGraph
 
@@ -294,6 +298,13 @@ object Projects:
 
   /** How generated workflows install Histos. Omission is [[CiSetup.Remote]]. */
   def ciSetup(value: CiSetup): Organized = Organized.empty.ciSetup(value)
+
+  /** Console colors for compile, test, and doctor. Omission is [[histos.theme.Theme.standard]]. A dependency's
+    * [[histos.theme.Theme]] is applied the same way: pass the value here. Depending on the jar does not restyle the
+    * console. [[histos.theme.Color.rgb]] is truecolor when the client allows it, and a named color stays that name at
+    * every depth.
+    */
+  def theme(value: Theme): Organized = Organized.empty.theme(value)
 
   /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
   def jobTimeout(value: JobTimeout): Organized = Organized.empty.jobTimeout(value)
@@ -407,6 +418,7 @@ object Projects:
             settings.formatting,
             coordinates,
             settings.ciSetup,
+            settings.theme,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -1026,6 +1038,9 @@ final class Organized private (settings: Organized.Settings):
   /** How generated workflows install Histos. A second call replaces the choice. Omission is [[CiSetup.Remote]]. */
   def ciSetup(value: CiSetup): Organized = Organized(settings.copy(ciSetup = value))
 
+  /** Replaces the console theme. A second call replaces it. Omission is [[histos.theme.Theme.standard]]. */
+  def theme(value: Theme): Organized = Organized(settings.copy(theme = value))
+
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.build(settings, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
@@ -1093,6 +1108,7 @@ object Organized:
       formatting: Formatting = Formatting.Off,
       pluginSources: List[PluginRef] = Nil,
       ciSetup: CiSetup = CiSetup.Remote,
+      theme: Theme = Theme.standard,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())
