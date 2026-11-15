@@ -6,6 +6,7 @@ import histos.load.{Loader, LoadedBuild}
 import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult}
 import histos.resolve.Resolve
+import histos.process.{StdinFeed, Terminal}
 import histos.server.{Call, Client, Feed, Message, Perform, Say, ServerError}
 import histos.task.RunId
 
@@ -36,12 +37,12 @@ object Build:
       case Beat.Bytes(data)      => Feed.Output(data)
       case Beat.Finished(result) => Feed.Done(result)
 
-  private def locally[R, E](
-      input: Boolean,
-      use: histos.process.RunRelay => ZIO[R, E, Unit],
+  def relay[R, E](terminal: Terminal, call: Call)(
+      use: histos.process.RunRelay => ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
-    if input then ZIO.scoped(histos.process.LiveInput.open.flatMap(use))
-    else use(histos.process.RunRelay.Closed)
+    StdinFeed.of(terminal, call.attendance) match
+      case StdinFeed.Live   => ZIO.scoped(histos.process.LiveInput.open.flatMap(use))
+      case StdinFeed.Closed => use(histos.process.RunRelay.Closed)
 
   def write(bytes: Chunk[Byte]): UIO[Unit] =
     ZIO.attemptBlocking {
@@ -50,10 +51,10 @@ object Build:
       out.flush()
     }.ignore
 
-  def attached(socket: Path): Build[Any] =
+  def attached(socket: Path, terminal: Terminal = Terminal.Detached): Build[Any] =
     new Build[Any]:
       def perform(call: Call): ZStream[Any, ServerError, Beat] =
-        Client.talk(socket, call).map {
+        Client.talk(socket, call, terminal).map {
           case Feed.Event(event)  => Beat.Heard(event)
           case Feed.Output(bytes) => Beat.Bytes(bytes)
           case Feed.Done(result)  => Beat.Finished(result)
@@ -69,7 +70,7 @@ object Build:
       adopt: Call => ZIO[R, ServerError, Either[BuildFault, Option[LoadedBuild]]],
       edges: Say => Perform.Edges[R],
       hear: Beat => UIO[Unit],
-      input: Boolean = false,
+      terminal: Terminal = Terminal.Detached,
   ): Build[R] =
     new Build[R]:
       def perform(call: Call): ZStream[R, ServerError, Beat] =
@@ -103,12 +104,10 @@ object Build:
                 .flatMap { report =>
                   histos.zinc.CompileMemo.provide(
                     histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                      locally(
-                        input,
-                        relay =>
-                          Perform
-                            .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say), relay)
-                            .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live),
+                      relay(terminal, call)(stdin =>
+                        Perform
+                          .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say), stdin)
+                          .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
                     )
                   )

@@ -516,29 +516,53 @@ object ChildProcess:
           )
           .unit
 
-  /** `Closed` leaves stdin open. An open relay copies bytes, then closes the pipe on end. */
+  private enum Inlet:
+    case Open
+    case Shut
+
+  /** `Closed` leaves stdin open. An open relay copies bytes, then closes the pipe on end. A failed write stops: the
+    * child is gone.
+    */
   private def pump(process: Process, relay: RunRelay): UIO[Unit] =
     relay match
       case RunRelay.Closed     => ZIO.unit
       case RunRelay.Open(take) =>
-        def loop(open: Boolean): UIO[Unit] =
+        def loop(inlet: Inlet): UIO[Unit] =
           take.flatMap:
-            case None                                 => ZIO.unit
-            case Some(RelayCommand.Stdin(_)) if !open => loop(open)
-            case Some(RelayCommand.Stdin(bytes))      =>
-              ZIO.attemptBlocking {
-                val out = process.getOutputStream
-                out.write(bytes.toArray)
-                out.flush()
-              }.ignore *> loop(open)
-            case Some(RelayCommand.End) =>
-              ZIO.attemptBlocking(process.getOutputStream.close()).ignore *> loop(false)
-            case Some(RelayCommand.Interrupt) =>
-              ZIO.attempt {
-                val pid = process.pid()
-                if pid > 0 && pid <= Int.MaxValue then Posix.signalGroup(pid.toInt, Posix.SigInt)
-              }.ignore *> loop(open)
-        loop(true)
+            case None          => ZIO.unit
+            case Some(command) =>
+              (inlet, command) match
+                case (Inlet.Shut, RelayCommand.Stdin(_))     => loop(Inlet.Shut)
+                case (Inlet.Open, RelayCommand.Stdin(bytes)) =>
+                  writeIn(process, bytes).flatMap:
+                    case Inlet.Open => loop(Inlet.Open)
+                    case Inlet.Shut => ZIO.unit
+                case (_, RelayCommand.End) =>
+                  closeIn(process) *> loop(Inlet.Shut)
+                case (_, RelayCommand.Interrupt) =>
+                  interrupt(process) *> loop(inlet)
+        loop(Inlet.Open)
+
+  private def writeIn(process: Process, bytes: Chunk[Byte]): UIO[Inlet] =
+    ZIO
+      .attemptBlocking {
+        val out = process.getOutputStream
+        out.write(bytes.toArray)
+        out.flush()
+      }
+      .as(Inlet.Open)
+      .orElseSucceed(Inlet.Shut)
+
+  private def closeIn(process: Process): UIO[Unit] =
+    ZIO.attemptBlocking(process.getOutputStream.close()).orElseSucceed(())
+
+  private def interrupt(process: Process): UIO[Unit] =
+    ZIO
+      .attempt(process.pid())
+      .orElseSucceed(0L)
+      .flatMap: pid =>
+        if pid > 0 && pid <= Int.MaxValue then ZIO.succeed(Posix.signalGroup(pid.toInt, Posix.SigInt)).unit
+        else ZIO.unit
 
   private def startCommand(
       java: Path,

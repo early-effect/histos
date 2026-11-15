@@ -4,7 +4,7 @@ import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
-import histos.server.{Call, Message, RunBytes, RunLaunch, ServerError, ServerFile, ServerStamp, Successor}
+import histos.server.{Attendance, Call, Message, RunBytes, RunLaunch, ServerError, ServerFile, ServerStamp, Successor}
 import histos.report.CallResult
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -165,9 +165,9 @@ object Main extends ZIOAppDefault:
 
   /** Stdin frames start after the call is written, so this fiber is the socket's only writer. */
   private def copyInput(call: Call, output: java.io.OutputStream): ZIO[Scope, Nothing, Unit] =
-    call match
-      case Call.Run(_, _, _, _) | Call.Watch(Call.Run(_, _, _, _), _) => StdinRelay.attach(output)
-      case _                                                          => ZIO.unit
+    call.attendance match
+      case Attendance.Program                 => StdinRelay.attach(output)
+      case Attendance.Held | Attendance.Quiet => ZIO.unit
 
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match

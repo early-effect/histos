@@ -1423,11 +1423,12 @@ object Bsp:
               .map(found => Rpc.InverseSourcesResult(found.distinct.map(Rpc.TargetId(_))))
 
     private def documentPath(uri: String): Option[Path] =
-      try
-        val parsed = java.net.URI.create(uri)
-        if parsed.getScheme != "file" then None
-        else Some(Path.of(parsed).toAbsolutePath.normalize)
-      catch case _: IllegalArgumentException => None
+      scala.util
+        .Try(java.net.URI.create(uri))
+        .toOption
+        .flatMap: parsed =>
+          if parsed.getScheme == "file" then scala.util.Try(Path.of(parsed).toAbsolutePath.normalize).toOption
+          else None
 
     private def filesOf(id: Id): IO[BspError, List[Path]] =
       id match

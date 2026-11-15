@@ -893,7 +893,7 @@ object Cli:
                 adopted(repo, apiJar, _),
                 cliEdges(repo, _),
                 heard(repo, frame, _).provideEnvironment(services),
-                programRun(call),
+                histos.process.Terminal.Owned,
               )
             build
               .perform(call)
@@ -955,19 +955,12 @@ object Cli:
                         .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                     )
                   )
-                if programRun(call) then ZIO.scoped(histos.process.LiveInput.open.flatMap(ran))
-                else ran(histos.process.RunRelay.Closed)
+                Build.relay(histos.process.Terminal.Owned, call)(ran)
               }
           }
         }
       }
     }
-
-  private def programRun(call: Call): Boolean =
-    call match
-      case Call.Run(_, _, _, _)                => true
-      case Call.Watch(Call.Run(_, _, _, _), _) => true
-      case _                                   => false
 
   private def adopted(
       repo: Path,
@@ -2094,7 +2087,7 @@ object Cli:
   )(using appearance: Appearance): ZIO[Stdio, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(Ref.make(Show.start)).flatMap {
       (result, shown) =>
-        Build.attached(socket).perform(call).foreach {
+        Build.attached(socket, histos.process.Terminal.Owned).perform(call).foreach {
           case Beat.Heard(event) =>
             Show.follow(repo, shown, event, appearance, say, sayError)
           case Beat.Bytes(data) =>

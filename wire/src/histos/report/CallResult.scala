@@ -165,6 +165,7 @@ enum Rejection:
   case FormatMode(raw: String)
   case FormatTargets
   case FormatPath(raw: String)
+  case Path(raw: String)
   case Retired(word: String, use: String)
   case PublishToken(error: histos.publish.PublishToken.Error)
 
@@ -196,6 +197,7 @@ enum Rejection:
     case FormatMode(raw)       => s"'$raw' is not a fmt mode. It is write or check"
     case FormatTargets         => "fmt takes projects or files, not both"
     case FormatPath(raw)       => s"'$raw' is not a path relative to the repository"
+    case Path(raw)             => s"'$raw' is not a path"
     case CommandHelp(names)    =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
     case Retired(word, use)  => s"$word was removed\nuse $use"

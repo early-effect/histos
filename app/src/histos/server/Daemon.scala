@@ -13,7 +13,7 @@ import histos.cache.CacheCleanMode
 import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
-import histos.process.{LiveInput, RelayCommand, RunRelay}
+import histos.process.{LiveInput, RelayCommand, RunRelay, StdinFeed, Terminal}
 import histos.toolchain.Runtimes
 import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectGraph, ProjectName, Resolution}
@@ -195,7 +195,11 @@ object Attach:
 end Attach
 
 object Client:
-  def talk(socket: Path, call: Call): ZStream[Any, ServerError, Feed] =
+  def talk(
+      socket: Path,
+      call: Call,
+      terminal: Terminal = Terminal.Detached,
+  ): ZStream[Any, ServerError, Feed] =
     ZStream.unwrapScoped {
       for
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
@@ -204,7 +208,7 @@ object Client:
         _     <- Frame.write(output, call.toJson).mapError(written(socket))
         first <- Frame.read(input).mapError(read(socket))
         _     <- ZIO.fromEither(ready(first))
-        _     <- attachInput(call, output)
+        _     <- attachInput(terminal, call, output)
       yield frames(input, socket)
     }
 
@@ -226,32 +230,32 @@ object Client:
       yield code
     }
 
-  /** A program's stdin is this process, when this process is the client. The server reads the frames. */
-  private def attachInput(call: Call, output: OutputStream): ZIO[Scope, Nothing, Unit] =
-    if programRun(call) then
-      val box = new java.util.concurrent.LinkedTransferQueue[RelayCommand]
-      LiveInput.serve(box) *> forward(output, box).forkScoped.unit
-    else ZIO.unit
+  /** Program frames leave this process only when it owns the terminal. The server reads them. */
+  private def attachInput(
+      terminal: Terminal,
+      call: Call,
+      output: OutputStream,
+  ): ZIO[Scope, Nothing, Unit] =
+    StdinFeed.of(terminal, call.attendance) match
+      case StdinFeed.Live =>
+        for
+          queue <- Queue.unbounded[RelayCommand]
+          _     <- LiveInput.serve(queue)
+          _     <- forward(output, queue).forkScoped
+        yield ()
+      case StdinFeed.Closed => ZIO.unit
 
-  private def forward(output: OutputStream, box: java.util.concurrent.LinkedTransferQueue[RelayCommand]): UIO[Unit] =
+  private def forward(output: OutputStream, queue: Queue[RelayCommand]): UIO[Unit] =
     def step: UIO[Unit] =
-      ZIO
-        .attemptBlocking(box.take())
-        .orDie
+      queue.take
         .flatMap: command =>
           val frame = command match
             case RelayCommand.Stdin(bytes) => RunInput.Stdin(RunBytes.encode(bytes))
             case RelayCommand.End          => RunInput.StdinEnd
             case RelayCommand.Interrupt    => RunInput.Interrupt
-          Frame.write(output, frame.toJson).ignore *> step
+          Frame.write(output, frame.toJson).foldZIO(_ => ZIO.unit, _ => step)
         .catchAllCause(cause => if cause.isInterruptedOnly then ZIO.unit else ZIO.failCause(cause))
     step
-
-  private def programRun(call: Call): Boolean =
-    call match
-      case Call.Run(_, _, _, _)                => true
-      case Call.Watch(Call.Run(_, _, _, _), _) => true
-      case _                                   => false
 
   private def connect(socket: Path): IO[ServerError, SocketChannel] =
     ZIO
@@ -832,10 +836,10 @@ object Daemon:
   private def attended[R](call: Call, socket: SocketChannel, input: InputStream)(
       body: RunRelay => ZIO[R, ServerError, Unit]
   ): ZIO[R, ServerError, Unit] =
-    call match
-      case Call.Bsp | Call.Reboot(_)                                  => body(RunRelay.Closed)
-      case Call.Run(_, _, _, _) | Call.Watch(Call.Run(_, _, _, _), _) => liveInput(input)(body)
-      case _ => body(RunRelay.Closed).raceFirst(gone(socket, input))
+    call.attendance match
+      case Attendance.Held    => body(RunRelay.Closed)
+      case Attendance.Program => liveInput(input)(body)
+      case Attendance.Quiet   => body(RunRelay.Closed).raceFirst(gone(socket, input))
 
   /** Frames from the owning client. The socket closing ends the call. A bad frame does too. */
   private def liveInput[R](input: InputStream)(

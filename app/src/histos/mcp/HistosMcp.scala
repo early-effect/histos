@@ -594,8 +594,9 @@ object HistosMcp:
     raw match
       case None       => Right(None)
       case Some(text) =>
-        try Right(Some(Path.of(text)))
-        catch case _: java.nio.file.InvalidPathException => Left(BuildFault.Rejected(Rejection.Watch(text)))
+        scala.util.Try(Path.of(text)).toOption match
+          case Some(path) => Right(Some(path))
+          case None       => Left(BuildFault.Rejected(Rejection.Path(text)))
 
   private def arguments(
       texts: List[NamedArg],

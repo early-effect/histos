@@ -168,6 +168,18 @@ object RunBytes:
     catch case _: IllegalArgumentException => None
 end RunBytes
 
+/** What the client does with the socket after Ready. */
+enum Attendance:
+  /** The handler reads the socket. Closing it is not a cancel. */
+  case Held
+
+  /** The client writes program input frames. */
+  case Program
+
+  /** The client writes nothing more. Closing the socket cancels the call. */
+  case Quiet
+end Attendance
+
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
@@ -205,6 +217,13 @@ enum Call derives JsonCodec:
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
   case PreviewRun(id: String, platform: Option[Platform])
+
+  /** A nested watch is quiet. Only the program under one watch reads stdin. */
+  def attendance: Attendance =
+    this match
+      case Bsp | Reboot(_)                             => Attendance.Held
+      case Run(_, _, _, _) | Watch(Run(_, _, _, _), _) => Attendance.Program
+      case _                                           => Attendance.Quiet
 end Call
 
 object Call:

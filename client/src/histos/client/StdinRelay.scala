@@ -102,9 +102,8 @@ private[client] object StdinRelay:
   private def note(fd: CInt): Option[Byte] =
     Zone {
       val buf = alloc[Byte](1)
-      val n   = unistd.read(fd, buf, 1.toCSize)
-      if n == 1 then Some(buf(0))
-      else if n < 0 && errno.errno == errno.EINTR then note(fd)
-      else None
+      var n   = unistd.read(fd, buf, 1.toCSize)
+      while n < 0 && errno.errno == errno.EINTR do n = unistd.read(fd, buf, 1.toCSize)
+      if n == 1 then Some(buf(0)) else None
     }
 end StdinRelay
