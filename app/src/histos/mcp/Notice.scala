@@ -3,7 +3,7 @@ package histos.mcp
 import heddle.mcp.Session
 import heddle.mcp.protocol.Message
 import histos.build.BuildEvent
-import histos.cli.{CompileConsole, Show}
+import histos.cli.{Appearance, CompileConsole, Show}
 
 import java.nio.file.Path
 
@@ -44,9 +44,11 @@ object Notice:
 
   def err(text: String): UIO[Unit] = line(Level.Error, text)
 
-  /** The rendered line, when it is not empty, then the event itself. A layout only updates `column`. */
-  def show(repo: Path, column: Ref[Int], event: BuildEvent): UIO[Unit] =
-    Show.follow(repo, column, event, out, err) *> eventNote(event)
+  /** The rendered line, when it is not empty, then the event itself. A layout or a theme prints nothing. Live logs stay
+    * plain. The report paints only when the tool asked for color.
+    */
+  def show(repo: Path, shown: Ref[Show.Shown], event: BuildEvent): UIO[Unit] =
+    Show.follow(repo, shown, event, Appearance.plain, out, err) *> eventNote(event)
 
   private def line(level: Level, text: String): UIO[Unit] =
     if text.isEmpty then ZIO.unit

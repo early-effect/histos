@@ -5,7 +5,7 @@ import heddle.endpoint.{Schema, SchemaDoc}
 import heddle.mcp.{Mcp, McpBuildError}
 import heddle.mcp.protocol.ToolName
 import histos.cache.{CacheCleanMode, ContentStore}
-import histos.cli.Cli
+import histos.cli.{Appearance, Cli, Depth, Ink, Paint, TruecolorChoice}
 import histos.client.{ClientJson, Session}
 import histos.format.{FormatMode, FormatTargets}
 import histos.report.{BuildFault, Rejection, Stored, WireSchema}
@@ -117,11 +117,18 @@ object HistosMcp:
   ) derives Schema,
         JsonCodec
   final case class CancelArgs(id: String) derives Schema, JsonCodec
-  final case class CompileArgs(projects: List[String] = Nil) derives Schema, JsonCodec
+  final case class CompileArgs(
+      projects: List[String] = Nil,
+      color: Boolean = false,
+      truecolor: Option[Boolean] = None,
+  ) derives Schema,
+        JsonCodec
   final case class TestArgs(
       projects: List[String] = Nil,
       patterns: List[String] = Nil,
       mode: TestMode = TestMode.Run,
+      color: Boolean = false,
+      truecolor: Option[Boolean] = None,
   ) derives Schema,
         JsonCodec
   final case class PublishArgs(place: PublishPlace, tokens: List[String] = Nil) derives Schema, JsonCodec
@@ -160,6 +167,8 @@ object HistosMcp:
       yes: Boolean = false,
       verbose: Boolean = false,
       projects: List[String] = Nil,
+      color: Boolean = false,
+      truecolor: Option[Boolean] = None,
   ) derives Schema,
         JsonCodec
   final case class DoctorText(text: String) derives Schema, JsonCodec
@@ -282,11 +291,23 @@ object HistosMcp:
       compiling <- stopped.tool[CompileArgs](
         Names.compile,
         "Compile modules. An empty list compiles every module. An aggregate name compiles its modules, on every platform each module builds.",
-      )(args => ZIO.fromEither(compileCall(args.projects)).mapError(refused).flatMap(ask))
+      )(args =>
+        depthOf(args.color, args.truecolor).flatMap { depth =>
+          ZIO.fromEither(compileCall(args.projects)).mapError(refused).flatMap { call =>
+            Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
+          }
+        }
+      )
       testing <- compiling.tool[TestArgs](
         Names.test,
         "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
-      )(args => ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap(ask))
+      )(args =>
+        depthOf(args.color, args.truecolor).flatMap { depth =>
+          ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap { call =>
+            Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
+          }
+        }
+      )
       publishing <- testing.tool[PublishArgs](
         Names.publish,
         "local installs into Coursier's ivy2Local. snapshots publishes the snapshot coordinate. A token is a ship, an aggregate, or a module. An empty list publishes every ship.",
@@ -361,34 +382,52 @@ object HistosMcp:
         Names.doctor,
         "Run doctor. projects are the modules this run launches. An empty list launches nothing, so node.floor, node.shadowed, and clang.source do not probe. The text lists errors and warnings. verbose lists every check. area limits the checks. json prints json. preflight runs the offline checks and does not call GitHub. fix applies local edits and runs histos commands, whose output is part of the text, and never changes GitHub settings.",
       )(args =>
-        ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap {
-          case Left(error)   => ZIO.succeed(DoctorText(error.message))
-          case Right(loaded) =>
-            launched(loaded.graph, args.projects) match
-              case Left(error)    => ZIO.succeed(notLaunched(error))
-              case Right(modules) =>
-                DoctorSurface
-                  .run(
-                    repo,
-                    loaded.graph,
-                    DoctorSurface.Request(
-                      args.area,
-                      args.json,
-                      args.preflight,
-                      args.fix,
-                      args.yes,
-                      modules,
-                      args.verbose,
-                    ),
-                    machine,
-                  )
-                  .provideSomeLayer[DoctorSurface.Reads](
-                    ZLayer.succeed(histos.cli.Stdio.redirected) ++ histos.supply.CommandRunner.captured
-                  )
-                  .map((_, text) => DoctorText(text))
+        appearanceOf(args.color, args.truecolor).flatMap { view =>
+          ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap {
+            case Left(error)   => ZIO.succeed(DoctorText(error.message))
+            case Right(loaded) =>
+              launched(loaded.graph, args.projects) match
+                case Left(error)    => ZIO.succeed(notLaunched(error))
+                case Right(modules) =>
+                  DoctorSurface
+                    .run(
+                      repo,
+                      loaded.graph,
+                      DoctorSurface.Request(
+                        args.area,
+                        args.json,
+                        args.preflight,
+                        args.fix,
+                        args.yes,
+                        modules,
+                        args.verbose,
+                      ),
+                      machine,
+                      view,
+                    )
+                    .provideSomeLayer[DoctorSurface.Reads](
+                      ZLayer.succeed(histos.cli.Stdio.redirected) ++ histos.supply.CommandRunner.captured
+                    )
+                    .map((_, text) => DoctorText(text))
+          }
         }
       )
     yield diagnosed
+
+  /** Absent color stays plain. A set color follows `COLORTERM` unless `truecolor` says otherwise. */
+  private def depthOf(color: Boolean, truecolor: Option[Boolean]): UIO[Option[Depth]] =
+    if !color then ZIO.succeed(None)
+    else
+      val choice = truecolor match
+        case None        => TruecolorChoice.Default
+        case Some(true)  => TruecolorChoice.On
+        case Some(false) => TruecolorChoice.Off
+      zio.System.env("COLORTERM").orElseSucceed(None).map(term => Some(Paint.depth(choice, term)))
+
+  private def appearanceOf(color: Boolean, truecolor: Option[Boolean]): UIO[Appearance] =
+    depthOf(color, truecolor).map:
+      case Some(depth) => Appearance(Ink.Colour, depth)
+      case None        => Appearance.plain
 
   /** The modules a doctor run launches. The first bad name or selection is the refusal. */
   private[mcp] def launched(

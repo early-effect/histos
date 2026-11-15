@@ -19,7 +19,8 @@ import histos.doctor.{
   Runner,
 }
 import histos.central.{KeyServer, ReleaseFeed}
-import histos.cli.Stdio
+import histos.cli.{Appearance, Paint, Stdio}
+import histos.theme.Theme
 import histos.plugin.RepoPath
 import histos.version.CommitSha
 import histos.workflow.PinScan
@@ -30,7 +31,7 @@ import histos.ProjectGraph
 import java.nio.file.{Files, Path}
 import java.time.ZoneOffset
 
-import zio.{durationInt, Clock, IO, UIO, ULayer, URIO, ZIO, ZLayer}
+import zio.{Chunk, durationInt, Clock, IO, UIO, ULayer, URIO, ZIO, ZLayer}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -67,6 +68,7 @@ object DoctorSurface:
       graph: ProjectGraph,
       request: Request,
       machine: histos.jdk.Machine,
+      appearance: Appearance = Appearance.plain,
   ): URIO[Needs, (Int, String)] =
     for
       env   <- zio.System.envs.orElseSucceed(Map.empty)
@@ -86,7 +88,13 @@ object DoctorSurface:
       survey  <- toolchainLines(request, machine, graph)
     yield
       val body =
-        if request.json then Render.json(report) else Render.text(repoName(repo), report, request.verbose)
+        if request.json then Render.json(report)
+        else
+          Paint.paintLines(
+            Chunk.fromIterable(Render.lines(repoName(repo), report, request.verbose)),
+            graph.theme.orElse(Theme.standard),
+            appearance,
+          )
       val note = if written.isEmpty then "" else written.mkString("\n", "\n", "")
       (report.exit, body + note + survey)
 

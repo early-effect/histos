@@ -654,6 +654,33 @@ end WireSchemaCall
 private object WireSchemaEvent extends WireSchemaSupport:
   import WireSchemaLeaves.given
   import WireSchemaBuild.given
+  import histos.theme.{Color, Emphasis, Role, Style, Theme}
+
+  given Schema[Color] = text("Color")
+
+  given Schema[Emphasis] = enumeration("Emphasis", List("plain", "bold", "dim"))
+
+  given Schema[Role] = enumeration(
+    "Role",
+    List(
+      "compiling",
+      "pulse",
+      "unchanged",
+      "cached",
+      "passed",
+      "failed",
+      "no-tests",
+      "unmatched",
+      "warn",
+      "error",
+      "tally-ok",
+      "tally-bad",
+    ),
+  )
+
+  given Schema[Style] = Schema.derived
+
+  given Schema[Theme] = Schema.derived
 
   given Schema[CompileSeverity] = Schema.derived
 

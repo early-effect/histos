@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.report.{Diagnostic, ModuleTally, Observation, Tally}
+import histos.theme.{Role, Theme}
 import histos.zinc.{CompileFacts, CompileFeed, CompilePulse, KeyMiss, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
 
@@ -12,22 +13,33 @@ import zio.{Chunk, Ref, UIO, ZIO}
   */
 object CompileConsole:
   enum Line:
-    case Out(text: String)
-    case Err(text: String)
+    case Out(parts: Chunk[Part])
+    case Err(parts: Chunk[Part])
+
+    def spans: Chunk[Part] = this match
+      case Out(parts) => parts
+      case Err(parts) => parts
+
+    def text: String = spans.map(_.text).mkString
+  end Line
+
+  object Line:
+    def out(text: String): Line = Out(Chunk(Part.Plain(text)))
+    def err(text: String): Line = Err(Chunk(Part.Plain(text)))
 
   def lines(repo: Path, feed: CompileFeed, column: Int = 0): Chunk[Line] =
     feed match
       case CompileFeed.Began(module, version, platform) =>
-        Chunk(Line.Out(Lines.compiling(module, version, platform, column)))
+        Chunk(Line.Out(Lines.compilingParts(module, version, platform, column)))
       case CompileFeed.Diagnostic(module, version, platform, problem) =>
-        Chunk(Line.Err(Lines.cell(module, version, platform, Lines.diagnostic(repo, problem), column)))
+        Chunk(Line.Err(Lines.lead(module, version, platform, Lines.diagnosticParts(repo, problem), column)))
       case CompileFeed.Miss(module, version, platform, change) =>
-        Chunk(Line.Out(KeyMiss.line(module, version, platform, change, column)))
+        Chunk(Line.out(KeyMiss.line(module, version, platform, change, column)))
       case CompileFeed.Pulse(module, version, platform, pulse) =>
-        Chunk(Line.Out(Lines.cell(module, version, platform, pulseText(pulse), column)))
+        Chunk(Line.Out(Lines.lead(module, version, platform, Chunk(Part.Mark(pulseText(pulse), Role.Pulse)), column)))
       case CompileFeed.Done(cell) =>
         Lines
-          .outcome(
+          .outcomeParts(
             cell.module,
             cell.version,
             cell.platform,
@@ -36,9 +48,9 @@ object CompileConsole:
             cell.classesWritten,
             column,
           )
-          .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
+          .fold(Chunk.empty)(parts => Chunk(Line.Out(parts)))
       case CompileFeed.Failed(error) =>
-        Chunk(Line.Err(error.message))
+        Chunk(Line.Err(Chunk(Part.Mark(error.message, Role.Error))))
 
   def open(repo: Path, column: Int = 0): UIO[Session] =
     Ref.make(Counts.empty).map(counts => new Session(repo, counts, column))
@@ -48,12 +60,14 @@ object CompileConsole:
 
   def show[R, E](
       lines: Chunk[Line],
+      theme: Theme,
+      appearance: Appearance,
       out: String => ZIO[R, E, Unit],
       err: String => ZIO[R, E, Unit],
   ): ZIO[R, E, Unit] =
     ZIO.foreachDiscard(lines):
-      case Line.Out(text) => out(text)
-      case Line.Err(text) => err(text)
+      case line: Line.Out => out(Paint.paint(line.spans, theme, appearance))
+      case line: Line.Err => err(Paint.paint(line.spans, theme, appearance))
 
   final class Session private[CompileConsole] (repo: Path, counts: Ref[Counts], column: Int):
     def hear(feed: CompileFeed): UIO[Chunk[Line]] =
@@ -87,10 +101,11 @@ object CompileConsole:
     def tally: UIO[Option[String]] =
       counts.get.map(_.line(Lines.tally))
 
-    def announce[R, E](out: String => ZIO[R, E, Unit]): ZIO[R, E, Unit] =
-      tally.flatMap:
-        case Some(line) => out(line)
-        case None       => ZIO.unit
+    def announce[R, E](out: (String, Role) => ZIO[R, E, Unit]): ZIO[R, E, Unit] =
+      counts.get.flatMap: found =>
+        found.line(Lines.tally) match
+          case Some(line) => out(line, if found.failed == 0 then Role.TallyOk else Role.TallyBad)
+          case None       => ZIO.unit
 
     def observation: UIO[Option[Observation]] =
       counts.get.map(_.observed)
@@ -133,10 +148,11 @@ object CompileConsole:
     def tally: UIO[Option[String]] =
       counts.get.map(_.line(Lines.testTally))
 
-    def announce[R, E](out: String => ZIO[R, E, Unit]): ZIO[R, E, Unit] =
-      tally.flatMap:
-        case Some(line) => out(line)
-        case None       => ZIO.unit
+    def announce[R, E](out: (String, Role) => ZIO[R, E, Unit]): ZIO[R, E, Unit] =
+      counts.get.flatMap: found =>
+        found.line(Lines.testTally) match
+          case Some(line) => out(line, if found.failed == 0 then Role.TallyOk else Role.TallyBad)
+          case None       => ZIO.unit
 
     def observation: UIO[Option[Observation]] =
       counts.get.map(_.observed)

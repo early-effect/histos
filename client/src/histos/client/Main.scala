@@ -3,7 +3,7 @@ package histos.client
 import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
-import histos.cli.{CliExit, CompileConsole, Show}
+import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
 import histos.server.{Call, Message, ServerError, ServerFile, ServerStamp, Successor}
 import histos.report.CallResult
 
@@ -43,19 +43,31 @@ object Main extends ZIOAppDefault:
   override def run =
     for
       args <- ZIO.serviceWith[zio.ZIOAppArgs](_.getArgs)
-      code <- Batch.parse(args.toList) match
-        case None       => jvm(args.toList)
-        case Some(call) => batch(call)
+      raw    = args.toList
+      peeled = ColorFlag.peel(raw)
+      code <- Batch.parse(peeled.args) match
+        case None       => jvm(raw)
+        case Some(call) => batch(call, seen(peeled))
     yield ExitCode(code)
 
-  private def batch(call: Call): ZIO[Scope, Nothing, Int] =
+  /** A terminal and an unset `NO_COLOR` take color. `--truecolor` does not turn color on. */
+  private def seen(peeled: Peeled): Appearance =
+    val terminal  = unistd.isatty(1) == 1
+    val noColor   = Option(System.getenv("NO_COLOR"))
+    val colorTerm = Option(System.getenv("COLORTERM"))
+    Appearance(
+      Paint.decide(peeled.color, terminal, noColor),
+      Paint.depth(peeled.truecolor, colorTerm),
+    )
+
+  private def batch(call: Call, appearance: Appearance): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
     ApiClock.admit(repo).flatMap { admitted =>
       val noted = admitted match
         case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
         case ApiClock.Admit.Go         => ZIO.unit
       noted *>
-        talk(repo, call).foldZIO(
+        talk(repo, call, appearance).foldZIO(
           error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
           code => ZIO.succeed(leave(code, None)),
         )
@@ -72,24 +84,24 @@ object Main extends ZIOAppDefault:
     unistd._exit(code)
     code
 
-  private def talk(repo: Path, call: Call): ZIO[Scope, ServerError, Int] =
+  private def talk(repo: Path, call: Call, appearance: Appearance): ZIO[Scope, ServerError, Int] =
     readRecord(repo).flatMap:
-      case None         => boot(repo).flatMap(socket => exchange(repo, socket, call))
+      case None         => boot(repo).flatMap(socket => exchange(repo, socket, call, appearance))
       case Some(record) =>
         agrees(record).flatMap: ok =>
           val socket = Path.of(record.socket)
           if ok then
-            exchange(repo, socket, call).catchSome:
+            exchange(repo, socket, call, appearance).catchSome:
               case ServerError.Unreachable(_) =>
-                boot(repo).flatMap(fresh => exchange(repo, fresh, call))
-          else replace(repo, socket, record.version, call)
+                boot(repo).flatMap(fresh => exchange(repo, fresh, call, appearance))
+          else replace(repo, socket, record.version, call, appearance)
 
-  private def exchange(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
+  private def exchange(repo: Path, socket: Path, call: Call, appearance: Appearance): ZIO[Scope, ServerError, Int] =
     ZIO
       .acquireRelease(UnixPipe.connect(socket))(session => ZIO.succeed(session.close()))
       .flatMap: session =>
         ZIO
-          .attemptBlocking(drive(repo, socket, session, call))
+          .attemptBlocking(drive(repo, socket, session, call, appearance))
           .mapError(_ => ServerError.Io(histos.server.ServerIo.Read(socket)))
           .flatMap(ZIO.fromEither)
 
@@ -98,6 +110,7 @@ object Main extends ZIOAppDefault:
       socket: Path,
       session: UnixPipe.Session,
       call: Call,
+      appearance: Appearance,
   ): Either[ServerError, Int] =
     Frame.put(session.output, call.toJson) match
       case Left(_)  => Left(ServerError.Io(histos.server.ServerIo.Write(socket)))
@@ -107,7 +120,7 @@ object Main extends ZIOAppDefault:
           case Right(head) =>
             ready(head) match
               case Left(error) => Left(error)
-              case Right(_)    => frames(repo, socket, session.input, 0)
+              case Right(_)    => frames(repo, socket, session.input, Show.start, appearance)
 
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match
@@ -119,7 +132,8 @@ object Main extends ZIOAppDefault:
       repo: Path,
       socket: Path,
       input: java.io.InputStream,
-      column: Int,
+      shown: Show.Shown,
+      appearance: Appearance,
   ): Either[ServerError, Int] =
     Frame.take(input) match
       case Left(_)              => Left(ServerError.Io(histos.server.ServerIo.Read(socket)))
@@ -127,17 +141,21 @@ object Main extends ZIOAppDefault:
       case Right(Some(payload)) =>
         payload.fromJson[Message] match
           case Right(Message.Event(BuildEvent.Layout(width))) =>
-            frames(repo, socket, input, width)
+            frames(repo, socket, input, shown.copy(column = width), appearance)
+          case Right(Message.Event(BuildEvent.Theme(value))) =>
+            frames(repo, socket, input, shown.copy(theme = value.orElse(histos.theme.Theme.standard)), appearance)
           case Right(Message.Event(event)) =>
-            show(repo, event, column)
-            frames(repo, socket, input, column)
+            show(repo, event, shown, appearance)
+            frames(repo, socket, input, shown, appearance)
           case Right(Message.Done(result)) => Right(finish(result))
           case _                           => Left(ServerError.Protocol)
 
-  private def show(repo: Path, event: BuildEvent, column: Int): Unit =
-    Show(repo, event, column).foreach:
-      case CompileConsole.Line.Out(text) => System.out.println(text)
-      case CompileConsole.Line.Err(text) => System.err.println(text)
+  private def show(repo: Path, event: BuildEvent, shown: Show.Shown, appearance: Appearance): Unit =
+    Show(repo, event, shown.column).foreach:
+      case line: CompileConsole.Line.Out =>
+        System.out.println(Paint.paint(line.spans, shown.theme, appearance))
+      case line: CompileConsole.Line.Err =>
+        System.err.println(Paint.paint(line.spans, shown.theme, appearance))
 
   private def finish(result: CallResult): Int =
     val exit = CliExit.from(result)
@@ -151,19 +169,25 @@ object Main extends ZIOAppDefault:
   /** The server that heard the reboot starts its successor, so this client waits for it and starts none. A server that
     * did not answer is gone, so this client starts one, as on a cold start.
     */
-  private def replace(repo: Path, socket: Path, was: String, call: Call): ZIO[Scope, ServerError, Int] =
+  private def replace(
+      repo: Path,
+      socket: Path,
+      was: String,
+      call: Call,
+      appearance: Appearance,
+  ): ZIO[Scope, ServerError, Int] =
     Successor.here.flatMap { onto =>
       val next = onto.version.getOrElse(was)
       val line = ApiClock.rebootText(next, was, socket.toString)
       ZIO.succeed(java.lang.System.err.println(line)) *>
-        exchange(repo, socket, Call.Reboot(onto)).either.flatMap {
-          case Right(_) => successor(repo, socket, next, was).flatMap(fresh => exchange(repo, fresh, call))
+        exchange(repo, socket, Call.Reboot(onto), appearance).either.flatMap {
+          case Right(_) => successor(repo, socket, next, was).flatMap(fresh => exchange(repo, fresh, call, appearance))
           case Left(_)  =>
             boot(repo).flatMap { fresh =>
               readRecord(repo).flatMap {
                 case Some(record) =>
                   agrees(record).flatMap: ok =>
-                    if ok then exchange(repo, fresh, call)
+                    if ok then exchange(repo, fresh, call, appearance)
                     else ZIO.fail(ApiClock.restart(socket, next, record.version))
                 case None =>
                   ZIO.fail(ApiClock.restart(socket, next, was))

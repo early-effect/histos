@@ -1,10 +1,12 @@
 package histos.doctor
 
+import histos.cli.Part
 import histos.plugin.RegisteredPlugin
 import histos.supply.SupplyDiagnostic
+import histos.theme.Role
 import histos.ProjectGraph
 
-import zio.{Duration, UIO, ZIO}
+import zio.{Chunk, Duration, UIO, ZIO}
 
 /** Collected checks, in check-id order. Plugins and jobs append after the core list. */
 object Registry:
@@ -56,11 +58,19 @@ object Runner:
 end Runner
 
 object Render:
-  /** Errors and warnings, plus a timed-out check. `verbose` also prints ok, skipped, and info lines. */
+  /** Errors and warnings, plus a timed-out check. `verbose` also prints ok, skipped, and info lines. The plain text is
+    * the join of [[lines]].
+    */
   def text(repo: String, report: DoctorReport, verbose: Boolean): String =
+    Part.join(Chunk.fromIterable(lines(repo, report, verbose)))
+
+  /** One console line is a chunk of spans. The status word carries the role. The check id, the summary, and the fix
+    * stay plain. Info has no role.
+    */
+  def lines(repo: String, report: DoctorReport, verbose: Boolean): List[Chunk[Part]] =
     val shown = if verbose then report.outcomes.flatMap(line) else report.outcomes.flatMap(broken)
-    val lines = shown ++ report.timedOut.map(late)
-    ((s"histos doctor  $repo" :: lines) :+ counts(report, verbose)).mkString("\n")
+    val rows  = shown ++ report.timedOut.map(late)
+    (Chunk(Part.Plain(s"histos doctor  $repo")) :: rows) :+ counts(report, verbose)
 
   def annotations(report: DoctorReport): String =
     val found = report.found.map { diagnostic =>
@@ -92,42 +102,57 @@ object Render:
     val late = report.timedOut.map(id => quote(id.value))
     s"""{"exit":${report.exit},"timedOut":[${late.mkString(",")}],"findings":[${items.mkString(",")}]}"""
 
-  private def counts(report: DoctorReport, verbose: Boolean): String =
+  private def counts(report: DoctorReport, verbose: Boolean): Chunk[Part] =
     val head = s"${report.errors} errors, ${report.warnings} warnings"
     val body =
       if verbose then s"$head, ${report.oks} ok, ${report.skipped} skipped" else head
-    if report.timedOut.isEmpty then body else s"$body, ${report.timedOut.size} timed out"
+    val text = if report.timedOut.isEmpty then body else s"$body, ${report.timedOut.size} timed out"
+    val role = if report.errors > 0 || report.timedOut.nonEmpty then Role.TallyBad else Role.TallyOk
+    Chunk(Part.Mark(text, role))
 
   /** Info is not a failure. Ok and skipped stay off the default log. */
-  private def broken(outcome: Outcome): List[String] =
+  private def broken(outcome: Outcome): List[Chunk[Part]] =
     outcome match
       case Outcome.Found(diagnostic) if diagnostic.level == Level.Error || diagnostic.level == Level.Warning =>
         line(outcome)
       case _ => Nil
 
-  private def late(id: CheckId): String =
-    s"  x timed out ${id.value}"
+  private def late(id: CheckId): Chunk[Part] =
+    Chunk(Part.Plain("  x "), Part.Mark("timed out", Role.Failed), Part.Plain(s" ${id.value}"))
 
-  private def line(outcome: Outcome): List[String] =
+  private def line(outcome: Outcome): List[Chunk[Part]] =
     outcome match
       case Outcome.Ok(check, note) =>
-        List(s"  ok         ${check.value}           $note")
+        List(
+          Chunk(
+            Part.Plain("  "),
+            Part.Mark("ok", Role.Passed),
+            Part.Plain(s"         ${check.value}           $note"),
+          )
+        )
       case Outcome.Skipped(check, missing, how) =>
         val hints = how match
           case Fix.Settings(url, _, _) => List(url.value)
           case Fix.Steps(items)        => items.toList
           case other                   => List(FaultText.shown(other))
-        s"  -  skipped ${check.value}  (needs $missing)" :: hints.map(hint => s"             $hint")
+        Chunk(
+          Part.Plain("  -  "),
+          Part.Mark("skipped", Role.Unchanged),
+          Part.Plain(s" ${check.value}  (needs $missing)"),
+        ) :: hints.map(hint => Chunk(Part.Plain(s"             $hint")))
       case Outcome.Found(diagnostic) =>
         val mark = diagnostic.level match
-          case Level.Error   => "x error   "
-          case Level.Warning => "! warning "
-          case Level.Info    => "i info    "
+          case Level.Error =>
+            Chunk(Part.Plain("  x "), Part.Mark("error", Role.Error), Part.Plain(s"    ${diagnostic.check.value}"))
+          case Level.Warning =>
+            Chunk(Part.Plain("  ! "), Part.Mark("warning", Role.Warn), Part.Plain(s"  ${diagnostic.check.value}"))
+          case Level.Info =>
+            Chunk(Part.Plain(s"  i info     ${diagnostic.check.value}"))
         List(
-          s"  $mark ${diagnostic.check.value}",
-          s"             ${diagnostic.summary}",
-          s"             ${diagnostic.explain}",
-          s"             ${FaultText.rendered(diagnostic.fixes.head)}",
+          mark,
+          Chunk(Part.Plain(s"             ${diagnostic.summary}")),
+          Chunk(Part.Plain(s"             ${diagnostic.explain}")),
+          Chunk(Part.Plain(s"             ${FaultText.rendered(diagnostic.fixes.head)}")),
         )
 
   private def quote(text: String): String =

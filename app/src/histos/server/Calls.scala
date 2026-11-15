@@ -5,6 +5,7 @@ import histos.assembly.{Assemble, AssemblyPath}
 import histos.cache.{CacheCleanMode, CacheForget, CacheVerify, ContentStore}
 import histos.build.BuildEvent
 import histos.cli.{Cli, CompileConsole, GraphText, Lines, Show, TestLogs}
+import histos.theme.{Role, Theme}
 import histos.report.{BuildFault, CallResult, Diagnostic, Observation, Rejection, Report, Stored, Tally, WorkflowFault}
 import histos.testrun.{
   ModuleTest,
@@ -148,10 +149,10 @@ object Say:
     )
 
   def record(repo: Path, feeds: Ref[Chunk[Feed]]): UIO[Say] =
-    Ref.make(0).map { column =>
+    Ref.make(Show.start).map { shown =>
       new Say({
         case Message.Event(event) =>
-          feeds.update(_ :+ Feed.Event(event)) *> histos.mcp.Notice.show(repo, column, event)
+          feeds.update(_ :+ Feed.Event(event)) *> histos.mcp.Notice.show(repo, shown, event)
         case Message.Done(result) => feeds.update(_ :+ Feed.Done(result))
         case _                    => ZIO.unit
       })
@@ -300,7 +301,7 @@ object Calls:
   ): ZIO[R, ServerError, Unit] =
     ran.foldZIO(
       failure =>
-        console.announce(text => told(say, text)) *>
+        console.announce((text, role) => status(say, text, role)) *>
           finishNoted(
             repo,
             say,
@@ -315,7 +316,7 @@ object Calls:
         val result =
           if report.anyFailed then CallResult.Fault(BuildFault.Release(report.failed.mkString("\n")))
           else CallResult.reported()
-        console.announce(text => told(say, text)) *>
+        console.announce((text, role) => status(say, text, role)) *>
           told(say, shown.mkString("\n")) *>
           finishNoted(repo, say, console, List(console.observation), result),
     )
@@ -334,7 +335,7 @@ object Calls:
   ): ZIO[R, ServerError, Unit] =
     ran.foldZIO(
       failure =>
-        console.announce(text => told(say, text)) *>
+        console.announce((text, role) => status(say, text, role)) *>
           finishNoted(
             repo,
             say,
@@ -343,7 +344,7 @@ object Calls:
             CallResult.Fault(BuildFault.Publish(failure)),
           ),
       report =>
-        console.announce(text => told(say, text)) *>
+        console.announce((text, role) => status(say, text, role)) *>
           told(say, report.lines.mkString("\n")) *> finishNoted(
             repo,
             say,
@@ -371,7 +372,7 @@ object Calls:
           Ref
             .make(0)
             .zip(Runtimes.read(machine, graph.runnerTools.nodePath))
-            .flatMap: (status, runtimes) =>
+            .flatMap: (exit, runtimes) =>
               histos.program.Program
                 .console(
                   repo,
@@ -381,7 +382,7 @@ object Calls:
                   runtimes,
                   platform,
                   feed => speak(say, console, feed).ignore,
-                  console.announce(text => told(say, text).ignore) *> compiled,
+                  console.announce((text, role) => status(say, text, role).ignore) *> compiled,
                 )
                 .provideSomeLayer(ZLayer.succeed(remote))
                 .foreach:
@@ -391,13 +392,13 @@ object Calls:
                   case histos.program.ProgramFeed.Err(text) =>
                     errLine(say, text)
                   case histos.program.ProgramFeed.Exited(_, _, _, code) =>
-                    ZIO.when(code != 0)(status.set(code)).unit
+                    ZIO.when(code != 0)(exit.set(code)).unit
                 .foldZIO(
                   {
                     case error: histos.program.ProgramError =>
                       val announced = error match
                         case histos.program.ProgramError.Compile(_) =>
-                          console.announce(text => told(say, text))
+                          console.announce((text, role) => status(say, text, role))
                         case _ => ZIO.unit
                       val result = Faults.programStopped(error) match
                         case Some(why) => CallResult.Fault(why)
@@ -412,7 +413,7 @@ object Calls:
                     case error: ServerError => ZIO.fail(error)
                   },
                   _ =>
-                    status.get.flatMap: code =>
+                    exit.get.flatMap: code =>
                       finishNoted(
                         repo,
                         say,
@@ -450,7 +451,7 @@ object Calls:
                   error =>
                     val announced = error match
                       case histos.program.ProgramError.Compile(_) =>
-                        console.announce(text => told(say, text))
+                        console.announce((text, role) => status(say, text, role))
                       case _ => ZIO.unit
                     val result = Faults.programStopped(error) match
                       case Some(why) => CallResult.Fault(why)
@@ -855,7 +856,7 @@ object Calls:
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     remaining match
       case Nil =>
-        console.announce(text => told(say, text)) *>
+        console.announce((text, role) => status(say, text, role)) *>
           ZIO.foreachDiscard(written)(line => told(say, line)) *>
           finishNoted(repo, say, console, List(console.observation), CallResult.reported())
       case raw :: rest =>
@@ -880,7 +881,7 @@ object Calls:
                   val result = Faults.assembleStopped(error) match
                     case Some(why) => CallResult.Fault(why)
                     case None      => CallResult.reported(error.message)
-                  console.announce(text => told(say, text)) *>
+                  console.announce((text, role) => status(say, text, role)) *>
                     finishNoted(repo, say, console, List(console.observation), result)
                 ,
                 assembled =>
@@ -940,12 +941,12 @@ object Calls:
                   val result = Faults.compileStopped(error) match
                     case Some(why) => CallResult.Fault(why)
                     case None      => CallResult.reported(Cli.compileFailure(error))
-                  console.announce(text => told(say, text)) *>
+                  console.announce((text, role) => status(say, text, role)) *>
                     finishNoted(repo, say, console, List(console.observation), result)
                 case error: ServerError => ZIO.fail(error)
               },
               _ =>
-                console.announce(text => told(say, text)) *>
+                console.announce((text, role) => status(say, text, role)) *>
                   finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
             )
         }
@@ -1115,11 +1116,11 @@ object Calls:
               Ref.make(List.empty[String]).flatMap { missed =>
                 Ref.make(SuiteCount.empty).flatMap { totals =>
                   val close =
-                    console.announce(text => told(say, text)) *>
-                      notes.announce(text => told(say, text)) *>
+                    console.announce((text, role) => status(say, text, role)) *>
+                      notes.announce((text, role) => status(say, text, role)) *>
                       totals.get.flatMap { count =>
                         ZIO.foreachDiscard(Lines.suites(count.passed, count.failed, count.cached, count.modules.size))(
-                          line => told(say, line)
+                          line => status(say, line, if count.failed == 0 then Role.TallyOk else Role.TallyBad)
                         )
                       }
                   val ran =
@@ -1139,8 +1140,12 @@ object Calls:
                             mode,
                             patterns,
                             (module, version, platform, facts) =>
-                              notes(module, version, platform, facts)
-                                .flatMap(line => told(say, line).ignore),
+                              notes(module, version, platform, facts).flatMap { line =>
+                                val spoken =
+                                  if facts.changed then told(say, line)
+                                  else status(say, line, Role.Unchanged)
+                                spoken.ignore
+                              },
                           )
                         )
                         .provideSomeLayer(ZLayer.succeed(remote))
@@ -1295,7 +1300,8 @@ object Calls:
       .replace('\\', '/')
 
   private def layout(say: Say, graph: ProjectGraph): IO[ServerError, Unit] =
-    say(Message.Event(BuildEvent.Layout(graph.moduleColumn)))
+    say(Message.Event(BuildEvent.Layout(graph.moduleColumn))) *>
+      say(Message.Event(BuildEvent.Theme(graph.theme.orElse(Theme.standard))))
 
   private def speak(
       say: Say,
@@ -1331,8 +1337,7 @@ object Calls:
         case TestFeed.Done(cell)                           => (cell.module, cell.version, cell.platform)
         case TestFeed.Cached(module, version, platform, _) => (module, version, platform)
       val lines = Show(repo, BuildEvent.Test(feed), graph.moduleColumn).collect {
-        case CompileConsole.Line.Out(text) if text.nonEmpty => text
-        case CompileConsole.Line.Err(text) if text.nonEmpty => text
+        case line if line.text.nonEmpty => line.text
       }
       ZIO.foreachDiscard(lines)(line => TestLogs.append(repo, module, version, platform, line))
 
@@ -1358,6 +1363,9 @@ object Calls:
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =
     if text.isEmpty then ZIO.unit else say(Message.Event(BuildEvent.Out(text)))
+
+  private def status(say: Say, text: String, role: Role): IO[ServerError, Unit] =
+    if text.isEmpty then ZIO.unit else say(Message.Event(BuildEvent.Status(text, role)))
 
   private def errLine(say: Say, text: String): IO[ServerError, Unit] =
     say(Message.Event(BuildEvent.Err(text)))
