@@ -38,14 +38,14 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is in progress locally on `histos/plugin-p1` (`plug-p1`). The local gate is green on `80e20c8`. No implementation PR is open. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is open as #216 on `histos/plugin-p1` (`plug-p1`). The local gate is green on `80e20c8`. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes. P2 does not start until #216 is on `main`.
 
 ## Units
 
 | Unit | Depends | Branch | Worktree | PR | Status | Gate | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
-| P1 | P0 | `histos/plugin-p1` | `plug-p1` | | in progress | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `80e20c8` (test run compiled 6 skipped 680, tests passed 5 failed 0, fmt unformatted 0). No PR. |
+| P1 | P0 | `histos/plugin-p1` | `plug-p1` | #216 | open | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `80e20c8` (test run compiled 6 skipped 680, tests passed 5 failed 0, fmt unformatted 0). PR #216. |
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | |
