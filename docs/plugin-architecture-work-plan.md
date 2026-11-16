@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). Wave 2 is next: P2, P3, and P5. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is #217. P3 is #218. P5 is in review locally on `histos/plugin-p5` and is not pushed. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
@@ -46,8 +46,8 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
 | P1 | P0 | `histos/plugin-p1` | `plug-p1` | #216 | merged | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | merged as `8f74a2e` (#216). CI run 43931858280 on `7395b60` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `80e20c8`. |
-| P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
-| P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
+| P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | #217 | open | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | local exit 0 on `c7ea9e6`. PR #217. |
+| P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | #218 | open | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | local exit 0 on `f830c1c` (30 passed, 0 failed, no test-clock warning). PR #218. |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | |
 | P4 | P5 on main | `histos/plugin-p4` | `plug-p4` | | pending | same commands as the develop gate, after rebase onto P5, including one real `GraphCompile` snapshot | |
 | P6 | P2, P3, P4, P5 on main | `histos/plugin-p6` | `plug-p6` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginBootstrapSpec*' '*PluginClosureSpec*' '*PluginLifetimeSpec*'`; `./histos fmt --check` | |
