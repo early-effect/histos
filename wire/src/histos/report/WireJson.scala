@@ -333,31 +333,33 @@ private object WireLeaves extends WireSupport:
     JsonCodec.int.transformOrFail(raw => ClangMajor.from(raw).left.map(_.message), _.value)
   given JsonCodec[NodeMajor] =
     JsonCodec.int.transformOrFail(raw => NodeMajor.from(raw).left.map(_.message), _.value)
-  given JsonCodec[JsVersion]        = parsed(JsVersion.from, _.message, _.value)
-  given JsonCodec[NativeVersion]    = parsed(NativeVersion.from, _.message, _.value)
-  given JsonCodec[TaskName]         = parsed(TaskName.from, _.message, _.value)
-  given JsonCodec[CommandName]      = parsed(CommandName.from, _.message, _.value)
-  given JsonCodec[JobName]          = parsed(JobName.from, _.message, _.value)
-  given JsonCodec[ActionName]       = parsed(ActionName.from, _.message, _.value)
-  given JsonCodec[RunnerName]       = parsed(RunnerName.from, _.message, _.value)
-  given JsonCodec[SecretName]       = parsed(SecretName.from, _.message, _.value)
-  given JsonCodec[TargetName]       = parsed(TargetName.from, _.message, _.value)
-  given JsonCodec[ProjectPath]      = parsed(ProjectPath.from, _.message, _.value)
-  given JsonCodec[RepoPath]         = parsed(RepoPath.from, _.message, _.value)
-  given JsonCodec[ResourceName]     = parsed(ResourceName.from, _.message, _.value)
-  given JsonCodec[Organization]     = parsed(Organization.from, _.message, _.value)
-  given JsonCodec[ToolRevision]     = parsed(ToolRevision.from, _.message, _.value)
-  given JsonCodec[TestMain]         = parsed(TestMain.from, _.message, _.value)
-  given JsonCodec[FrameworkClass]   = parsed(FrameworkClass.from, _.message, _.value)
-  given JsonCodec[MainClass]        = parsed(MainClass.from, _.message, _.value)
-  given JsonCodec[PackMain]         = parsed(PackMain.from, _.message, _.binary)
-  given JsonCodec[SourcePos]        = JsonCodec.derived
-  given JsonCodec[PluginCoordinate] = JsonCodec.derived
-  given JsonCodec[PluginIo]         = JsonCodec.derived
-  given JsonCodec[RepoUrl]          = parsed(RepoUrl.from, _.message, _.value)
-  given JsonCodec[ReleaseError]     = JsonCodec.derived
-  given JsonCodec[Reject]           = JsonCodec.derived
-  given JsonCodec[Config.Error]     =
+  given JsonCodec[JsVersion]          = parsed(JsVersion.from, _.message, _.value)
+  given JsonCodec[NativeVersion]      = parsed(NativeVersion.from, _.message, _.value)
+  given JsonCodec[TaskName]           = parsed(TaskName.from, _.message, _.value)
+  given JsonCodec[CommandName]        = parsed(CommandName.from, _.message, _.value)
+  given JsonCodec[JobName]            = parsed(JobName.from, _.message, _.value)
+  given JsonCodec[ActionName]         = parsed(ActionName.from, _.message, _.value)
+  given JsonCodec[RunnerName]         = parsed(RunnerName.from, _.message, _.value)
+  given JsonCodec[SecretName]         = parsed(SecretName.from, _.message, _.value)
+  given JsonCodec[TargetName]         = parsed(TargetName.from, _.message, _.value)
+  given JsonCodec[ProjectPath]        = parsed(ProjectPath.from, _.message, _.value)
+  given JsonCodec[RepoPath]           = parsed(RepoPath.from, _.message, _.value)
+  given JsonCodec[ResourceName]       = parsed(ResourceName.from, _.message, _.value)
+  given JsonCodec[Organization]       = parsed(Organization.from, _.message, _.value)
+  given JsonCodec[ToolRevision]       = parsed(ToolRevision.from, _.message, _.value)
+  given JsonCodec[TestMain]           = parsed(TestMain.from, _.message, _.value)
+  given JsonCodec[FrameworkClass]     = parsed(FrameworkClass.from, _.message, _.value)
+  given JsonCodec[MainClass]          = parsed(MainClass.from, _.message, _.value)
+  given JsonCodec[PackMain]           = parsed(PackMain.from, _.message, _.binary)
+  given JsonCodec[SourcePos]          = JsonCodec.derived
+  given JsonCodec[RepositoryUrl]      = parsed(RepositoryUrl.from, _.message, _.value)
+  given JsonCodec[RepositoryUrlError] = JsonCodec.derived
+  given JsonCodec[PluginCoordinate]   = JsonCodec.derived
+  given JsonCodec[PluginIo]           = JsonCodec.derived
+  given JsonCodec[RepoUrl]            = parsed(RepoUrl.from, _.message, _.value)
+  given JsonCodec[ReleaseError]       = JsonCodec.derived
+  given JsonCodec[Reject]             = JsonCodec.derived
+  given JsonCodec[Config.Error]       =
     summon[JsonCodec[ConfigError]].transform(wireConfig, configWire)
 
   private def wireConfig(error: ConfigError): Config.Error = error match
@@ -424,6 +426,7 @@ private object WireLeaves extends WireSupport:
 end WireLeaves
 private object WireBuild extends WireSupport:
   import WireLeaves.given
+  import WireContract.given
 
   given JsonCodec[ToolchainError]    = JsonCodec.derived
   given JsonCodec[CacheError]        = JsonCodec.derived
@@ -460,8 +463,6 @@ private object WireBuild extends WireSupport:
     choose("lock field", LockField.values.toList.map(field => LockField.token(field) -> field), LockField.token)
   given JsonCodec[JarClassifier]                         = parsed(JarClassifier.from, _.message, _.value)
   given JsonCodec[ClassifierError]                       = JsonCodec.derived
-  given JsonCodec[RepositoryUrl]                         = parsed(RepositoryUrl.from, _.message, _.value)
-  given JsonCodec[RepositoryUrlError]                    = JsonCodec.derived
   given JsonCodec[ToolId]                                = JsonCodec.derived
   given JsonCodec[ToolRoot]                              = JsonCodec.derived
   given JsonCodec[ToolRootFault]                         = JsonCodec.derived
@@ -541,6 +542,7 @@ private object WireBuild extends WireSupport:
 end WireBuild
 private object WireCall extends WireSupport:
   import WireLeaves.given
+  import WireContract.given
   import WireBuild.given
 
   given JsonCodec[SuiteName]       = parsed(SuiteName.from, _.message, _.value)
@@ -637,6 +639,7 @@ private object WireCall extends WireSupport:
 end WireCall
 private object WireEvent extends WireSupport:
   import WireLeaves.given
+  import WireContract.given
   import WireBuild.given
   import histos.theme.ThemeJson.given
 
@@ -654,6 +657,7 @@ private object WireEvent extends WireSupport:
 end WireEvent
 object WireJson:
   export WireLeaves.given
+  export WireContract.given
   export WireBuild.given
   export WireCall.given
   export WireEvent.given

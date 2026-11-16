@@ -2,6 +2,7 @@ package histos.zinc
 
 import histos.doctor.{Diagnostic, Noted}
 import histos.jdk.{Sha256, ToolchainError}
+import histos.plugin.RecipeError
 import histos.resolve.ResolveError
 import histos.select.SelectError
 import histos.{AssetError, Platform, ProjectName, ScalaVersion}
@@ -23,6 +24,8 @@ final case class CompiledCell(
     sources: Option[SourceCount],
     /** Class files this round wrote. Absent when that set is not known. */
     classesWritten: Option[Int],
+    /** Absent until a compilation snapshot is captured. Absence is not an empty snapshot. */
+    capture: CompilationCapture = CompilationCapture.Unrecorded,
 )
 
 /** One incremental fact from a cell that is still compiling. A new fact is a case here.
@@ -90,6 +93,7 @@ enum GraphCompileError:
       error: AssetError,
   )
   case Cells(errors: NonEmptyChunk[GraphCompileError])
+  case Recipe(error: RecipeError)
 
   def message: String = this match
     case Runtime(error)               => error.message
@@ -114,6 +118,7 @@ enum GraphCompileError:
     case Assets(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} could not copy resources\n${error.message}"
     case Cells(errors) => errors.map(_.message).mkString("\n")
+    case Recipe(error) => error.message
 
   def diagnose: Diagnostic = this match
     case Target(error) => error.diagnose

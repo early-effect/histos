@@ -237,6 +237,10 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[NonEmptyChunk[GraphCompileError]] =
     Schema.of(SchemaDoc.Array(SchemaDoc.Ref("GraphCompileError")))
 
+  given Schema[RepositoryUrl] = text("RepositoryUrl")
+
+  given Schema[RepositoryUrlError] = Schema.derived
+
   given Schema[ProjectName] = text("ProjectName")
 
   given Schema[ScalaVersion] = text("ScalaVersion")
@@ -389,6 +393,7 @@ private object WireSchemaLeaves extends WireSchemaSupport:
 end WireSchemaLeaves
 private object WireSchemaBuild extends WireSchemaSupport:
   import WireSchemaLeaves.given
+  import WireSchemaContract.given
 
   given Schema[ToolchainError] = Schema.derived
 
@@ -423,10 +428,6 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[JarClassifier] = text("JarClassifier")
 
   given Schema[ClassifierError] = Schema.derived
-
-  given Schema[RepositoryUrl] = text("RepositoryUrl")
-
-  given Schema[RepositoryUrlError] = Schema.derived
 
   given Schema[ToolId] = Schema.derived
 
@@ -537,6 +538,7 @@ end WireSchemaReport
 
 private object WireSchemaCall extends WireSchemaSupport:
   import WireSchemaLeaves.given
+  import WireSchemaContract.given
   import WireSchemaBuild.given
   import WireSchemaReport.given
 
@@ -653,6 +655,7 @@ private object WireSchemaCall extends WireSchemaSupport:
 end WireSchemaCall
 private object WireSchemaEvent extends WireSchemaSupport:
   import WireSchemaLeaves.given
+  import WireSchemaContract.given
   import WireSchemaBuild.given
   import histos.theme.{Color, Emphasis, Role, Style, Theme}
 
@@ -706,6 +709,7 @@ private object WireSchemaEvent extends WireSchemaSupport:
 end WireSchemaEvent
 object WireSchema:
   export WireSchemaLeaves.given
+  export WireSchemaContract.given
   export WireSchemaBuild.given
   export WireSchemaReport.given
   export WireSchemaCall.given

@@ -1,6 +1,7 @@
 package histos.resolve
 
 import histos.doctor.{Diagnostic, Noted, Suggest}
+import histos.lock.LockTransactionError
 import histos.format.ScalafmtConfError
 import histos.jdk.Sha256
 import histos.plugin.PluginLoadError
@@ -34,6 +35,7 @@ enum ResolveError:
   case Repository(op: RepositoryIo)
   case Download(misses: ::[ArtifactMiss])
   case Scalafmt(error: ScalafmtConfError)
+  case Transaction(error: LockTransactionError)
 
   /** Every artifact that failed did so in transit, after Coursier's own retries, so a later fetch may succeed. */
   def transient: Boolean = this match
@@ -69,7 +71,8 @@ enum ResolveError:
       s"resolve failed while ${op.toString.toLowerCase}"
     case ResolveError.Download(misses) =>
       ("could not download:" :: misses.map(miss => s"${miss.url}: ${miss.detail}")).mkString("\n")
-    case ResolveError.Scalafmt(error) => error.message
+    case ResolveError.Scalafmt(error)    => error.message
+    case ResolveError.Transaction(error) => error.message
 
   def diagnose: Diagnostic = this match
     case ResolveError.LockDrift(_, _, _, _, changed) =>
