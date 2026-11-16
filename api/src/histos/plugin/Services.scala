@@ -97,10 +97,12 @@ sealed abstract class Plan[S, E <: ServiceSetupError] extends BuildServices:
   ): Plan[S, E | E1] =
     Plan.locksE(this, layer)
 
-  def add[A: Tag]: AddPartiallyApplied[S, E, A] =
+  inline def add[A](using Tag[A]): AddPartiallyApplied[S, E, A] =
+    Plan.requireOne[A]
     AddPartiallyApplied(this)
 
-  def tasks[P <: HistosPlugin: Tag]: TasksPartiallyApplied[S, E, P] =
+  inline def tasks[P <: HistosPlugin](using Tag[P]): TasksPartiallyApplied[S, E, P] =
+    Plan.requireOne[P]
     TasksPartiallyApplied(this)
 
   /** Builds registered layers in the caller scope. A duplicate is refused before any layer runs. */
@@ -138,9 +140,32 @@ object Plan:
       environment: ZEnvironment[S],
       locks: List[LockStrategy],
       tasks: List[HistosPlugin],
+      built: List[Tag[?]],
   )
 
   private[plugin] def empty: Plan[NoExtraServices, Nothing] = Empty()
+
+  /** The registration key is one capability. Rejected before the layer value is touched. */
+  private inline def requireOne[A]: Unit =
+    ${ PluginMacros.rejectIntersection[A] }
+
+  /** The first slot for a capability builds it. A later service or task slot for that same key reuses the instance. */
+  private def place[S, A, E](
+      prior: Chain[S],
+      layer: ZLayer[GenerationAmbient & CoreServices & S, E, A],
+  )(using
+      tag: Tag[A]
+  ): ZIO[GenerationAmbient & CoreServices & Scope, ServiceActivationError | E, Chain[S & A]] =
+    val already = prior.built.exists(_.tag == tag.tag)
+    val value   =
+      if already then
+        prior.environment.getDynamic[A] match
+          case Some(found) => ZIO.succeed(found)
+          case None        => ZIO.fail(missing(tag, ActivationPhase.Main))
+      else provide(prior.environment, layer)
+    value.map: found =>
+      val tags = if already then prior.built else tag :: prior.built
+      Chain(prior.environment.add(found), prior.locks, prior.tasks, tags)
 
   private[plugin] def locks[S, E <: ServiceSetupError](
       prev: Plan[S, E],
@@ -240,7 +265,7 @@ object Plan:
       ServiceActivationError | Nothing,
       Chain[NoExtraServices],
     ] =
-      ZIO.succeed(Chain(ZEnvironment[NoExtraServices](NoExtraServices.marker), Nil, Nil))
+      ZIO.succeed(Chain(ZEnvironment[NoExtraServices](NoExtraServices.marker), Nil, Nil, Nil))
   end Empty
 
   private final class Locks[S, E <: ServiceSetupError](
@@ -293,10 +318,7 @@ object Plan:
       ServiceActivationError | E,
       Chain[S & A],
     ] =
-      for
-        prior <- prev.materialize
-        value <- provide(prior.environment, layer)
-      yield Chain(prior.environment.add(value), prior.locks, prior.tasks)
+      prev.materialize.flatMap(prior => place(prior, layer))
   end Added
 
   private final class AddedE[S, E <: ServiceSetupError, A, E1 <: ServiceSetupError](
@@ -311,10 +333,7 @@ object Plan:
       ServiceActivationError | E | E1,
       Chain[S & A],
     ] =
-      for
-        prior <- prev.materialize
-        value <- provide(prior.environment, layer)
-      yield Chain(prior.environment.add(value), prior.locks, prior.tasks)
+      prev.materialize.flatMap(prior => place(prior, layer))
   end AddedE
 
   private final class Tasked[S, E <: ServiceSetupError, P <: HistosPlugin](
@@ -331,8 +350,9 @@ object Plan:
     ] =
       for
         prior <- prev.materialize
-        value <- provide(prior.environment, layer)
-      yield Chain(prior.environment.add(value), prior.locks, prior.tasks :+ value)
+        chain <- place(prior, layer)
+        value <- taskOf(chain)
+      yield chain.copy(tasks = chain.tasks :+ value)
   end Tasked
 
   private final class TaskedE[S, E <: ServiceSetupError, P <: HistosPlugin, E1 <: ServiceSetupError](
@@ -349,9 +369,17 @@ object Plan:
     ] =
       for
         prior <- prev.materialize
-        value <- provide(prior.environment, layer)
-      yield Chain(prior.environment.add(value), prior.locks, prior.tasks :+ value)
+        chain <- place(prior, layer)
+        value <- taskOf(chain)
+      yield chain.copy(tasks = chain.tasks :+ value)
   end TaskedE
+
+  private def taskOf[S, P <: HistosPlugin: Tag](
+      chain: Chain[S]
+  ): ZIO[Any, ServiceActivationError, P] =
+    chain.environment.getDynamic[P] match
+      case Some(value) => ZIO.succeed(value)
+      case None        => ZIO.fail(missing(summon[Tag[P]], ActivationPhase.Main))
 end Plan
 
 /** Early lock and loading services. There is no late main equivalent of plugin loading. */

@@ -219,6 +219,23 @@ private[histos] object PluginMacros:
       canonical => '{ SourceId.trusted(${ Expr(canonical) }) },
     )
 
+  /** One capability. An intersection is not a registration key. */
+  def rejectIntersection[A: Type](using Quotes): Expr[Unit] =
+    import quotes.reflect.*
+
+    def core(tpe: TypeRepr): TypeRepr =
+      tpe.dealias match
+        case Refinement(parent, _, _) => core(parent)
+        case AnnotatedType(inner, _)  => core(inner)
+        case other                    => other
+
+    core(TypeRepr.of[A]) match
+      case AndType(_, _) =>
+        report.errorAndAbort("a service is registered under one capability, not an intersection")
+      case _ =>
+        '{ () }
+  end rejectIntersection
+
   def serviceKey(raw: Expr[String])(using Quotes): Expr[ServiceKey] =
     literal(
       raw,

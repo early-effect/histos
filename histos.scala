@@ -16,6 +16,10 @@ object build extends HistosBuild:
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
+    val pluginTestkit = module("plugin-testkit", Jvm)(scala3)
+      .dependsOn(api)
+      .libraryDependencies(zio)
+      .testDependencies(zioTest, zioTestSbt)
     val wire = module("wire", Jvm, Native)(nativeScala)
       .clang(ClangMajor(21))
       .dependsOn(api)
@@ -130,4 +134,5 @@ object build extends HistosBuild:
         central,
         engine,
         app,
+        pluginTestkit,
       )
