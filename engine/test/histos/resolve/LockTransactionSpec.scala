@@ -220,12 +220,14 @@ object LockTransactionSpec extends ZIOSpecDefault:
           hold    <- Promise.make[Nothing, Unit]
           left  = context("left")
           right = context("right")
+          noticed <- Promise.make[Nothing, Unit]
           harness <- open(
             fixed(LockDecision.Update),
             solvedBy = id =>
               if id == left.id then Some(appSolved("app-a"))
               else if id == right.id then Some(appSolved("app-b"))
               else None,
+            noticed = id => if id == right.id then noticed.succeed(()).unit else ZIO.unit,
             probe = new CommitProbe:
               def beforeRename = started.succeed(()) *> hold.await
               def afterRename  = ZIO.unit,
@@ -233,6 +235,7 @@ object LockTransactionSpec extends ZIOSpecDefault:
           fiberA <- harness.coordinator.prepare(prepare(left)).fork
           _      <- started.await
           fiberB <- harness.coordinator.prepare(prepare(right)).fork
+          _      <- noticed.await
           _      <- hold.succeed(())
           winner <- fiberA.join
           loser  <- fiberB.await
@@ -498,6 +501,7 @@ object LockTransactionSpec extends ZIOSpecDefault:
       renameLock: (Path, Path) => IO[LockStoreFault, Unit] = AtomicReplace.rename,
       fail: Option[PluginDetail] = None,
       pause: UIO[Unit] = ZIO.unit,
+      noticed: InvocationId => UIO[Unit] = _ => ZIO.unit,
       drift: DeclarationDrift = changed,
       seed: Option[LockDocument] = Some(original),
       command: Ref[Int] => SuspendedCommand = runs =>
@@ -513,7 +517,7 @@ object LockTransactionSpec extends ZIOSpecDefault:
         case Some(document) => write(store.lock, LockDocument.render(document))
         case None           => ZIO.unit
       generations <- GenerationOwner.memory(root)
-      preparer = ScriptPreparer(inspection(drift), solvedBy, solves, pause, fail)
+      preparer = ScriptPreparer(inspection(drift), solvedBy, solves, pause, fail, noticed)
       coordinator <- LockCoordinator.open(preparer, strategy, store, generations, command(runs))
     yield Harness(root, store, generations, coordinator, runs, solves)
 
@@ -618,6 +622,7 @@ object LockTransactionSpec extends ZIOSpecDefault:
       solves: Ref[Int],
       pause: UIO[Unit],
       fail: Option[PluginDetail],
+      noticed: InvocationId => UIO[Unit],
   ) extends LockPreparer:
     def inspect(
         request: PrepareRequest,
@@ -627,7 +632,7 @@ object LockTransactionSpec extends ZIOSpecDefault:
       ZIO.succeed(seen)
 
     def solve(request: PrepareRequest, inspection: Inspection): IO[PrepareFault, Solved] =
-      pause *> solves.update(_ + 1) *> fail.fold(pick(request.context.id))(detail =>
+      noticed(request.context.id) *> pause *> solves.update(_ + 1) *> fail.fold(pick(request.context.id))(detail =>
         ZIO.fail(PrepareFault.Solve(detail))
       )
 

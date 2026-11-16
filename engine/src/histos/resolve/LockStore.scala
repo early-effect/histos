@@ -250,7 +250,9 @@ final class LockStore private (
         .attemptBlocking(FileChannel.open(guardPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE))
         .mapError(_ => LockStoreFault.Unwritable)
     )(channel => ZIO.attemptBlocking(channel.close()).ignore): channel =>
-      ZIO.attemptBlockingInterrupt(channel.lock()).mapError(_ => LockStoreFault.Unwritable) *> body
+      ZIO.acquireReleaseWith(
+        ZIO.attemptBlockingInterrupt(channel.lock()).mapError(_ => LockStoreFault.Unwritable)
+      )(held => ZIO.attemptBlocking(held.release()).ignore)(_ => body)
 
   private def corrupt(error: LockTextError): LockStoreFault =
     PluginDetail.from(error.message) match
