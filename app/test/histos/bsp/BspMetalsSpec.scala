@@ -4,7 +4,15 @@ import histos.*
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Toolchain}
 import histos.load.BuildNotes
-import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
+import histos.resolve.{
+  BuildResolvers,
+  ClasspathScope,
+  DependencyLock,
+  LockedCell,
+  Repository,
+  ResolutionService,
+  Resolve,
+}
 import histos.schedule.RemoteCache
 import histos.testrun.TestCompile
 import histos.toolchain.Runtimes
@@ -429,9 +437,10 @@ object BspMetalsSpec extends ZIOSpecDefault:
         val start = lines.indexWhere(_ == "tool compiler 3.10.1 jvm")
         if start < 0 then ZIO.fail("tool compiler 3.10.1 jvm is not in the lock")
         else
-          val rest = lines.drop(start + 1)
-          val next = rest.indexWhere(_.startsWith("tool "))
-          val tool = (if next < 0 then lines.drop(start) else lines.slice(start, start + 1 + next)).mkString("\n")
+          val rest    = lines.drop(start + 1)
+          val next    = rest.indexWhere(_.startsWith("tool "))
+          val tool    = (if next < 0 then lines.drop(start) else lines.slice(start, start + 1 + next)).mkString("\n")
+          val aligned = currentResolvers(tool)
           ZIO.fromEither(graph.left.map(_.message)).flatMap { built =>
             val locked = built.projects.collect:
               case module: Module =>
@@ -445,7 +454,22 @@ object BspMetalsSpec extends ZIOSpecDefault:
                   ClasspathScope.Compile,
                 )
             val head = locked.map(DependencyLock.renderCell).mkString("\n")
-            val raw  = if head.isEmpty then tool else s"$head\n$tool"
+            val raw  = if head.isEmpty then aligned else s"$head\n$aligned"
             ZIO.fromEither(DependencyLock.parse(raw).left.map(_.message))
           }
+
+  /** The copied compiler cell names the repositories of the launcher that wrote the lock. This process searches
+    * [[BuildResolvers]].
+    */
+  private def currentResolvers(tool: String): String =
+    val resolvers = BuildResolvers(Nil).all.map(repo => s"resolver ${Repository.token(repo)}")
+    val lines     = tool.linesIterator.toList
+    val at        = lines.indexWhere(_.startsWith("resolver "))
+    val placed    =
+      if at < 0 then lines ::: resolvers
+      else
+        val before = lines.take(at).filterNot(_.startsWith("resolver "))
+        val after  = lines.drop(at).filterNot(_.startsWith("resolver "))
+        before ::: resolvers ::: after
+    placed.mkString("\n")
 end BspMetalsSpec
