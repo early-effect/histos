@@ -33,6 +33,9 @@ enum CompilePulse:
 
   /** A later file entered a phase that names each file. */
   case Source(phase: String, path: String)
+
+  /** `path` finished the last phase. */
+  case Finished(path: String)
 end CompilePulse
 
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not interleaved.

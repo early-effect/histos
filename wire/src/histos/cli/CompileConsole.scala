@@ -27,7 +27,7 @@ object CompileConsole:
     def out(text: String): Line = Out(Chunk(Part.Plain(text)))
     def err(text: String): Line = Err(Chunk(Part.Plain(text)))
 
-  def lines(repo: Path, feed: CompileFeed, column: Int = 0): Chunk[Line] =
+  def lines(repo: Path, feed: CompileFeed, column: Int = 0, log: CompileLog = CompileLog.Units): Chunk[Line] =
     feed match
       case CompileFeed.Began(module, version, platform) =>
         Chunk(Line.Out(Lines.compilingParts(module, version, platform, column)))
@@ -36,7 +36,9 @@ object CompileConsole:
       case CompileFeed.Miss(module, version, platform, change) =>
         Chunk(Line.out(KeyMiss.line(module, version, platform, change, column)))
       case CompileFeed.Pulse(module, version, platform, pulse) =>
-        Chunk(Line.Out(Lines.lead(module, version, platform, Chunk(Part.Mark(pulseText(pulse), Role.Pulse)), column)))
+        pulseText(log, pulse).fold(Chunk.empty)(text =>
+          Chunk(Line.Out(Lines.lead(module, version, platform, Chunk(Part.Mark(text, Role.Pulse)), column)))
+        )
       case CompileFeed.Done(cell) =>
         Lines
           .outcomeParts(
@@ -247,11 +249,15 @@ object CompileConsole:
         )
   end Counts
 
-  private def pulseText(pulse: CompilePulse): String =
-    pulse match
-      case CompilePulse.Phase(name, Some(source)) => s"$name  $source"
-      case CompilePulse.Phase(name, None)         => name
-      case CompilePulse.Source(phase, path)       => s"$phase  $path"
+  private def pulseText(log: CompileLog, pulse: CompilePulse): Option[String] =
+    (log, pulse) match
+      case (CompileLog.Phases, CompilePulse.Phase(name, Some(source)))                    => Some(s"$name  $source")
+      case (CompileLog.Phases, CompilePulse.Phase(name, None))                            => Some(name)
+      case (CompileLog.Phases, CompilePulse.Source(phase, path))                          => Some(s"$phase  $path")
+      case (CompileLog.Phases, CompilePulse.Finished(_))                                  => None
+      case (CompileLog.Units, CompilePulse.Finished(path))                                => Some(path)
+      case (CompileLog.Units, CompilePulse.Phase(name, None))                             => Some(name)
+      case (CompileLog.Units, CompilePulse.Phase(_, Some(_)) | CompilePulse.Source(_, _)) => None
 
   private def addFiles(sum: Files, sources: Option[SourceCount]): Files =
     (sum, sources) match

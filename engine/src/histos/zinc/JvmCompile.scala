@@ -509,6 +509,7 @@ object JvmCompile:
         watching.start(phase, unitPath)
 
       override def advance(current: Int, total: Int, prevPhase: String, nextPhase: String): Boolean =
+        watching.finish(nextPhase)
         true
     val ownClasses  = request.classes.toAbsolutePath.normalize
     val ownAnalysis = request.analysis.toAbsolutePath.normalize

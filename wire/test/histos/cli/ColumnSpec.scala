@@ -43,6 +43,7 @@ object ColumnSpec extends ZIOSpecDefault:
           CompilePulse.Phase("typer", Some("zinc/GraphCompile.scala")),
         ),
         column,
+        CompileLog.Phases,
       )
       assertTrue(
         line.map(_.text) == Chunk("engine 3.10.1 jvm typer  zinc/GraphCompile.scala"),
@@ -50,6 +51,36 @@ object ColumnSpec extends ZIOSpecDefault:
           case Part.Mark(text, Role.Pulse) => text == "typer  zinc/GraphCompile.scala"
           case _                           => false
         },
+      )
+    },
+    test("a finished source is one line and a phase line waits for verbose") {
+      val phase = CompileFeed.Pulse(
+        engine,
+        version,
+        Platform.Jvm,
+        CompilePulse.Phase("typer", Some("zinc/GraphCompile.scala")),
+      )
+      val done = CompileFeed.Pulse(
+        engine,
+        version,
+        Platform.Jvm,
+        CompilePulse.Finished("zinc/GraphCompile.scala"),
+      )
+      val java = CompileFeed.Pulse(
+        engine,
+        version,
+        Platform.Jvm,
+        CompilePulse.Phase("Java compilation", None),
+      )
+      assertTrue(
+        CompileConsole.lines(repo, phase, column).isEmpty,
+        CompileConsole.lines(repo, done, column).map(_.text) == Chunk(
+          "engine 3.10.1 jvm zinc/GraphCompile.scala"
+        ),
+        CompileConsole.lines(repo, phase, column, CompileLog.Phases).map(_.text) == Chunk(
+          "engine 3.10.1 jvm typer  zinc/GraphCompile.scala"
+        ),
+        CompileConsole.lines(repo, java, column).map(_.text) == Chunk("engine 3.10.1 jvm Java compilation"),
       )
     },
     test("a layout in the transcript pads the lines") {
