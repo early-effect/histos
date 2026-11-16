@@ -27,7 +27,9 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompilerStarts, Compilers}
 import histos.{Dep, DepKind, ProjectName, ScalaVersion}
 
+import java.net.URI
 import java.net.URLClassLoader
+import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -184,7 +186,7 @@ object PluginCompileSupport:
     pin(HostToolRole.Support, "org.slf4j", "slf4j-api", "1.7.36"),
   )
 
-  /** 3.8.4 is pinned in the local tool cache and is not a compiler cell of this project lock. */
+  /** Not a compiler cell of this project lock. A missing jar is fetched from Maven Central. */
   val Scala384: List[Pinned] = List(
     pin(HostToolRole.Compiler, "org.scala-lang", "scala3-compiler_3", "3.8.4"),
     pin(HostToolRole.Bridge, "org.scala-lang", "scala3-sbt-bridge", "3.8.4"),
@@ -210,26 +212,50 @@ object PluginCompileSupport:
       .fromEither(ArtifactPath.from(name))
       .mapError(_ => HostCompilerError.Io(IoFailure(source, IoFault.Read)))
       .flatMap { relative =>
+        val dest = root.resolve("bootstrap/compiler").resolve(name)
         ZIO
           .attemptBlocking {
-            if !Files.isRegularFile(source) then Left(HostCompilerError.Io(IoFailure(source, IoFault.Stat)))
-            else
-              val dest = root.resolve("bootstrap/compiler").resolve(name)
-              Files.createDirectories(dest.getParent)
-              Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING)
+            copyOrFetch(pinned, source, dest).map { _ =>
               val bytes = Files.readAllBytes(dest)
-              Right(
-                HostToolEntry(
-                  pinned.role,
-                  Dep.trusted(pinned.organization, pinned.name, pinned.revision, DepKind.Java),
-                  ContentHash.trusted(Sha256Digest.of(Chunk.fromArray(bytes)).value),
-                  relative,
-                )
+              HostToolEntry(
+                pinned.role,
+                Dep.trusted(pinned.organization, pinned.name, pinned.revision, DepKind.Java),
+                ContentHash.trusted(Sha256Digest.of(Chunk.fromArray(bytes)).value),
+                relative,
               )
+            }
           }
-          .mapError(_ => HostCompilerError.Io(IoFailure(source, IoFault.Read)))
+          .mapError(_ => HostCompilerError.Io(IoFailure(dest, IoFault.Read)))
           .flatMap(ZIO.fromEither)
       }
+
+  /** The coursier cache when it already has the jar. Maven Central otherwise. */
+  private def copyOrFetch(pinned: Pinned, source: Path, dest: Path): Either[HostCompilerError, Unit] =
+    Files.createDirectories(dest.getParent)
+    if Files.isRegularFile(source) then
+      Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING)
+      Right(())
+    else fetch(pinned, dest)
+
+  private def fetch(pinned: Pinned, dest: Path): Either[HostCompilerError, Unit] =
+    val group = pinned.organization.replace('.', '/')
+    val uri   = URI.create(
+      s"https://repo1.maven.org/maven2/$group/${pinned.name}/${pinned.revision}/${pinned.name}-${pinned.revision}.jar"
+    )
+    val client   = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+    val response = client.send(
+      HttpRequest.newBuilder(uri).header("User-Agent", "histos-test").GET().build(),
+      HttpResponse.BodyHandlers.ofInputStream(),
+    )
+    val body = response.body()
+    try
+      if response.statusCode() == 200 then
+        val partial = dest.resolveSibling(dest.getFileName.toString + ".part")
+        Files.copy(body, partial, StandardCopyOption.REPLACE_EXISTING)
+        Files.move(partial, dest, StandardCopyOption.REPLACE_EXISTING)
+        Right(())
+      else Left(HostCompilerError.Io(IoFailure(dest, IoFault.Read)))
+    finally body.close()
 
   private def maven(organization: String, name: String, revision: String): Path =
     val group = organization.replace('.', '/')
