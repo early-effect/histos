@@ -38,13 +38,13 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is the following commit. No implementation PR is open. Next unit is P1. Nothing is blocked on Russ.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. No implementation PR is open. Next unit is P1. Nothing is blocked on Russ.
 
 ## Units
 
 | Unit | Depends | Branch | Worktree | PR | Status | Gate | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board is the commit that added this file |
+| P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
 | P1 | P0 | `histos/plugin-p1` | `plug-p1` | | pending | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | |
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
@@ -56,7 +56,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is the following commit. No i
 | P9 | P2, P4, P6 on main | `histos/plugin-p9` | `plug-p9` | | pending | tracked link check; `./histos fmt --check`; `./histos run doc` | |
 | P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | |
 
-- [x] P0. Spec and this board on `main` (`c60ee8d` plus the board commit)
+- [x] P0. Spec and this board on `main` (`c60ee8d`, `ce6fd7f`)
 - [ ] P1. Contracts, codecs, fixtures. Merged before wave 2 PRs open
 - [ ] P2. `BuildServices` and `plugin-testkit`
 - [ ] P3. Lock transaction with a fake preparer
