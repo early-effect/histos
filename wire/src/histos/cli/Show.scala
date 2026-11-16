@@ -16,11 +16,16 @@ object Show:
 
   val start: Shown = Shown(0, Theme.standard)
 
-  def apply(repo: Path, event: BuildEvent, column: Int = 0): Chunk[CompileConsole.Line] =
+  def apply(
+      repo: Path,
+      event: BuildEvent,
+      column: Int = 0,
+      log: CompileLog = CompileLog.Units,
+  ): Chunk[CompileConsole.Line] =
     event match
       case BuildEvent.Layout(_)          => Chunk.empty
       case BuildEvent.Theme(_)           => Chunk.empty
-      case BuildEvent.Compile(feed)      => CompileConsole.lines(repo, feed, column)
+      case BuildEvent.Compile(feed)      => CompileConsole.lines(repo, feed, column, log)
       case BuildEvent.Test(feed)         => tested(feed, column)
       case BuildEvent.Out(text)          => Chunk(CompileConsole.Line.out(text))
       case BuildEvent.Err(text)          => Chunk(CompileConsole.Line.err(text))
@@ -69,7 +74,7 @@ object Show:
       case BuildEvent.Theme(value)  => shown.update(_.copy(theme = value.orElse(Theme.standard)))
       case other                    =>
         shown.get.flatMap: frame =>
-          CompileConsole.show(apply(repo, other, frame.column), frame.theme, appearance, out, err)
+          CompileConsole.show(apply(repo, other, frame.column, appearance.log), frame.theme, appearance, out, err)
 
   private def tested(feed: TestFeed, column: Int): Chunk[CompileConsole.Line] =
     feed match

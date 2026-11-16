@@ -39,24 +39,40 @@ enum ColorChoice:
 enum TruecolorChoice:
   case Default, On, Off
 
-/** The ink and the depth for one process. The theme is not here. */
-final case class Appearance(ink: Ink, depth: Depth)
+/** How far a compile log goes. `Units` is one line per finished source. `Phases` is every compiler phase. */
+enum CompileLog:
+  case Units
+  case Phases
+
+/** The ink, the depth, and the compile log for one process. The theme is not here. */
+final case class Appearance(ink: Ink, depth: Depth, log: CompileLog = CompileLog.Units)
 
 object Appearance:
   val plain: Appearance = Appearance(Ink.Plain, Depth.Indexed)
 
-/** Color flags peeled off an argv before the command is parsed. The last flag of a pair wins. */
-final case class Peeled(args: List[String], color: ColorChoice, truecolor: TruecolorChoice)
+/** Flags peeled off an argv before the command is parsed. The last color flag of a pair wins. Tokens after `--` stay,
+  * so a program argument is not a histos flag.
+  */
+final case class Peeled(
+    args: List[String],
+    color: ColorChoice,
+    truecolor: TruecolorChoice,
+    log: CompileLog,
+)
 
 object ColorFlag:
   def peel(args: List[String]): Peeled =
-    args.foldLeft(Peeled(Nil, ColorChoice.Default, TruecolorChoice.Default)): (acc, token) =>
-      token match
-        case "--color"        => acc.copy(color = ColorChoice.On)
-        case "--no-color"     => acc.copy(color = ColorChoice.Off)
-        case "--truecolor"    => acc.copy(truecolor = TruecolorChoice.On)
-        case "--no-truecolor" => acc.copy(truecolor = TruecolorChoice.Off)
-        case other            => acc.copy(args = acc.args :+ other)
+    val (ours, program) = args.span(_ != "--")
+    val peeled          =
+      ours.foldLeft(Peeled(Nil, ColorChoice.Default, TruecolorChoice.Default, CompileLog.Units)): (acc, token) =>
+        token match
+          case "--color"        => acc.copy(color = ColorChoice.On)
+          case "--no-color"     => acc.copy(color = ColorChoice.Off)
+          case "--truecolor"    => acc.copy(truecolor = TruecolorChoice.On)
+          case "--no-truecolor" => acc.copy(truecolor = TruecolorChoice.Off)
+          case "--verbose"      => acc.copy(log = CompileLog.Phases)
+          case other            => acc.copy(args = acc.args :+ other)
+    peeled.copy(args = peeled.args ++ program)
 
 /** SGR for a line of parts. This is the only writer of an escape. */
 object Paint:

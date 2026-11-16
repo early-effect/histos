@@ -91,6 +91,7 @@ object Main extends ZIOAppDefault:
     Appearance(
       Paint.decide(peeled.color, terminal, noColor),
       Paint.depth(peeled.truecolor, colorTerm),
+      peeled.log,
     )
 
   /** This process's environment and working directory. The program's streams stay pipes. */
@@ -206,7 +207,7 @@ object Main extends ZIOAppDefault:
     }
 
   private def show(repo: Path, event: BuildEvent, shown: Show.Shown, appearance: Appearance): Unit =
-    Show(repo, event, shown.column).foreach:
+    Show(repo, event, shown.column, appearance.log).foreach:
       case line: CompileConsole.Line.Out =>
         System.out.println(Paint.paint(line.spans, shown.theme, appearance))
       case line: CompileConsole.Line.Err =>

@@ -42,6 +42,24 @@ object CellPulseSpec extends ZIOSpecDefault:
         )
       )
     },
+    test("a file finishes once when the next phase is the end") {
+      val seen  = mutable.ListBuffer.empty[CompilePulse]
+      val pulse = CellPulse(checkout, seen.addOne)
+      pulse.start("parser", "/repo/src/A.scala")
+      pulse.finish("typer")
+      pulse.finish(CellPulse.End)
+      pulse.start("genBCode", "/repo/src/A.scala")
+      pulse.finish(CellPulse.End)
+      pulse.finish(CellPulse.End)
+      pulse.start("genBCode", "/repo/src/B.scala")
+      pulse.finish(CellPulse.End)
+      pulse.start("genBCode", "/repo/src/A.scala")
+      pulse.finish(CellPulse.End)
+      pulse.start("Java compilation", "")
+      pulse.finish(CellPulse.End)
+      val files = seen.collect { case CompilePulse.Finished(path) => path }
+      assertTrue(files.toList == List("src/A.scala", "src/B.scala"))
+    },
     test("the typer phase names each new file") {
       val seen  = mutable.ListBuffer.empty[CompilePulse]
       val pulse = CellPulse(checkout, seen.addOne)

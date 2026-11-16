@@ -280,7 +280,7 @@ object Cli:
       apiJar: Path,
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve & IvyRoot & Stdio, Completed] =
     val peeled = ColorFlag.peel(args)
-    appearance(peeled.color, peeled.truecolor).flatMap { view =>
+    appearance(peeled.color, peeled.truecolor, peeled.log).flatMap { view =>
       given Appearance = view
       Connection.ensure(repo).ignore *>
         parse(peeled.args).foldZIO(
@@ -291,7 +291,7 @@ object Cli:
                 Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held)
               )
           },
-          command => perform(repo, apiJar, command),
+          command => perform(repo, apiJar, noted(peeled.log, command)),
         )
     }
 
@@ -607,7 +607,7 @@ object Cli:
     */
   private[histos] def launch(args: List[String], repo: Path): URIO[Scope & ReleaseFeed & Resolve & Stdio, Completed] =
     val peeled = ColorFlag.peel(args)
-    appearance(peeled.color, peeled.truecolor).flatMap { view =>
+    appearance(peeled.color, peeled.truecolor, peeled.log).flatMap { view =>
       given Appearance = view
       System.property("os.name").orElseSucceed(None).flatMap {
         case Some(name) if Os.from(name) == Os.Windows =>
@@ -624,13 +624,17 @@ object Cli:
                 case detail =>
                   ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held))
               },
-              command => route(repo, command),
+              command => route(repo, noted(peeled.log, command)),
             )
       }
     }
 
   /** Ink from the flag, then `NO_COLOR`, then whether stdout is a terminal. Depth from the flag, else `COLORTERM`. */
-  private def appearance(color: ColorChoice, truecolor: TruecolorChoice): URIO[Stdio, Appearance] =
+  private def appearance(
+      color: ColorChoice,
+      truecolor: TruecolorChoice,
+      log: CompileLog,
+  ): URIO[Stdio, Appearance] =
     for
       stdio     <- ZIO.service[Stdio]
       noColor   <- System.env("NO_COLOR").orElseSucceed(None)
@@ -638,7 +642,15 @@ object Cli:
     yield Appearance(
       Paint.decide(color, stdio.output == Attached.Terminal, noColor),
       Paint.depth(truecolor, colorTerm),
+      log,
     )
+
+  /** `--verbose` is peeled before the grammar sees it. Doctor reads it here. */
+  private def noted(log: CompileLog, command: Command): Command =
+    (log, command) match
+      case (CompileLog.Phases, Command.Doctor(area, form, preflight, fix, _, projects)) =>
+        Command.Doctor(area, form, preflight, fix, DoctorDetail.Verbose, projects)
+      case _ => command
 
   private def perform(
       repo: Path,

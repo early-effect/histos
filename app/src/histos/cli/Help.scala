@@ -29,13 +29,19 @@ object Help:
       "histos [--color | --no-color] [--truecolor | --no-truecolor] <command>",
       "Color is on when stdout is a terminal and NO_COLOR is unset or empty. --color forces it on. --no-color forces it off. The last flag wins. --truecolor sends 24-bit color. --no-truecolor stops at the 256-color cube. --truecolor does not turn color on. A pipe stays plain unless --color is set.",
     ),
+    Entry(
+      "--verbose",
+      "info",
+      "histos [--verbose] <command>",
+      "A compile prints one line when a source finishes. --verbose prints each compiler phase instead. histos doctor --verbose lists every check.",
+    ),
     Entry("graph", "info", "histos graph", "Print each module, platform, and Scala version."),
     Entry("observe", "info", "histos observe", "Print the stored compile tally."),
     Entry(
       "compile",
       "build",
       "histos compile [project ...]",
-      "Compile the named projects, or every module. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "Compile the named projects, or every module. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "run",

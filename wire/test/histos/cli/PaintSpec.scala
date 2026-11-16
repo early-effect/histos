@@ -77,11 +77,20 @@ object PaintSpec extends ZIOSpecDefault:
       val before = ColorFlag.peel(List("--color", "test", "--no-color"))
       val watch  = ColorFlag.peel(List("~", "--no-color", "test"))
       val depth  = ColorFlag.peel(List("--truecolor", "compile", "--no-truecolor"))
+      val phases = ColorFlag.peel(List("--verbose", "compile", "app"))
+      val arg    = ColorFlag.peel(List("run", "app", "--", "--verbose"))
       assertTrue(
-        after == Peeled(List("compile"), ColorChoice.Off, TruecolorChoice.Default),
-        before == Peeled(List("test"), ColorChoice.Off, TruecolorChoice.Default),
-        watch == Peeled(List("~", "test"), ColorChoice.Off, TruecolorChoice.Default),
-        depth == Peeled(List("compile"), ColorChoice.Default, TruecolorChoice.Off),
+        after == Peeled(List("compile"), ColorChoice.Off, TruecolorChoice.Default, CompileLog.Units),
+        before == Peeled(List("test"), ColorChoice.Off, TruecolorChoice.Default, CompileLog.Units),
+        watch == Peeled(List("~", "test"), ColorChoice.Off, TruecolorChoice.Default, CompileLog.Units),
+        depth == Peeled(List("compile"), ColorChoice.Default, TruecolorChoice.Off, CompileLog.Units),
+        phases == Peeled(List("compile", "app"), ColorChoice.Default, TruecolorChoice.Default, CompileLog.Phases),
+        arg == Peeled(
+          List("run", "app", "--", "--verbose"),
+          ColorChoice.Default,
+          TruecolorChoice.Default,
+          CompileLog.Units,
+        ),
       )
     },
     test("a status takes its role and an out line stays plain") {
