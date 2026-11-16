@@ -7,6 +7,7 @@ import histos.plugin.{
   InvocationContext,
   InvocationId,
   LockRevision,
+  PluginCoordinate,
   PluginDetail,
   PluginEvents,
   ProposalId,
@@ -49,9 +50,40 @@ enum DeclarationDrift:
   case Same
   case Changed(declarations: ContentHash)
 
-final case class NecessaryScope(summary: PluginDetail)
+enum LockChange:
+  case Added
+  case Removed
+  case Changed
 
-final case class ProposalSummary(id: ProposalId, base: LockRevisionState, candidate: ContentHash)
+enum LockSubject:
+  case Artifact
+  case Eviction
+  case Locator
+  case Recipe
+  case Checksum
+
+/** One row of a necessary diff. The checksums are the before and after bytes, when that side exists. */
+final case class LockDiffEntry(
+    coordinate: PluginCoordinate,
+    change: LockChange,
+    subject: LockSubject,
+    before: Option[ContentHash],
+    after: Option[ContentHash],
+)
+
+/** Every added, removed, and changed member of the necessary closure. An empty list is an empty diff. */
+final case class LockDiff(entries: List[LockDiffEntry])
+
+/** The one-line summary plus the structured diff. The diff is not folded into [[PluginDetail]]. */
+final case class NecessaryScope(summary: PluginDetail, diff: LockDiff)
+
+final case class ProposalSummary(
+    id: ProposalId,
+    base: LockRevisionState,
+    declarations: ContentHash,
+    candidate: ContentHash,
+    scope: NecessaryScope,
+)
 
 /** Facts a strategy may read. It does not commit the lock or own the generation. */
 final case class LockContext(
@@ -90,13 +122,14 @@ enum LockStrategyError:
     case Policy(detail)        => detail.value
 end LockStrategyError
 
-/** One consent for the whole necessary diff. */
+/** One consent for the whole necessary diff. The declaration digest and the candidate digest are both bound. */
 final case class LockProposal(
     id: ProposalId,
     invocation: InvocationId,
     client: ClientId,
     command: CommandIdentity,
     base: LockRevisionState,
+    declarations: ContentHash,
     candidate: ContentHash,
     scope: NecessaryScope,
 )

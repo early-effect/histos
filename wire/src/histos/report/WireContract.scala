@@ -7,8 +7,11 @@ import histos.lock.{
   InvocationEnvelope,
   LockBlocked,
   LockCommitted,
+  LockChange,
   LockDecision,
   LockDefaults,
+  LockDiff,
+  LockDiffEntry,
   LockEvent,
   LockMode,
   LockOffer,
@@ -17,6 +20,7 @@ import histos.lock.{
   LockReply,
   LockRevisionState,
   LockStage,
+  LockSubject,
   LockTransactionError,
   NecessaryScope,
   ProposalSummary,
@@ -42,7 +46,9 @@ import histos.plugin.{
   FrozenDirectory,
   FrozenEnv,
   FrozenFile,
-  FrozenInput,
+  BindingKind,
+  ClosureArtifact,
+  ClosureRole,
   GenerationId,
   GenerationPluginEvent,
   InputKey,
@@ -55,6 +61,7 @@ import histos.plugin.{
   OfflineSelection,
   PluginEventError,
   PluginCatalog,
+  PluginCoordinate,
   PluginOrigin,
   PluginResolvers,
   ProposalId,
@@ -64,13 +71,22 @@ import histos.plugin.{
   RecipeNode,
   RecipeNodeId,
   RecipeRole,
+  HostRole,
+  HostSubstitution,
+  ProducerBinding,
   RecipeVersion,
+  RecordedInputs,
   RebuildRecipe,
   ResolutionIntent,
   ResolveVerb,
   SealedArtifactManifest,
   ServiceKey,
+  SelectedInput,
+  SemanticSetting,
   SourceId,
+  SourceKind,
+  SourceProvenance,
+  SourceSet,
   StageAssurance,
   StageBinding,
   StageClock,
@@ -94,7 +110,7 @@ import histos.toolchain.{
   HostToolRole,
   MaterializedTool,
 }
-import histos.zinc.{CompilationCapture, CompilationSnapshot, SelectedSource, SemanticSetting, SourceKind}
+import histos.zinc.{CompilationCapture, CompilationSnapshot}
 import histos.{HttpUrl, PluginPublication, PluginRef, Resolution, Resolver}
 
 import zio.json.*
@@ -165,6 +181,7 @@ private[histos] object WireContract extends WireSupport:
       manifest => WireManifest(manifest.version, manifest.entries),
     )
 
+  given JsonCodec[BindingKind]        = JsonCodec.derived
   given JsonCodec[StageAssurance]     = JsonCodec.derived
   given JsonCodec[BindingClass]       = JsonCodec.derived
   given JsonCodec[StageCwd]           = JsonCodec.derived
@@ -182,12 +199,22 @@ private[histos] object WireContract extends WireSupport:
   given JsonCodec[StageContract]      = JsonCodec.derived
   given JsonCodec[StageContractError] = JsonCodec.derived
 
-  given JsonCodec[RecipeVersion] = JsonCodec.derived
-  given JsonCodec[RecipeRole]    = JsonCodec.derived
-  given JsonCodec[FrozenInput]   = JsonCodec.derived
-  given JsonCodec[InputRecord]   = JsonCodec.derived
-  given JsonCodec[RecipeNode]    = JsonCodec.derived
-  given JsonCodec[RecipeError]   = JsonCodec.derived
+  given JsonCodec[RecipeVersion]    = JsonCodec.derived
+  given JsonCodec[RecipeRole]       = JsonCodec.derived
+  given JsonCodec[SourceSet]        = JsonCodec.derived
+  given JsonCodec[SourceKind]       = JsonCodec.derived
+  given JsonCodec[SourceProvenance] = JsonCodec.derived
+  given JsonCodec[SelectedInput]    = JsonCodec.derived
+  given JsonCodec[SemanticSetting]  = JsonCodec.derived
+  given JsonCodec[ClosureRole]      = JsonCodec.derived
+  given JsonCodec[HostRole]         = JsonCodec.derived
+  given JsonCodec[HostSubstitution] = JsonCodec.derived
+  given JsonCodec[ClosureArtifact]  = JsonCodec.derived
+  given JsonCodec[ProducerBinding]  = JsonCodec.derived
+  given JsonCodec[RecordedInputs]   = JsonCodec.derived
+  given JsonCodec[InputRecord]      = JsonCodec.derived
+  given JsonCodec[RecipeNode]       = JsonCodec.derived
+  given JsonCodec[RecipeError]      = JsonCodec.derived
 
   private final case class WireRecipe(version: RecipeVersion, root: RecipeNodeId, nodes: List[RecipeNode])
   private given JsonCodec[WireRecipe] = JsonCodec.derived
@@ -198,9 +225,6 @@ private[histos] object WireContract extends WireSupport:
       recipe => WireRecipe(recipe.version, recipe.root, recipe.nodes),
     )
 
-  given JsonCodec[SourceKind]          = JsonCodec.derived
-  given JsonCodec[SelectedSource]      = JsonCodec.derived
-  given JsonCodec[SemanticSetting]     = JsonCodec.derived
   given JsonCodec[CompilationSnapshot] = JsonCodec.derived
   given JsonCodec[CompilationCapture]  = JsonCodec.derived
 
@@ -217,6 +241,10 @@ private[histos] object WireContract extends WireSupport:
   given JsonCodec[LockPhase]             = JsonCodec.derived
   given JsonCodec[LockStage]             = JsonCodec.derived
   given JsonCodec[LockRevisionState]     = JsonCodec.derived
+  given JsonCodec[LockChange]            = JsonCodec.derived
+  given JsonCodec[LockSubject]           = JsonCodec.derived
+  given JsonCodec[LockDiffEntry]         = JsonCodec.derived
+  given JsonCodec[LockDiff]              = JsonCodec.derived
   given JsonCodec[DeclarationDrift]      = JsonCodec.derived
   given JsonCodec[NecessaryScope]        = JsonCodec.derived
   given JsonCodec[ProposalSummary]       = JsonCodec.derived

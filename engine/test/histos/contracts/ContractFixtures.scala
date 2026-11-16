@@ -10,7 +10,6 @@ import histos.plugin.{
   ContentHash,
   Digests,
   EntryName,
-  FrozenInput,
   InputRecord,
   PluginOrigin,
   RecipeNodeId,
@@ -20,7 +19,7 @@ import histos.plugin.{
   SourceId,
   VerifiedPluginManifest,
 }
-import histos.zinc.{CompilationCapture, CompilationSnapshot, SelectedSource, SourceKind}
+import histos.zinc.{CompilationCapture, CompilationSnapshot}
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -50,7 +49,18 @@ object ContractFixtures:
         ProjectName("app"),
         ScalaVersion("3.10.1"),
         Platform.Jvm,
-        List(SelectedSource(RepoPath("src/A.scala"), SourceKind.Scala, Digests.content(bytes), bytes.length.toLong)),
+        List(
+          histos.plugin.SelectedInput(
+            RepoPath("src/A.scala"),
+            histos.plugin.SourceKind.Scala,
+            histos.plugin.SourceSet.Main,
+            histos.plugin.SourceProvenance.Unmanaged,
+            Digests.content(bytes),
+            bytes.length.toLong,
+          )
+        ),
+        Nil,
+        Nil,
         Nil,
         Nil,
         Nil,
@@ -86,9 +96,6 @@ object ContractFixtures:
         Nil,
       )
       histos.load.ProvenanceResult.Verified(manifest)
-
-  def frozen(path: RepoPath, bytes: Array[Byte]): FrozenInput =
-    FrozenInput(path, Digests.content(bytes), bytes.length.toLong)
 
   val root: RecipeNodeId = RecipeNodeId("root")
 end ContractFixtures

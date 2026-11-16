@@ -1,14 +1,6 @@
 package histos.lock
 
-import histos.plugin.{
-  ClientId,
-  CommandIdentity,
-  InvocationContext,
-  InvocationId,
-  LockRevision,
-  PluginDetail,
-  ProposalId,
-}
+import histos.plugin.{ClientId, CommandIdentity, ContentHash, InvocationContext, InvocationId, LockRevision, ProposalId}
 import histos.server.Call
 
 /** The call and the caller, as data. The running socket still accepts a bare [[Call]]. */
@@ -17,8 +9,11 @@ final case class InvocationEnvelope(context: InvocationContext, call: Call)
 /** One complete repair, offered once. Consent is not stdin and not the server environment. */
 final case class LockOffer(
     proposal: ProposalId,
+    caller: ClientId,
     base: LockRevisionState,
-    scope: PluginDetail,
+    declarations: ContentHash,
+    candidate: ContentHash,
+    scope: NecessaryScope,
     command: CommandIdentity,
 )
 
@@ -29,7 +24,7 @@ enum LockReply:
 final case class LockCommitted(revision: LockRevision, invocation: InvocationId, client: ClientId)
 
 /** Frozen or rejected before a solve. No lock write is implied. */
-final case class LockBlocked(refusal: LockRefusal, scope: PluginDetail)
+final case class LockBlocked(refusal: LockRefusal, scope: NecessaryScope)
 
 /** A lock transaction failed. This is not a resolver miss and not a checksum rewrite. */
 enum LockTransactionError:

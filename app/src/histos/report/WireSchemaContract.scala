@@ -7,8 +7,11 @@ import histos.lock.{
   ExecutionKind,
   LockBlocked,
   LockCommitted,
+  LockChange,
   LockDecision,
   LockDefaults,
+  LockDiff,
+  LockDiffEntry,
   LockEvent,
   LockMode,
   LockOffer,
@@ -17,6 +20,7 @@ import histos.lock.{
   LockReply,
   LockRevisionState,
   LockStage,
+  LockSubject,
   LockTransactionError,
   NecessaryScope,
   ProposalSummary,
@@ -29,6 +33,7 @@ import histos.plugin.{
   ArtifactManifestError,
   ArtifactPath,
   BindingClass,
+  BindingKind,
   BootstrapError,
   BootstrapPlanError,
   BootstrapSource,
@@ -41,7 +46,8 @@ import histos.plugin.{
   FrozenDirectory,
   FrozenEnv,
   FrozenFile,
-  FrozenInput,
+  ClosureArtifact,
+  ClosureRole,
   GenerationId,
   GenerationPluginEvent,
   InputKey,
@@ -64,12 +70,21 @@ import histos.plugin.{
   RecipeNode,
   RecipeNodeId,
   RecipeRole,
+  HostRole,
+  HostSubstitution,
+  ProducerBinding,
   RecipeVersion,
+  RecordedInputs,
   ResolutionIntent,
   ResolveVerb,
   SealedArtifactManifest,
   ServiceKey,
+  SelectedInput,
+  SemanticSetting,
   SourceId,
+  SourceKind,
+  SourceProvenance,
+  SourceSet,
   StageAssurance,
   StageBinding,
   StageClock,
@@ -90,7 +105,7 @@ import histos.toolchain.{
   HostToolRole,
   MaterializedTool,
 }
-import histos.zinc.{CompilationCapture, CompilationSnapshot, SelectedSource, SemanticSetting, SourceKind}
+import histos.zinc.{CompilationCapture, CompilationSnapshot}
 import histos.{HttpUrl, PluginPublication, PluginRef, Resolution, Resolver}
 
 /** Document schemas for the plugin contracts. JSON codecs stay in wire. */
@@ -132,6 +147,7 @@ private object WireSchemaContract extends WireSchemaSupport:
   given Schema[ArtifactManifestError]  = Schema.derived
   given Schema[SealedArtifactManifest] = Schema.derived
 
+  given Schema[BindingKind]        = Schema.derived
   given Schema[StageAssurance]     = Schema.derived
   given Schema[BindingClass]       = Schema.derived
   given Schema[StageCwd]           = Schema.derived
@@ -149,16 +165,22 @@ private object WireSchemaContract extends WireSchemaSupport:
   given Schema[StageContract]      = Schema.derived
   given Schema[StageContractError] = Schema.derived
 
-  given Schema[RecipeVersion] = Schema.derived
-  given Schema[RecipeRole]    = Schema.derived
-  given Schema[FrozenInput]   = Schema.derived
-  given Schema[InputRecord]   = Schema.derived
-  given Schema[RecipeNode]    = Schema.derived
-  given Schema[RecipeError]   = Schema.derived
-
+  given Schema[RecipeVersion]       = Schema.derived
+  given Schema[RecipeRole]          = Schema.derived
+  given Schema[SourceSet]           = Schema.derived
   given Schema[SourceKind]          = Schema.derived
-  given Schema[SelectedSource]      = Schema.derived
+  given Schema[SourceProvenance]    = Schema.derived
+  given Schema[SelectedInput]       = Schema.derived
   given Schema[SemanticSetting]     = Schema.derived
+  given Schema[ClosureRole]         = Schema.derived
+  given Schema[HostRole]            = Schema.derived
+  given Schema[HostSubstitution]    = Schema.derived
+  given Schema[ClosureArtifact]     = Schema.derived
+  given Schema[ProducerBinding]     = Schema.derived
+  given Schema[RecordedInputs]      = Schema.derived
+  given Schema[InputRecord]         = Schema.derived
+  given Schema[RecipeNode]          = Schema.derived
+  given Schema[RecipeError]         = Schema.derived
   given Schema[CompilationSnapshot] = Schema.derived
   given Schema[CompilationCapture]  = Schema.derived
 
@@ -175,6 +197,10 @@ private object WireSchemaContract extends WireSchemaSupport:
   given Schema[LockPhase]             = Schema.derived
   given Schema[LockStage]             = Schema.derived
   given Schema[LockRevisionState]     = Schema.derived
+  given Schema[LockChange]            = Schema.derived
+  given Schema[LockSubject]           = Schema.derived
+  given Schema[LockDiffEntry]         = Schema.derived
+  given Schema[LockDiff]              = Schema.derived
   given Schema[DeclarationDrift]      = Schema.derived
   given Schema[NecessaryScope]        = Schema.derived
   given Schema[ProposalSummary]       = Schema.derived

@@ -47,7 +47,12 @@ object StageRestrictions:
     StageProcess.Prohibited,
   )
 
-final case class StageBinding(key: InputKey, classification: BindingClass)
+enum BindingKind:
+  case File
+  case Directory
+  case Env
+
+final case class StageBinding(key: InputKey, classification: BindingClass, kind: BindingKind)
 
 /** One frozen file. The path is relative to the recipe root. */
 final case class FrozenFile(path: RepoPath, digest: ContentHash, length: Long)
@@ -106,15 +111,20 @@ object StageContract:
 
   private def secret(contract: StageContract): Option[StageContractError] =
     contract.required.collectFirst:
-      case StageBinding(_, BindingClass.Secret)       => StageContractError.SecretInput
-      case StageBinding(_, BindingClass.Unclassified) => StageContractError.UnclassifiedInput
+      case StageBinding(_, BindingClass.Secret, _)       => StageContractError.SecretInput
+      case StageBinding(_, BindingClass.Unclassified, _) => StageContractError.UnclassifiedInput
 
   private def missing(contract: StageContract): Option[InputKey] =
-    val present = contract.inputs.env.map(_.key.value).toSet ++
-      contract.inputs.files.map(_.path.value) ++
-      contract.inputs.directories.map(_.path.value)
+    def present(binding: StageBinding): Boolean =
+      binding.kind match
+        case BindingKind.File =>
+          contract.inputs.files.exists(_.path.value == binding.key.value)
+        case BindingKind.Directory =>
+          contract.inputs.directories.exists(_.path.value == binding.key.value)
+        case BindingKind.Env =>
+          contract.inputs.env.exists(_.key.value == binding.key.value)
     contract.required.collectFirst:
-      case StageBinding(key, BindingClass.Public) if !present.contains(key.value) => key
+      case binding @ StageBinding(key, BindingClass.Public, _) if !present(binding) => key
 end StageContract
 
 enum StageContractError:

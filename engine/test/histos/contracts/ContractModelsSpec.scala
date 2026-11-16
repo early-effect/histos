@@ -20,16 +20,25 @@ object ContractModelsSpec extends ZIOSpecDefault:
       val emptied  = captured.collect:
         case CompilationCapture.Recorded(snapshot) =>
           CompilationCapture.Recorded(snapshot.copy(sources = Nil))
-      val unrecorded = CompilationCapture.Unrecorded.record
-      val frozen     = emptied.map(_.record)
+      val unrecorded   = CompilationCapture.Unrecorded.record
+      val frozen       = emptied.map(_.record)
+      val emptySources = frozen match
+        case Some(InputRecord.Frozen(body)) => body.sources.isEmpty
+        case _                              => false
+      val read = frozen match
+        case Some(record) =>
+          RebuildRecipe.sourcesOf(ContractFixtures.root, record) match
+            case Right(body) => body.sources.isEmpty
+            case Left(_)     => false
+        case None => false
       assertTrue(
         captured.isDefined,
         unrecorded == InputRecord.Unrecorded,
-        frozen.contains(InputRecord.Frozen(Nil)),
-        unrecorded != InputRecord.Frozen(Nil),
+        emptySources,
+        frozen != Some(InputRecord.Unrecorded),
         RebuildRecipe.sourcesOf(ContractFixtures.root, unrecorded) ==
           Left(RecipeError.Unrecorded(ContractFixtures.root)),
-        RebuildRecipe.sourcesOf(ContractFixtures.root, InputRecord.Frozen(Nil)) == Right(Nil),
+        read,
         emptied != Some(CompilationCapture.Unrecorded),
       )
     },

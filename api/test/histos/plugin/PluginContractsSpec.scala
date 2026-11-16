@@ -127,13 +127,18 @@ object PluginContractsSpec extends ZIOSpecDefault:
       )
     },
     test("a repeated artifact path is rejected and an empty seal is not that rejection") {
-      val entry = ArtifactEntry(ArtifactPath("A.class"), 1L, ContentHash(digest))
-      val again = ArtifactEntry(ArtifactPath("A.class"), 2L, ContentHash(digest))
+      val entry    = ArtifactEntry(ArtifactPath("A.class"), 1L, ContentHash(digest))
+      val again    = ArtifactEntry(ArtifactPath("A.class"), 2L, ContentHash(digest))
+      val first    = ArtifactEntry(ArtifactPath("A.class"), 1L, ContentHash(digest))
+      val later    = ArtifactEntry(ArtifactPath("B.class"), 1L, ContentHash(digest))
+      val forward  = SealedArtifactManifest.from(List(first, later))
+      val reversed = SealedArtifactManifest.from(List(later, first))
       assertTrue(
         SealedArtifactManifest.from(List(entry, again)) == Left(
           ArtifactManifestError.Duplicate(ArtifactPath("A.class"))
         ),
         SealedArtifactManifest.from(Nil).isRight,
+        forward.map(_.identity) == reversed.map(_.identity),
       )
     },
     test("secret, unclassified, and missing public bindings are refused") {
@@ -144,17 +149,44 @@ object PluginContractsSpec extends ZIOSpecDefault:
         StageContract.validate(secret) == Left(StageContractError.SecretInput),
         StageContract.validate(open) == Left(StageContractError.UnclassifiedInput),
         StageContract.validate(absent) == Left(StageContractError.MissingBinding(InputKey("TOKEN"))),
+        StageContract.validate(fileNamedToken) == Left(StageContractError.MissingBinding(InputKey("TOKEN"))),
         StageContract.admitOffline(secret) == Left(StageContractError.UnsupportedOffline),
         StageContract.admitOffline(secret.copy(assurance = StageAssurance.HostKnown)) == Right(()),
       )
     },
     test("an unrecorded recipe input is not an empty frozen list") {
       val unrecorded = RebuildRecipe.sourcesOf(node, InputRecord.Unrecorded)
-      val empty      = RebuildRecipe.sourcesOf(node, InputRecord.Frozen(Nil))
+      val emptyBody  = recorded()
+      val empty      = RebuildRecipe.sourcesOf(node, InputRecord.Frozen(emptyBody))
       assertTrue(
         unrecorded == Left(RecipeError.Unrecorded(node)),
-        empty == Right(Nil),
+        empty == Right(emptyBody),
+        emptyBody.sources.isEmpty,
         unrecorded != empty,
+      )
+    },
+    test("a duplicate id and a missing prerequisite are refused") {
+      val root     = RecipeNode(node, RecipeRole.Root, Nil, InputRecord.Frozen(recorded()), None)
+      val again    = root
+      val dangling = RecipeNode(
+        node,
+        RecipeRole.Root,
+        List(RecipeNodeId("missing")),
+        InputRecord.Frozen(recorded()),
+        None,
+      )
+      val absent = RecipeNode(node, RecipeRole.Root, Nil, InputRecord.Unrecorded, None)
+      val badJdk = root.copy(sources =
+        InputRecord.Frozen(recorded().copy(producer = ProducerBinding(histos.ScalaVersion("3.10.1"), 0, Nil, Nil)))
+      )
+      assertTrue(
+        RebuildRecipe.from(RecipeVersion.V1, node, List(root, again)) ==
+          Left(RecipeError.Duplicate(node)),
+        RebuildRecipe.from(RecipeVersion.V1, node, List(dangling)) ==
+          Left(RecipeError.Incomplete(RecipeInput("prerequisite"), RecipeNodeId("missing"))),
+        RebuildRecipe.from(RecipeVersion.V1, node, List(absent)).isRight,
+        RebuildRecipe.from(RecipeVersion.V1, node, List(badJdk)) ==
+          Left(RecipeError.Incomplete(RecipeInput("jdk"), node)),
       )
     },
     test("the builder infers the setup error and a missing service does not typecheck") {
@@ -259,9 +291,28 @@ object PluginContractsSpec extends ZIOSpecDefault:
       List(EntryName("stage.Main")),
       Nil,
       CompilerConstraint.unconstrained,
-      List(StageBinding(InputKey("TOKEN"), classification)),
+      List(StageBinding(InputKey("TOKEN"), classification, BindingKind.Env)),
       StageInputs(Nil, Nil, env),
       StageRestrictions.v1,
+    )
+
+  private def fileNamedToken: StageContract =
+    contract(BindingClass.Public, present = false).copy(
+      inputs = StageInputs(
+        List(FrozenFile(RepoPath("TOKEN"), ContentHash(digest), 1L)),
+        Nil,
+        Nil,
+      )
+    )
+
+  private def recorded(): RecordedInputs =
+    RecordedInputs(
+      Nil,
+      Nil,
+      Nil,
+      Nil,
+      Nil,
+      ProducerBinding(histos.ScalaVersion("3.10.1"), 21, Nil, Nil),
     )
 
   private object Reviewed:

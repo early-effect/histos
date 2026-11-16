@@ -29,8 +29,9 @@ object SealedArtifactManifest:
         entries.find(_.length < 0) match
           case Some(entry) => Left(ArtifactManifestError.NegativeLength(entry.path, entry.length))
           case None        =>
-            val identity = ArtifactIdentity(ArtifactFormat.Jar, Digests.content(canonical(entries)))
-            Right(SealedArtifactManifest(Current, entries, identity))
+            val ordered  = entries.sortBy(_.path.value)
+            val identity = ArtifactIdentity(ArtifactFormat.Jar, Digests.content(canonical(ordered)))
+            Right(SealedArtifactManifest(Current, ordered, identity))
 
   private def duplicate(entries: List[ArtifactEntry]): Option[ArtifactPath] =
     entries

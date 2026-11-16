@@ -2,7 +2,7 @@ package histos.plugin
 
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.report.WireJson.given
-import histos.zinc.{CompilationCapture, CompilationSnapshot, SelectedSource, SourceKind}
+import histos.zinc.{CompilationCapture, CompilationSnapshot}
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -25,7 +25,18 @@ object PluginWireSpec extends ZIOSpecDefault:
       ProjectName("app"),
       ScalaVersion("3.10.1"),
       Platform.Jvm,
-      List(SelectedSource(RepoPath("src/A.scala"), SourceKind.Scala, hash, bytes.length.toLong)),
+      List(
+        SelectedInput(
+          RepoPath("src/A.scala"),
+          SourceKind.Scala,
+          SourceSet.Main,
+          SourceProvenance.Unmanaged,
+          hash,
+          bytes.length.toLong,
+        )
+      ),
+      Nil,
+      Nil,
       Nil,
       Nil,
       Nil,
@@ -64,7 +75,8 @@ object PluginWireSpec extends ZIOSpecDefault:
             unrecorded.fromJson[CompilationCapture] == Right(absent),
             recorded.fromJson[CompilationCapture] == Right(present),
             absent.record == InputRecord.Unrecorded,
-            present.record == InputRecord.Frozen(Nil),
+            present.record != InputRecord.Unrecorded,
+            recordedSources(present.record).exists(_.isEmpty),
           )
     },
     test("a manifest codec recomputes identity and does not accept a repeated path") {
@@ -84,6 +96,11 @@ object PluginWireSpec extends ZIOSpecDefault:
           )
     },
   )
+
+  private def recordedSources(record: InputRecord): Option[List[SelectedInput]] =
+    record match
+      case InputRecord.Unrecorded   => None
+      case InputRecord.Frozen(body) => Some(body.sources)
 
   private def drop(encoded: String, field: String): Either[String, String] =
     encoded
