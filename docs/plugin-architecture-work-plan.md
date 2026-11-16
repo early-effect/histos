@@ -38,14 +38,14 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is in progress locally on `histos/plugin-p1` (`plug-p1`). The local gate is green on `33852e9`. No implementation PR is open. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is in progress locally on `histos/plugin-p1` (`plug-p1`). The local gate is green on `80e20c8`. No implementation PR is open. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
 | Unit | Depends | Branch | Worktree | PR | Status | Gate | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
-| P1 | P0 | `histos/plugin-p1` | `plug-p1` | | in progress | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `33852e9` (compile skipped 686, tests passed 5 failed 0, fmt unformatted 0). No PR. |
+| P1 | P0 | `histos/plugin-p1` | `plug-p1` | | in progress | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `80e20c8` (test run compiled 6 skipped 680, tests passed 5 failed 0, fmt unformatted 0). No PR. |
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | |
@@ -126,6 +126,7 @@ P1 notes. These are boundaries, not new product behavior.
 - `ProjectGraph.resolution` still defaults to `Resolution.Solve`. `intent` defaults to `ResolutionIntent.Inherit`. `Projects.locked` and `Organized.locked` set both `resolution = Resolution.Lock` and `intent = ResolutionIntent.Select(Resolution.Lock)`. The loader still reads `resolution`. Normalizing `Inherit` is P6.
 - `PluginRuntime` fills `RunRequest` with a stand-in caller: `ExecutionKind.Local`, `Interaction.Unattended`, `OfflineSelection.Online`, `ClientId("plugin-runtime")`, `CommandIdentity.Task`, and `PluginEvents.closedInvocation`. P8 replaces that caller. There is no third `ExecutionKind` and no unscoped origin.
 - `Plan.activate` and `StrategyPlan.activate` refuse a duplicate slot before `materialize`, so activation is not an empty success. P2 owns registration, generation-scope lifetime, concurrent callers, and the harness. There is no `ServiceActivationError.Unavailable`.
+- Service slots and task slots are duplicate-checked separately. `.add[P].tasks[P]` constructs two instances, and `.add` accepts an intersection key. P2 rejects an intersection key and constructs one instance for `.add[P].tasks[P]`.
 - `InvocationEnvelope`, lock offer, reply, committed, blocked, and `LockEvent` are data and codecs. The live build-event channel is unchanged. The resolve CLI does not gain refresh.
 - A stage network restriction is prohibited in v1. There is no network-enabled stage mode.
 - `HostCompilerInputs` is a provider trait. There is no live layer.
@@ -142,7 +143,7 @@ Owns `BuildServices` and `StrategyServices`: `.withLocks`, `.add[A]`, `.tasks[P]
 
 Must not edit `Loader`.
 
-Proof. Positive examples from the spec, including `CheckedReviewLabel` inferring `LabelSetupError` with no ascription. Negative compiler fixtures: missing `ReviewLabel`, a late main loading override, a generation layer that requires `InvocationContext` or `PluginEvents.Invocation`. Runtime: duplicate `.add` fails before construction, an empty label keeps the previous generation and surfaces `Noted`, two concurrent requests on one constructed service see their own command and their own event queue. Construction count is one. Scoped setup interruption runs finalizers.
+Proof. Positive examples from the spec, including `CheckedReviewLabel` inferring `LabelSetupError` with no ascription. Negative compiler fixtures: missing `ReviewLabel`, a late main loading override, a generation layer that requires `InvocationContext` or `PluginEvents.Invocation`, and an intersection registration key. Runtime: duplicate `.add` fails before construction, an empty label keeps the previous generation and surfaces `Noted`, two concurrent requests on one constructed service see their own command and their own event queue. `.add[P].tasks[P]` constructs one instance. Scoped setup interruption runs finalizers. P1 left the intersection key and the two-instance construction open.
 
 Ledger: R9 activation, A3, R10 at the builder, AR2 at the builder. Live loader proof of R10 stays P6.
 
