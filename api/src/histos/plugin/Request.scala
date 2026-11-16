@@ -68,6 +68,8 @@ final case class RunRequest(
     modules: List[ModuleView],
     args: PluginArgs,
     inputs: List[MaterialInput],
+    invocation: InvocationContext,
+    events: PluginEvents.Invocation,
     compiled: List[CellClasspath] = Nil,
     linked: List[LinkedScript] = Nil,
 )

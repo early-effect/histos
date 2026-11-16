@@ -3,8 +3,9 @@ package histos.load
 import histos.doctor.{Diagnostic, Noted}
 import histos.BuildError
 import histos.pack.JarError
-import histos.plugin.PluginLoadError
+import histos.plugin.{BootstrapError, PluginLoadError}
 import histos.resolve.ResolveError
+import histos.toolchain.HostCompilerError
 import histos.workspace.IoFailure
 import java.nio.file.Path
 import _root_.scala.annotation.publicInBinary
@@ -41,6 +42,8 @@ enum LoadError:
   case NoHome
   case Io(failure: IoFailure)
   case Jar(error: JarError)
+  case Bootstrap(error: BootstrapError)
+  case HostCompiler(error: HostCompilerError)
 
   def message: String = this match
     case Runtime(error)             => error.message
@@ -50,13 +53,15 @@ enum LoadError:
       "histos.scala does not define one object that extends HistosBuild"
     case AmbiguousEntry(classes) =>
       s"histos.scala defines more than one HistosBuild: ${classes.map(_.value).mkString(", ")}"
-    case BrokenGraph(error) => error.message
-    case Plugin(error)      => error.message
-    case Resolve(error)     => error.message
-    case MissingApi(path)   => s"$path has no bootstrap api jar"
-    case NoHome             => "no user home, so the api jar cannot be cached"
-    case Io(failure)        => failure.message
-    case Jar(error)         => error.message
+    case BrokenGraph(error)  => error.message
+    case Plugin(error)       => error.message
+    case Resolve(error)      => error.message
+    case MissingApi(path)    => s"$path has no bootstrap api jar"
+    case NoHome              => "no user home, so the api jar cannot be cached"
+    case Io(failure)         => failure.message
+    case Jar(error)          => error.message
+    case Bootstrap(error)    => error.message
+    case HostCompiler(error) => error.message
 
   def diagnose: Diagnostic = this match
     case Resolve(error) => error.diagnose

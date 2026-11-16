@@ -16,6 +16,11 @@ enum Publication:
   case Application
 end Publication
 
+/** How a plugin library is published. Rebuildable is the default. Binary-only keeps binding metadata and no recipe. */
+enum PluginPublication:
+  case Rebuildable
+  case BinaryOnly
+
 /** The sbt binary series carried in the artifact id. sbt 2 is `2`, so a Scala 3 jar is `name_sbt2_3`. */
 opaque type SbtSeries = String
 

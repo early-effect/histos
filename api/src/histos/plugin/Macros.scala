@@ -210,6 +210,114 @@ private[histos] object PluginMacros:
       canonical => '{ Cron.trusted(${ Expr(canonical) }) },
     )
 
+  def sourceId(raw: Expr[String])(using Quotes): Expr[SourceId] =
+    literal(
+      raw,
+      "SourceId",
+      text => SourceId.from(text).map(_.value),
+      _.message,
+      canonical => '{ SourceId.trusted(${ Expr(canonical) }) },
+    )
+
+  def serviceKey(raw: Expr[String])(using Quotes): Expr[ServiceKey] =
+    literal(
+      raw,
+      "ServiceKey",
+      text => ServiceKey.from(text).map(_.value),
+      _.message,
+      canonical => '{ ServiceKey.trusted(${ Expr(canonical) }) },
+    )
+
+  def lockRevision(raw: Expr[String])(using Quotes): Expr[LockRevision] =
+    literal(
+      raw,
+      "LockRevision",
+      text => LockRevision.from(text).map(_.value),
+      _.message,
+      canonical => '{ LockRevision.trusted(${ Expr(canonical) }) },
+    )
+
+  def proposalId(raw: Expr[String])(using Quotes): Expr[ProposalId] =
+    literal(
+      raw,
+      "ProposalId",
+      text => ProposalId.from(text).map(_.value),
+      _.message,
+      canonical => '{ ProposalId.trusted(${ Expr(canonical) }) },
+    )
+
+  def recipeNodeId(raw: Expr[String])(using Quotes): Expr[RecipeNodeId] =
+    literal(
+      raw,
+      "RecipeNodeId",
+      text => RecipeNodeId.from(text).map(_.value),
+      _.message,
+      canonical => '{ RecipeNodeId.trusted(${ Expr(canonical) }) },
+    )
+
+  def generationId(raw: Expr[String])(using Quotes): Expr[GenerationId] =
+    literal(
+      raw,
+      "GenerationId",
+      text => GenerationId.from(text).map(_.value),
+      _.message,
+      canonical => '{ GenerationId.trusted(${ Expr(canonical) }) },
+    )
+
+  def invocationId(raw: Expr[String])(using Quotes): Expr[InvocationId] =
+    literal(
+      raw,
+      "InvocationId",
+      text => InvocationId.from(text).map(_.value),
+      _.message,
+      canonical => '{ InvocationId.trusted(${ Expr(canonical) }) },
+    )
+
+  def clientId(raw: Expr[String])(using Quotes): Expr[ClientId] =
+    literal(
+      raw,
+      "ClientId",
+      text => ClientId.from(text).map(_.value),
+      _.message,
+      canonical => '{ ClientId.trusted(${ Expr(canonical) }) },
+    )
+
+  def commandToken(raw: Expr[String])(using Quotes): Expr[CommandToken] =
+    literal(
+      raw,
+      "CommandToken",
+      text => CommandToken.from(text).map(_.value),
+      _.message,
+      canonical => '{ CommandToken.trusted(${ Expr(canonical) }) },
+    )
+
+  def recipeFeature(raw: Expr[String])(using Quotes): Expr[RecipeFeature] =
+    literal(
+      raw,
+      "RecipeFeature",
+      text => RecipeFeature.from(text).map(_.value),
+      _.message,
+      canonical => '{ RecipeFeature.trusted(${ Expr(canonical) }) },
+    )
+
+  def recipeInput(raw: Expr[String])(using Quotes): Expr[RecipeInput] =
+    literal(
+      raw,
+      "RecipeInput",
+      text => RecipeInput.from(text).map(_.value),
+      _.message,
+      canonical => '{ RecipeInput.trusted(${ Expr(canonical) }) },
+    )
+
+  def artifactPath(raw: Expr[String])(using Quotes): Expr[ArtifactPath] =
+    literal(
+      raw,
+      "ArtifactPath",
+      text => ArtifactPath.from(text).map(_.value),
+      _.message,
+      canonical => '{ ArtifactPath.trusted(${ Expr(canonical) }) },
+    )
+
   private def literal[E, A](
       raw: Expr[String],
       what: String,

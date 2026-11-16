@@ -224,6 +224,8 @@ object ScalacClasspath:
       case histos.load.LoadError.Resolve(_)        => GraphCompileError.RootRead(repo)
       case histos.load.LoadError.NoHome            => GraphCompileError.RootRead(repo)
       case histos.load.LoadError.Jar(error)        => GraphCompileError.RootRead(jarPath(repo, error))
+      case histos.load.LoadError.Bootstrap(_)      => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.HostCompiler(_)   => GraphCompileError.RootRead(repo)
 
   private def jarPath(repo: Path, error: JarError): Path =
     error match

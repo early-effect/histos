@@ -141,6 +141,12 @@ sealed trait ModuleDef[P] extends ProjectDef:
   /** Leave plugin-owned text on this module. A repeated plugin and key is refused later. */
   def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef[P]
 
+  /** Publish this module as a plugin library with a rebuild recipe. */
+  def pluginLibrary: ModuleDef[P] = pluginLibrary(PluginPublication.Rebuildable)
+
+  /** Publish this module as a plugin library. Binary-only keeps binding metadata and no recipe. */
+  def pluginLibrary(mode: PluginPublication): ModuleDef[P]
+
   private[histos] def rewriteJsVersion(version: JsVersion): ModuleDef[P]
   private[histos] def rewriteJsEnv(env: JsEnv): ModuleDef[P]
   private[histos] def rewriteJsModule(kind: JsModuleKind): ModuleDef[P]
@@ -183,6 +189,7 @@ object ModuleDef:
       TestStore.Off,
       Set.empty,
       ThreadStack.default,
+      None,
     )
 
 /** The stored module. Graph reads these fields. Callers see [[ModuleDef]]. */
@@ -212,6 +219,7 @@ private[histos] final class ModuleBody[P](
     val testStore: TestStore,
     val needs: Set[Need],
     val threadStack: ThreadStack,
+    val pluginPublication: Option[PluginPublication],
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -271,6 +279,9 @@ private[histos] final class ModuleBody[P](
   override def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef[P] =
     revise(notes = notes :+ ModuleNote(plugin, key, value))
 
+  override def pluginLibrary(mode: PluginPublication): ModuleDef[P] =
+    revise(pluginPublication = Some(mode))
+
   override private[histos] def rewriteJsVersion(version: JsVersion): ModuleDef[P] =
     revise(jsVersion = Some(version))
 
@@ -314,6 +325,7 @@ private[histos] final class ModuleBody[P](
       testStore: TestStore = this.testStore,
       needs: Set[Need] = this.needs,
       threadStack: ThreadStack = this.threadStack,
+      pluginPublication: Option[PluginPublication] = this.pluginPublication,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -341,6 +353,7 @@ private[histos] final class ModuleBody[P](
       testStore,
       needs,
       threadStack,
+      pluginPublication,
     )
 end ModuleBody
 

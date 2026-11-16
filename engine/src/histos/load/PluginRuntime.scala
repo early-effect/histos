@@ -1,13 +1,21 @@
 package histos.load
 
 import histos.jdk.{Machine, Sha256, Sha256Digest}
+import histos.lock.ExecutionKind
 import histos.plugin.{
   ApiDigest,
+  ClientId,
+  CommandIdentity,
   DeclaredTask,
   HistosPlugin,
+  Interaction,
+  InvocationContext,
+  InvocationId,
   ModuleView,
+  OfflineSelection,
   PluginArgs,
   PluginDetail,
+  PluginEvents,
   PluginId,
   PluginLinked,
   PluginOutput,
@@ -330,6 +338,15 @@ object PluginRuntime:
             views(id.plugin),
             args,
             hashed.material,
+            InvocationContext(
+              InvocationId.derive(id.render),
+              ClientId("plugin-runtime"),
+              CommandIdentity.Task(id),
+              ExecutionKind.Local,
+              Interaction.Unattended,
+              OfflineSelection.Online,
+            ),
+            PluginEvents.closedInvocation,
             compiled,
             linked,
           ),

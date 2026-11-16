@@ -102,7 +102,8 @@ private[histos] object CacheVerify:
       case GraphCompileError.Assets(module, _, _, _)                  => List(module)
       case GraphCompileError.Cells(errors)                            => errors.toList.flatMap(modulesOf)
       case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.Lock(_) |
-          GraphCompileError.LockRead(_) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) =>
+          GraphCompileError.LockRead(_) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
+          GraphCompileError.Recipe(_) =>
         Nil
 
   private def differs(

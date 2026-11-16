@@ -1,6 +1,7 @@
 package histos
 
 import histos.plugin.{
+  BuildServices,
   CiSettings,
   DeclaredInput,
   HistosPlugin,
@@ -11,6 +12,7 @@ import histos.plugin.{
   PluginId,
   RegisteredPlugin,
   RepoPath,
+  ResolutionIntent,
   TaskDep,
   TaskName,
 }
@@ -63,6 +65,7 @@ final case class Module(
     needs: Set[Need] = Set.empty,
     resources: List[GeneratedAsset] = Nil,
     threadStack: ThreadStack = ThreadStack.default,
+    pluginLibrary: Option[PluginPublication] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -149,6 +152,7 @@ final case class ProjectGraph private (
     coordinates: List[PluginCoordinate] = Nil,
     ciSetup: CiSetup = CiSetup.Remote,
     theme: Theme = Theme.standard,
+    intent: ResolutionIntent = ResolutionIntent.Inherit,
 ):
   /** Width of the longest project name. Compile and test lines pad the name to it. */
   val moduleColumn: Int =
@@ -221,6 +225,7 @@ object ProjectGraph:
       coordinates: List[PluginCoordinate] = Nil,
       ciSetup: CiSetup = CiSetup.Remote,
       theme: Theme = Theme.standard,
+      intent: ResolutionIntent = ResolutionIntent.Inherit,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -244,6 +249,7 @@ object ProjectGraph:
       coordinates,
       ciSetup,
       theme,
+      intent,
     )
 end ProjectGraph
 
@@ -254,6 +260,9 @@ trait HistosBuild:
 
   /** The engine supplies [[PairProof]]. An override that needs nothing ignores it. */
   def dist: ZLayer[PairProof, Nothing, PairProof] = ZLayer.service[PairProof]
+
+  /** Typed services and tasks. Omission installs nothing beyond the early strategies. */
+  def services: BuildServices = BuildServices.default
 end HistosBuild
 
 object HistosBuild:
@@ -419,6 +428,7 @@ object Projects:
             coordinates,
             settings.ciSetup,
             settings.theme,
+            settings.intent,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -597,6 +607,7 @@ object Projects:
                   m.needs,
                   m.resources,
                   m.threadStack,
+                  m.pluginPublication,
                 )
 
   private def publicationOf(
@@ -982,7 +993,10 @@ final class Organized private (settings: Organized.Settings):
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
-  def locked: Organized = Organized(settings.copy(resolution = Resolution.Lock))
+  def locked: Organized =
+    Organized(
+      settings.copy(resolution = Resolution.Lock, intent = ResolutionIntent.Select(Resolution.Lock))
+    )
 
   /** `histos fmt` formats with the `.scalafmt.conf` at the repository root, and CI checks it. Off unless a build asks.
     */
@@ -1109,6 +1123,7 @@ object Organized:
       pluginSources: List[PluginRef] = Nil,
       ciSetup: CiSetup = CiSetup.Remote,
       theme: Theme = Theme.standard,
+      intent: ResolutionIntent = ResolutionIntent.Inherit,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())

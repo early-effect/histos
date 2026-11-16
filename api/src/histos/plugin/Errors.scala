@@ -18,6 +18,7 @@ enum PluginLoadError:
   case Defect(coordinate: PluginCoordinate, binary: String)
   case Io(op: PluginIo)
   case Construction(detail: String)
+  case Recipe(error: RecipeError)
 
   def message: String = this match
     case Unlocked(coordinate)    => s"plugin $coordinate is not in the lock"
@@ -36,6 +37,7 @@ enum PluginLoadError:
     case Defect(coordinate, binary)     => s"plugin ${coordinate.render} failed while loading ($binary)"
     case Io(op)                         => s"plugin ${op.word} failed at ${op.location}"
     case Construction(detail)           => s"plugin construction failed ($detail)"
+    case Recipe(error)                  => error.message
 end PluginLoadError
 
 enum PluginIo:
