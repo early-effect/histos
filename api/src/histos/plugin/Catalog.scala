@@ -8,7 +8,7 @@ enum PluginResolvers:
   case Central
   case Listed(resolvers: List[Resolver])
 
-/** Where early strategy services are wired. [[Core]] means there is no strategy file. */
+/** Where early strategy services are wired. [[histos.plugin.BootstrapSource.Core]] means there is no strategy file. */
 enum BootstrapSource:
   case Core
   case File(path: RepoPath, required: PluginCatalog)

@@ -82,7 +82,7 @@ final class TasksPartiallyApplied[S, E <: ServiceSetupError, P <: HistosPlugin](
     Plan.taskE(plan, layer)
 end TasksPartiallyApplied
 
-/** `S` is the registered capability intersection. Each capability keeps its own [[Tag]]. An intersection tag is not
+/** `S` is the registered capability intersection. Each capability keeps its own [[zio.Tag]]. An intersection tag is not
   * summoned.
   */
 sealed abstract class Plan[S, E <: ServiceSetupError] extends BuildServices:

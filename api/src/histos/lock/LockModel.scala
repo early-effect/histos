@@ -41,7 +41,7 @@ enum LockStage:
   case Discovery
   case Acceptance
 
-/** No lock file is [[Absent]]. That is a revision, not a missing read. */
+/** No lock file is [[histos.lock.LockRevisionState.Absent]]. That is a revision, not a missing read. */
 enum LockRevisionState:
   case Absent
   case Present(revision: LockRevision)
@@ -74,7 +74,7 @@ final case class LockDiffEntry(
 /** Every added, removed, and changed member of the necessary closure. An empty list is an empty diff. */
 final case class LockDiff(entries: List[LockDiffEntry])
 
-/** The one-line summary plus the structured diff. The diff is not folded into [[PluginDetail]]. */
+/** The one-line summary plus the structured diff. The diff is not folded into [[histos.plugin.PluginDetail]]. */
 final case class NecessaryScope(summary: PluginDetail, diff: LockDiff)
 
 final case class ProposalSummary(
