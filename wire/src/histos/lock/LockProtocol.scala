@@ -18,7 +18,8 @@ final case class LockOffer(
 )
 
 enum LockReply:
-  case Accept(proposal: ProposalId, revision: LockRevision)
+  /** `base` is the revision the caller consented to. An absent lock is that revision. */
+  case Accept(proposal: ProposalId, base: LockRevisionState)
   case Decline(proposal: ProposalId)
 
 final case class LockCommitted(revision: LockRevision, invocation: InvocationId, client: ClientId)
