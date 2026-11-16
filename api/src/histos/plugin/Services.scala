@@ -37,18 +37,22 @@ enum CoreSlot:
 enum ServiceActivationError:
   case Setup(diagnosis: Noted)
   case MissingCapability(key: ServiceKey, phase: ActivationPhase)
+  case BadKey(raw: String)
   case DuplicateService(key: ServiceKey)
   case DuplicateReplacement(slot: CoreSlot)
 
   def message: String = this match
     case Setup(diagnosis)              => diagnosis.summary
     case MissingCapability(key, phase) => s"capability ${key.value} is missing at $phase"
+    case BadKey(raw)                   => s"'$raw' is not a service key"
     case DuplicateService(key)         => s"service ${key.value} is registered twice"
     case DuplicateReplacement(slot)    => s"$slot is replaced twice"
 end ServiceActivationError
 
-/** Host-facing result. User services stay in the generation environment that built them. */
-final case class ActivatedBuildServices(locks: Option[LockStrategy], tasks: List[HistosPlugin])
+/** Host-facing result. User services stay in the generation environment that built them. `locks` is the replacement, or
+  * the core strategy when the plan did not call `.withLocks`.
+  */
+final case class ActivatedBuildServices(locks: LockStrategy, tasks: List[HistosPlugin])
 
 /** The associated-type plan is [[Plan]]. This trait is what [[histos.HistosBuild.services]] returns. */
 trait BuildServices:
@@ -108,11 +112,12 @@ sealed abstract class Plan[S, E <: ServiceSetupError] extends BuildServices:
     Plan.refuse(recorded) match
       case Some(error) => ZIO.fail(error)
       case None        =>
-        materialize.map: chain =>
-          val selected = chain.locks match
-            case strategy :: Nil => Some(strategy)
-            case _               => None
-          ActivatedBuildServices(selected, chain.tasks)
+        ZIO.serviceWithZIO[LockStrategy]: core =>
+          materialize.flatMap: chain =>
+            chain.locks match
+              case Nil                => ZIO.succeed(ActivatedBuildServices(core, chain.tasks))
+              case replacement :: Nil => ZIO.succeed(ActivatedBuildServices(replacement, chain.tasks))
+              case _                  => ZIO.fail(ServiceActivationError.DuplicateReplacement(CoreSlot.Locks))
 
   protected def recorded: List[Plan.Slot]
 
@@ -179,12 +184,15 @@ object Plan:
       case _         => false
     if locks > 1 then Some(ServiceActivationError.DuplicateReplacement(CoreSlot.Locks))
     else
-      repeated(slots.collect { case Slot.Service(tag) => tag }) match
-        case Some(tag) => Some(ServiceActivationError.DuplicateService(keyOf(tag)))
-        case None      =>
-          repeated(slots.collect { case Slot.Task(tag) => tag }) match
-            case Some(tag) => Some(ServiceActivationError.DuplicateService(keyOf(tag)))
-            case None      => None
+      coreConflict(slots) match
+        case found @ Some(_) => found
+        case None            =>
+          repeated(slots.collect { case Slot.Service(tag) => tag }) match
+            case Some(tag) => Some(duplicate(tag))
+            case None      =>
+              repeated(slots.collect { case Slot.Task(tag) => tag }) match
+                case Some(tag) => Some(duplicate(tag))
+                case None      => None
 
   private def repeated(tags: List[Tag[?]]): Option[Tag[?]] =
     tags
@@ -194,10 +202,23 @@ object Plan:
         case ((seen, None), tag)                                  => (tag :: seen, None)
       ._2
 
-  private def keyOf(tag: Tag[?]): ServiceKey =
+  private def coreConflict(slots: List[Slot]): Option[ServiceActivationError] =
+    val tags = slots.collect { case Slot.Service(tag) => tag.tag }
+    if tags.exists(_ == summon[Tag[LockStrategy]].tag) then
+      Some(ServiceActivationError.DuplicateReplacement(CoreSlot.Locks))
+    else if tags.exists(_ == summon[Tag[PluginLoadingStrategy]].tag) then
+      Some(ServiceActivationError.DuplicateReplacement(CoreSlot.PluginLoading))
+    else None
+
+  private def duplicate(tag: Tag[?]): ServiceActivationError =
     ServiceKey.from(tag.tag.toString) match
-      case Right(key) => key
-      case Left(_)    => ServiceKey("service")
+      case Right(key) => ServiceActivationError.DuplicateService(key)
+      case Left(_)    => ServiceActivationError.BadKey(tag.tag.toString)
+
+  private def missing(tag: Tag[?], phase: ActivationPhase): ServiceActivationError =
+    ServiceKey.from(tag.tag.toString) match
+      case Right(key) => ServiceActivationError.MissingCapability(key, phase)
+      case Left(_)    => ServiceActivationError.BadKey(tag.tag.toString)
 
   private def provide[S, A: Tag, E](
       prior: ZEnvironment[S],
@@ -209,7 +230,7 @@ object Plan:
         built.getDynamic[A] match
           case Some(value) => ZIO.succeed(value)
           case None        =>
-            ZIO.fail(ServiceActivationError.MissingCapability(keyOf(summon[Tag[A]]), ActivationPhase.Main))
+            ZIO.fail(missing(summon[Tag[A]], ActivationPhase.Main))
 
   private final class Empty(using Tag[NoExtraServices]) extends Plan[NoExtraServices, Nothing]:
     protected def recorded: List[Slot] = Nil

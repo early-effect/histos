@@ -192,6 +192,62 @@ object PluginContractsSpec extends ZIOSpecDefault:
           seen <- counter.get
         yield assertTrue(exit.isFailure, seen == 0)
     },
+    test("omitted locks keep the core strategy") {
+      ZIO.scoped:
+        for
+          scope <- ZIO.service[Scope]
+          built <- BuildServices.default.activate.provide(
+            ZLayer.succeed[BuildContext](Ambient.context),
+            ZLayer.succeed[PluginEvents.Generation](Ambient.events),
+            ZLayer.succeed[LockStrategy](locks),
+            PluginLoading.exactOrRebuild,
+            ZLayer.succeed(scope),
+          )
+        yield assertTrue(built.locks eq locks)
+    },
+    test("withLocks replaces the core strategy") {
+      val replacement = new LockStrategy:
+        def decide(context: LockContext): zio.IO[histos.lock.LockStrategyError, LockDecision] =
+          ZIO.succeed(LockDecision.Update)
+      ZIO.scoped:
+        for
+          scope <- ZIO.service[Scope]
+          built <- BuildServices.default
+            .withLocks(ZLayer.succeed[LockStrategy](replacement))
+            .activate
+            .provide(
+              ZLayer.succeed[BuildContext](Ambient.context),
+              ZLayer.succeed[PluginEvents.Generation](Ambient.events),
+              ZLayer.succeed[LockStrategy](locks),
+              PluginLoading.exactOrRebuild,
+              ZLayer.succeed(scope),
+            )
+        yield assertTrue((built.locks eq replacement), !(built.locks eq locks))
+    },
+    test("adding the core lock slot is refused before that layer runs") {
+      ZIO.scoped:
+        for
+          scope   <- ZIO.service[Scope]
+          counter <- Ref.make(0)
+          layer = ZLayer.fromZIO:
+            counter.update(_ + 1) *> ZIO.succeed[LockStrategy](locks)
+          exit <- BuildServices.default
+            .add[LockStrategy](layer)
+            .activate
+            .provide(
+              ZLayer.succeed[BuildContext](Ambient.context),
+              ZLayer.succeed[PluginEvents.Generation](Ambient.events),
+              ZLayer.succeed[LockStrategy](locks),
+              PluginLoading.exactOrRebuild,
+              ZLayer.succeed(scope),
+            )
+            .exit
+          seen <- counter.get
+          refused = exit.causeOption.flatMap(_.failureOption) match
+            case Some(ServiceActivationError.DuplicateReplacement(CoreSlot.Locks)) => true
+            case _                                                                 => false
+        yield assertTrue(refused, seen == 0)
+    },
   )
 
   private def contract(classification: BindingClass, present: Boolean): StageContract =
