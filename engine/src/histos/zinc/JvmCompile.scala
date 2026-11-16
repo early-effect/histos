@@ -19,7 +19,7 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
+import sbt.internal.inc.{FileAnalysisStore, HashUtil, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
 import sbt.util.Logger
 import xsbti.compile.{
   AnalysisContents,
@@ -62,6 +62,8 @@ final case class CompileRequest(
     coverageTools: List[histos.resolve.ToolInput] = Nil,
     /** The tree the source row is relative to. The path itself is not a key input. */
     checkout: Path,
+    /** SHA-256 of each substituted host API jar, in order. Empty when this compile does not substitute one. */
+    apiBytes: List[Sha256] = Nil,
 )
 
 final case class CompileOutput(
@@ -484,6 +486,83 @@ object JvmCompile:
       case Some(recorded) =>
         sourceDigest(request.checkout, request.sources).map(_.value == recorded)
 
+  /** Compile with jars the caller already checked. This does not ask the project lock for a compiler or a bridge. */
+  private[histos] def compileSupplied(
+      request: CompileRequest,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
+      support: List[Path],
+      rows: List[CompileRow],
+      key: Sha256,
+  ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
+    val compilerJars = compiler ++ support
+    cached(
+      request,
+      CompilerArtifacts(
+        runtime,
+        compilerJars,
+        bridge,
+        Nil,
+        (compilerJars ++ runtime).distinct,
+        LoaderBoundary.Engine,
+      ),
+      Nil,
+      _ => (),
+      rows,
+      key,
+      ZIO.unit,
+      _ => (),
+    )
+
+  /** A Scala source under the checkout is named by its checkout-relative path. Java stays path-based: mixed compilation
+    * hands every source to the Scala compiler, and javac reads a real path.
+    */
+  private def checkoutSources(request: CompileRequest): Array[xsbti.VirtualFile] =
+    val root = request.checkout.toAbsolutePath.normalize
+    request.sources.map { path =>
+      val absolute = path.toAbsolutePath.normalize
+      if scalaSource(absolute) && absolute.startsWith(root) then
+        val rel = root.relativize(absolute).toString.replace('\\', '/')
+        new RelativeSource(rel, absolute)
+      else MappedFileConverter.empty.toVirtualFile(absolute)
+    }.toArray
+
+  private def scalaSource(path: Path): Boolean =
+    Option(path.getFileName).exists(_.toString.endsWith(".scala"))
+
+  private final class CheckoutFiles(checkout: Path) extends xsbti.FileConverter:
+    private val root  = checkout.toAbsolutePath.normalize
+    private val other = MappedFileConverter.empty
+
+    def toPath(ref: xsbti.VirtualFileRef): Path =
+      ref match
+        case path: xsbti.PathBasedFile => path.toPath
+        case named                     =>
+          val resolved = root.resolve(named.id).normalize
+          if resolved.startsWith(root) then resolved else other.toPath(ref)
+
+    def toVirtualFile(path: Path): xsbti.VirtualFile =
+      other.toVirtualFile(path)
+  end CheckoutFiles
+
+  /** Named by its checkout-relative id. Not path-based, so the bridge reads that id as the source path. */
+  private final class RelativeSource(rel: String, absolute: Path)
+      extends xsbti.BasicVirtualFileRef(rel)
+      with xsbti.VirtualFile:
+    override lazy val contentHash: Long =
+      HashUtil.farmHash(absolute)
+
+    override def sizeBytes(): Long =
+      Files.size(absolute)
+
+    override lazy val contentHashStr: String =
+      HashUtil.sha256HashStr(input())
+
+    def input(): java.io.InputStream =
+      Files.newInputStream(absolute)
+  end RelativeSource
+
   private def carried(error: RemoteError | CacheError): CompileError =
     error match
       case found: RemoteError => CompileError.Remote(found)
@@ -501,7 +580,7 @@ object JvmCompile:
       onPulse: CompilePulse => Unit,
   ): Either[CompileError, (CompileOutput, Option[Remembered])] =
     val zinc      = new IncrementalCompilerImpl
-    val converter = MappedFileConverter.empty
+    val converter = new CheckoutFiles(request.checkout)
     val reporter  = CollectingReporter(hear)
     val watching  = CellPulse(request.checkout, onPulse)
     val progress  = new CompileProgress:
@@ -539,7 +618,7 @@ object JvmCompile:
     val classpath = (request.classes :: prepared.runtime ++ request.classpath)
       .map(converter.toVirtualFile)
       .toArray
-    val sources = request.sources.map(converter.toVirtualFile).toArray
+    val sources = checkoutSources(request)
     val inputs  = zinc.inputs(
       classpath,
       sources,

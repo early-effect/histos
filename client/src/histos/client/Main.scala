@@ -322,7 +322,8 @@ object Main extends ZIOAppDefault:
               Option(log.getParent).foreach(dir => Files.createDirectories(dir))
               if !Files.exists(log) then Files.createFile(log)
               val java    = Option(System.getenv("HISTOS_JAVA")).filter(_.nonEmpty).getOrElse("java")
-              val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: jar :: "server" :: Nil
+              val command =
+                java :: "--enable-native-access=ALL-UNNAMED" :: "--sun-misc-unsafe-memory-access=allow" :: "-jar" :: jar :: "server" :: Nil
               new ProcessBuilder(command*)
                 .directory(repo.toFile)
                 .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
@@ -372,7 +373,8 @@ object Main extends ZIOAppDefault:
         jar match
           case None       => 1
           case Some(path) =>
-            val command = java :: "--enable-native-access=ALL-UNNAMED" :: "-jar" :: path :: args
+            val command =
+              java :: "--enable-native-access=ALL-UNNAMED" :: "--sun-misc-unsafe-memory-access=allow" :: "-jar" :: path :: args
             pass = true
             try new ProcessBuilder(command*).inheritIO().start().waitFor()
             finally pass = false

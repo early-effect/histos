@@ -201,6 +201,17 @@ object ScalacClasspath:
     dependencies.exists: dep =>
       dep.name == "histos-api" || ArtifactName.of(dep, version, platform).startsWith("histos-api")
 
+  /** The host api jar when this module compiles against it. Empty when it does not. */
+  private[histos] def substituted(
+      repo: Path,
+      module: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      scope: ClasspathScope,
+  ): IO[GraphCompileError, List[Path]] =
+    if asks(dependenciesOf(module, platform, scope), version, platform) then hostApi(repo).map(path => List(path))
+    else ZIO.succeed(Nil)
+
   /** The pure api jar inside this process. An assembly carries it at `bootstrap/histos-api.jar`. Class files are packed
     * into the repo cache.
     */

@@ -55,6 +55,10 @@ enum HostCompilerError:
   case IncompatibleCompiler(found: ScalaVersion, required: ScalaVersion)
   case ConflictingRole(role: HostToolRole)
   case BadDigest(role: HostToolRole, expected: ContentHash, actual: ContentHash)
+
+  /** The manifest parsed, and its fingerprint does not match the signed entries. No tool jar was hashed. */
+  case Fingerprint(recorded: ContentHash, computed: ContentHash)
+  case ManifestUnreadable
   case UnsupportedJdk(found: JdkVersion, required: JdkVersion)
   case Io(failure: IoFailure)
 
@@ -67,6 +71,8 @@ enum HostCompilerError:
       s"host compiler ${found.value} does not match ${required.value}"
     case ConflictingRole(role)           => s"host compiler role $role is repeated"
     case BadDigest(role, _, _)           => s"host compiler $role does not match its digest"
+    case Fingerprint(_, _)               => "the host compiler manifest fingerprint does not match its entries"
+    case ManifestUnreadable              => "the host compiler manifest could not be read"
     case UnsupportedJdk(found, required) =>
       s"JDK ${found.value} does not satisfy ${required.value}"
     case Io(failure) => failure.message

@@ -5,6 +5,7 @@ import java.lang.invoke.{MethodHandle, MethodHandles, MethodType}
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.OptionConverters.*
+import scala.util.control.NonFatal
 
 import zio.stream.ZStream
 import zio.{Queue, Scope, UIO, ZIO}
@@ -203,7 +204,7 @@ private[process] object Signals:
 
   private def invoke(handle: MethodHandle, args: Object*): Option[Object] =
     try Some(handle.invokeWithArguments(args*))
-    catch case _: Throwable => None
+    catch case NonFatal(_) => None
 
   private def linker: Linker = Linker.nativeLinker()
 

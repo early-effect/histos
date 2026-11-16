@@ -33,6 +33,7 @@ import histos.zinc.{
   ApiDigest,
   CellPlatform,
   CompileError,
+  CompileInputs,
   CompileFacts,
   CompileProblem,
   CompilePulse,
@@ -288,7 +289,10 @@ private[histos] object TestCompile:
         repositories,
         coverage,
       )
-      apis <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
+      apis  <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
+      bytes <- CompileInputs
+        .jarBytes(linked.permitted)
+        .mapError(error => ModuleTestError.Sources(module.name, cell.version, error))
       request = CompileRequest(
         CompileToolchain(cell.version, cell.platform, jdk, module.flags),
         sources,
@@ -299,6 +303,7 @@ private[histos] object TestCompile:
         apis,
         permitted = linked.permitted,
         checkout = repo,
+        apiBytes = bytes,
       )
       held  <- holdMeasured(coverage, linked.classDirs, module.name, cell.version)
       facts <- compileSuite(

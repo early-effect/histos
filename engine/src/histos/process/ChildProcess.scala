@@ -574,7 +574,7 @@ object ChildProcess:
     ZIO
       .attemptBlocking {
         val command =
-          java.toString :: Toolchain.NativeAccess :: "-cp" :: classes.toString :: "subprocess.Exec" :: argv
+          java.toString :: Toolchain.NativeAccess :: Toolchain.LazyVals :: "-cp" :: classes.toString :: "subprocess.Exec" :: argv
         val builder = new ProcessBuilder(command.asJava)
         builder.directory(work.toFile)
         val env = builder.environment()
@@ -593,6 +593,7 @@ object ChildProcess:
         val command = List(
           request.java.toString,
           Toolchain.NativeAccess,
+          Toolchain.LazyVals,
           "-cp",
           entries.map(_.toString).mkString(java.io.File.pathSeparator),
           EntryClass.binary,

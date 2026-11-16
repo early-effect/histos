@@ -127,6 +127,11 @@ object Toolchain:
   val NativeAccess: String         = "--enable-native-access=ALL-UNNAMED"
   val NativeAccessManifest: String = "Enable-Native-Access: ALL-UNNAMED"
 
+  /** JDK 25 warns when Scala initializes a lazy val through `sun.misc.Unsafe`. Allowing it keeps that warning off child
+    * JVMs. The floor JDK is 25, which is the release that added this flag.
+    */
+  val LazyVals: String = "--sun-misc-unsafe-memory-access=allow"
+
   def explain(machine: Machine): IO[ToolchainError, JdkSurvey] =
     resolve(machine).map(runtime => JdkSurvey(runtime.home, runtime.version, runtime.identity))
 
@@ -165,7 +170,7 @@ object Toolchain:
       case JdkRead.Failed(error, _)   => ZIO.fail(error)
 
   def command(javaBin: Path, jar: Path, args: List[String]): List[String] =
-    javaBin.toString :: NativeAccess :: "-jar" :: jar.toString :: args
+    javaBin.toString :: NativeAccess :: LazyVals :: "-jar" :: jar.toString :: args
 
   private def finish(accepted: IO[ToolchainError, JdkRuntime], source: JdkSource): UIO[JdkRead] =
     accepted.fold(
