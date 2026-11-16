@@ -38,14 +38,14 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is open as #216 on `histos/plugin-p1` (`plug-p1`). The local gate is green on `80e20c8`. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes. P2 does not start until #216 is on `main`.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). Wave 2 is next: P2, P3, and P5. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
 | Unit | Depends | Branch | Worktree | PR | Status | Gate | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
-| P1 | P0 | `histos/plugin-p1` | `plug-p1` | #216 | open | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `80e20c8` (test run compiled 6 skipped 680, tests passed 5 failed 0, fmt unformatted 0). PR #216. |
+| P1 | P0 | `histos/plugin-p1` | `plug-p1` | #216 | merged | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | merged as `8f74a2e` (#216). CI run 43931858280 on `7395b60` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `80e20c8`. |
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | |
@@ -57,7 +57,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is open as #
 | P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | |
 
 - [x] P0. Spec and this board on `main` (`c60ee8d`, `ce6fd7f`)
-- [ ] P1. Contracts, codecs, fixtures. Merged before wave 2 PRs open
+- [x] P1. Contracts, codecs, fixtures. Merged as #216 on `8f74a2e`. CI run 43931858280 on `7395b60`. Local gate: `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` on `80e20c8`
 - [ ] P2. `BuildServices` and `plugin-testkit`
 - [ ] P3. Lock transaction with a fake preparer
 - [ ] P5. Host compiler, snapshot capture, cache, stage worker
