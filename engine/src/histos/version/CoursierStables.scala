@@ -6,9 +6,8 @@ import histos.Resolver
 
 import zio.{IO, ZIO}
 
-/** `coursier.Versions` lists each repository beside the versions it found. Ivy2 local is always asked. A maven
-  * repository is asked only when this build resolves from it. An empty resolver list is Central. Metadata is downloaded
-  * on every lookup; a failed refresh cannot answer with stale cached metadata.
+/** `coursier.Versions` lists each repository beside the versions it found. The repositories are the ones a resolve
+  * searches. Metadata is downloaded on every lookup; a failed refresh cannot answer with stale cached metadata.
   *
   * `eitherResult` blocks on Coursier's `Task`, which is a `Future`. The failure becomes [[BumpFault]] here.
   */
@@ -63,9 +62,9 @@ object CoursierStables:
       .noMirrors
       .eitherResult()
 
-  /** Ivy2 local first, then the repositories this build declared. */
+  /** The repositories a resolve searches, in that order. */
   def repositories(declared: List[Resolver]): Seq[coursier.core.Repository] =
-    coursier.LocalRepositories.ivy2Local +: BuildResolvers(declared).all.map(toCoursier)
+    BuildResolvers(declared).all.map(toCoursier)
 
   private def toCoursier(repository: Repository): coursier.core.Repository =
     repository match

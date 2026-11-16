@@ -54,7 +54,7 @@ jobs:
           path: dist-in
       - run: |
           set -eu
-          version=0.4.4
+          version=0.4.5
           jar=dist-in/histos-jar/histos.jar
           kit=dist-in/client-kit/client-kit.zip
           sha() { sha256sum "$1" | awk '{print $1}'; }

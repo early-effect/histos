@@ -2,6 +2,7 @@ package histos.native
 
 import histos.resolve.{
   ArtifactName,
+  BuildResolvers,
   LockedTools,
   ResolveError,
   ToolRoot,
@@ -313,14 +314,9 @@ object NativeRequests:
       reposFor(toolchain, repos),
     )
 
-  private val Snapshots: Repository =
-    Repository.Maven(
-      RepoUrl.trusted("https://central.sonatype.com/repository/maven-snapshots/")
-    )
-
   /** A snapshot revision is published to Central's snapshot repository. The release repository stays in the list. */
   private def reposFor(toolchain: NativeToolchain, repos: Repositories): Repositories =
     if toolchain.source != NativeSource.Central || !toolchain.revision.value.endsWith("-SNAPSHOT") then repos
-    else if repos.all.contains(Snapshots) then repos
-    else Repositories(Snapshots, repos.all)
+    else if repos.all.exists(BuildResolvers.same(_, BuildResolvers.snapshots)) then repos
+    else Repositories(BuildResolvers.snapshots, repos.all)
 end NativeRequests

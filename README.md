@@ -118,7 +118,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `UpstreamCells.read` is that choice. Compile, test, the quick stamp, run, assembly, publish, scaladoc, and BSP all use it.
 
-`Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`.
+`Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`. A resolve always searches ivy local (`~/.ivy2/local`), then the resolvers the build listed, then Sonatype snapshots, then Maven Central. A repository the build already listed keeps that place.
 
 ## Commands
 
