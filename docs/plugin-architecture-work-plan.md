@@ -38,14 +38,14 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. No implementation PR is open. Next unit is P1. Nothing is blocked on Russ.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is in progress locally on `histos/plugin-p1` (`plug-p1`). The local gate is green on `33852e9`. No implementation PR is open. Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
 | Unit | Depends | Branch | Worktree | PR | Status | Gate | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0 | none | direct to main | this checkout | none | merged | docs only | spec `c60ee8d`; board `ce6fd7f` |
-| P1 | P0 | `histos/plugin-p1` | `plug-p1` | | pending | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | |
+| P1 | P0 | `histos/plugin-p1` | `plug-p1` | | in progress | `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` | local exit 0 on `33852e9` (compile skipped 686, tests passed 5 failed 0, fmt unformatted 0). No PR. |
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | | pending | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | | pending | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | |
@@ -117,9 +117,22 @@ Wire codecs and nested faults for those families (`LoadError`, publish data, `Ca
 
 Must not touch loader, compiler, or publisher behavior. API does not import engine or wire. `Plan[S, E]` is types here. P2 implements registration. If the associated-type builder does not compile as the examples require, a `/tmp` scala-cli probe settles the Scala 3 shape before the signatures change. The public examples stay the contract. Nest new fault families the way `PluginGraphFault` is nested.
 
-Ledger: R9 contracts, A1 and A2 data. Loading proof is P6.
+Ledger: R9 contracts, A1 and A2 data. Loading proof is P6. No red SHA: there was no prior failing test, and this unit did not manufacture one. The three specs landed with the types.
 
 Review: dependency direction, codec round-trips, `Unrecorded` is absence rather than a successful capture.
+
+P1 notes. These are boundaries, not new product behavior.
+
+- `ProjectGraph.resolution` still defaults to `Resolution.Solve`. `intent` defaults to `ResolutionIntent.Inherit`. `Projects.locked` and `Organized.locked` set both `resolution = Resolution.Lock` and `intent = ResolutionIntent.Select(Resolution.Lock)`. The loader still reads `resolution`. Normalizing `Inherit` is P6.
+- `PluginRuntime` fills `RunRequest` with a stand-in caller: `ExecutionKind.Local`, `Interaction.Unattended`, `OfflineSelection.Online`, `ClientId("plugin-runtime")`, `CommandIdentity.Task`, and `PluginEvents.closedInvocation`. P8 replaces that caller. There is no third `ExecutionKind` and no unscoped origin.
+- `Plan.activate` and `StrategyPlan.activate` refuse a duplicate slot before `materialize`, so activation is not an empty success. P2 owns registration, generation-scope lifetime, concurrent callers, and the harness. There is no `ServiceActivationError.Unavailable`.
+- `InvocationEnvelope`, lock offer, reply, committed, blocked, and `LockEvent` are data and codecs. The live build-event channel is unchanged. The resolve CLI does not gain refresh.
+- A stage network restriction is prohibited in v1. There is no network-enabled stage mode.
+- `HostCompilerInputs` is a provider trait. There is no live layer.
+- The API digest is a pure SHA-256 so an API native test does not link `libcrypto`. `PluginContractsSpec` checks the published vectors.
+- After one native compile, Scala 3 leaves the nscplugin zip file system closed in that histos JVM. A later native compile then warns `No plugin in path` and emits class files with no NIR. Reboot so the compile that must emit NIR is the first native compile in that JVM. Once analysis is stored, a later command skips and does not open the plugin. This unit does not change the compiler.
+- `BuildServices.default.add[A]` yields `Plan[NoExtraServices & A, E]`. The marker stays in the intersection. Examples do not ascribe `S`.
+- Built-in loading policies are pure functions of `BindingMatch`. They do not special-case offline.
 
 ### P2. Typed activation and the test kit
 
