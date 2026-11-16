@@ -553,10 +553,10 @@ object GraphCompile:
 
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
-  /** Lock checksums and source bytes. A hit does not fetch jars, read the store, or open a compiler. The caller listed
-    * the sources and this hashes each path relative to the checkout, then its bytes, so an added, deleted, or edited
-    * source is a miss whatever the modified times say. The key is [[CellTools.recall]]'s, which the compile stores
-    * through the same function.
+  /** Lock checksums and source bytes. A hit does not fetch project jars or open a compiler. A module that compiles
+    * against the host api still hashes that jar. The caller listed the sources and this hashes each path relative to
+    * the checkout, then its bytes, so an added, deleted, or edited source is a miss whatever the modified times say.
+    * The key is [[CellTools.recall]]'s, which the compile stores through the same function.
     */
   private def recall(
       work: CellWork,
@@ -566,8 +566,9 @@ object GraphCompile:
       classes: Path,
       recorded: Path,
       identity: Option[String],
-  ): ZIO[CompileMemo, CompileError, Option[CompileOutput]] =
+  ): ZIO[CompileMemo, GraphCompileError, Option[CompileOutput]] =
     val CellWork(plan, module, version, platform, _, _) = work
+    val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     ZIO.serviceWithZIO[CompileMemo]: memo =>
       memo
         .hashes(plan.lock, module, upstream, version, platform, ClasspathScope.Compile, plan.stamp)
@@ -577,23 +578,59 @@ object GraphCompile:
             CellPlatform.of(module, platform, plan.tools.catalog, plan.native) match
               case Left(_)       => ZIO.none
               case Right(placed) =>
-                val base = CompileRequest(
-                  CompileToolchain(version, platform, plan.jdk, module.flags),
-                  sources,
-                  Nil,
-                  classes,
-                  recorded,
-                  hashes,
-                  apis,
-                  coverage = identity,
-                  checkout = plan.repo,
-                )
-                JvmCompile
-                  .sourceDigest(base.checkout, sources)
-                  .flatMap(digest => CellTools.recall(plan.tools, placed, base, digest))
-                  .flatMap:
-                    case Some(keyed) => CompileReplay.recall(keyed.request, keyed.key)
-                    case None        => ZIO.none
+                val carried = (error: GraphCompileError) =>
+                  error match
+                    case GraphCompileError.RootRead(path) =>
+                      GraphCompileError.Failed(
+                        module.name,
+                        version,
+                        platform,
+                        CompileError.Io(IoFailure(path, IoFault.Read)),
+                      )
+                    case GraphCompileError.LockRead(path) =>
+                      GraphCompileError.Failed(
+                        module.name,
+                        version,
+                        platform,
+                        CompileError.Io(IoFailure(path, IoFault.Read)),
+                      )
+                    case GraphCompileError.Output(path) =>
+                      GraphCompileError.Failed(
+                        module.name,
+                        version,
+                        platform,
+                        CompileError.Io(IoFailure(path, IoFault.Write)),
+                      )
+                    case other => other
+                for
+                  jars <- ScalacClasspath
+                    .substituted(
+                      plan.repo,
+                      module,
+                      version,
+                      platform,
+                      ClasspathScope.Compile,
+                    )
+                    .mapError(carried)
+                  bytes <- CompileInputs.jarBytes(jars).mapError(failed)
+                  base = CompileRequest(
+                    CompileToolchain(version, platform, plan.jdk, module.flags),
+                    sources,
+                    Nil,
+                    classes,
+                    recorded,
+                    hashes,
+                    apis,
+                    coverage = identity,
+                    checkout = plan.repo,
+                    apiBytes = bytes,
+                  )
+                  digest <- JvmCompile.sourceDigest(base.checkout, sources).mapError(failed)
+                  keyed  <- CellTools.recall(plan.tools, placed, base, digest)
+                  found  <- keyed match
+                    case Some(hit) => CompileReplay.recall(hit.request, hit.key).mapError(failed)
+                    case None      => ZIO.none
+                yield found
 
   private def compileOf(
       work: CellWork,
@@ -620,7 +657,7 @@ object GraphCompile:
             cells = read.map(_._1)
             apis  = read.map(_._2)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
-            known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity)).mapError(failed)
+            known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
             compiled <- known match
               case Some(output) => ZIO.succeed(output)
               case None         =>
@@ -640,6 +677,7 @@ object GraphCompile:
                       )
                     )
                     .provideSomeLayer(ZLayer.succeed(plan.tools))
+                  bytes <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
                   request = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
                     sources,
@@ -652,6 +690,7 @@ object GraphCompile:
                     coverage = planned.map(_.identity),
                     coverageTools = planned.fold(List.empty[ToolInput])(_.tools),
                     checkout = plan.repo,
+                    apiBytes = bytes,
                   )
                   compiled <- compile(
                     work,

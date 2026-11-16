@@ -4,6 +4,7 @@ import java.lang.foreign.{FunctionDescriptor, Linker, ValueLayout}
 import java.lang.invoke.MethodHandle
 
 import scala.jdk.OptionConverters.*
+import scala.util.control.NonFatal
 
 /** `setpgid` and `kill` from libc. A negative pid is the process group, which is how cancel reaches children. */
 private[process] object Posix:
@@ -22,7 +23,7 @@ private[process] object Posix:
         method.invokeWithArguments(Integer.valueOf(a), Integer.valueOf(b)) match
           case code: Integer => Right(code.intValue)
           case _             => Left(GroupOp.Call)
-      catch case _: Throwable => Left(GroupOp.Call)
+      catch case NonFatal(_) => Left(GroupOp.Call)
 
   private def handle(name: String): Either[GroupOp, MethodHandle] =
     Linker.nativeLinker().defaultLookup().find(name).toScala match

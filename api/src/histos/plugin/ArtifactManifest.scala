@@ -2,9 +2,12 @@ package histos.plugin
 
 import java.nio.charset.StandardCharsets
 
-/** Archive layout this identity was computed for. The digest covers every entry, including TASTy and metadata. */
+/** Layout this identity was computed for. A jar digest covers every entry. A directory digest covers the sorted
+  * relative paths and file bytes of a classes tree.
+  */
 enum ArtifactFormat:
   case Jar
+  case Directory
 
 /** Versioned canonical digest of one sealed entry set. Not a semantic class digest. */
 final case class ArtifactIdentity(format: ArtifactFormat, digest: ContentHash)

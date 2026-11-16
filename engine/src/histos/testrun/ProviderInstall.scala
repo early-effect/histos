@@ -3,13 +3,7 @@ package histos.testrun
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.jdk.{Sha256, Sha256Digest}
-import histos.zinc.{
-  CompileRequest,
-  CompileToolchain,
-  JvmCompile,
-
-  ScalacFlags,
-}
+import histos.zinc.{CompileInputs, CompileRequest, CompileToolchain, JvmCompile, ScalacFlags}
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -74,6 +68,9 @@ private[testrun] final class ProviderInstall(
           Files.writeString(source, ProviderRunner.source)
         }
         .mapError(_ => ModuleTestError.Runner(source))
+      bytes <- CompileInputs
+        .jarBytes(permitted)
+        .mapError(error => ModuleTestError.Sources(module, version, error))
       _ <- JvmCompile
         .compile(
           CompileRequest(
@@ -86,6 +83,7 @@ private[testrun] final class ProviderInstall(
             Nil,
             permitted = permitted,
             checkout = root,
+            apiBytes = bytes,
           )
         )
         .mapError(error => ModuleTestError.Sources(module, version, error))

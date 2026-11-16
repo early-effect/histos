@@ -7,12 +7,12 @@ import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 import scala.annotation.tailrec
 import scala.util.control.NonFatal
 
-import zio.{Chunk, IO}
+import zio.{Chunk, IO, ZIO}
 
 final case class CompileRow(input: CompileInput, value: String)
 
@@ -30,7 +30,7 @@ object CompileInputs:
       CompileRow(CompileInput.Flags, tool.flags.canonical),
       CompileRow(CompileInput.Sources, sources.value),
       CompileRow(CompileInput.Artifacts, join(request.artifactHashes)),
-      CompileRow(CompileInput.Apis, join(request.upstreamApis)),
+      CompileRow(CompileInput.Apis, join(request.upstreamApis ++ request.apiBytes)),
       CompileRow(CompileInput.Tools, join(request.compilationTools.map(_.fingerprint))),
     ) ++ request.coverage.toList.map(text => CompileRow(CompileInput.Coverage, text))
 
@@ -68,9 +68,16 @@ object CompileInputs:
       rows: List[CompileRow],
   ): IO[CompileError, Unit] =
     for
-      now <- zio.Clock.ClockLive.instant
+      now <- ZIO.clockWith(_.instant)
       _   <- store.put(slot(analysis), encode(rows), now).mapError(CompileError.Stored(_))
     yield ()
+
+  /** SHA-256 of each substituted jar, in the order the compile places them. */
+  def jarBytes(paths: List[Path]): IO[CompileError, List[Sha256]] =
+    ZIO.foreach(paths): path =>
+      ZIO
+        .attemptBlocking(histos.jdk.Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path))))
+        .mapError(_ => CompileError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
 
   /** Analysis directory, not the compile key. */
   def slot(analysis: Path): Digest =
