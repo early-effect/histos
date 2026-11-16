@@ -162,6 +162,7 @@ object Session:
         .perform(call)
         .tap {
           case Beat.Heard(event) => Notice.show(repo, frame, event)
+          case Beat.Bytes(data)  => histos.build.Build.write(data)
           case Beat.Finished(_)  => ZIO.unit
         }
         .runCollect
@@ -190,6 +191,9 @@ object Session:
       id: String,
       platform: Option[String],
       args: PluginArgs,
+      env: Map[String, String] = Map.empty,
+      directory: Option[java.nio.file.Path] = None,
+      argv: List[String] = Nil,
   ): Either[BuildFault, Call] =
     TaskId
       .from(id)
@@ -198,16 +202,19 @@ object Session:
       .flatMap: named =>
         val task = id.contains("/") || named.builtIn
         if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
+        else if task && (env.nonEmpty || directory.isDefined || argv.nonEmpty) then
+          Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
         else
+          val launch = histos.server.RunLaunch.Tool(env, directory)
           platform match
             case Some(_) if task =>
               Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
             case Some(raw) =>
               Platform.from(raw) match
                 case Left(error)  => Left(BuildFault.Platform(error))
-                case Right(found) => Right(Call.Run(id, Some(found)))
+                case Right(found) => Right(Call.Run(id, Some(found), launch, argv))
             case None if task => Right(Call.Task(id, args))
-            case None         => Right(Call.Run(id, None))
+            case None         => Right(Call.Run(id, None, launch, argv))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
   def spoken(repo: Path, feeds: List[Feed], paint: Option[Depth] = None): Either[TransportError, CallResult] =
@@ -250,6 +257,7 @@ object Session:
           sessionEdges(repo, apiJar, machine, desk),
           {
             case Beat.Heard(event) => Notice.show(repo, frame, event)
+            case Beat.Bytes(data)  => histos.build.Build.write(data)
             case Beat.Finished(_)  => ZIO.unit
           },
         )

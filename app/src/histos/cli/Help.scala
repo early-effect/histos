@@ -37,7 +37,12 @@ object Help:
       "histos compile [project ...]",
       "Compile the named projects, or every module. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
-    Entry("run", "build", "histos run <name> [jvm|js|native]", "Run a module main, inspect, versions, or doc."),
+    Entry(
+      "run",
+      "build",
+      "histos run <name> [jvm|js|native] [-- arg ...]",
+      "Run a module main, inspect, versions, or doc. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program.",
+    ),
     Entry(
       "clean",
       "build",

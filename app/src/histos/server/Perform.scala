@@ -33,7 +33,7 @@ object Perform:
   def needsGraph(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
+          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _) |
           Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_) |
           Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewRun(_, _) | Call.CacheVerify(_) =>
@@ -76,6 +76,7 @@ object Perform:
       call: Call,
       say: Say,
       edges: Edges[R],
+      relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
   ): ZIO[
     R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
       histos.resolve.ResolutionService & histos.format.Formatters & IvyRoot,
@@ -173,9 +174,25 @@ object Perform:
             held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(modules) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
-          case Call.Run(id, platform) =>
+          case Call.Run(id, platform, launch, args) =>
             held(build =>
-              follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say, edges.compiled)))
+              follow(
+                withJdk(jdk =>
+                  Calls.run(
+                    repo,
+                    build.graph,
+                    jdk,
+                    machine,
+                    id,
+                    platform,
+                    launch,
+                    args,
+                    say,
+                    edges.compiled,
+                    relay,
+                  )
+                )
+              )
             )
           case Call.Task(id, args) =>
             held(build => follow(Calls.task(repo, build.graph, build.plugins, machine, id, args, say)))

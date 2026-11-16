@@ -20,10 +20,11 @@ object JsKey:
       main: MainClass,
       products: List[Sha256],
       initialize: Boolean = true,
+      arguments: List[String] = Nil,
   ): Sha256 =
     val entry =
       if initialize then main.binary else "exports"
-    val text =
+    val base =
       s"""${version.value}
          |${linker.value}
          |${kind.token}
@@ -31,4 +32,15 @@ object JsKey:
          |products
          |${products.map(_.value).mkString("\n")}
          |""".stripMargin
+    val text =
+      if arguments.isEmpty then base
+      else base + "args\n" + encoded(arguments) + "\n"
     Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
+
+  /** Count, then one Base64 line per argument. Empty arguments stay out of the key. */
+  private[js] def encoded(arguments: List[String]): String =
+    arguments.length.toString + "\n" + arguments.map(encode).mkString("\n")
+
+  private def encode(argument: String): String =
+    java.util.Base64.getEncoder.encodeToString(argument.getBytes(StandardCharsets.UTF_8))
+end JsKey

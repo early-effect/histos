@@ -362,8 +362,11 @@ object Calls:
       machine: Machine,
       id: String,
       platform: Option[Platform],
+      launch: histos.server.RunLaunch,
+      args: List[String],
       say: Say,
       compiled: UIO[Unit],
+      relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     opened(say) { remote =>
       CompileConsole
@@ -381,6 +384,9 @@ object Calls:
                   jdk,
                   runtimes,
                   platform,
+                  launch,
+                  args,
+                  relay,
                   feed => speak(say, console, feed).ignore,
                   console.announce((text, role) => status(say, text, role).ignore) *> compiled,
                 )
@@ -391,6 +397,8 @@ object Calls:
                   case histos.program.ProgramFeed.Out(text) => told(say, text)
                   case histos.program.ProgramFeed.Err(text) =>
                     errLine(say, text)
+                  case histos.program.ProgramFeed.Bytes(data) =>
+                    say(Message.Output(histos.server.RunBytes.encode(data)))
                   case histos.program.ProgramFeed.Exited(_, _, _, code) =>
                     ZIO.when(code != 0)(exit.set(code)).unit
                 .foldZIO(

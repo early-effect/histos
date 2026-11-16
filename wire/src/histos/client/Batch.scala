@@ -9,22 +9,39 @@ import histos.{Platform, ProjectName}
 
 import zio.NonEmptyChunk
 
-/** Batch argv the native client sends. Anything else is the JVM client's command. */
+/** Batch argv the native client sends. Anything else is the JVM client's command. A program is not a call until the
+  * client fills the shell.
+  */
 object Batch:
-  def parse(args: List[String]): Option[Call] =
+  enum Parsed:
+    case Ready(call: Call)
+    case Program(id: String, platform: Option[Platform], args: List[String])
+
+  def parse(args: List[String]): Option[Parsed] =
     args match
-      case "compile" :: rest     => projects(rest).map(Call.Compile(_))
-      case "test" :: rest        => projects(rest).map(names => Call.Test(names, Nil, TestMode.Run))
+      case "compile" :: rest     => projects(rest).map(names => Parsed.Ready(Call.Compile(names)))
+      case "test" :: rest        => projects(rest).map(names => Parsed.Ready(Call.Test(names, Nil, TestMode.Run)))
       case "run" :: name :: rest =>
-        rest match
-          case Nil          => runCall(name, None)
-          case token :: Nil => runCall(name, Some(token))
+        val (tokens, argv) = splitDash(rest)
+        tokens match
+          case Nil          => runCall(name, None, argv)
+          case token :: Nil => runCall(name, Some(token), argv)
           case _            => None
-      case "clean" :: "--full" :: Nil => Some(Call.Clean(Nil, CleanExtent.Full))
-      case "clean" :: rest            => projects(rest).map(names => Call.Clean(names, CleanExtent.Products))
-      case "fmt" :: "--check" :: rest => projects(rest).map(names => Call.Format(targets(names), FormatMode.Check))
-      case "fmt" :: rest              => projects(rest).map(names => Call.Format(targets(names), FormatMode.Write))
-      case _                          => None
+      case "clean" :: "--full" :: Nil => Some(Parsed.Ready(Call.Clean(Nil, CleanExtent.Full)))
+      case "clean" :: rest            =>
+        projects(rest).map(names => Parsed.Ready(Call.Clean(names, CleanExtent.Products)))
+      case "fmt" :: "--check" :: rest =>
+        projects(rest).map(names => Parsed.Ready(Call.Format(targets(names), FormatMode.Check)))
+      case "fmt" :: rest => projects(rest).map(names => Parsed.Ready(Call.Format(targets(names), FormatMode.Write)))
+      case _             => None
+
+  private def splitDash(args: List[String]): (List[String], List[String]) =
+    def loop(seen: List[String], rest: List[String]): (List[String], List[String]) =
+      rest match
+        case "--" :: tail => (seen.reverse, tail)
+        case head :: tail => loop(head :: seen, tail)
+        case Nil          => (seen.reverse, Nil)
+    loop(Nil, args)
 
   /** No project is the build. */
   private def targets(names: List[ProjectName]): FormatTargets =
@@ -37,12 +54,13 @@ object Batch:
         else ProjectName.from(token).toOption.map(name => have :+ name)
 
   /** The same split `run` uses: a module, `inspect`, `versions`, `doc`, or a plugin task. */
-  private def runCall(name: String, platform: Option[String]): Option[Call] =
+  private def runCall(name: String, platform: Option[String], argv: List[String]): Option[Parsed] =
     if name.contains('/') then
       platform match
-        case Some(_) => None
-        case None    =>
-          PluginTaskId.parse(name).toOption.map(id => Call.Task(id.render, PluginArgs.empty))
+        case Some(_)               => None
+        case None if argv.nonEmpty => None
+        case None                  =>
+          PluginTaskId.parse(name).toOption.map(id => Parsed.Ready(Call.Task(id.render, PluginArgs.empty)))
     else
       TaskId
         .from(name)
@@ -50,12 +68,10 @@ object Batch:
         .flatMap: id =>
           val task = id.builtIn
           platform match
-            case Some(_) if task => None
-            case None            =>
-              Some(
-                if task then Call.Task(id.value, PluginArgs.empty)
-                else Call.Run(id.value, None)
-              )
-            case Some(text) =>
-              Platform.from(text).toOption.map(chosen => Call.Run(id.value, Some(chosen)))
+            case Some(_) if task            => None
+            case _ if task && argv.nonEmpty => None
+            case None if task               => Some(Parsed.Ready(Call.Task(id.value, PluginArgs.empty)))
+            case None                       => Some(Parsed.Program(id.value, None, argv))
+            case Some(text)                 =>
+              Platform.from(text).toOption.map(chosen => Parsed.Program(id.value, Some(chosen), argv))
 end Batch

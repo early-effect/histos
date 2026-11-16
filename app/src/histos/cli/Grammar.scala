@@ -279,8 +279,9 @@ object Grammar:
         val (policy, body) = rest match
           case "--restart" :: tail => (histos.server.WatchPolicy.Restart, tail)
           case other               => (histos.server.WatchPolicy.After, other)
-        prepared(body).flatMap: ready =>
-          parseRoot(ready.args)
+        val (kept, argv) = peelRun(body)
+        prepared(kept).flatMap: ready =>
+          parseRoot(ready.args, argv)
             .flatMap(command => withExcludes(command, ready))
             .flatMap(command => watched(command, policy))
             .map(command => Command.Watch(command, rest))
@@ -291,8 +292,9 @@ object Grammar:
       case "--explain" :: _ =>
         ZIO.fail(CliParseError.Pattern("--explain takes one check id"))
       case _ =>
-        prepared(args).flatMap: ready =>
-          parseRoot(ready.args).flatMap(command => withExcludes(command, ready))
+        val (kept, argv) = peelRun(args)
+        prepared(kept).flatMap: ready =>
+          parseRoot(ready.args, argv).flatMap(command => withExcludes(command, ready))
 
   /** `--restart` repeats a program. Every other watched command runs, then polls. */
   private def watched(command: Command, policy: histos.server.WatchPolicy): IO[CliParseError, Command] =
@@ -300,11 +302,27 @@ object Grammar:
       case histos.server.WatchPolicy.After   => ZIO.succeed(command)
       case histos.server.WatchPolicy.Restart =>
         command match
-          case Command.Run(id, _) if !id.builtIn => ZIO.succeed(command)
-          case _                                 =>
+          case Command.Run(id, _, _) if !id.builtIn => ZIO.succeed(command)
+          case _                                    =>
             ZIO.fail(CliParseError.WatchCommand("--restart watches a program"))
 
-  private def parseRoot(args: List[String]): IO[CliParseError, Command] =
+  /** Tokens after a run's `--` are the program's arguments. Any other command keeps its text. */
+  private def peelRun(args: List[String]): (List[String], List[String]) =
+    args match
+      case "run" :: rest =>
+        val (before, after) = splitDash(rest)
+        ("run" :: before, after)
+      case other => (other, Nil)
+
+  private def splitDash(args: List[String]): (List[String], List[String]) =
+    def loop(seen: List[String], rest: List[String]): (List[String], List[String]) =
+      rest match
+        case "--" :: tail => (seen.reverse, tail)
+        case head :: tail => loop(head :: seen, tail)
+        case Nil          => (seen.reverse, Nil)
+    loop(Nil, args)
+
+  private def parseRoot(args: List[String], programArgs: List[String] = Nil): IO[CliParseError, Command] =
     gate(args) match
       case Some(error) => ZIO.fail(error)
       case None        =>
@@ -312,7 +330,7 @@ object Grammar:
           .parse("histos" :: args, CliConfig.default)
           .mapError(error => failure(error, args))
           .flatMap:
-            case CommandDirective.UserDefined(Nil, wire) => command(wire)
+            case CommandDirective.UserDefined(Nil, wire) => command(wire, programArgs)
             case CommandDirective.UserDefined(_, _)      =>
               ZIO.fail(shim(args).getOrElse(CliParseError.UnexpectedArguments))
             case CommandDirective.BuiltIn(_) =>
@@ -321,7 +339,7 @@ object Grammar:
                 case "preview" :: "publish" :: Nil => ZIO.fail(CliParseError.PublishForm)
                 case _                             => ZIO.fail(CliParseError.Help)
 
-  private def command(wire: Wire): IO[CliParseError, Command] =
+  private def command(wire: Wire, programArgs: List[String] = Nil): IO[CliParseError, Command] =
     wire match
       case Wire.Version         => ZIO.succeed(Command.Version)
       case Wire.ToolchainClient => ZIO.succeed(Command.ToolchainClient)
@@ -418,10 +436,15 @@ object Grammar:
             Command.PreviewRun(id, platform)
           case NamedRun.Plugin(id) => Command.PreviewPlugin(id)
       case Wire.Run(raw, token) =>
-        namedRun(raw, token).map:
-          case NamedRun.Module(id, platform) => Command.Run(id, platform)
-          case NamedRun.Plugin(id)           =>
-            Command.Plugin(id, histos.plugin.PluginArgs.empty)
+        namedRun(raw, token).flatMap:
+          case NamedRun.Module(id, platform) =>
+            if id.builtIn && programArgs.nonEmpty then
+              ZIO.fail(CliParseError.Pattern(s"'${id.value}' does not take program arguments"))
+            else ZIO.succeed(Command.Run(id, platform, programArgs))
+          case NamedRun.Plugin(id) =>
+            if programArgs.nonEmpty then
+              ZIO.fail(CliParseError.Pattern(s"'${id.render}' does not take program arguments"))
+            else ZIO.succeed(Command.Plugin(id, histos.plugin.PluginArgs.empty))
 
   private final case class Prepared(args: List[String], classlikes: List[String], files: List[String])
 

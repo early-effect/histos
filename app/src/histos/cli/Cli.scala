@@ -57,7 +57,7 @@ enum Command:
   case Version
   case ToolchainClient
   case Graph
-  case Run(id: TaskId, platform: Option[Platform])
+  case Run(id: TaskId, platform: Option[Platform], args: List[String])
   case Plugin(id: PluginTaskId, args: PluginArgs)
   case Test(
       projects: List[ProjectName],
@@ -660,9 +660,9 @@ object Cli:
         )
       case Command.ToolchainClient =>
         toolchainClient
-      case Command.Graph                  => graph(repo, apiJar)
-      case Command.Run(id, platform)      => run(repo, apiJar, id, platform)
-      case Command.Plugin(id, pluginArgs) =>
+      case Command.Graph                   => graph(repo, apiJar)
+      case Command.Run(id, platform, args) => run(repo, apiJar, id, platform, args)
+      case Command.Plugin(id, pluginArgs)  =>
         plugin(repo, apiJar, id, pluginArgs)
       case Command.Test(projects, affected, mode, patterns) =>
         AffectedChoice.select(projects, affected) match
@@ -799,8 +799,11 @@ object Cli:
     Operation.operation(inner) match
       case Left(error) =>
         ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(error.diagnose), Playback.Held))
-      case Right(call) =>
-        attach(repo, Call.Watch(call, WatchPolicy.After), watchLocal(repo, apiJar, call, WatchPolicy.After))
+      case Right(pending) =>
+        Operation
+          .seal(pending)
+          .flatMap: call =>
+            attach(repo, Call.Watch(call, WatchPolicy.After), watchLocal(repo, apiJar, call, WatchPolicy.After))
 
   private def policyOf(args: List[String]): WatchPolicy =
     if args.headOption.contains("--restart") then WatchPolicy.Restart else WatchPolicy.After
@@ -819,6 +822,10 @@ object Cli:
             val printing = new Say({
               case Message.Event(event) =>
                 Show.follow(repo, shown, event, appearance, say, sayError).provideEnvironment(io)
+              case Message.Output(encoded) =>
+                histos.server.RunBytes.decode(encoded) match
+                  case Some(bytes) => histos.build.Build.write(bytes)
+                  case None        => ZIO.unit
               case Message.Done(done) =>
                 val finished = done match
                   case CallResult.Reported(_) =>
@@ -886,6 +893,7 @@ object Cli:
                 adopted(repo, apiJar, _),
                 cliEdges(repo, _),
                 heard(repo, frame, _).provideEnvironment(services),
+                histos.process.Terminal.Owned,
               )
             build
               .perform(call)
@@ -927,24 +935,27 @@ object Cli:
               .open(repo, mode)
               .mapError(ServerError.Resolve(_))
               .flatMap { report =>
-                histos.zinc.CompileMemo.provide(
-                  histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                    Perform
-                      .run(
-                        repo,
-                        apiJar,
-                        loaded,
-                        machine,
-                        runs,
-                        track = false,
-                        shown,
-                        call,
-                        say,
-                        cliEdges(repo, say),
-                      )
-                      .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                val ran = (relay: histos.process.RunRelay) =>
+                  histos.zinc.CompileMemo.provide(
+                    histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                      Perform
+                        .run(
+                          repo,
+                          apiJar,
+                          loaded,
+                          machine,
+                          runs,
+                          track = false,
+                          shown,
+                          call,
+                          say,
+                          cliEdges(repo, say),
+                          relay,
+                        )
+                        .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                    )
                   )
-                )
+                Build.relay(histos.process.Terminal.Owned, call)(ran)
               }
           }
         }
@@ -988,6 +999,8 @@ object Cli:
     beat match
       case Beat.Heard(event) =>
         Show.follow(repo, shown, event, appearance, say, sayError)
+      case Beat.Bytes(data) =>
+        histos.build.Build.write(data)
       case Beat.Finished(CallResult.Fault(fault)) =>
         val text = FaultText.show(fault.diagnose)
         if text.isEmpty then ZIO.unit else sayError(text)
@@ -1032,11 +1045,12 @@ object Cli:
       apiJar: Path,
       id: TaskId,
       platform: Option[Platform],
+      args: List[String],
   )(using Appearance): URIO[Local, Completed] =
-    val call =
-      if id.builtIn then Call.Task(id.value, PluginArgs.empty)
-      else Call.Run(id.value, platform)
-    attach(repo, call, locally(repo, apiJar, call))
+    val built =
+      if id.builtIn then ZIO.succeed(Call.Task(id.value, PluginArgs.empty))
+      else histos.process.Shells.capture.map(launch => Call.Run(id.value, platform, launch, args))
+    built.flatMap(call => attach(repo, call, locally(repo, apiJar, call)))
 
   private def compile(
       repo: Path,
@@ -1879,6 +1893,11 @@ object Cli:
       case Message.Event(event) =>
         Show.follow(repo, shown, event, appearance, say, sayError).provideEnvironment(io) *>
           feeds.update(_ :+ Feed.Event(event))
+      case Message.Output(encoded) =>
+        histos.server.RunBytes.decode(encoded) match
+          case Some(bytes) =>
+            histos.build.Build.write(bytes) *> feeds.update(_ :+ Feed.Output(bytes))
+          case None => ZIO.unit
       case Message.Done(CallResult.Fault(fault)) =>
         val text  = FaultText.show(fault.diagnose)
         val shown = if text.isEmpty then ZIO.unit else sayError(text).provideEnvironment(io)
@@ -2068,9 +2087,11 @@ object Cli:
   )(using appearance: Appearance): ZIO[Stdio, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(Ref.make(Show.start)).flatMap {
       (result, shown) =>
-        Build.attached(socket).perform(call).foreach {
+        Build.attached(socket, histos.process.Terminal.Owned).perform(call).foreach {
           case Beat.Heard(event) =>
             Show.follow(repo, shown, event, appearance, say, sayError)
+          case Beat.Bytes(data) =>
+            histos.build.Build.write(data)
           case Beat.Finished(done) =>
             val finished = done match
               case CallResult.Reported(_) =>
@@ -2265,13 +2286,14 @@ object Cli:
             case Left(error) =>
               ZIO.fail(BuildFault.Rejected(Rejection.Watch(error.message)))
             case Right(command) =>
-              ZIO.fromEither(
-                Operation
-                  .operation(command)
-                  .map(call => Call.Watch(call, WatchPolicy.After))
-                  .left
-                  .map(error => BuildFault.Rejected(Rejection.Watch(error.message)))
-              )
+              ZIO
+                .fromEither(
+                  Operation
+                    .operation(command)
+                    .left
+                    .map(error => BuildFault.Rejected(Rejection.Watch(error.message)))
+                )
+                .flatMap(pending => Operation.seal(pending).map(call => Call.Watch(call, WatchPolicy.After)))
 
   private def taskFrom(
       loaded: histos.load.LoadedBuild,
@@ -2299,23 +2321,21 @@ object Cli:
     attach(repo, call, locally(repo, apiJar, call))
 
   /** The call a batch command sends. Other commands stay on the JVM route. */
-  private[histos] def callOf(command: Command): Option[Call] =
+  private[histos] def callOf(command: Command): UIO[Option[Call]] =
     command match
-      case Command.Compile(projects)                        => Some(Call.Compile(projects))
+      case Command.Compile(projects)                        => ZIO.succeed(Some(Call.Compile(projects)))
       case Command.Test(projects, affected, mode, patterns) =>
-        AffectedChoice.select(projects, affected).map(names => Call.Test(names, patterns, mode))
-      case Command.Run(id, platform) =>
-        Some(
-          if id.builtIn then Call.Task(id.value, PluginArgs.empty)
-          else Call.Run(id.value, platform)
-        )
-      case Command.Clean(projects, extent) => Some(Call.Clean(projects, extent))
+        ZIO.succeed(AffectedChoice.select(projects, affected).map(names => Call.Test(names, patterns, mode)))
+      case Command.Run(id, platform, args) =>
+        if id.builtIn then ZIO.succeed(Some(Call.Task(id.value, PluginArgs.empty)))
+        else histos.process.Shells.capture.map(launch => Some(Call.Run(id.value, platform, launch, args)))
+      case Command.Clean(projects, extent) => ZIO.succeed(Some(Call.Clean(projects, extent)))
       case Command.Fmt(targets @ (histos.format.FormatTargets.Build | histos.format.FormatTargets.Projects(_)), mode) =>
-        Some(Call.Format(targets, mode))
-      case _ => None
+        ZIO.succeed(Some(Call.Format(targets, mode)))
+      case _ => ZIO.succeed(None)
 
   private def dispatched(command: Command)(use: Call => URIO[Launched, Completed]): URIO[Launched, Completed] =
-    callOf(command) match
+    callOf(command).flatMap:
       case Some(call) => use(call)
       case None       => ZIO.succeed(Completed(CliExit.Usage, "", "histos could not build that call", Playback.Held))
 
@@ -2336,7 +2356,7 @@ object Cli:
         toolchainClient
       case Command.Graph =>
         attach(repo, Call.Graph, inProcessReady(repo)((api, machine) => withLoader(machine)(graphLocal(repo, api))))
-      case Command.Run(_, _) =>
+      case Command.Run(_, _, _) =>
         dispatched(command)(call => served(repo, call))
       case Command.Plugin(id, pluginArgs) =>
         served(repo, Call.Task(id.render, pluginArgs))
@@ -2353,13 +2373,18 @@ object Cli:
         inProcessReady(repo)((api, machine) => withLoader(machine)(affected(repo, api, base)))
       case Command.Watch(inner, args) =>
         Operation.operation(inner) match
-          case Left(error) => ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
-          case Right(call) =>
-            attach(
-              repo,
-              Call.Watch(call, policyOf(args)),
-              inProcessReady(repo)((api, machine) => withLocal(machine)(watchLocal(repo, api, call, policyOf(args)))),
-            )
+          case Left(error)    => ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
+          case Right(pending) =>
+            Operation
+              .seal(pending)
+              .flatMap: call =>
+                attach(
+                  repo,
+                  Call.Watch(call, policyOf(args)),
+                  inProcessReady(repo)((api, machine) =>
+                    withLocal(machine)(watchLocal(repo, api, call, policyOf(args)))
+                  ),
+                )
       case Command.Compile(projects) =>
         dispatched(command)(call => compileAt(repo, projects, compileServices(repo, call)))
       case Command.Fmt(targets, mode) =>

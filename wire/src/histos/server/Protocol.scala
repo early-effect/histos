@@ -15,9 +15,11 @@ import histos.{Platform, ProjectName}
 
 import java.nio.file.Path
 
+import zio.Chunk
 import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
+import histos.report.WireJson.given JsonCodec[Path]
 import histos.report.WireJson.given JsonCodec[Platform]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
@@ -71,6 +73,7 @@ end ServerIo
 /** One event from a command running in the daemon. */
 enum Feed:
   case Event(event: BuildEvent)
+  case Output(bytes: Chunk[Byte])
   case Done(result: CallResult)
 
 private object CallJson:
@@ -136,6 +139,47 @@ enum WatchPolicy derives JsonCodec:
   case After
   case Restart
 
+/** `Shell` replaces the server environment with the caller's. `Tool` overlays the server environment.
+  *
+  * The program's standard streams are pipes. Histos keeps the terminal.
+  */
+enum RunLaunch derives JsonCodec:
+  case Shell(env: Map[String, String], directory: Path)
+  case Tool(env: Map[String, String], directory: Option[Path])
+
+  def programEnv(server: Map[String, String]): Map[String, String] =
+    this match
+      case Shell(env, _) => env
+      case Tool(env, _)  => server ++ env
+end RunLaunch
+
+/** A frame the client sends while a program runs. `Stdin` carries base64 bytes. */
+enum RunInput derives JsonCodec:
+  case Stdin(bytes: String)
+  case StdinEnd
+  case Interrupt
+
+object RunBytes:
+  def encode(bytes: Chunk[Byte]): String =
+    java.util.Base64.getEncoder.encodeToString(bytes.toArray)
+
+  def decode(text: String): Option[Chunk[Byte]] =
+    try Some(Chunk.fromArray(java.util.Base64.getDecoder.decode(text)))
+    catch case _: IllegalArgumentException => None
+end RunBytes
+
+/** What the client does with the socket after Ready. */
+enum Attendance:
+  /** The handler reads the socket. Closing it is not a cancel. */
+  case Held
+
+  /** The client writes program input frames. */
+  case Program
+
+  /** The client writes nothing more. Closing the socket cancels the call. */
+  case Quiet
+end Attendance
+
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
@@ -146,7 +190,7 @@ enum Call derives JsonCodec:
   case PublishDrop(id: DeploymentId)
   case PublishAssets(tokens: List[String])
   case Graph
-  case Run(id: String, platform: Option[Platform])
+  case Run(id: String, platform: Option[Platform], launch: RunLaunch, args: List[String])
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
   case Resolve(action: ResolveAction)
@@ -173,6 +217,13 @@ enum Call derives JsonCodec:
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
   case PreviewRun(id: String, platform: Option[Platform])
+
+  /** A nested watch is quiet. Only the program under one watch reads stdin. */
+  def attendance: Attendance =
+    this match
+      case Bsp | Reboot(_)                             => Attendance.Held
+      case Run(_, _, _, _) | Watch(Run(_, _, _, _), _) => Attendance.Program
+      case _                                           => Attendance.Quiet
 end Call
 
 object Call:
@@ -183,5 +234,6 @@ object Call:
 enum Message derives JsonCodec:
   case Ready
   case Event(event: BuildEvent)
+  case Output(bytes: String)
   case Done(result: CallResult)
   case Marker(histosExit: Int)

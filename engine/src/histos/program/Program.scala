@@ -18,7 +18,8 @@ import histos.resolve.{
   ResolveCell,
   ResolveError,
 }
-import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest, RunRelay}
+import histos.server.RunLaunch
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile, UpstreamCells}
@@ -45,6 +46,9 @@ object Program:
       jdk: JdkRuntime,
       runtimes: Runtimes,
       choice: Option[Platform],
+      launch: RunLaunch,
+      args: List[String],
+      relay: RunRelay,
       report: CompileFeed => UIO[Unit],
       afterCompile: UIO[Unit],
   ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, ProgramFeed] =
@@ -79,7 +83,7 @@ object Program:
           ZStream.unwrap:
             continue.get.map: keep =>
               if keep then
-                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store))
+                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store, launch, args, relay))
                   .tap:
                     case ProgramFeed.Exited(_, _, _, code) if code != 0 =>
                       continue.set(false)
@@ -398,151 +402,181 @@ object Program:
       jdk: JdkRuntime,
       runtimes: Runtimes,
       store: ContentStore,
+      launch: RunLaunch,
+      args: List[String],
+      relay: RunRelay,
   )
 
   private def one(
       run: CellRun
   ): ZStream[Resolve & LockedTools & RemoteCache, ProgramError, ProgramFeed] =
-    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store) = run
-    val env                                                                    = runtimes.env
+    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store, launch, args, relay) = run
+    val serverEnv                                                                                   = runtimes.env
+    val programEnv   = launch.programEnv(serverEnv)
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
-    val began        = ZStream.succeed(
-      ProgramFeed.Begin(cell.module, cell.version, cell.platform)
-    )
-    val ran =
-      cell.platform match
-        case Platform.Jvm =>
-          ZStream.unwrap:
-            for
-              paths <- classpath(
-                repo,
-                modules,
-                module,
-                cell,
-                lock,
-                repositories,
-              )
-              work <- fresh(workDir(repo, cell))
-            yield events(
-              cell,
-              ChildRequest(
-                Platform.Jvm,
-                jdk.home.resolve("bin").resolve("java"),
-                ChildClasspath(cell.classes, paths.drop(1)),
-                binary,
-                work,
-                env,
-              ),
-            )
-        case Platform.Js =>
-          ZStream.unwrap:
-            val linkDir = workDir(repo, cell)
-            for
-              node  <- runtimes.node.mapError(miss => ProgramError.NoNode(cell.module, cell.version, miss))
-              paths <- classpath(
-                repo,
-                modules,
-                module,
-                cell,
-                lock,
-                repositories,
-              )
-              _      <- fresh(linkDir)
-              linked <- cachedLink(
-                store,
-                JsLink.link(
-                  JsLinkRequest(
-                    cell.version,
-                    binary,
-                    paths,
-                    linkDir,
-                    jdk,
-                    module.jsModule,
-                    revision = module.jsVersion,
+    ZStream.unwrap:
+      launchDirectory(repo, launch).map: cwd =>
+        val began = ZStream.succeed(
+          ProgramFeed.Begin(cell.module, cell.version, cell.platform)
+        )
+        val ran =
+          cell.platform match
+            case Platform.Jvm =>
+              ZStream.unwrap:
+                for
+                  paths <- classpath(
+                    repo,
+                    modules,
+                    module,
+                    cell,
+                    lock,
+                    repositories,
                   )
-                ),
-              ).mapError(error =>
-                ProgramError.Tool(
-                  cell.module,
-                  cell.version,
-                  histos.toolchain.PlatformToolError.JsLink(error),
-                )
-              )
-              asked <- JsRun
-                .start(
-                  JsRunRequest(
-                    module.jsEnv,
-                    module.jsModule,
-                    linked.script,
-                    linkDir,
-                    jdk,
-                    env,
-                    node,
-                  )
-                )
-                .mapError(error =>
-                  ProgramError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.JsRun(error),
-                  )
-                )
-            yield events(cell, asked)
-        case Platform.Native =>
-          ZStream.unwrap:
-            val linkDir = workDir(repo, cell)
-            for
-              view  <- ZIO.service[LockedTools]
-              major <- nativeMajor(module, cell.version)
-              paths <- classpath(
-                repo,
-                modules,
-                module,
-                cell,
-                lock,
-                repositories,
-              )
-              _         <- fresh(linkDir)
-              toolchain <- ZIO
-                .fromEither(
-                  NativeToolchain.of(
-                    module.nativeVersion
-                      .getOrElse(view.catalog.native.revision),
-                    runtimes.native,
-                  )
-                )
-                .mapError(error =>
-                  ProgramError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.NativeOrigin(error),
-                  )
-                )
-              program <- cachedLink(
-                store,
-                NativeLink.linkClasspath(
-                  NativeLinkRequest(
-                    major,
-                    toolchain,
-                    env,
-                    linkDir,
-                    jdk,
-                    binary,
-                    cell.version,
+                  work <- fresh(workDir(repo, cell))
+                yield feeds(
+                  cell,
+                  ChildProcess.events(
+                    ChildRequest(
+                      Platform.Jvm,
+                      jdk.home.resolve("bin").resolve("java"),
+                      ChildClasspath(cell.classes, paths.drop(1)),
+                      binary,
+                      work,
+                      programEnv,
+                      directory = cwd,
+                      arguments = args,
+                    ),
+                    relay,
                   ),
-                  paths,
-                ),
-              ).mapError(error =>
-                ProgramError.Tool(
-                  cell.module,
-                  cell.version,
-                  histos.toolchain.PlatformToolError.Native(error),
                 )
-              )
-              work <- fresh(linkDir.resolve("exec"))
-            yield command(cell, List(program.toString), work, nativeEnvironment(env, module))
-    began ++ ran
+            case Platform.Js =>
+              ZStream.unwrap:
+                val linkDir = workDir(repo, cell)
+                for
+                  node  <- runtimes.node.mapError(miss => ProgramError.NoNode(cell.module, cell.version, miss))
+                  paths <- classpath(
+                    repo,
+                    modules,
+                    module,
+                    cell,
+                    lock,
+                    repositories,
+                  )
+                  _      <- fresh(linkDir)
+                  linked <- cachedLink(
+                    store,
+                    JsLink.link(
+                      JsLinkRequest(
+                        cell.version,
+                        binary,
+                        paths,
+                        linkDir,
+                        jdk,
+                        module.jsModule,
+                        revision = module.jsVersion,
+                        arguments = args,
+                      )
+                    ),
+                  ).mapError(error =>
+                    ProgramError.Tool(
+                      cell.module,
+                      cell.version,
+                      histos.toolchain.PlatformToolError.JsLink(error),
+                    )
+                  )
+                  asked <- JsRun
+                    .start(
+                      JsRunRequest(
+                        module.jsEnv,
+                        module.jsModule,
+                        linked.script,
+                        linkDir,
+                        jdk,
+                        programEnv,
+                        node,
+                        directory = cwd,
+                      )
+                    )
+                    .mapError(error =>
+                      ProgramError.Tool(
+                        cell.module,
+                        cell.version,
+                        histos.toolchain.PlatformToolError.JsRun(error),
+                      )
+                    )
+                yield feeds(cell, ChildProcess.events(asked, relay))
+            case Platform.Native =>
+              ZStream.unwrap:
+                val linkDir = workDir(repo, cell)
+                for
+                  view  <- ZIO.service[LockedTools]
+                  major <- nativeMajor(module, cell.version)
+                  paths <- classpath(
+                    repo,
+                    modules,
+                    module,
+                    cell,
+                    lock,
+                    repositories,
+                  )
+                  _         <- fresh(linkDir)
+                  toolchain <- ZIO
+                    .fromEither(
+                      NativeToolchain.of(
+                        module.nativeVersion
+                          .getOrElse(view.catalog.native.revision),
+                        runtimes.native,
+                      )
+                    )
+                    .mapError(error =>
+                      ProgramError.Tool(
+                        cell.module,
+                        cell.version,
+                        histos.toolchain.PlatformToolError.NativeOrigin(error),
+                      )
+                    )
+                  program <- cachedLink(
+                    store,
+                    NativeLink.linkClasspath(
+                      NativeLinkRequest(
+                        major,
+                        toolchain,
+                        serverEnv,
+                        linkDir,
+                        jdk,
+                        binary,
+                        cell.version,
+                      ),
+                      paths,
+                    ),
+                  ).mapError(error =>
+                    ProgramError.Tool(
+                      cell.module,
+                      cell.version,
+                      histos.toolchain.PlatformToolError.Native(error),
+                    )
+                  )
+                yield feeds(
+                  cell,
+                  ChildProcess.command(
+                    program.toString :: args,
+                    cwd.getOrElse(linkDir),
+                    nativeEnvironment(programEnv, module),
+                    relay,
+                  ),
+                )
+        began ++ ran
+
+  /** A shell directory may sit outside the repo. A tool directory must stay inside it. */
+  private def launchDirectory(repo: Path, launch: RunLaunch): IO[ProgramError, Option[Path]] =
+    launch match
+      case RunLaunch.Shell(_, directory) =>
+        RunDirectory.existing(directory).mapBoth(ProgramError.Directory(_), Some(_))
+      case RunLaunch.Tool(_, None) =>
+        ZIO.succeed(None)
+      case RunLaunch.Tool(_, Some(directory)) =>
+        RunDirectory.accept(repo, directory).mapBoth(ProgramError.Directory(_), Some(_))
 
   private def cachedLink[R, E, A](
       store: ContentStore,
@@ -550,16 +584,17 @@ object Program:
   ): ZIO[R, E, A] =
     effect.provideSomeLayer(zio.ZLayer.succeed(store) ++ LinkerStarts.live)
 
-  private def events(
+  /** Lines from the child's pipes. */
+  private def feeds(
       cell: histos.zinc.CompiledCell,
-      request: ChildRequest,
+      ran: ZStream[Any, histos.process.ChildError, ChildEvent],
   ): ZStream[Any, ProgramError, ProgramFeed] =
-    ChildProcess
-      .events(request)
+    ran
       .mapError(error => ProgramError.Process(cell.module, cell.version, error.message))
       .map:
         case ChildEvent.Out(text)    => ProgramFeed.Out(text)
         case ChildEvent.Err(text)    => ProgramFeed.Err(text)
+        case ChildEvent.Bytes(data)  => ProgramFeed.Bytes(data)
         case ChildEvent.Exited(code) =>
           ProgramFeed.Exited(
             cell.module,
@@ -568,29 +603,9 @@ object Program:
             code.value,
           )
 
-  /** A Native program's environment. The module's [[histos.ThreadStack]] wins over one the server inherited. */
+  /** A Native program's environment. The module's [[histos.ThreadStack]] wins over the program environment. */
   private[histos] def nativeEnvironment(env: Map[String, String], module: Module): Map[String, String] =
     env ++ NativeStack.environment(module.threadStack)
-
-  private def command(
-      cell: histos.zinc.CompiledCell,
-      argv: List[String],
-      work: Path,
-      env: Map[String, String],
-  ): ZStream[Any, ProgramError, ProgramFeed] =
-    ChildProcess
-      .command(argv, work, env)
-      .mapError(error => ProgramError.Process(cell.module, cell.version, error.message))
-      .map:
-        case ChildEvent.Out(text)    => ProgramFeed.Out(text)
-        case ChildEvent.Err(text)    => ProgramFeed.Err(text)
-        case ChildEvent.Exited(code) =>
-          ProgramFeed.Exited(
-            cell.module,
-            cell.version,
-            cell.platform,
-            code.value,
-          )
 
   /** Main classes, each upstream cell's classes, the JVM library on JVM, then this cell's lock jars and each upstream
     * cell's. The upstream cells are the ones [[UpstreamCells.read]] picks. A JVM run takes runtime dependencies, and a
@@ -687,6 +702,7 @@ enum ProgramFeed:
   case Begin(module: ProjectName, version: ScalaVersion, platform: Platform)
   case Out(text: String)
   case Err(text: String)
+  case Bytes(data: Chunk[Byte])
   case Exited(
       module: ProjectName,
       version: ScalaVersion,
