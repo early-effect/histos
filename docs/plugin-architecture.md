@@ -243,7 +243,7 @@ P1 also makes the necessary caller/result-shape adaptations so these contracts c
 
 ### Author-Facing Examples
 
-All examples are proposed/compiler-gated. Adjacent filenames identify planned fixtures, not live repository source; fences use portable Scala/text Markdown. P1/P2/P6/P8 must compile them unchanged apart from local/snapshot test coordinates.
+Fences use portable Scala and text Markdown. The nine Scala fences from the locked catalog through the producer build are the strings `PluginBootstrapSpec` compiles in `the spec author fixtures compile`. [plugins.md](plugins.md) links to those strings and does not copy them. The `ReviewedLocksSpec` fence and the lock-repair transcript are still proposed text. They are not compiler fixtures, and the transcript is not a tracked file. The landed `add` method is `inline def add[A](using Tag[A])`. The call sites in those strings are unchanged. This document stays proposed until P10.
 
 #### Normal locked consumer: two files
 

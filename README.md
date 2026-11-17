@@ -293,11 +293,25 @@ Histos uses the JDK, Node, and clang already installed.
 
 A file that points at a missing or too-old home fails, and Histos does not pick another.
 
+## Lock
+
+`dependencies.lock` is the pin file `DependencyLock` writes. `histos resolve` fetches what it records and checks each sha256. `resolve --update` solves and writes the lock. `resolve --check` fails when a fresh solve differs. The lines are `cell` or `test`, `direct`, `artifact`, `evict`, `plugin`, `source`, and `tool`. A `plugin` line is the organization, the name, the revision, and `exact-binary`, `source`, or `binary-or-source`. A published coordinate in a build file is a `dep"..."` literal. The lock does not add another published-pin syntax. The field order is in [docs/plugins.md](docs/plugins.md).
+
+`Projects.locked` selects `Resolution.Lock`. Omission is `Resolution.Solve`. An optional `histos.plugins.scala` can select resolution before main compiles, and main inherits it. The same selection on main agrees. A different explicit selection is a conflict. The lock file's presence does not select `Resolution.Lock`.
+
+Offer, update, local, and frozen are lock-strategy decisions on a catalog load. This guide does not add a command flag for them.
+
 ## Plugins
 
-A plugin is a service, and the layer provides it. The types live in [api/src/histos/plugin](api/src/histos/plugin). A command name the grammar owns is reserved. `acp` is reserved and has no command.
+A plugin is a constructor-injected service. A coordinate does not install it. `histos.plugins.scala` names coordinates. `histos.scala` activates services and tasks. Early lock and loading policy, when a build needs it, is `histos.strategies.scala`. The types live in [api/src/histos/plugin](api/src/histos/plugin). The guide is [docs/plugins.md](docs/plugins.md). Its examples are the compiler fixtures named there, not a second copy of those sources.
 
-A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar.
+A command name the grammar owns is reserved. `acp` is reserved and has no command.
+
+A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar. Authors do not write that file.
+
+`.pluginLibrary` publishes a plugin library with a rebuild recipe. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and no recipe.
+
+`histos.version` is `0.4.2`. That pin does not run this catalog protocol. This repository's `histos.scala` declares no plugins.
 
 ## Building Histos
 
