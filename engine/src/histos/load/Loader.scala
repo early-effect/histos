@@ -121,7 +121,16 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
         builds  <- BuildFile.entries(out, opened.build)
         build   <- BuildFile.select(builds)
         loaded  <- assemble(wired, opened.build, threads, graph, launcher, leases).onError(_ => leases.discard)
-        runtime <- PluginRuntime.loaded(repo, loaded.graph, opened.build, threads, loaded.links, launcher, leases)
+        runtime <- PluginRuntime.loaded(
+          repo,
+          loaded.graph,
+          opened.build,
+          threads,
+          loaded.links,
+          launcher,
+          leases,
+          Nil,
+        )
       yield LoadedBuild(loaded.graph, runtime, build)
 
   /** No published pin reads no lock and calls no resolver. */

@@ -1,6 +1,7 @@
 package histos.task
 
 import histos.doctor.{Diagnostic, Noted}
+import histos.load.PluginFault
 import histos.plugin.PluginRunError
 import histos.version.VersionError
 
@@ -68,6 +69,7 @@ enum TaskError:
   case UnknownRun(id: RunId)
   case Version(error: VersionError)
   case Plugin(error: PluginRunError)
+  case Fault(error: PluginFault)
   case Doc(lines: NonEmptyChunk[String])
 
   def message: String = this match
@@ -76,6 +78,7 @@ enum TaskError:
     case UnknownRun(id) => s"no run '${id.value}'"
     case Version(error) => error.message
     case Plugin(error)  => error.message
+    case Fault(error)   => error.message
     case Doc(lines)     => lines.mkString("\n")
 
   def diagnose: Diagnostic = this match

@@ -14,7 +14,6 @@ import histos.plugin.{
   ModuleView,
   OfflineSelection,
   PluginArgs,
-  PluginDetail,
   PluginEvents,
   PluginId,
   PluginLinked,
@@ -52,8 +51,11 @@ import histos.resolve.{Resolve, DependencyLock}
 import histos.zinc.GraphCompile
 import histos.{Module, ProjectGraph}
 
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path}
+
+import scala.util.Try
 
 import zio.{Chunk, IO, NonEmptyChunk, Ref, Scope, ZIO, ZLayer}
 
@@ -102,6 +104,7 @@ object PluginRuntime:
       links: List[PluginLink],
       launcher: ApiDigest,
       leases: GenerationLeases,
+      provenance: List[ProvenanceResult],
   ): ZIO[Scope, Nothing, PluginRuntime] =
     for environment <- (Parallelism.live >>> Histos.live).build
     yield Running(
@@ -113,6 +116,7 @@ object PluginRuntime:
       launcher,
       environment.get[Histos],
       leases,
+      provenance,
     )
 
   private final class Running(
@@ -124,6 +128,7 @@ object PluginRuntime:
       val launcher: ApiDigest,
       runner: Histos,
       leases: GenerationLeases,
+      provenance: List[ProvenanceResult],
   ) extends PluginRuntime:
     def run(
         id: PluginTaskId,
@@ -236,10 +241,7 @@ object PluginRuntime:
               .map(out => TaskResult.Plugin(out))
               .mapError:
                 case PluginFault.Task(error) => TaskError.Plugin(error)
-                case other                   =>
-                  TaskError.Plugin(
-                    PluginRunError.Failed(PluginDetail.trusted(other.message))
-                  )
+                case other                   => TaskError.Fault(other)
           yield key -> runner
       yield bound.toMap
 
@@ -260,7 +262,7 @@ object PluginRuntime:
         case Some(plugin) =>
           for
             hashed <- PluginInputs
-              .hash(hashRequest(id, task, env))
+              .hash(hashRequest(id, task, env, passed))
               .mapError(error => PluginFault.Task(error))
             inputs   <- withUpstream(hashed.inputs, upstream)
             compiled <- PluginCells.classpath(repo, graph, task, lock)
@@ -328,7 +330,7 @@ object PluginRuntime:
         env: Map[String, String],
     ): IO[PluginRunError, String] =
       for
-        hashed <- PluginInputs.hash(hashRequest(id, task, env))
+        hashed <- PluginInputs.hash(hashRequest(id, task, env, args))
         output <- invoke(
           plugin,
           RunRequest(
@@ -481,6 +483,7 @@ object PluginRuntime:
         id: PluginTaskId,
         task: DeclaredTask,
         env: Map[String, String],
+        args: PluginArgs,
     ): PluginInputs.HashRequest =
       PluginInputs.HashRequest(
         repo,
@@ -491,7 +494,24 @@ object PluginRuntime:
         jars(id.plugin),
         launcher,
         env,
+        args,
+        binding(id.plugin),
+        provenance,
+        classpath,
       )
+
+    private val classpath: List[Path] =
+      loader match
+        case build: BuildLoader => build.getURLs.toList.flatMap(fileOf)
+        case _                  => Nil
+
+    private def fileOf(url: URL): Option[Path] =
+      if url.getProtocol != "file" then None
+      else Try(Path.of(url.toURI)).toOption
+
+    private def binding(id: PluginId): Option[PluginLinked] =
+      links.collectFirst:
+        case link if link.id == id => link.linked
 
     private def jars(id: PluginId): List[String] =
       links.collectFirst:

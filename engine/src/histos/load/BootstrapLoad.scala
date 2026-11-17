@@ -171,8 +171,17 @@ private[load] object BootstrapLoad:
       agreed <- ZIO.fromEither(normalize(catalog.resolution, graph)).mapError(LoadError.Bootstrap(_))
       tasks  <- activateMain(build, strategy, leases, launcher, request.repo)
       linked = agreed.withPlugins(tasks)
-      runtime <- PluginRuntime.loaded(request.repo, linked, opened.build, threads, Nil, launcher, leases)
       proven  <- VerifiedClosure(launcher, (seedPaths ++ rest).distinct)
+      runtime <- PluginRuntime.loaded(
+        request.repo,
+        linked,
+        opened.build,
+        threads,
+        Nil,
+        launcher,
+        leases,
+        proven,
+      )
     yield LoadedBuild(linked, runtime, build, Some(catalog), proven)
 
   private def plan(plugins: HistosPlugins): Either[BootstrapError, BootstrapSteps.CoreFirst] =
