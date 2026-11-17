@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). Nothing is blocked on Russ. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
@@ -49,7 +49,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | P2 | P1 on main | `histos/plugin-p2` | `plug-p2` | #217 | merged | `./histos compile api plugin-testkit`; `./histos test api plugin-testkit --only '*BuildServicesSpec*' '*PluginHarnessSpec*'`; `./histos fmt --check` | merged as `0073b37` (#217). CI on `e7c4979` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `c7ea9e6`. |
 | P3 | P1 on main | `histos/plugin-p3` | `plug-p3` | #218 | merged | `./histos compile engine`; `./histos test engine --only '*LockTransactionSpec*' '*LockSnapshotSpec*'`; `./histos fmt --check` | merged as `f60ae81` (#218). CI run 43951028491 on `b5bf8f8` passed 7 failed 0, no test-clock warning. Concurrent writer passed. |
 | P5 | P1 on main | `histos/plugin-p5` | `plug-p5` | #219 | merged | `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check` | merged as `86e0bc1` (#219). CI run 43970363195 on `81232e3` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `637c3e7` (13 passed). |
-| P4 | P5 on main | `histos/plugin-p4` | `plug-p4` | #220 | in progress | same commands as the develop gate, after rebase onto P5, including one real `GraphCompile` snapshot | |
+| P4 | P5 on main | `histos/plugin-p4` | `plug-p4` | #220 | merged | `./histos compile engine`; `./histos test engine --only '*PluginPublicationSpec*' '*PluginPackageKeySpec*'`; `./histos fmt --check` | merged as `250c089` (#220). CI run 43984700796 on `07441f0` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `e0186e8` (14 passed). The cell snapshot published. |
 | P6 | P2, P3, P4, P5 on main | `histos/plugin-p6` | `plug-p6` | | pending | `./histos compile engine`; `./histos test engine --only '*PluginBootstrapSpec*' '*PluginClosureSpec*' '*PluginLifetimeSpec*'`; `./histos fmt --check` | |
 | P7 | P6 on main | `histos/plugin-p7` | `plug-p7` | | pending | `./histos compile engine wire`; `./histos test engine --only '*PluginTaskIdentitySpec*'`; `./histos fmt --check`; real loader manifest before merge | |
 | P8 | P3, P6, P7 on main | `histos/plugin-p8` | `plug-p8` | | pending | `./histos compile app wire client`; `./histos test app wire --only '*LockInvocationSpec*' '*LockOfferSpec*' '*LockPolicySpec*' '*RunCallSpec*' '*BatchRunSpec*'`; `./histos fmt --check` | |
@@ -61,7 +61,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 - [x] P2. `BuildServices` and `plugin-testkit`. Merged as #217 on `0073b37`. CI on `e7c4979`. Local gate on `c7ea9e6`.
 - [x] P3. Lock transaction with a fake preparer. Merged as #218 on `f60ae81`. CI run 43951028491 on `b5bf8f8`.
 - [x] P5. Host compiler, snapshot capture, cache, stage worker. Merged as #219 on `86e0bc1`. CI run 43970363195 on `81232e3`. Local gate on `637c3e7`: `./histos compile engine`; `./histos test engine --only '*PluginCompileCacheSpec*' '*HostApiInputsSpec*' '*HostCompilerBootstrapSpec*' '*PluginStageInputsSpec*'`; `./histos fmt --check`
-- [ ] P4. Publication and package identity, rebased onto P5, real snapshot in the suite
+- [x] P4. Publication and package identity, rebased onto P5, real snapshot in the suite. Merged as #220 on `250c089`. CI run 43984700796 on `07441f0`. Local gate on `e0186e8`: `./histos compile engine`; `./histos test engine --only '*PluginPublicationSpec*' '*PluginPackageKeySpec*'`; `./histos fmt --check`
 - [ ] P6. Bootstrap loader and closure
 - [ ] P7. Task identity, rebased onto P6, real manifest in the suite
 - [ ] P8. Client envelope, offers, generation leases
