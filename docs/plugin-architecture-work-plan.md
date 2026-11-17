@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin is `0.5.0-9e4a872c9265-SNAPSHOT`, packed from `9e4a872`. A5 through A8 stay open until their milestones close. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin is `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`. A5 through A8 stay open until their milestones close. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
