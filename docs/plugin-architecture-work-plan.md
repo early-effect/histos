@@ -53,7 +53,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | P6 | P2, P3, P4, P5 on main | `histos/plugin-p6` | `plug-p6` | #221 | merged | `./histos compile engine`; `./histos test engine --only '*PluginBootstrapSpec*' '*PluginClosureSpec*' '*PluginLifetimeSpec*'`; `./histos fmt --check` | merged as `23037d9` (#221). CI run 44006796848 on `82ffd50` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `610c21e` (23 passed). |
 | P7 | P6 on main | `histos/plugin-p7` | `plug-p7` | #222 | merged | `./histos compile engine wire`; `./histos test engine --only '*PluginTaskIdentitySpec*'`; `./histos fmt --check`; real loader manifest before merge | merged as `82303e8` (#222). CI run 44012856100 on `79f6bc1` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `62b151c` (4 passed). The loader seal reached the task. |
 | P8 | P3, P6, P7 on main | `histos/plugin-p8` | `plug-p8` | | pending | `./histos compile app wire client`; `./histos test app wire --only '*LockInvocationSpec*' '*LockOfferSpec*' '*LockPolicySpec*' '*RunCallSpec*' '*BatchRunSpec*'`; `./histos fmt --check` | |
-| P9 | P2, P4, P6 on main | `histos/plugin-p9` | `plug-p9` | | pending | tracked link check; `./histos fmt --check`; `./histos run doc` | |
+| P9 | P2, P4, P6 on main | `histos/plugin-p9` | `plug-p9` | #223 | in progress | tracked link check; `./histos fmt --check`; `./histos run doc` | |
 | P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | |
 
 - [x] P0. Spec and this board on `main` (`c60ee8d`, `ce6fd7f`)
@@ -241,6 +241,8 @@ Owns the README plugin and lock sections, an author guide, and fixture-backed ex
 Must not edit scaffold sources. Those are P10.
 
 Ledger: none. The rendered-spec box in the architecture doc waits for P10 along with the rest of that checklist.
+
+Rendered review, recorded here and not as a checked completion box. `gh api --method POST /markdown` with `mode=gfm` and `context=early-effect/histos` rendered `docs/plugin-architecture.md`. 39 destination-relative links resolve. Headings are unique. Eleven fences are balanced and render as Scala or text. Tables have a separator row and consistent columns. A `<` inside a code span, and `\|` inside a table cell, render as `<` and `|`. Nine author fences equal the `Author` strings in `PluginBootstrapSpec`. Left for P10 with that checklist: the opening still says no compiler verification has been performed; the service table still writes `def add[A: Tag]` where the landed method is `inline def add[A](using Tag[A])`; `ReviewedLocksSpec` and `examples/expected-lock-repair.txt` are not tracked files. The Markdown API response has no heading `id` attributes. Blob anchors stay unique because the headings are unique.
 
 ### P10. Assembled host
 
