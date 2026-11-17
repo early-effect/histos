@@ -904,7 +904,7 @@ Original research R1-R7 is preserved; R8-R14 are focused additional observations
 | A4, recipe/TASTy | Closure/stages/compiler direction must be complete. | P4/P5/P6 typed supported model/refusal/closure; P6 closes assembled fixture. | [ ] |
 | A5, transaction | Consent/write/adoption/resume races. | P3 store and P8 parity. A local re-run does not close this row. | [ ] |
 | A6, CI/transport | Server env/stdin cannot select caller repair; frozen differs from fresh check. | P8 envelope. A local caller re-run does not close this row. | [ ] |
-| A7, self-host | Shim/pin may run old code. | The pin is `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. This row stays open until that pin's CI is green. | [ ] |
+| A7, self-host | Shim/pin may run old code. | The pin is `0.5.0-05fece9782a5-SNAPSHOT`, packed from `05fece9`. This row stays open until that pin's CI is green. | [ ] |
 | A8, host compiler tools | Existing Zinc module path obtains compiler/bridge via LockedTools; it cannot implicitly solve a new host version in frozen fallback. | P5 supplied the bundle. Local packaging of the launcher closure does not close this row. | [ ] |
 | V1, review | Two rounds completed; six design findings verified and closed, none open. | Round 2 accepted AR1-AR6 with no new/reopened findings. Design review is complete; implementation proof remains pending. | [x] |
 
@@ -963,7 +963,7 @@ Later implementation gate:
 - [ ] A-to-B mixed rebuild uses complete distribution tools with no B project cell, zero solves, unchanged lock; declared stage inputs/offline restrictions and complete TASTy seals proven. This unit did not prove stage inputs, offline refusal, or a TASTy seal.
 - [ ] P4/P7 repeat real producer-consumer proof after P5/P6 landing, not only contract fixtures. Those landing gates already merged. This unit did not publish a new producer.
 - [ ] Second unchanged local/published loads zero compiler; host/full-key changes invalidate. The second load here is a local module, and a published load was not run.
-- [ ] Assembled host actually executes edited sources; self-host/scaffold/BSP/watch migration complete. The pin is `0.4.4-8c61390d3c7a-SNAPSHOT`. This line stays open until that pin's CI runs the edited tree.
+- [ ] Assembled host actually executes edited sources; self-host/scaffold/BSP/watch migration complete. The pin is `0.5.0-05fece9782a5-SNAPSHOT`. This line stays open until that pin's CI runs the edited tree.
 - [ ] Format, affected full tests without quick, workflow, docs checks run. The combined `./histos test api wire engine app plugin-testkit` exited 1 on `ld: library 'crypto' not found` before engine finished.
 - [ ] Hard-unit and whole-change review complete; no unauthorized merge/release. The parent reviews this unit. No release was cut.
 
