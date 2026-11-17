@@ -7,7 +7,7 @@ import histos.resolve.ResolveError
 import histos.version.{CiVersion, ShipName, VersionError}
 import histos.select.SelectError
 import histos.schedule.RemoteError
-import histos.plugin.RecipeError
+import histos.plugin.{RecipeError, RepoPath}
 import histos.zinc.{CompileError, GraphCompileError}
 import histos.{Platform, PomFact, ProjectName, ScalaVersion}
 import java.nio.file.Path
@@ -55,6 +55,7 @@ enum LocalPublishError:
   )
   case Remote(error: RemoteError)
   case Recipe(error: RecipeError)
+  case InputsChanged(path: RepoPath)
 
   def message: String = this match
     case Version(error)                        => error.message
@@ -93,8 +94,9 @@ enum LocalPublishError:
     case Runtime(error)                         => error.message
     case Pack(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
-    case Remote(error) => error.message
-    case Recipe(error) => error.message
+    case Remote(error)       => error.message
+    case Recipe(error)       => error.message
+    case InputsChanged(path) => s"${path.value} changed after it was recorded"
 
   def diagnose: Diagnostic = this match
     case Publish(error)   => error.diagnose
