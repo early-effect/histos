@@ -91,7 +91,7 @@ A helper is an ordinary module the plugin module `dependsOn`. Compile-only depen
 
 `LockDefaults.core` is local `Offer` and CI `Frozen`. `bootstrapLocks` on the catalog replaces that pair. A `LockStrategy` reads `LockContext` in `decide` and returns a `LockDecision`. It does not commit the lock. The caller is an argument of `decide`, not a constructor input.
 
-On this loader, `Frozen` and `UsePinned` materialize pins and do not solve. `OfferRepair`, `Update`, and `LocalSolve` may solve and rebuild, and they take the same path. `Reject` fails the load. Nothing in that path prompts. `LockCoordinator` is not wired to a command.
+On this loader, `Frozen` and `UsePinned` materialize pins and do not solve. `OfferRepair`, `Update`, and `LocalSolve` may solve and rebuild, and they take the same path. `Reject` fails the load. Nothing in that path prompts. The daemon session's `ConsentDesk` holds one `LockCoordinator`. An offer is a lock event on the build feed, and a reply accepts or declines it.
 
 `dependencies.lock` is the file `DependencyLock.render` writes.
 
