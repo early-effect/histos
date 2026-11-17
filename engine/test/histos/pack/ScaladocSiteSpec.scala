@@ -6,7 +6,7 @@ import histos.ToolchainIdentity
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
-import zio.{Chunk, ZIO}
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
 object ScaladocSiteSpec extends ZIOSpecDefault:
