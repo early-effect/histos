@@ -311,7 +311,7 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 
 `.pluginLibrary` publishes a plugin library with a rebuild recipe. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and no recipe.
 
-`histos.version` is `0.5.0-05fece9782a5-SNAPSHOT`, the assembled host packed from `05fece9`. This repository's `histos.scala` declares no plugins.
+`histos.version` is `0.5.0-8f20c655411f-SNAPSHOT`, the assembled host packed from `8f20c65`. This repository's `histos.scala` declares no plugins.
 
 ## Building Histos
 
