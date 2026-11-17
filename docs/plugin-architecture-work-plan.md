@@ -301,7 +301,7 @@ Snapshot `0.4.4-8c61390d3c7a-SNAPSHOT` was published from clean `8c61390`. The l
 
 These are the next plans. None of them is authorized by the pin PR. A milestone that changes what a command writes stops for Russ before that behavior is chosen.
 
-- M1. Daemon consent (A5). Wire `LockCoordinator` into the daemon. An offer receives a `LockReply`, and the watch loop keeps that answer. Redirected CLI, unnegotiated MCP, and unnegotiated BSP stay diagnoses. Consent is not read from the server environment or from program stdin.
+- M1. Daemon consent (A5). Wire `LockCoordinator` into the daemon. An offer receives a `LockReply`, and the watch loop keeps that answer. Redirected CLI, unnegotiated MCP, and unnegotiated BSP stay diagnoses. Consent is not read from the server environment or from program stdin. Branch `histos/plugin-m1`. In progress. Ordinary commands do not call `prepare`. A dependency lock is `Corrupt` and is not rewritten.
 - M2. Refresh. `resolve --refresh` currently does not revalidate and says so. Decide whether it revalidates before changing the command. The parser still rejects frozen, local, and a combination with update or check.
 - M3. Published pin grammar. Do not invent the lock lines. After Russ names them, add `ReviewedLocksSpec` and `examples/expected-lock-repair.txt`, and compiler-prove the published examples.
 - M4. Lock strategy context. A custom `LockStrategy` sees revision, intent, drift, and diff. The built-in exact-or-rebuild behavior stays. Frozen-miss stays a typed refusal and does not solve.
