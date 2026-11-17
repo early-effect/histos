@@ -1,8 +1,11 @@
 package histos.pack
 
 import histos.load.BuildClasspath
+import histos.publish.PublishedShim
 import histos.workspace.Workspace
+import histos.ToolchainIdentity
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
@@ -13,7 +16,7 @@ import zio.test.*
 
 object DistributionSpec extends ZIOSpecDefault:
   def spec = suite("a packed classpath")(
-    test("is a distribution and drops ide data") {
+    test("is a distribution, drops ide data, and keeps the application identity") {
       ZIO.scoped {
         for
           root <- Workspace.work("histos-dist-spec").orDieWith(error => new java.io.IOException(error.message))
@@ -27,6 +30,8 @@ object DistributionSpec extends ZIOSpecDefault:
                 "histos/cli/Main.class"                  -> bytes(1, 2, 3),
                 "META-INF/semanticdb/a.scala.semanticdb" -> bytes(4),
                 "META-INF/TEST.SF"                       -> bytes(5),
+                ToolchainIdentity.entry                  -> Chunk.fromArray(applicationIdentity),
+                PublishedShim.entry                      -> Chunk.fromArray(applicationShim),
               ),
               app,
             )
@@ -35,12 +40,21 @@ object DistributionSpec extends ZIOSpecDefault:
             .writeBytes(List("histos/Graph.class" -> bytes(6, 7)), api)
             .orDieWith(error => new java.io.IOException(error.message))
           _ <- ClassJar
-            .writeBytes(List("third/Lib.class" -> bytes(8)), dep)
+            .writeBytes(
+              List(
+                "third/Lib.class"       -> bytes(8),
+                ToolchainIdentity.entry -> Chunk.fromArray(dependencyIdentity),
+                PublishedShim.entry     -> Chunk.fromArray(dependencyShim),
+              ),
+              dep,
+            )
             .orDieWith(error => new java.io.IOException(error.message))
           _           <- Distribution.write(app, List(dep, api), api, out)
           distributed <- BuildClasspath.distribution(out)
           names       <- entries(out)
           nested      <- entry(out, BuildClasspath.Entry)
+          identity    <- entry(out, ToolchainIdentity.entry)
+          shim        <- entry(out, PublishedShim.entry)
           original    <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
         yield assertTrue(
           distributed,
@@ -50,10 +64,24 @@ object DistributionSpec extends ZIOSpecDefault:
           !names.exists(ClassJar.semanticdb),
           !names.exists(_.endsWith(".SF")),
           nested.sameElements(original),
+          identity.sameElements(applicationIdentity),
+          shim.sameElements(applicationShim),
         )
       }
     }
   )
+
+  private val applicationIdentity = utf8(
+    """{"coordinate":"app","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","dirty":false}"""
+  )
+  private val dependencyIdentity = utf8(
+    """{"coordinate":"dep","commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","dirty":true}"""
+  )
+  private val applicationShim = utf8("a" * 64 + "\n")
+  private val dependencyShim  = utf8("b" * 64 + "\n")
+
+  private def utf8(text: String): Array[Byte] =
+    text.getBytes(StandardCharsets.UTF_8)
 
   private def bytes(values: Int*): Chunk[Byte] =
     Chunk.fromArray(values.map(_.toByte).toArray)
