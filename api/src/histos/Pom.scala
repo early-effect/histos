@@ -9,7 +9,8 @@ enum Publication:
   /** The library packer under the sbt artifact id. The series is the binary series, `2` or `1.0`. */
   case SbtPlugin(series: SbtSeries)
 
-  /** One JVM fat jar. No Scala suffix, and the pom lists no dependencies. */
+  /** The toolchain launcher. No Scala suffix. The pom lists the classpath. The installing machine builds the fat jar.
+    */
   case Assembly(main: MainClass)
 
   /** The thin jar. The pom lists the classpath. */

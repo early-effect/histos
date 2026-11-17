@@ -19,15 +19,19 @@ object ClientInstallSpec extends ZIOSpecDefault:
     case Main(error: MainClassError)
 
   def spec = suite("an installed client")(
-    test("the manifest names the jar and the kit") {
+    test("the manifest names the coordinate and the kit") {
       val text = DistLayout.manifestJson(
         "0.3.2",
-        "a" * 64,
+        DistLayout.MavenPin("rocks.earlyeffect", "histos", "0.3.2"),
         Some("0.3.2-client-kit.zip" -> ("b" * 64)),
       )
       assertTrue(
-        text.contains(""""jarSha256""""),
+        text.contains(""""group""""),
+        text.contains(""""artifact""""),
+        text.contains(""""revision""""),
         text.contains(""""clientKit""""),
+        !text.contains(""""jar""""),
+        !text.contains(""""jarSha256""""),
         !text.contains("linux-x86_64"),
         !text.contains("macos-aarch64"),
         !text.contains(""""clients""""),

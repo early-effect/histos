@@ -28,7 +28,7 @@ This is a 0.x release. The API breaks when that makes it more honest.
 
 Histos runs on macOS and Linux. On Windows, use WSL.
 
-Histos does not install a JDK, Node, or clang. It needs JDK 25 or newer. The checkout script the generator writes refuses an older JDK before it downloads the shim, and the shim refuses an older `java` with the install guide. The `./histos` committed in this repository is that wrapper. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed.
+Histos does not install a JDK, Node, or clang. It needs JDK 25 or newer. The checkout script the generator writes refuses an older JDK before it downloads the shim, and the shim refuses an older `java` with the install guide. The `./histos` committed in this repository is that wrapper. A JavaScript module needs Node 25 or newer. A native module needs clang. Dependency resolution uses the Coursier library inside the server, so the `cs` binary is not needed. A coordinate install downloads one pinned Coursier jar to `~/.histos/coursier.jar` and uses it only to fetch.
 
 One POSIX script is the installer and the command:
 
@@ -41,7 +41,7 @@ The script installs itself as `~/.histos/bin/histos` and does not edit a shell r
 
 ### Toolchains and pins
 
-A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest and `histos.jar`. When the manifest names a link kit, `toolchain install` and `update` also place `client-kit.zip` beside the jar. A command fetches the jar and the manifest only when that directory does not already have both, and checks them. Once those two files are on disk, a command does not touch the network. CI uses the jar and does not fetch the kit. `toolchain client` fetches a missing kit, then links. CI refuses that command.
+A toolchain is one Histos version under `~/.histos/toolchains/<version>/`: its manifest and `histos.jar`. A manifest that names a jar and `jarSha256` is a published fat jar: the shim downloads it and checks the checksum. A manifest that names `group`, `artifact`, and `revision` is a thin module: the shim resolves that coordinate and packs `histos.jar` on this machine. A later command leaves that packed jar in place while the coordinate is unchanged. When the manifest names a link kit, `toolchain install` and `update` also place `client-kit.zip` beside the jar. A command fetches the manifest, and packs or downloads the jar, only when that directory does not already have both. Once those two files are on disk, a command does not touch the network. CI uses the jar and does not fetch the kit. `toolchain client` fetches a missing kit, then links. CI refuses that command.
 
 A native client is optional. On a terminal, `toolchain install` and `update` ask once per jar whether to build `histos-client` on this machine. Enter means yes. Answering `n` is remembered for that jar, and later commands do not ask. `histos toolchain client` builds it later. `--client` builds without asking, and `--no-client` skips. With no terminal and CI unset, install prints one line that names `histos toolchain client` and does not link. In CI the shim always runs `java -jar`, even when a client is already on disk. Building the client needs clang 21 on `PATH` and takes a few minutes, once for that jar. On a terminal the link prints `Linking the native client` and a dot each second until it finishes. A redirected run prints one line when it starts and one when it finishes, with no dots. A missing clang, a missing kit, or a failed link still leaves the jar installed. Histos does not install clang.
 
@@ -203,7 +203,7 @@ Node is installed for a JavaScript module, or when Playwright is installed. LLVM
 
 A `SiteJob` publishes one directory. `Automatic` deploys from a `pages` job on a push to the default branch, `Manual` writes `histos-pages.yml` for a person to dispatch, and `Both` (the default) does both.
 
-The catalog adds `histos-release.yml` (dispatch only), `histos-promote.yml` when the release holds the deployment, and `histos-snapshots.yml` when a ship names an asset. The supply chain adds `histos-deps.yml`, and `histos-audit.yml` when it schedules an audit. This repository's snapshot workflow is one job: it assemblies the launcher and runs `./histos publish snapshots`. It does not link a client. The release workflow publishes the ship, then an `install` job uploads the jar, the client kit, and the shim to the `dist` release. It does not upload a linked client. This build's publisher finishes the release, so there is no promote workflow.
+The catalog adds `histos-release.yml` (dispatch only), `histos-promote.yml` when the release holds the deployment, and `histos-snapshots.yml` when a ship names an asset. The supply chain adds `histos-deps.yml`, and `histos-audit.yml` when it schedules an audit. This repository's snapshot workflow is one job: it runs `./histos publish snapshots`. It does not assemble a launcher and it does not link a client. The release workflow publishes the ship, then an `install` job uploads the manifest, the client kit, and the shim to the `dist` release. It does not upload a toolchain jar or a linked client. The installing machine packs the jar from the published coordinate. This build's publisher finishes the release, so there is no promote workflow.
 
 ## Publishing
 
@@ -212,12 +212,12 @@ A ship is a catalog row, `Ship("demo").next(0, 1, 0)(api, app)`, and the number 
 | Command | Writes |
 | --- | --- |
 | `publish local` | The snapshot coordinate of HEAD into Coursier's `ivy2Local`, unsigned. A release when `HISTOS_SESSION=release`. |
-| `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. The same command uploads that coordinate to the GitHub `dist` release: the channel file, the manifest, the jar, the client kit when the ship has one, and the shim when the repository has `install/histos`. |
-| `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. The release workflow's `install` job, not this command, uploads the jar, the kit, and the shim to `dist`. |
+| `publish snapshots` | `<ship>-<sha>-SNAPSHOT` and the moving `<ship>-SNAPSHOT` pointer to Sonatype, unsigned, without a javadoc jar. The same command uploads that coordinate to the GitHub `dist` release: the channel file, the manifest, the client kit when the ship has one, and the shim when the repository has `install/histos`. It does not upload a toolchain jar. |
+| `publish release` | The ship number, signed, as one Central portal bundle. Requires `HISTOS_SESSION=release`. The release workflow's `install` job, not this command, uploads the manifest, the kit, and the shim to `dist`. |
 
-`publish local` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module stages its packaged program. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publish local` moves it only on the default branch.
+`publish local` and `publish release` stage the jar, the pom, the sources jar, and a javadoc jar that is one HTML page. Publish does not run scaladoc. `publish snapshots` stages the same files without the javadoc jar. An assembly module publishes its own classes. The pom lists the module graph, and the installing machine builds the runnable jar. A token is a ship, an aggregate, or a module, and no token publishes every ship the command can write. `publish snapshots` moves the pointer from any checkout, and `publish local` moves it only on the default branch.
 
-A ship that names `.toolchain` makes `publish local`, `publish snapshots`, and `publish release` pack the launcher and compile the client kit before they write anything. The kit is the client's compiled native code and the versions a later link needs. It contains no clang and no linked binary. Publish does not link a binary. `publish local` installs the jar and the kit under `~/.histos/toolchains/<id>`, writes `.histos/toolchain`, and writes `dist/install` for a local installer. The manifest's jar digest is the staged module jar, the file the installer copies out of ivy. The native client is built on the machine that installs, with `histos toolchain client`. A ship without `.toolchain` publishes coordinates only. Two ships that name a toolchain fail the workflow render.
+A ship that names `.toolchain` makes `publish local`, `publish snapshots`, and `publish release` compile the client kit before they write anything. The kit is the client's compiled native code and the versions a later link needs. It contains no clang and no linked binary. Publish does not link a binary. `publish local` resolves the staged coordinate from ivy and packs the toolchain jar under `~/.histos/toolchains/<id>`, writes `.histos/toolchain`, and writes `dist/install` for a local installer. The manifest names the Maven coordinate and, for a local publish, the ivy coordinate. It does not name a jar checksum. The native client is built on the machine that installs, with `histos toolchain client`. A ship without `.toolchain` publishes coordinates only. Two ships that name a toolchain fail the workflow render.
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. An upload to `dist` also needs `GITHUB_TOKEN` (or `gh auth token`) and `GITHUB_REPOSITORY` (or an `origin` remote that names `owner/name`).
 - A release also needs `PGP_SECRET`. `PGP_PASSPHRASE` unlocks it (empty by default), and `PGP_KEY_HEX` selects a fingerprint. `HISTOS_SIGNER=gpg` signs with `gpg` instead, and then `PGP_KEY_HEX` is required and `PGP_SECRET` is not read.
@@ -315,23 +315,24 @@ A plugin task's `run` is called inside a `Scope` that closes when the task retur
 
 ## Building Histos
 
-Histos builds itself. `histos.scala` names `Ship("histos")` with members `api` and `app`, and `.toolchain(launcher = app, client = client)`. The number on `.next` is the next release. `histos bump` moves it.
+Histos builds itself. `histos.scala` names `Ship("histos")` with members `api`, `wire`, `central`, `engine`, and `app`, and `.toolchain(launcher = app, client = client)`. The number on `.next` is the next release. `histos bump` moves it.
 
 `histos.version` in `build.properties` is the published Histos that CI installs. Each job runs `./histos` on that jar. `histos.scala` is compiled against the api packed inside the running jar, so a change that adds build API this file uses needs a pin that already has it. `.histos/toolchain`, written by `publish local`, wins over the pin for every command except `update`. Delete that file to return to the pin.
 
-`histos publish local` packs the launcher, compiles the client kit, installs both under `~/.histos/toolchains/<id>`, and writes `.histos/toolchain`. It does not link `histos-client`. `histos assembly app` writes `dist/histos.jar` and does not install a toolchain. `histos portal` rehearses a release.
+`histos publish local` publishes the thin modules to ivy, packs the toolchain jar from that coordinate, compiles the client kit, installs both under `~/.histos/toolchains/<id>`, and writes `.histos/toolchain`. It does not link `histos-client`. `histos assembly app` writes `dist/histos.jar` for this checkout and does not install a toolchain. `histos portal` rehearses a release.
 
 `histos publish snapshots` writes the Maven snapshot and uploads to the GitHub release named `dist`:
 
 - `channel-<ship>-<sha>-SNAPSHOT`, and `channel-<ship>-SNAPSHOT` when this command moves the pointer. Each body is one timestamp. The channel file is uploaded last.
-- `<timestamp>-manifest.json`, naming the jar and, for this ship, the client kit.
-- `<timestamp>-histos.jar`
+- `<timestamp>-manifest.json`, naming the Maven coordinate and, for this ship, the client kit.
 - `<timestamp>-client-kit.zip`
 - `shim-<sha256>`, `shim`, and `shim.sha256`. The pinned name is the digest, so those bytes do not move.
 
+The manifest does not name a jar. The shim resolves the coordinate and packs `histos.jar` on the installing machine. A manifest that still names `jar` and `jarSha256` is an older fat jar, and the shim downloads that file.
+
 To build this tree with a snapshot of itself: commit, run `histos publish snapshots`, then set `histos.version` to `<ship>-<12 hex of that commit>-SNAPSHOT`. `workflow --update`, run by that jar, pins the setup action to the commit stored in the jar.
 
-`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The `install` job then uploads the jar, the kit, and the shim to `dist`. After that release is on Central, `histos bump` moves `.next`.
+`gh workflow run histos-release.yml --ref main` publishes the ship to Central. The `install` job then uploads the manifest, the kit, and the shim to `dist`. After that release is on Central, `histos bump` moves `.next`.
 
 There is no `client` command and no `launcher` command. `histos toolchain client` links the client beside the installed jar. `histos update` moves the pin.
 

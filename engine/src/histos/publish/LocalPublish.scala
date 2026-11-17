@@ -13,11 +13,10 @@ import histos.central.{
   Revision,
 }
 import histos.native.NativeOrigin
-import histos.doc.DocClasspath
 import histos.cache.{ContentStore, ProductCache}
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.pack.{ClassJar, JarError, JarIo, JavadocStub, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate, RecipeError, RecipeFeature, RecipeNodeId}
-import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{ArtifactName, Resolve, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
 import histos.workspace.{IoFailure, IoFault, Workspace}
@@ -27,14 +26,12 @@ import histos.{
   DepExclusion,
   DepLink,
   MavenScope,
-  MainClass,
   Module,
   Organization,
   Platform,
   PomFact,
   ProjectGraph,
   ProjectName,
-  Publication,
   ScalaVersion,
 }
 
@@ -166,7 +163,6 @@ object LocalPublish:
                       graph,
                       group,
                       jobs(plans, live.modules, cells),
-                      cells,
                       write,
                       api,
                     )
@@ -185,7 +181,6 @@ object LocalPublish:
       graph: ProjectGraph,
       group: Organization,
       jobs: List[Job],
-      cells: List[histos.zinc.CompiledCell],
       write: PublishWrite,
       api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, List[PublishedModule]] =
@@ -196,7 +191,7 @@ object LocalPublish:
         Chunk.empty,
         Set(Need.Io),
       )
-      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, cells, write, api))))
+      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, write, api))))
 
   private def combine(
       steps: List[Step[PublishEnv, LocalPublishError, PublishedModule]]
@@ -373,21 +368,16 @@ object LocalPublish:
       scm = graph.facts.scm,
     )
 
-  private def publication(graph: ProjectGraph, name: ProjectName): Publication =
-    graph.get(name) match
-      case Some(module: Module) => module.publication
-      case _                    => Publication.Library
-
   private def publishedRevision(
-      jobs: List[Job],
+      published: List[(ProjectName, Revision)],
       module: ProjectName,
       dependency: ProjectName,
       writing: Revision,
   ): Either[LocalPublishError, String] =
     val wanted = kind(writing)
-    jobs.filter(job => job.cell.module == dependency && kind(job.revision) == wanted) match
-      case job :: _ => Right(job.revision.render)
-      case Nil      => Left(LocalPublishError.UnpublishedDependency(module, dependency))
+    published.filter((name, revision) => name == dependency && kind(revision) == wanted) match
+      case (_, revision) :: _ => Right(revision.render)
+      case Nil                => Left(LocalPublishError.UnpublishedDependency(module, dependency))
 
   private def kind(revision: Revision): RevisionKind =
     revision match
@@ -413,17 +403,12 @@ object LocalPublish:
       group: Organization,
       job: Job,
       jobs: List[Job],
-      cells: List[histos.zinc.CompiledCell],
       write: PublishWrite,
       api: ApiDigest,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell     = job.cell
     val artifact = artifactName(graph, cell.module, cell.version, cell.platform)
-    publication(graph, cell.module) match
-      case Publication.Assembly(main) =>
-        stageAssembly(repo, graph, group, job, cells, main, artifact, write, api)
-      case Publication.Library | Publication.SbtPlugin(_) | Publication.Application =>
-        stageLibrary(repo, graph, group, job, jobs, artifact, write, api)
+    stageLibrary(repo, graph, group, job, jobs, artifact, write, api)
 
   private def stageLibrary(
       repo: Path,
@@ -437,8 +422,18 @@ object LocalPublish:
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
-      name   <- artifactId(group, artifact, job.revision.render)
-      deps   <- ZIO.fromEither(dependencies(graph, group, cell, job.revision, jobs))
+      name <- artifactId(group, artifact, job.revision.render)
+      deps <- ZIO.fromEither(
+        dependencies(
+          graph,
+          group,
+          cell.module,
+          cell.version,
+          cell.platform,
+          job.revision,
+          jobs.map(item => item.cell.module -> item.revision),
+        )
+      )
       module <- ZIO.fromEither(moduleOf(graph, cell.module))
       packed <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
@@ -452,7 +447,7 @@ object LocalPublish:
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      javadoc     <- documented(repo, graph, cell, job.revision, write)
+      javadoc     <- documented(repo, cell, job.revision, write)
       sourceBytes <- bytesOf(sources.path)
       published   <- publishOne(
         group,
@@ -517,7 +512,7 @@ object LocalPublish:
               key,
               jarPath =>
                 ClassJar
-                  .write(cell.classes, Nil, jarPath, stamp)
+                  .write(cell.classes, Nil, jarPath, stamp, ClassJar.semanticdb)
                   .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
                   .flatMap(_ => bytesOf(jarPath)),
             )
@@ -559,86 +554,6 @@ object LocalPublish:
         jarred(JarError.Escaped(name))
       case PluginPublishFault.Publish(error) =>
         LocalPublishError.Publish(error)
-
-  private def stageAssembly(
-      repo: Path,
-      graph: ProjectGraph,
-      group: Organization,
-      job: Job,
-      cells: List[histos.zinc.CompiledCell],
-      main: MainClass,
-      artifact: String,
-      write: PublishWrite,
-      api: ApiDigest,
-  ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
-    val cell = job.cell
-    for
-      name     <- artifactId(group, artifact, job.revision.render)
-      module   <- ZIO.fromEither(moduleOf(graph, cell.module))
-      upstream <- upstreamOf(repo, graph, module, cell, cells)
-      dirs = cell.classes :: upstream.map(_.classes)
-      products <- productDigests(dirs, cell)
-      jars     <- runtimeJars(
-        repo,
-        graph,
-        (module -> cell.version) :: upstream.map(found => found.module -> found.version),
-        cell,
-      )
-      packed <- sourcesOf(repo, graph, cell)
-      jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp  <- versionStamp(repo, graph, cell, api)
-      store  <- ZIO.service[ContentStore]
-      remote <- ZIO.service[RemoteCache]
-      key    <- assemblyKey(cell, products, stamp)
-      bytes  <- ProductCache
-        .materialize(
-          remote,
-          store,
-          key,
-          jarPath,
-          Assembly
-            .write(
-              dirs,
-              jars,
-              histos.pack.MainClass.trusted(main.value),
-              jarPath,
-              replacing = stamp.map((entry, file) => AssemblyFile(entry, file)),
-            )
-            .mapError(error => LocalPublishError.Pack(cell.module, cell.version, cell.platform, error))
-            .flatMap(_ => bytesOf(jarPath)),
-        )
-        .mapError(cached)
-      sources <- ClassJar
-        .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
-        .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      javadoc     <- documented(repo, graph, cell, job.revision, write)
-      sourceBytes <- bytesOf(sources.path)
-      published   <- publishOne(
-        group,
-        name,
-        job.revision,
-        bytes,
-        Nil,
-        document(graph, job.ship),
-        Some(sourceBytes),
-        javadoc,
-        artifact,
-        cell.module,
-        job.ship,
-        key,
-      )
-    yield published
-
-  private def assemblyKey(
-      cell: histos.zinc.CompiledCell,
-      products: List[Sha256],
-      stamp: List[(String, Path)],
-  ): ZIO[Any, LocalPublishError, Sha256] =
-    if stamp.isEmpty then ZIO.succeed(PackageKey.of(products))
-    else
-      PluginBundle
-        .metadata(stamp)
-        .mapBoth(fault => rejected(cell, fault), meta => PackageKey.withMetadata(products, meta))
 
   private def artifactId(
       group: Organization,
@@ -707,62 +622,6 @@ object LocalPublish:
           LocalPublishError.Compile(GraphCompileError.Failed(cell.module, cell.version, cell.platform, error))
         )
 
-  /** The upstream cells the assembled cell's compile read, from the cells this publish compiled. */
-  private def upstreamOf(
-      repo: Path,
-      graph: ProjectGraph,
-      module: Module,
-      cell: histos.zinc.CompiledCell,
-      cells: List[histos.zinc.CompiledCell],
-  ): ZIO[Resolve, LocalPublishError, List[histos.zinc.UpstreamCell]] =
-    for
-      lock     <- Resolve.readLock(repo).mapError(LocalPublishError.Classpath(_))
-      upstream <- histos.zinc.UpstreamCells
-        .read(
-          module,
-          Module.chain(module, modulesOf(graph), cell.platform),
-          cell.version,
-          cell.platform,
-          histos.zinc.UpstreamCells.compiled(cells),
-        )
-        .mapError(LocalPublishError.Compile(_))
-        .provideSome[Resolve](ZLayer.fromZIO(LockedTools.make(lock, graph)))
-    yield upstream
-
-  /** The JVM runtime of `cell`, then each module's runtime jars at its own cell's version. */
-  private def runtimeJars(
-      repo: Path,
-      graph: ProjectGraph,
-      placed: List[(Module, ScalaVersion)],
-      cell: histos.zinc.CompiledCell,
-  ): ZIO[Resolve, LocalPublishError, List[Path]] =
-    val platform = cell.platform
-    for
-      lock    <- Resolve.readLock(repo).mapError(LocalPublishError.Classpath(_))
-      runtime <- JvmCompile
-        .runtime(cell.version)
-        .mapError(LocalPublishError.Runtime(_))
-        .provideSome[Resolve](ZLayer.fromZIO(LockedTools.make(lock, graph)))
-      external <- ZIO.foldLeft(placed)(List.empty[Path]): (acc, entry) =>
-        val (item, version) = entry
-        val request         = ResolveCell(
-          item.name,
-          Dep.runtime(item.dependencies, platform),
-          version,
-          platform,
-          BuildResolvers(graph.resolvers),
-          ClasspathScope.Compile,
-        )
-        Resolve
-          .materialize(request, lock)
-          .mapBoth(
-            LocalPublishError.Classpath(_),
-            classpath =>
-              val fresh = classpath.artifacts.map(_.path).filterNot(path => acc.contains(path))
-              acc ++ fresh,
-          )
-    yield runtime ++ external.filterNot(path => runtime.contains(path))
-
   private final case class Placed(
       jar: Option[Path],
       pom: Option[Path],
@@ -778,36 +637,38 @@ object LocalPublish:
       case Published.Snapshot(unique, _) =>
         Placed(None, None, None, None, Some(unique.value))
 
-  private def dependencies(
+  private[publish] def dependencies(
       graph: ProjectGraph,
       group: Organization,
-      cell: histos.zinc.CompiledCell,
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
       revision: Revision,
-      jobs: List[Job],
+      published: List[(ProjectName, Revision)],
   ): Either[LocalPublishError, List[MavenDependency]] =
-    graph.get(cell.module) match
+    graph.get(module) match
       case Some(found: Module) =>
         val internal = found
-          .upstream(cell.platform)
+          .upstream(platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
             acc.flatMap: seen =>
-              publishedRevision(jobs, cell.module, dependency, revision).flatMap: version =>
+              publishedRevision(published, module, dependency, revision).flatMap: at =>
                 coordinate(
                   group,
-                  artifactName(graph, dependency, cell.version, cell.platform),
-                  version,
+                  artifactName(graph, dependency, version, platform),
+                  at,
                 ).map(seen :+ _)
         val external = Dep
-          .declared(found.dependencies, cell.platform)
+          .declared(found.dependencies, platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
             acc.flatMap: seen =>
               externalCoordinate(
                 dependency.organization,
-                ArtifactName.of(dependency, cell.version, cell.platform),
+                ArtifactName.of(dependency, version, platform),
                 dependency.revision.value,
                 dependency.exclusions,
                 dependency.link,
@@ -863,10 +724,6 @@ object LocalPublish:
       case Some(module: Module) => ArtifactName.module(module, version, platform)
       case _                    => ArtifactName.published(name.value, version, platform)
 
-  /** Upstream modules on every platform the module builds. */
-  private def upstream(module: Module): List[ProjectName] =
-    module.platforms.all.flatMap(module.upstream).distinct
-
   private def sourcesOf(
       repo: Path,
       graph: ProjectGraph,
@@ -905,37 +762,25 @@ object LocalPublish:
       .attemptBlocking(Chunk.fromArray(Files.readAllBytes(path)))
       .mapError(_ => LocalPublishError.Read(path))
 
-  /** A snapshot omits the javadoc jar. A local publish and a release pack the scaladoc site. */
+  /** A snapshot omits the javadoc jar. A local publish and a release upload the stub page. */
   private def documented(
       repo: Path,
-      graph: ProjectGraph,
       cell: histos.zinc.CompiledCell,
       revision: Revision,
       write: PublishWrite,
-  ): ZIO[Resolve, LocalPublishError, Option[Chunk[Byte]]] =
+  ): ZIO[Any, LocalPublishError, Option[Chunk[Byte]]] =
     write match
       case PublishWrite.Snapshots                    => ZIO.succeed(None)
       case PublishWrite.Local | PublishWrite.Release =>
-        for
-          module <- ZIO.fromEither(moduleOf(graph, cell.module))
-          paths  <- DocClasspath
-            .of(repo, graph, module, cell)
-            .mapError(LocalPublishError.Compile(_))
-          packed <- JavadocJar
-            .write(
-              cell.classes,
-              paths,
-              cell.module.value,
-              cell.version.value,
-              scratch(repo, cell, revision, Scratch.DocSite),
-              scratch(repo, cell, revision, Scratch.Javadoc),
-            )
-            .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-          bytes <- bytesOf(packed.path)
-        yield Some(bytes)
+        val path = scratch(repo, cell, revision, Scratch.Javadoc)
+        JavadocStub
+          .write(path)
+          .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
+          .flatMap(_ => bytesOf(path))
+          .map(Some(_))
 
   private enum Scratch:
-    case Classes, SourceJar, Javadoc, DocSite
+    case Classes, SourceJar, Javadoc
 
     def file(platform: String, revision: Revision): String =
       val stem = revision match
@@ -945,7 +790,6 @@ object LocalPublish:
         case Classes   => s"$stem.jar"
         case SourceJar => s"$stem-sources.jar"
         case Javadoc   => s"$stem-javadoc.jar"
-        case DocSite   => s"$stem-doc"
   end Scratch
 
   /** The binary jar of a module the graph names as a plugin. The sources jar is left alone. */

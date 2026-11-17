@@ -25,13 +25,16 @@ object DistLayout:
 
   def kit(version: String): String = s"$version-client-kit.zip"
 
+  /** The published module the installing machine resolves. The toolchain jar is built there, not uploaded. */
+  final case class MavenPin(group: String, artifact: String, revision: String)
+
   final case class IvyPin(organisation: String, module: String, revision: String)
 
   /** `kit` is the asset name and its sha. `ivy` is only on the manifest `publish local` writes for a local installer.
     */
   def manifestJson(
       version: String,
-      jarSha256: String,
+      pin: MavenPin,
       kit: Option[(String, String)],
       ivy: Option[IvyPin] = None,
   ): String =
@@ -42,16 +45,17 @@ object DistLayout:
            |  "clientKit": "$name",
            |  "clientKitSha256": "$sha"""".stripMargin
     val ivyLines = ivy match
-      case None      => ""
-      case Some(pin) =>
+      case None        => ""
+      case Some(local) =>
         s""",
-           |  "ivyOrganisation": "${pin.organisation}",
-           |  "ivyModule": "${pin.module}",
-           |  "ivyRevision": "${pin.revision}"""".stripMargin
+           |  "ivyOrganisation": "${local.organisation}",
+           |  "ivyModule": "${local.module}",
+           |  "ivyRevision": "${local.revision}"""".stripMargin
     s"""{
        |  "version": "$version",
-       |  "jar": "${jar(version)}",
-       |  "jarSha256": "$jarSha256"$kitLines$ivyLines
+       |  "group": "${pin.group}",
+       |  "artifact": "${pin.artifact}",
+       |  "revision": "${pin.revision}"$kitLines$ivyLines
        |}
        |""".stripMargin
 

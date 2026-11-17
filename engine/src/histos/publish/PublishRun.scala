@@ -1,9 +1,10 @@
 package histos.publish
 
 import histos.central.{Publisher, SnapshotRepository}
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Machine}
 import histos.plugin.ApiDigest
 import histos.version.{Revision as ShipRevision, ShipName}
+import histos.workspace.Workspace
 import histos.zinc.CompileFeed
 import histos.{PublishFault, PublishReceipt, PublishRequest, StagedDependency, StagedModule}
 import histos.ProjectGraph
@@ -36,7 +37,7 @@ object PublishRun:
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
         placed <- toolchain(repo, graph, staged, jdk, note)
         lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
-        _      <- installToolchain(repo, placed)
+        _      <- packLocal(repo, graph, staged, placed)
         _      <- localAssets(repo, graph, staged, placed)
       yield Report(show(staged, lines))
 
@@ -126,7 +127,8 @@ object PublishRun:
   ): IO[AssetError, AssetReport] =
     AssetRun.publish(repo, graph, tokens, env)
 
-  /** Pack the launcher and compile the link kit for each staged toolchain ship. A ship with no `.toolchain` is skipped.
+  /** Compile the link kit for each staged toolchain ship. A ship with no `.toolchain` is skipped. The launcher jar is
+    * packed later, from ivy.
     */
   private def toolchain(
       repo: Path,
@@ -165,49 +167,63 @@ object PublishRun:
           case Some(found) => Right(found)
           case None        => Left(LocalPublishError.Stock("publish local did not stage the launcher"))
 
-  /** The manifest sha is the ivy jar the local installer copies. That file is the staged module jar. The assembly
-    * copied into the toolchain directory is a different zip, so hashing `placed.jar` would fail the installer's check.
+  /** Ivy is already published. Resolve that coordinate and pack the toolchain jar, then write the same manifest
+    * `dist/install` serves.
     */
+  private def packLocal(
+      repo: Path,
+      graph: ProjectGraph,
+      staged: StagedTree,
+      placed: List[DistStock.Placed],
+  ): ZIO[histos.resolve.Resolve & Scope, LocalPublishError, Unit] =
+    placed match
+      case Nil => ZIO.unit
+      case _   =>
+        for
+          module  <- ZIO.fromEither(launcherModule(graph, staged))
+          machine <- Machine.load(repo).mapError(error => LocalPublishError.Stock(error.message))
+          _       <- ZIO.foreachDiscard(placed): item =>
+            for
+              work <- Workspace.work("histos-local-pack").mapError(error => LocalPublishError.Stock(error.message))
+              jar = work.resolve("histos.jar")
+              _ <- DistStock
+                .pack(module, jar)
+                .mapError(error => LocalPublishError.Stock(error.message))
+              text <- ZIO
+                .attemptBlocking(localManifest(item.id, module, item.kit))
+                .mapError(_ => LocalPublishError.Io(item.kit.toString))
+              _ <- DistStock
+                .install(Path.of(machine.userHome), repo, item.id, jar, item.kit, text)
+                .mapError(error => LocalPublishError.Stock(error.message))
+            yield ()
+        yield ()
+
+  /** The manifest names the ivy coordinate. The toolchain jar is built from that coordinate on this machine. */
   private def writeAssets(
       repo: Path,
       placed: DistStock.Placed,
       module: PublishedModule,
   ): IO[LocalPublishError, Unit] =
-    module.jar match
-      case None =>
-        ZIO.fail(LocalPublishError.Stock("publish local did not stage a launcher jar"))
-      case Some(jar) =>
-        val install = repo.resolve("dist").resolve("install")
-        val name    = DistLayout.kit(placed.id)
-        ZIO
-          .attemptBlocking {
-            Files.createDirectories(install)
-            Files.copy(placed.kit, install.resolve(name), StandardCopyOption.REPLACE_EXISTING)
-            val jarSha = DistLayout.sha256(Files.readAllBytes(jar))
-            val kitSha = DistLayout.sha256(Files.readAllBytes(placed.kit))
-            val text   = DistLayout.manifestJson(
-              placed.id,
-              jarSha,
-              Some(name -> kitSha),
-              Some(DistLayout.IvyPin(module.group.value, module.artifact, module.revision)),
-            )
-            Files.writeString(install.resolve("manifest.json"), text)
-            ()
-          }
-          .mapError(_ => LocalPublishError.Io(install.toString))
+    val install = repo.resolve("dist").resolve("install")
+    val name    = DistLayout.kit(placed.id)
+    ZIO
+      .attemptBlocking {
+        Files.createDirectories(install)
+        Files.copy(placed.kit, install.resolve(name), StandardCopyOption.REPLACE_EXISTING)
+        val text = localManifest(placed.id, module, placed.kit)
+        Files.writeString(install.resolve("manifest.json"), text)
+        ()
+      }
+      .mapError(_ => LocalPublishError.Io(install.toString))
 
-  /** Install after the maven publish. An empty proof installs nothing and does not read a home. */
-  private def installToolchain(repo: Path, placed: List[DistStock.Placed]): IO[LocalPublishError, Unit] =
-    placed match
-      case Nil => ZIO.unit
-      case _   =>
-        histos.jdk.Machine
-          .load(repo)
-          .mapError(error => LocalPublishError.Stock(error.message))
-          .flatMap: machine =>
-            ZIO
-              .foreachDiscard(placed)(item => DistStock.install(Path.of(machine.userHome), repo, item))
-              .mapError(error => LocalPublishError.Stock(error.message))
+  private def localManifest(id: String, module: PublishedModule, kit: Path): String =
+    val kitSha = DistLayout.sha256(Files.readAllBytes(kit))
+    DistLayout.manifestJson(
+      id,
+      DistLayout.MavenPin(module.group.value, module.artifact, module.revision),
+      Some(DistLayout.kit(id) -> kitSha),
+      Some(DistLayout.IvyPin(module.group.value, module.artifact, module.revision)),
+    )
 
   private def show(staged: StagedTree, lines: List[String]): List[String] =
     staged.output.skipped ++ staged.output.refused ++ staged.output.held ++ lines

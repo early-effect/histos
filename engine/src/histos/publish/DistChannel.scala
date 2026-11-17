@@ -9,7 +9,9 @@ import java.nio.file.{Files, Path}
 
 import zio.{Chunk, IO, ZIO}
 
-/** One snapshot coordinate whose channel file, manifest, and jar go on the `dist` release. */
+/** One snapshot coordinate whose channel file and manifest go on the `dist` release. `asset` names the launcher module.
+  * The file is not uploaded.
+  */
 final case class ChannelPlan(
     ship: ShipName,
     module: ProjectName,
@@ -21,9 +23,9 @@ final case class ChannelPlan(
 )
 
 /** The shim reads `channel-<version>` from the existing `dist` release for a pin that ends in `-SNAPSHOT`. The body is
-  * the timestamp Maven stored for that coordinate. The manifest, the jar, and the link kit use that same timestamp. A
-  * stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel. A ship that
-  * names `.toolchain` uploads [[DistLayout.BuiltKit]]. A missing kit is refused before a token.
+  * the timestamp Maven stored for that coordinate. The manifest names that timestamped module, and the link kit uses
+  * the same timestamp. A stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer
+  * channel. A ship that names `.toolchain` uploads [[DistLayout.BuiltKit]]. A missing kit is refused before a token.
   */
 object DistChannel:
   val Tag: String = "dist"
@@ -85,20 +87,19 @@ object DistChannel:
           noted  <- ZIO.foreach(plans)(plan => send(repo, access, bases, plan, lines))
         yield noted
 
-  /** The jar, the link kit, the manifest, and last the channel body, in upload order. `coordinate` is the pin
-    * (`<ship>-SNAPSHOT` or `<ship>-<sha>-SNAPSHOT`). The channel goes last so it never names a manifest that is not up
-    * yet. With no kit the manifest names the jar and the shim runs `java -jar`.
+  /** The link kit, the manifest, and last the channel body, in upload order. `coordinate` is the pin (`<ship>-SNAPSHOT`
+    * or `<ship>-<sha>-SNAPSHOT`). The channel goes last so it never names a manifest that is not up yet. `pin.revision`
+    * is the timestamp Maven stored.
     */
   def files(
       coordinate: String,
       revision: String,
-      jar: Chunk[Byte],
+      pin: DistLayout.MavenPin,
       kit: Option[Chunk[Byte]],
   ): List[(String, Chunk[Byte])] =
     val named    = kit.map(bytes => DistLayout.kit(revision) -> DistLayout.sha256(bytes.toArray))
-    val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), named)
-    List(DistLayout.jar(revision) -> jar) ++
-      kit.toList.map(bytes => DistLayout.kit(revision) -> bytes) ++
+    val manifest = DistLayout.manifestJson(revision, pin, named)
+    kit.toList.map(bytes => DistLayout.kit(revision) -> bytes) ++
       List(
         DistLayout.manifest(revision)  -> text(manifest),
         DistLayout.channel(coordinate) -> text(revision + "\n"),
@@ -110,11 +111,11 @@ object DistChannel:
   def payload(
       coordinate: String,
       revision: String,
-      jar: Chunk[Byte],
+      pin: DistLayout.MavenPin,
       kit: Option[Chunk[Byte]],
       shim: Option[Chunk[Byte]],
   ): List[(String, Chunk[Byte])] =
-    attach(files(coordinate, revision, jar, kit), shim)
+    attach(files(coordinate, revision, pin, kit), shim)
 
   private def attach(
       listed: List[(String, Chunk[Byte])],
@@ -187,14 +188,7 @@ object DistChannel:
       acc.flatMap(_ => present(repo, plan))
 
   private def present(repo: Path, plan: ChannelPlan): Either[LocalPublishError, Unit] =
-    isFile(repo.resolve(plan.asset.value).normalize).flatMap:
-      case true  => kitPresent(repo, plan)
-      case false =>
-        Left(
-          LocalPublishError.Stock(
-            s"${plan.asset.value} is not a file. ./histos assembly writes the install jar."
-          )
-        )
+    kitPresent(repo, plan)
 
   private def kitPresent(repo: Path, plan: ChannelPlan): Either[LocalPublishError, Unit] =
     if plan.kit then
@@ -222,10 +216,10 @@ object DistChannel:
   ): IO[LocalPublishError, String] =
     for
       unique <- ZIO.fromEither(timestamp(plan, lines))
-      jar    <- bytes(repo.resolve(plan.asset.value).normalize)
       kit    <- kitBytes(repo, plan)
       shim   <- readShim(repo)
-      _      <- replace(access, bases, plan, payload(plan.revision, unique, jar, kit, shim))
+      pin = DistLayout.MavenPin(plan.group, plan.artifact, unique)
+      _ <- replace(access, bases, plan, payload(plan.revision, unique, pin, kit, shim))
     yield s"${plan.ship.value} dist ${DistLayout.channel(plan.revision)} $unique"
 
   private def timestamp(plan: ChannelPlan, lines: List[String]): Either[LocalPublishError, String] =

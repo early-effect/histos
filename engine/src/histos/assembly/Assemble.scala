@@ -115,11 +115,15 @@ object Assemble:
       case Publication.Assembly(main) => Right(BinaryName.trusted(main.value))
       case _                          => Left(AssembleError.NotAssembly(module.name))
 
-  /** Library members of the ship that names `launcher`. Empty when `launcher` is not a launcher. */
+  /** Library members of the ship that names `launcher`, and that no other member depends on. That is the api nested at
+    * `bootstrap/histos-api.jar`. Engine and the other libraries are shaded, not nested. Empty when `launcher` is not a
+    * launcher.
+    */
   private def libraries(graph: ProjectGraph, launcher: ProjectName): Either[AssembleError, List[Module]] =
     graph.catalog.ships.find(_.toolchain.exists(_.launcher == launcher)) match
       case None       => Right(Nil)
       case Some(ship) =>
+        val members = ship.members.toList.filterNot(_ == launcher).toSet
         ship.members.toList
           .filterNot(_ == launcher)
           .foldLeft[Either[AssembleError, List[Module]]](Right(Nil)): (acc, name) =>
@@ -127,9 +131,12 @@ object Assemble:
               graph.get(name) match
                 case Some(module: Module) =>
                   module.publication match
-                    case Publication.Library => Right(seen :+ module)
-                    case _                   => Right(seen)
+                    case Publication.Library if !dependsOnMember(module, members) => Right(seen :+ module)
+                    case _                                                        => Right(seen)
                 case _ => Left(AssembleError.NoModule(name.value))
+
+  private def dependsOnMember(module: Module, members: Set[ProjectName]): Boolean =
+    module.platforms.all.exists(platform => module.upstream(platform).exists(members.contains))
 
   private def index(graph: ProjectGraph): Map[ProjectName, Module] =
     graph.projects.collect { case found: Module => found.name -> found }.toMap

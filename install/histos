@@ -1,7 +1,8 @@
 #!/bin/sh
 # Histos user install. One script: the installer and the command on PATH.
-# It downloads a checksummed jar and, when the manifest names one, a link kit.
-# It does not install a JDK, Coursier, or clang. A native client is optional and built on this machine.
+# A manifest that names a jar downloads that jar. A manifest that names a Maven
+# coordinate resolves it and packs the toolchain jar on this machine.
+# It does not install a JDK, the cs binary, or clang. A native client is optional and built on this machine.
 set -eu
 version=shim
 fail() { echo "histos: $*" >&2; exit 1; }
@@ -56,6 +57,10 @@ case $dist in
   http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*) ;;
   *) fail "dist base is not a supported url: $dist" ;;
 esac
+# The runnable Coursier CLI. Central's coursier-cli module jar is not a java -jar.
+coursier_url=https://github.com/coursier/coursier/releases/download/v2.1.24/coursier.jar
+coursier_sha=8c724dc204534353ea8263ba0af624979658f7ab62395f35b04f03ce5714f330
+snapshots_repo=https://central.sonatype.com/repository/maven-snapshots
 os=$(uname -s)
 case $os in
   MINGW*|MSYS*|CYGWIN*|Windows*) fail "$wsl_guide" ;;
@@ -83,6 +88,30 @@ json_string() {
     }
   ' "$1"
 }
+# dist: a published jar name and checksum. coordinate: a Maven module to pack here. missing: neither.
+manifest_kind() {
+  file=$1
+  [ -f "$file" ] || fail "no manifest at $file"
+  jar_name=$(json_string "$file" jar)
+  jar_sha=$(json_string "$file" jarSha256)
+  group=$(json_string "$file" group)
+  artifact=$(json_string "$file" artifact)
+  revision=$(json_string "$file" revision)
+  if [ -n "$jar_name" ] && [ -n "$jar_sha" ]; then
+    printf 'dist'
+  elif [ -n "$group" ] && [ -n "$artifact" ] && [ -n "$revision" ]; then
+    printf 'coordinate'
+  else
+    printf 'missing'
+  fi
+}
+# Dry run of manifest_kind. No JDK, no fetch, no install.
+if [ "${1:-}" = --manifest-kind ]; then
+  [ "$#" -eq 2 ] || fail "usage: histos --manifest-kind <manifest>"
+  manifest_kind "$2"
+  printf '\n'
+  exit 0
+fi
 # A string field anywhere in a JSON object. A missing key prints nothing. Manifest lines stay on json_string.
 json_field() {
   awk -v key="$2" '
@@ -489,6 +518,101 @@ toolchain_ready() {
   dir=$home/toolchains/$1
   [ -f "$dir/histos.jar" ] && [ -f "$dir/manifest.json" ]
 }
+# True when both manifests name the same jar or the same Maven coordinate.
+same_pin() {
+  left=$1
+  right=$2
+  [ "$(json_string "$left" group)" = "$(json_string "$right" group)" ] \
+    && [ "$(json_string "$left" artifact)" = "$(json_string "$right" artifact)" ] \
+    && [ "$(json_string "$left" revision)" = "$(json_string "$right" revision)" ] \
+    && [ "$(json_string "$left" ivyOrganisation)" = "$(json_string "$right" ivyOrganisation)" ] \
+    && [ "$(json_string "$left" ivyModule)" = "$(json_string "$right" ivyModule)" ] \
+    && [ "$(json_string "$left" ivyRevision)" = "$(json_string "$right" ivyRevision)" ] \
+    && [ "$(json_string "$left" jar)" = "$(json_string "$right" jar)" ] \
+    && [ "$(json_string "$left" jarSha256)" = "$(json_string "$right" jarSha256)" ]
+}
+# A release revision is major.minor.patch. Anything else is fetched as a snapshot.
+release_revision() {
+  printf '%s\n' "$1" | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { ok = 1 } END { exit !ok }'
+}
+ensure_coursier() {
+  dest=$home/coursier.jar
+  if [ -f "$dest" ] && sha_matches "$dest" "$coursier_sha"; then
+    return 0
+  fi
+  tmp=$(mktemp)
+  fetch "$coursier_url" "$tmp" || { rm -f "$tmp"; fail "could not fetch the coursier cli"; }
+  verify_sha "$tmp" "$coursier_sha"
+  mv "$tmp" "$dest"
+}
+coursier_repositories() {
+  manifest=$1
+  revision=$2
+  args=
+  if [ -n "$(json_string "$manifest" ivyOrganisation)" ]; then
+    args="-r ivy2local"
+  fi
+  args="$args -r central"
+  if ! release_revision "$revision"; then
+    args="$args -r $snapshots_repo"
+  fi
+  printf '%s' "$args"
+}
+pack_repositories() {
+  manifest=$1
+  revision=$2
+  pack_repos=
+  if [ -n "$(json_string "$manifest" ivyOrganisation)" ]; then
+    pack_repos="--repository ivy-local"
+  fi
+  pack_repos="$pack_repos --repository central"
+  if ! release_revision "$revision"; then
+    pack_repos="$pack_repos --repository maven:$snapshots_repo"
+  fi
+}
+fetch_classpath() {
+  manifest=$1
+  group=$2
+  artifact=$3
+  revision=$4
+  repos=$(coursier_repositories "$manifest" "$revision")
+  # shellcheck disable=SC2086
+  "$java_bin" -jar "$home/coursier.jar" fetch -q -p $repos "$group:$artifact:$revision"
+}
+install_dist_jar() {
+  manifest=$1
+  dir=$2
+  jar_sha=$(json_string "$manifest" jarSha256)
+  [ -n "$(json_string "$manifest" jar)" ] && [ -n "$jar_sha" ] || fail "manifest has no jar"
+  jar=$dir/histos.jar
+  if [ -f "$jar" ] && ! sha_matches "$jar" "$jar_sha"; then rm -f "$jar"; fi
+  [ -f "$jar" ] || place_jar "$manifest" "$jar"
+  verify_sha "$jar" "$jar_sha"
+}
+install_coordinate() {
+  manifest=$1
+  dir=$2
+  group=$(json_string "$manifest" group)
+  artifact=$(json_string "$manifest" artifact)
+  revision=$(json_string "$manifest" revision)
+  [ -n "$group" ] && [ -n "$artifact" ] && [ -n "$revision" ] || fail "manifest has no coordinate"
+  jar=$dir/histos.jar
+  # The packed jar is this machine's. A coordinate change deletes it before this runs.
+  [ -f "$jar" ] && return 0
+  check_java
+  ensure_coursier
+  cp=$(fetch_classpath "$manifest" "$group" "$artifact" "$revision") || fail "could not resolve $group:$artifact:$revision"
+  [ -n "$cp" ] || fail "could not resolve $group:$artifact:$revision"
+  pack_repositories "$manifest" "$revision"
+  # shellcheck disable=SC2086
+  "$java_bin" -cp "$cp" histos.pack.Pack \
+    --out "$jar" \
+    --group "$group" \
+    --artifact "$artifact" \
+    --revision "$revision" \
+    $pack_repos || fail "could not pack $group:$artifact:$revision"
+  [ -f "$jar" ] || fail "packer wrote no jar"
+}
 ensure_toolchain() {
   selected=$1
   dir=$home/toolchains/$selected
@@ -500,18 +624,17 @@ ensure_toolchain() {
   [ "$(json_string "$manifest" version)" = "$selected" ] || fail "manifest version is not $selected"
   # A local asset manifest can move while the version id stays. Replace it before the jar is checked.
   if [ -n "${HISTOS_ASSETS:-}" ] && [ -f "${HISTOS_ASSETS}/manifest.json" ] && [ -f "$manifest" ]; then
-    asset_sha=$(json_string "${HISTOS_ASSETS}/manifest.json" jarSha256)
-    have_sha=$(json_string "$manifest" jarSha256)
-    if [ -n "$asset_sha" ] && [ "$asset_sha" != "$have_sha" ]; then
+    if ! same_pin "$manifest" "${HISTOS_ASSETS}/manifest.json"; then
       place_manifest "$selected" "$manifest"
+      rm -f "$dir/histos.jar"
     fi
   fi
-  jar_sha=$(json_string "$manifest" jarSha256)
-  [ -n "$(json_string "$manifest" jar)" ] && [ -n "$jar_sha" ] || fail "manifest has no jar"
-  jar=$dir/histos.jar
-  if [ -f "$jar" ] && ! sha_matches "$jar" "$jar_sha"; then rm -f "$jar"; fi
-  [ -f "$jar" ] || place_jar "$manifest" "$jar"
-  verify_sha "$jar" "$jar_sha"
+  kind=$(manifest_kind "$manifest")
+  case $kind in
+    dist) install_dist_jar "$manifest" "$dir" ;;
+    coordinate) install_coordinate "$manifest" "$dir" ;;
+    *) fail "manifest has no jar and no coordinate" ;;
+  esac
   if ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
 }
 client_mode() {

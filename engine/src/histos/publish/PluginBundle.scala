@@ -576,6 +576,7 @@ object PluginBundle:
           case (Right(acc), path) =>
             val name = root.relativize(path).toString.replace('\\', '/')
             if rejected(name) then Left(PluginPublishFault.Entry(name))
+            else if histos.pack.ClassJar.semanticdb(name) then Right(acc)
             else Right(acc :+ EntryBytes(name, Chunk.fromArray(Files.readAllBytes(path))))
       catch case _: IOException => Left(PluginPublishFault.Io(IoFailure(root, IoFault.Walk)))
       finally walk.close()
