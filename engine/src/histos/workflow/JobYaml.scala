@@ -34,7 +34,7 @@ import histos.plugin.{
 }
 import histos.{BuildError, PluginGraphFault, ProjectGraph}
 
-/** Prints [[JobRender]]. The engine does not match a [[histos.plugin.CiJob]] class. */
+/** Prints [[histos.plugin.JobRender]]. The engine does not match a [[histos.plugin.CiJob]] class. */
 object JobYaml:
   final case class Rendered(ci: List[String], files: List[RenderedWorkflow], header: CiHeader)
 

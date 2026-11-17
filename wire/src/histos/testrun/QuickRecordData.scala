@@ -5,7 +5,7 @@ import histos.jdk.Sha256Error
 import histos.workspace.IoFailure
 
 /** A stored success could not be written, read, or removed, or the text was not a success digest. A missing record is
-  * not one of these: [[QuickRecord.hit]] treats that as a miss.
+  * not one of these: `QuickRecord.hit` treats that as a miss.
   */
 enum QuickError:
   case Save(failure: IoFailure)

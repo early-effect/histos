@@ -34,7 +34,9 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, UIO, URLayer, ZIO, ZLayer}
 
 object SonaStock:
-  /** A snapshot or pointer revision deploys to the [[SnapshotRepository]]. A release goes to the portal `env` names. */
+  /** A snapshot or pointer revision deploys to the [[histos.central.SnapshotRepository]]. A release goes to the portal
+    * `env` names.
+    */
   def layer(env: Map[String, String], note: String => UIO[Unit]): URLayer[SnapshotRepository, SonaPublish] =
     ZLayer(ZIO.serviceWith[SnapshotRepository](Live(env, _, note)))
 

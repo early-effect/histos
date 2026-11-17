@@ -13,11 +13,11 @@ import histos.zinc.ProductDigest
 import zio.{Chunk, IO, ZIO}
 
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, the scalac flags, and
-  * each upstream API digest. Each class in that closure is the fingerprint of its [[ProductDigest.positionFree]] bytes,
-  * so a comment in a referenced class keeps the stamp and a body change moves it. The bytes are not kept. A class this
-  * suite does not reference is not part of that closure, and a class no suite reaches is not fingerprinted. The API
-  * digest still is: a public signature outside the closure moves the stamp, and a comment does not. Tool fingerprints
-  * and runtime-token hashes from [[SuiteCover]] are jar lines.
+  * each upstream API digest. Each class in that closure is the fingerprint of its
+  * [[histos.zinc.ProductDigest.positionFree]] bytes, so a comment in a referenced class keeps the stamp and a body
+  * change moves it. The bytes are not kept. A class this suite does not reference is not part of that closure, and a
+  * class no suite reaches is not fingerprinted. The API digest still is: a public signature outside the closure moves
+  * the stamp, and a comment does not. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are jar lines.
   */
 object SuiteStamp:
   /** One class file, and the binary names it mentions. */

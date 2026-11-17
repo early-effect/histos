@@ -3,7 +3,7 @@ package histos.lock
 import histos.plugin.{CommandIdentity, CommandToken, PluginCoordinate, PluginTaskId, ResolveVerb}
 import histos.server.{Call, ResolveAction}
 
-/** The command identity and the rerun words for one [[Call]]. The daemon does not invent either. */
+/** The command identity and the rerun words for one [[histos.server.Call]]. The daemon does not invent either. */
 object CallIdentity:
   def identity(call: Call): CommandIdentity =
     call match

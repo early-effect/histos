@@ -1,5 +1,7 @@
 package histos.pack
 
+import histos.ToolchainIdentity
+
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -63,29 +65,30 @@ object ScaladocSite:
               else ZIO.unit
       case None => ZIO.fail(ScaladocFault.Reported("the running JVM did not name java.home"))
 
-  /** The assembly jar merges two Scala libraries, so `scala.caps` is both an object and a package. Scaladoc then runs
-    * from the published tool jars instead of that jar.
+  /** A packed launcher is not a scaladoc classpath. It carries the toolchain stamp. An older assembly also merges two
+    * Scala libraries, so `scala.caps` is both an object and a package. Scaladoc then runs from the published tool jars.
     */
   private def toolClasspath(scalaVersion: String): ZIO[Any, ScaladocFault, String] =
     val running = Option(System.getProperty("java.class.path")).filter(_.nonEmpty)
     running match
-      case Some(classpath) if !mergedScala(classpath) => ZIO.succeed(classpath)
-      case _                                          =>
+      case Some(classpath) if !rejects(classpath) => ZIO.succeed(classpath)
+      case _                                      =>
         if !scalaVersion.startsWith("3.") then
           ZIO.fail(ScaladocFault.Reported(s"scaladoc for Scala $scalaVersion is not available"))
         else fetchTool(scalaVersion)
 
-  private def mergedScala(classpath: String): Boolean =
-    classpath.split(java.io.File.pathSeparator).exists(mergedJar)
+  private[pack] def rejects(classpath: String): Boolean =
+    classpath.split(java.io.File.pathSeparator).exists(distribution)
 
-  private def mergedJar(raw: String): Boolean =
+  private def distribution(raw: String): Boolean =
     val path = Path.of(raw)
     if !Files.isRegularFile(path) then false
     else
       val zip = new ZipFile(path.toFile)
       try
         val names = zip.entries.asScala.map(_.getName).toList
-        names.contains("scala/caps.class") && names.exists(_.startsWith("scala/caps/"))
+        names.contains(ToolchainIdentity.entry) ||
+        (names.contains("scala/caps.class") && names.exists(_.startsWith("scala/caps/")))
       finally zip.close()
 
   private def fetchTool(scalaVersion: String): ZIO[Any, ScaladocFault, String] =

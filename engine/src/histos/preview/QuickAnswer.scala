@@ -17,7 +17,8 @@ import zio.{IO, UIO, ZIO, ZLayer}
 /** What a quick run would do with the classes and the lock already on disk. Preview does not launch a framework, fetch
   * a dependency, or write a record.
   *
-  * A skip is a stored digest of [[SuiteCover]]. A cover that cannot be built is not known to be skippable.
+  * A skip is a stored digest of [[histos.testrun.SuiteCover]]. A cover that cannot be built is not known to be
+  * skippable.
   */
 enum QuickAnswer:
   /** The test class directory is absent. No suite would be skipped. */

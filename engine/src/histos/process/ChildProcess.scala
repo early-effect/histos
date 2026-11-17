@@ -12,9 +12,9 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Duration, IO, Promise, Scope, System, UIO, ZIO}
+import zio.{Chunk, Duration, IO, Promise, Queue, Scope, System, UIO, ZIO}
 import zio.durationInt
-import zio.stream.{ZPipeline, ZStream}
+import zio.stream.{Take, ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses.
   */
@@ -188,11 +188,15 @@ object ChildProcess:
   private final case class Child(
       process: Process,
       console: ZStream[Any, ChildError, ChildEvent],
+      drained: UIO[Unit],
   )
 
   /** One fiber per pipe. The readers' scope is forked before the process starts, so it closes after `stop`: a blocked
     * pipe read does not return on interrupt, so the tree dies first and each reader then reaches the end of its pipe.
     * `HaltStrategy.Both`: one pipe ending does not cancel the other. A failure does.
+    *
+    * Each reader offers into an unbounded queue and completes its promise when the pipe ends. A bounded queue would
+    * stop the read while the consumer is paused, and the drain would then treat a dead process as an orphan.
     */
   private def spawn(
       start: IO[ChildError, Process],
@@ -201,24 +205,31 @@ object ChildProcess:
     for
       readers <- ZIO.scopeWith(_.fork)
       process <- ZIO.acquireRelease(start)(stop(_, group))
-      out     <- readers.extend(
-        text(process.getInputStream).map(ChildEvent.Out(_)).toQueue()
-      )
-      err <- readers.extend(
-        text(process.getErrorStream).map(ChildEvent.Err(_)).toQueue()
-      )
+      outDone <- Promise.make[Nothing, Unit]
+      errDone <- Promise.make[Nothing, Unit]
+      out     <- readers.extend(hear(process.getInputStream, ChildEvent.Out(_), outDone))
+      err     <- readers.extend(hear(process.getErrorStream, ChildEvent.Err(_), errDone))
     yield Child(
       process,
-      ZStream
-        .fromQueue(out)
-        .flattenTake
-        .merge(ZStream.fromQueue(err).flattenTake),
+      ZStream.fromQueue(out).flattenTake.merge(ZStream.fromQueue(err).flattenTake),
+      outDone.await *> errDone.await,
     )
+
+  private def hear(
+      input: InputStream,
+      event: String => ChildEvent,
+      done: Promise[Nothing, Unit],
+  ): ZIO[Scope, Nothing, Queue[Take[ChildError, ChildEvent]]] =
+    for
+      queue <- ZIO.acquireRelease(Queue.unbounded[Take[ChildError, ChildEvent]])(_.shutdown)
+      _     <- text(input).map(event).runIntoQueue(queue).ensuring(done.succeed(()).unit).forkScoped
+    yield queue
 
   /** Lines while the process runs, then its status. The status waits on the process, not on the pipes. After it exits,
     * a child that inherited a pipe may still hold that pipe. The drain is [[Drain]], waited on a blocking thread so the
-    * caller's clock cannot hold the suite. Past that the group is ended and the stream fails with
-    * [[ChildError.Orphan]], so a suite cannot be recorded as finished while the child lives.
+    * caller's clock cannot hold the suite. It completes when the pipe readers see the end, not when the consumer
+    * finishes. Past that the group is ended and the stream fails with [[ChildError.Orphan]], so a suite cannot be
+    * recorded as finished while the child lives.
     */
   private def attend(
       child: Child,
@@ -227,24 +238,20 @@ object ChildProcess:
   ): ZStream[Any, ChildError, ChildEvent] =
     ZStream.unwrapScoped:
       for
-        closed <- Promise.make[Nothing, Unit]
         result <- Promise.make[ChildError, ChildEvent]
         _      <- finish
           .foldZIO(
             error => end(child.process, group) *> result.fail(error),
             code =>
-              closed.isDone.flatMap:
-                case true  => result.succeed(ChildEvent.Exited(code))
-                case false =>
-                  closed.await
-                    .as(true)
-                    .race(pause(Drain).as(false))
-                    .flatMap:
-                      case true  => result.succeed(ChildEvent.Exited(code))
-                      case false => end(child.process, group) *> result.fail(ChildError.Orphan(code.value)),
+              child.drained
+                .as(true)
+                .race(pause(Drain).as(false))
+                .flatMap:
+                  case true  => result.succeed(ChildEvent.Exited(code))
+                  case false => end(child.process, group) *> result.fail(ChildError.Orphan(code.value)),
           )
           .forkScoped
-      yield child.console.ensuring(closed.succeed(()).unit) ++ ZStream.fromZIO(result.await)
+      yield child.console ++ ZStream.fromZIO(result.await)
 
   /** Real time. A test clock cannot close the pipe, so this wait does not sleep on the caller's clock. */
   private def pause(bound: Duration): UIO[Unit] =

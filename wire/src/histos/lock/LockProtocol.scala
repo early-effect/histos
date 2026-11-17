@@ -3,7 +3,8 @@ package histos.lock
 import histos.plugin.{ClientId, CommandIdentity, ContentHash, InvocationContext, InvocationId, LockRevision, ProposalId}
 import histos.server.Call
 
-/** The call and the caller, as data. A bare [[Call]] on the socket is protocol skew, not an inferred caller.
+/** The call and the caller, as data. A bare [[histos.server.Call]] on the socket is protocol skew, not an inferred
+  * caller.
   *
   * `lock` is the explicit `--lock` disposition. Absent means the phase default. Derived codecs do not fill the Scala
   * default, so every writer emits the field.

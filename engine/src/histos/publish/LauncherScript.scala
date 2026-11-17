@@ -7,8 +7,8 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos` in a checkout. It refuses a JDK older than [[Toolchain.Floor]], installs `shim-<sha256>` when the user shim
-  * is missing or its bytes are not that pin, and execs that shim. The shim chooses the toolchain and sets
+/** `histos` in a checkout. It refuses a JDK older than [[histos.jdk.Toolchain.Floor]], installs `shim-<sha256>` when
+  * the user shim is missing or its bytes are not that pin, and execs that shim. The shim chooses the toolchain and sets
   * `HISTOS_VERSION`.
   */
 object LauncherScript:
