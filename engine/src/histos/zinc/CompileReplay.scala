@@ -42,9 +42,21 @@ end CompilerStarts
   * classes directory. The prefix keeps one from being read as the other.
   */
 object CompileReplay:
-  private val Magic          = "HC1\n".getBytes(StandardCharsets.US_ASCII)
-  private val AnalysisName   = "inc.zip"
-  private[histos] val Marker = "replay.key"
+  private val Magic                 = "HC1\n".getBytes(StandardCharsets.US_ASCII)
+  private val AnalysisName          = "inc.zip"
+  private[histos] val Marker        = "replay.key"
+  private[histos] val ToolchainFile = "replay.toolchain"
+
+  /** Jars a compile loaded. A later hit reads this instead of resolving the compiler again. */
+  private[histos] final case class RecordedToolchain(runtime: List[Path], compiler: List[Path], bridge: Path)
+
+  /** Absent when the file is missing or not the record a compile wrote. An empty list stays empty. */
+  private[histos] def recordedToolchain(analysis: Path): Option[RecordedToolchain] =
+    val file = analysis.resolve(ToolchainFile)
+    try
+      if !Files.isRegularFile(file) then None
+      else parseToolchain(Files.readString(file))
+    catch case _: IOException | _: UncheckedIOException => None
 
   /** Class files in a stored archive. A bad archive is corrupt. */
   private[histos] def classBytes(
@@ -102,6 +114,9 @@ object CompileReplay:
       store: ContentStore,
       key: Sha256,
       request: CompileRequest,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
   ): IO[CompileError, Option[CompileOutput]] =
     keyed(key).flatMap: id =>
       store
@@ -110,22 +125,25 @@ object CompileReplay:
         .flatMap:
           case None        => ZIO.none
           case Some(bytes) =>
-            restore(id, bytes, key, request).flatMap: output =>
+            restore(id, bytes, key, request, runtime, compiler, bridge).flatMap: output =>
               withoutNir(store, id, request).flatMap:
                 case true  => ZIO.none
-                case false => stamp(request, key).as(Some(output))
+                case false => stamp(request, key, runtime, compiler, bridge).as(Some(output))
 
   def save(
       store: ContentStore,
       key: Sha256,
       request: CompileRequest,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
   ): IO[CompileError, Unit] =
     for
       id    <- keyed(key)
       bytes <- ZIO.fromEither(archive(request))
       now   <- zio.Clock.ClockLive.instant
       _     <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
-      _     <- stamp(request, key)
+      _     <- stamp(request, key, runtime, compiler, bridge)
     yield ()
 
   /** A restored Native product with class files and no NIR is not a hit. The blob and the on-disk marker go, so the
@@ -153,6 +171,7 @@ object CompileReplay:
     ZIO
       .attemptBlocking {
         Files.deleteIfExists(request.analysis.resolve(Marker))
+        Files.deleteIfExists(request.analysis.resolve(ToolchainFile))
         Files.deleteIfExists(request.analysis.resolve(AnalysisName))
         ()
       }
@@ -164,17 +183,23 @@ object CompileReplay:
     if !Files.isRegularFile(marker) || !Files.isRegularFile(zip) || !occupied(request.classes) then None
     else if Files.readString(marker).trim != key.value then None
     else
-      Some(
-        CompileOutput(
-          request.classes,
-          0,
-          key,
-          changed = false,
-          sources = Some(SourceCount(0, request.sources.size)),
-          classesWritten = Some(0),
-          miss = None,
-        )
-      )
+      recordedToolchain(request.analysis) match
+        case None        => None
+        case Some(tools) =>
+          Some(
+            CompileOutput(
+              request.classes,
+              0,
+              key,
+              changed = false,
+              sources = Some(SourceCount(0, request.sources.size)),
+              classesWritten = Some(0),
+              miss = None,
+              tools.runtime,
+              tools.compiler,
+              tools.bridge,
+            )
+          )
 
   /** One directory entry is enough. A full walk is the data a hit does not use. */
   private def occupied(classes: Path): Boolean =
@@ -184,14 +209,57 @@ object CompileReplay:
       try stream.iterator.hasNext
       finally stream.close()
 
-  private def stamp(request: CompileRequest, key: Sha256): IO[CompileError, Unit] =
+  private def stamp(
+      request: CompileRequest,
+      key: Sha256,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
+  ): IO[CompileError, Unit] =
     ZIO
       .attemptBlocking {
         Files.createDirectories(request.analysis)
+        Files.writeString(request.analysis.resolve(ToolchainFile), renderToolchain(runtime, compiler, bridge))
         Files.writeString(request.analysis.resolve(Marker), key.value + "\n")
       }
       .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Write)))
       .unit
+
+  private def renderToolchain(runtime: List[Path], compiler: List[Path], bridge: Path): String =
+    val lines =
+      "runtime" :: runtime.length.toString :: runtime.map(show) :::
+        "compiler" :: compiler.length.toString :: compiler.map(show) :::
+        List("bridge", show(bridge))
+    lines.mkString("\n") + "\n"
+
+  private def show(path: Path): String =
+    path.toAbsolutePath.normalize.toString
+
+  private def parseToolchain(text: String): Option[RecordedToolchain] =
+    val lines = text.split("\n", -1).toList.map(_.trim).filter(_.nonEmpty)
+    lines match
+      case "runtime" :: rest =>
+        section(rest).flatMap: (runtime, afterRuntime) =>
+          afterRuntime match
+            case "compiler" :: more =>
+              section(more).flatMap: (compiler, afterCompiler) =>
+                afterCompiler match
+                  case "bridge" :: path :: Nil if path.nonEmpty =>
+                    Some(RecordedToolchain(runtime.map(Path.of(_)), compiler.map(Path.of(_)), Path.of(path)))
+                  case _ => None
+            case _ => None
+      case _ => None
+
+  private def section(lines: List[String]): Option[(List[String], List[String])] =
+    lines match
+      case raw :: rest =>
+        raw.toIntOption.filter(_ >= 0) match
+          case None        => None
+          case Some(count) =>
+            val (taken, left) = rest.splitAt(count)
+            if taken.length == count && taken.forall(_.nonEmpty) then Some((taken, left))
+            else None
+      case Nil => None
 
   private def keyed(key: Sha256): IO[CompileError, Digest] =
     Digest.from(key.value) match
@@ -216,13 +284,16 @@ object CompileReplay:
       bytes: Chunk[Byte],
       key: Sha256,
       request: CompileRequest,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
   ): IO[CompileError, CompileOutput] =
     ZIO
       .fromEither(decode(bytes))
       .mapError(_ => CompileError.Stored(CacheError.Corrupt(id)))
       .flatMap: decoded =>
         ZIO.fromEither(install(request, decoded)) *>
-          ZIO.fromEither(finish(id, key, request))
+          ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
 
   private def archive(request: CompileRequest): Either[CompileError, Chunk[Byte]] =
     val zip = request.analysis.resolve(AnalysisName)
@@ -343,6 +414,9 @@ object CompileReplay:
       id: Digest,
       key: Sha256,
       request: CompileRequest,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
   ): Either[CompileError, CompileOutput] =
     readAnalysis(request.analysis, id).flatMap: analysis =>
       ApiDigest
@@ -360,6 +434,9 @@ object CompileReplay:
                   sources = Some(SourceCount(0, request.sources.size)),
                   classesWritten = Some(0),
                   miss = None,
+                  runtime,
+                  compiler,
+                  bridge,
                 )
 
   private def readAnalysis(
