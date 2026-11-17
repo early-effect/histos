@@ -15,8 +15,8 @@ import histos.central.{
 import histos.native.NativeOrigin
 import histos.doc.DocClasspath
 import histos.cache.{ContentStore, ProductCache}
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarIo, JavadocJar, PackageKey}
-import histos.plugin.{ApiDigest, PluginCoordinate}
+import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JarIo, JavadocJar, PackageKey}
+import histos.plugin.{ApiDigest, PluginCoordinate, RecipeError, RecipeFeature, RecipeNodeId}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
@@ -437,27 +437,17 @@ object LocalPublish:
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
-      products <- productDigests(List(cell.classes), cell)
-      name     <- artifactId(group, artifact, job.revision.render)
-      deps     <- ZIO.fromEither(dependencies(graph, group, cell, job.revision, jobs))
-      module   <- ZIO.fromEither(moduleOf(graph, cell.module))
-      packed   <- sourcesOf(repo, graph, cell)
+      name   <- artifactId(group, artifact, job.revision.render)
+      deps   <- ZIO.fromEither(dependencies(graph, group, cell, job.revision, jobs))
+      module <- ZIO.fromEither(moduleOf(graph, cell.module))
+      packed <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
       stamp  <- versionStamp(repo, graph, cell, api)
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
-      key = PackageKey.of(products)
-      bytes <- ProductCache
-        .materialize(
-          remote,
-          store,
-          key,
-          jarPath,
-          ClassJar
-            .write(cell.classes, Nil, jarPath, stamp)
-            .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-            .flatMap(_ => bytesOf(jarPath)),
-        )
+      ready  <- preparedLibrary(repo, cell, module, stamp, deps, group, name, job.revision)
+      bytes  <- ProductCache
+        .materialize(remote, store, ready.key, jarPath, ready.write(jarPath))
         .mapError(cached)
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
@@ -476,9 +466,99 @@ object LocalPublish:
         artifact,
         cell.module,
         job.ship,
-        key,
+        ready.key,
       )
     yield published
+
+  private final case class PreparedLibrary(
+      key: Sha256,
+      write: Path => ZIO[Any, LocalPublishError, Chunk[Byte]],
+  )
+
+  /** A plugin library is sealed before the cache runs. An ordinary library keeps the semantic product key. */
+  private def preparedLibrary(
+      repo: Path,
+      cell: histos.zinc.CompiledCell,
+      module: Module,
+      stamp: List[(String, Path)],
+      dependencies: List[MavenDependency],
+      group: Organization,
+      name: ArtifactId,
+      revision: Revision,
+  ): ZIO[Any, LocalPublishError, PreparedLibrary] =
+    module.pluginLibrary match
+      case Some(mode) =>
+        ZIO
+          .fromEither(recipeNode(cell.module))
+          .flatMap: node =>
+            PluginBundle
+              .library(
+                mode,
+                node,
+                cell.capture,
+                repo,
+                cell.classes,
+                stamp,
+                dependencies,
+                group,
+                name,
+                revision,
+              )
+              .mapError(fault => rejected(cell, fault))
+              .map: staged =>
+                PreparedLibrary(staged.key, path => writeBytes(path, staged.bytes))
+      case None =>
+        productDigests(List(cell.classes), cell).flatMap: products =>
+          val keyed =
+            if stamp.isEmpty then ZIO.succeed(PackageKey.of(products))
+            else PluginBundle.legacyKey(cell.classes, stamp).mapError(fault => rejected(cell, fault))
+          keyed.map: key =>
+            PreparedLibrary(
+              key,
+              jarPath =>
+                ClassJar
+                  .write(cell.classes, Nil, jarPath, stamp)
+                  .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
+                  .flatMap(_ => bytesOf(jarPath)),
+            )
+
+  private def writeBytes(path: Path, bytes: Chunk[Byte]): ZIO[Any, LocalPublishError, Chunk[Byte]] =
+    ZIO
+      .attemptBlocking {
+        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+        Files.write(path, bytes.toArray)
+        bytes
+      }
+      .mapError(_ => LocalPublishError.Io(path.toString))
+
+  private def recipeNode(module: ProjectName): Either[LocalPublishError, RecipeNodeId] =
+    RecipeNodeId
+      .from(module.value)
+      .left
+      .map: _ =>
+        LocalPublishError.Recipe(RecipeError.Unsupported(RecipeFeature("node"), RecipeNodeId.trusted("module")))
+
+  private def rejected(cell: histos.zinc.CompiledCell, fault: PluginPublishFault): LocalPublishError =
+    val jarred = (error: JarError) => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error)
+    fault match
+      case PluginPublishFault.Recipe(error) =>
+        LocalPublishError.Recipe(error)
+      case PluginPublishFault.Changed(path) =>
+        LocalPublishError.InputsChanged(path)
+      case PluginPublishFault.Seal(error) =>
+        LocalPublishError.Recipe(RecipeError.Seal(error))
+      case PluginPublishFault.Jar(error) =>
+        jarred(error)
+      case PluginPublishFault.Dependency(group, name, revision) =>
+        LocalPublishError.BadDependency(group, name, revision)
+      case PluginPublishFault.Sources(error) =>
+        LocalPublishError.SourceRead(cell.module, cell.version, cell.platform, error)
+      case PluginPublishFault.Io(failure) =>
+        LocalPublishError.Io(failure.path.toString)
+      case PluginPublishFault.Entry(name) =>
+        jarred(JarError.Escaped(name))
+      case PluginPublishFault.Publish(error) =>
+        LocalPublishError.Publish(error)
 
   private def stageAssembly(
       repo: Path,
@@ -509,8 +589,8 @@ object LocalPublish:
       stamp  <- versionStamp(repo, graph, cell, api)
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
-      key = PackageKey.of(products)
-      bytes <- ProductCache
+      key    <- assemblyKey(cell, products, stamp)
+      bytes  <- ProductCache
         .materialize(
           remote,
           store,
@@ -548,6 +628,17 @@ object LocalPublish:
         key,
       )
     yield published
+
+  private def assemblyKey(
+      cell: histos.zinc.CompiledCell,
+      products: List[Sha256],
+      stamp: List[(String, Path)],
+  ): ZIO[Any, LocalPublishError, Sha256] =
+    if stamp.isEmpty then ZIO.succeed(PackageKey.of(products))
+    else
+      PluginBundle
+        .metadata(stamp)
+        .mapBoth(fault => rejected(cell, fault), meta => PackageKey.withMetadata(products, meta))
 
   private def artifactId(
       group: Organization,
@@ -791,7 +882,7 @@ object LocalPublish:
               ZIO.fail(LocalPublishError.Compile(GraphCompileError.NoRoot(cell.module)))
             case Some(root) =>
               Sources
-                .packaged(root, cell.version, cell.platform)
+                .published(root, Sources.unmanagedRoot(repo, module.name.value), cell.version, cell.platform)
                 .mapError(error => LocalPublishError.SourceRead(cell.module, cell.version, cell.platform, error))
                 .flatMap:
                   case Nil =>

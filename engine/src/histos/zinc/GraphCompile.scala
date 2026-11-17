@@ -551,7 +551,7 @@ object GraphCompile:
       upstreams: Map[CellKey, Path],
   )
 
-  private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
+  private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss], closure: Option[List[Path]])
 
   /** Lock checksums and source bytes. A hit does not fetch project jars or open a compiler. A module that compiles
     * against the host api still hashes that jar. The caller listed the sources and this hashes each path relative to
@@ -658,26 +658,12 @@ object GraphCompile:
             apis  = read.map(_._2)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
             known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
-            compiled <- known match
-              case Some(output) => ZIO.succeed(output)
+            produced <- known match
+              case Some(output) => ZIO.succeed((output, Option.empty[ScalacClasspath]))
               case None         =>
                 for
-                  assembled <- ZIO
-                    .serviceWithZIO[CompileMemo](
-                      _.classpath(
-                        plan.repo,
-                        module,
-                        cells,
-                        version,
-                        platform,
-                        plan.lock,
-                        plan.repositories,
-                        ClasspathScope.Compile,
-                        plan.stamp,
-                      )
-                    )
-                    .provideSomeLayer(ZLayer.succeed(plan.tools))
-                  bytes <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
+                  assembled <- classpathOf(plan, module, cells, version, platform)
+                  bytes     <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
                   request = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
                     sources,
@@ -700,24 +686,77 @@ object GraphCompile:
                     plan.admitted(module.name),
                     onPulse,
                   ).mapError(failed)
-                yield compiled
+                yield (compiled, Some(assembled))
+            (output, assembled) = produced
+            closure <- module.pluginLibrary match
+              case None    => ZIO.succeed(Option.empty[List[Path]])
+              case Some(_) =>
+                assembled match
+                  case Some(resolved) => ZIO.succeed(Some(CellCapture.classpath(resolved, cells)))
+                  case None           =>
+                    classpathOf(plan, module, cells, version, platform).map: resolved =>
+                      Some(CellCapture.classpath(resolved, cells))
             _ <- forgetMeasurements(plan, version, platform, classes).mapError(failed)
           yield CellResult(
             CompiledCell(
               module.name,
               version,
               platform,
-              compiled.classes,
-              compiled.classFiles,
-              Some(compiled.key),
-              compiled.changed,
-              compiled.sources,
-              compiled.classesWritten,
+              output.classes,
+              output.classFiles,
+              Some(output.key),
+              output.changed,
+              output.sources,
+              output.classesWritten,
             ),
-            compiled.miss,
+            output.miss,
+            closure,
           )
-      _ <- copyResources(plan, module, version, platform, base, compiled.cell.classes)
-    yield compiled
+      _        <- copyResources(plan, module, version, platform, base, compiled.cell.classes)
+      recorded <- compiled.closure match
+        case None        => ZIO.succeed(compiled.cell)
+        case Some(paths) =>
+          CellCapture
+            .record(
+              plan.repo,
+              module.name,
+              version,
+              platform,
+              sources,
+              extraRoot,
+              base,
+              compiled.cell.classes,
+              paths,
+              plan.jdk.version,
+            )
+            .map(capture => compiled.cell.copy(capture = capture))
+    yield compiled.copy(cell = recorded)
+
+  /** A replayed plugin library still resolves this. The snapshot closure is the classpath, and a hit does not otherwise
+    * fetch it.
+    */
+  private def classpathOf(
+      plan: CompilePlan,
+      module: Module,
+      upstream: List[UpstreamCell],
+      version: ScalaVersion,
+      platform: Platform,
+  ): ZIO[Fed, GraphCompileError, ScalacClasspath] =
+    ZIO
+      .serviceWithZIO[CompileMemo](
+        _.classpath(
+          plan.repo,
+          module,
+          upstream,
+          version,
+          platform,
+          plan.lock,
+          plan.repositories,
+          ClasspathScope.Compile,
+          plan.stamp,
+        )
+      )
+      .provideSomeLayer(ZLayer.succeed(plan.tools))
 
   /** Unmanaged resources and generated assets, after compile and after a product restore. The ownership list lives in
     * the analysis directory, so a class-directory wipe does not forget which files this sync owns.
@@ -771,6 +810,7 @@ object GraphCompile:
               sources = Some(SourceCount(0, 0)),
               classesWritten = Some(0),
             ),
+            None,
             None,
           )
         )

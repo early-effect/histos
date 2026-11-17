@@ -1,0 +1,490 @@
+package histos.publish
+
+import scala.jdk.CollectionConverters.*
+
+import histos.*
+import histos.cache.ContentStore
+import histos.central.{Artifact, Layout, PublishError, Published, Publisher, Revision}
+import histos.contracts.ContractFixtures
+import histos.jdk.Machine
+import histos.plugin.{
+  ArtifactFormat,
+  ArtifactIdentity,
+  BindingClass,
+  BindingKind,
+  ClosureArtifact,
+  ClosureRole,
+  CompilerConstraint,
+  Digests,
+  EntryName,
+  InputKey,
+  InputRecord,
+  RecipeError,
+  RecipeNodeId,
+  StageAssurance,
+  StageBinding,
+  StageContract,
+  StageContractError,
+  StageInputs,
+  StageRestrictions,
+}
+import histos.resolve.{BuildResolvers, ClasspathScope, LockedTools, ResolutionService, Resolve}
+import histos.schedule.RemoteCache
+import histos.version.{ReleaseVersion, ShipNumber}
+import histos.workspace.Workspace
+import histos.zinc.{CompilationCapture, CompilationSnapshot, GraphCompile, GraphCompileError, ScalacClasspath, Sources}
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
+
+import zio.{Chunk, Ref, ZIO, ZLayer, durationInt}
+import zio.test.*
+
+object PluginPublicationSpec extends ZIOSpecDefault:
+  private val version  = ScalaVersion("3.10.1")
+  private val revision = Revision.Release(ReleaseVersion(ShipNumber("0.1.0")))
+  private val node     = RecipeNodeId("plug")
+
+  def spec = suite("plugin publication")(
+    test("a generated replacement is the rebuild payload") {
+      ZIO.scoped {
+        Workspace
+          .work("plugin-prefer")
+          .flatMap: repo =>
+            val committed = "package demo\n\nobject Mark:\n  def token = \"committed-mark\"\n"
+            val generated = "package demo\n\nobject Mark:\n  def token = \"generated-mark\"\n"
+            val source    =
+              repo.resolve("plug").resolve("src").resolve("main").resolve("scala").resolve("demo").resolve("Mark.scala")
+            val unmanaged =
+              Sources.unmanagedRoot(repo, "plug").resolve("main").resolve("scala").resolve("demo").resolve("Mark.scala")
+            for
+              _        <- write(source, committed)
+              _        <- write(unmanaged, generated)
+              selected <- PluginBundle.preferred(
+                repo,
+                repo.resolve("plug").resolve("src"),
+                Sources.unmanagedRoot(repo, "plug"),
+                version,
+                Platform.Jvm,
+              )
+              current <- ZIO.foreach(selected): input =>
+                read(repo.resolve(input.path.value)).map(bytes => SourceBytes(input.path, Chunk.fromArray(bytes)))
+              capture <- ZIO.fromEither(captured(selected, Nil))
+              staged  <- ZIO.fromEither(stage(PluginPublication.Rebuildable, capture, current, Nil))
+              packed  <- publish(staged)
+            yield
+              val payload = packed.entries.find: (name, _) =>
+                name.contains("META-INF/histos/rebuild/") && name.endsWith("Mark.scala")
+              val text = payload.map: (_, bytes) =>
+                new String(bytes, StandardCharsets.UTF_8)
+              assertTrue(
+                selected.exists(_.provenance == histos.plugin.SourceProvenance.Generated),
+                text.contains(generated),
+                !text.exists(_.contains("committed-mark")),
+                packed.uploads == 1,
+              )
+      }
+    },
+    test("a compile classpath member is in the recipe and a compile-only coordinate is off the pom") {
+      val only    = Dep("com.example:only:1.2.3").compileOnly
+      val kept    = Dep("com.example:kept:1.2.3")
+      val digest  = Digests.content("compile-only-member".getBytes(StandardCharsets.UTF_8))
+      val closure = List(ClosureArtifact(ArtifactIdentity(ArtifactFormat.Jar, digest), ClosureRole.Compile))
+      for
+        dependencies <- ZIO.fromEither(PluginBundle.dependencies(List(only, kept), version, Platform.Jvm))
+        capture      <- ZIO.fromEither(captured(Nil, closure))
+        staged       <- ZIO.fromEither(stage(PluginPublication.Rebuildable, capture, Nil, dependencies))
+        packed       <- publish(staged)
+      yield
+        val names  = dependencies.map(_.name.value)
+        val frozen = staged.recipe.toList
+          .flatMap(_.nodes)
+          .flatMap: item =>
+            item.sources match
+              case InputRecord.Frozen(body) => body.closure
+              case InputRecord.Unrecorded   => Nil
+        val pom  = Layout.pom(artifactOf(staged, dependencies))
+        val json = packed.text(PluginBundle.Descriptor)
+        assertTrue(
+          names.contains("kept"),
+          !names.contains("only"),
+          frozen.exists(item => item.role == ClosureRole.Compile && item.artifact.digest == digest),
+          json.exists(_.contains(digest.value)),
+          json.exists(_.contains("\"role\":\"compile\"")),
+          pom.contains("<artifactId>kept</artifactId>"),
+          !pom.contains("<artifactId>only</artifactId>"),
+          packed.uploads == 1,
+        )
+    },
+    test("an unknown stage refuses publication before an upload") {
+      refuse(
+        hostKnown(EntryName("demo.NotKnown")),
+        RecipeError.Unsupported(histos.plugin.RecipeFeature("stage"), stageId),
+      )
+    },
+    test("an empty stage entrypoint is incomplete and uploads nothing") {
+      refuse(hostKnownEmpty, RecipeError.Incomplete(histos.plugin.RecipeInput("stage"), stageId))
+    },
+    test("a missing public binding is incomplete and uploads nothing") {
+      val binding = StageBinding(InputKey("src/Need.scala"), BindingClass.Public, BindingKind.File)
+      refuse(declared(List(binding)), RecipeError.Incomplete(histos.plugin.RecipeInput("binding"), stageId))
+    },
+    test("a secret stage input uploads nothing") {
+      val binding = StageBinding(InputKey("TOKEN"), BindingClass.Secret, BindingKind.Env)
+      refuse(declared(List(binding)), RecipeError.Stage(StageContractError.SecretInput))
+    },
+    test("an unclassified stage input uploads nothing") {
+      val binding = StageBinding(InputKey("TOKEN"), BindingClass.Unclassified, BindingKind.Env)
+      refuse(declared(List(binding)), RecipeError.Stage(StageContractError.UnclassifiedInput))
+    },
+    test("an unrecorded rebuildable capture uploads nothing") {
+      val built = ask(PluginPublication.Rebuildable, CompilationCapture.Unrecorded, Nil, Nil)
+      ZIO
+        .fromEither(built)
+        .flatMap: request =>
+          counted(PluginBundle.publish(request)) { (uploads, result) =>
+            ZIO.succeed(
+              assertTrue(uploads == 0, result == Left(PluginPublishFault.Recipe(RecipeError.Unrecorded(node))))
+            )
+          }
+    },
+    test("binary-only keeps binding metadata and makes no rebuild claim") {
+      val built = ask(PluginPublication.BinaryOnly, CompilationCapture.Unrecorded, Nil, Nil)
+      ZIO
+        .fromEither(built)
+        .flatMap: request =>
+          counted(PluginBundle.publish(request)) { (uploads, result) =>
+            readPublished(uploads, result).map: packed =>
+              val json = packed.text(PluginBundle.Descriptor)
+              assertTrue(
+                packed.uploads == 1,
+                json.exists(_.contains("\"mode\":\"binary-only\"")),
+                json.exists(_.contains("\"binding\":null")),
+                json.forall(text => !text.contains("\"closure\"")),
+                !packed.entries.keys.exists(_.startsWith("META-INF/histos/rebuild/")),
+              )
+          }
+    },
+    test("bytes that differ from the snapshot refuse publication") {
+      val current = List(
+        SourceBytes(histos.plugin.RepoPath("src/A.scala"), Chunk.fromArray("changed".getBytes(StandardCharsets.UTF_8)))
+      )
+      for
+        snapshot <- ZIO.fromEither(fixture)
+        request  <- ZIO.fromEither(
+          ask(PluginPublication.Rebuildable, CompilationCapture.Recorded(snapshot), current, Nil)
+        )
+        outcome <- counted(PluginBundle.publish(request))((uploads, result) => ZIO.succeed((uploads, result)))
+      yield
+        val (uploads, result) = outcome
+        val changed           = result match
+          case Left(PluginPublishFault.Changed(path)) => path.value == "src/A.scala"
+          case _                                      => false
+        assertTrue(uploads == 0, changed)
+    },
+    test("a GraphCompile snapshot publishes the jar it compiled") {
+      ZIO.scoped {
+        Workspace
+          .work("plugin-graph")
+          .flatMap: repo =>
+            val source =
+              repo.resolve("plug").resolve("src").resolve("main").resolve("scala").resolve("demo").resolve("Mark.scala")
+            val built    = Projects(module("plug", Jvm)(version).pluginLibrary)
+            val compiled = for
+              _       <- write(source, "package demo\n\nobject Mark:\n  def token = \"from-graph\"\n")
+              _       <- hostFacts
+              graph   <- ZIO.fromEither(built).mapError(Gate.Build(_))
+              machine <- Machine.load(repo).mapError(Gate.Tool(_))
+              jdk     <- GraphCompile.jdk(machine).mapError(Gate.Compile(_))
+              cells   <- GraphCompile
+                .run(repo, graph, List(ProjectName("plug")), jdk, machine.native, Some(Platform.Jvm), _ => ZIO.unit)
+                .mapError(Gate.Compile(_))
+              found <- cells match
+                case cell :: Nil => ZIO.succeed(cell)
+                case _           => ZIO.fail(Gate.Cell)
+              opened <- ResolutionService.open(repo, graph).mapError(Gate.Lock(_))
+              lock   <- opened.current
+              tools  <- LockedTools.make(lock, graph)
+              module <- graph.projects.collect { case item: Module => item } match
+                case item :: Nil => ZIO.succeed(item)
+                case _           => ZIO.fail(Gate.Module)
+              classpath <- ScalacClasspath
+                .of(
+                  repo,
+                  module,
+                  Nil,
+                  version,
+                  Platform.Jvm,
+                  lock,
+                  BuildResolvers(graph.resolvers),
+                  ClasspathScope.Compile,
+                )
+                .provideSomeLayer(ZLayer.succeed(tools))
+                .mapError(error => Gate.Compile(error))
+              tasty    <- ZIO.attemptBlocking(hasTasty(found.classes)).orDie
+              snapshot <- found.capture match
+                case CompilationCapture.Recorded(shot) => ZIO.succeed(shot)
+                case CompilationCapture.Unrecorded     => ZIO.fail(Gate.Cell)
+              staged <- PluginBundle
+                .library(
+                  PluginPublication.Rebuildable,
+                  node,
+                  found.capture,
+                  repo,
+                  found.classes,
+                  Nil,
+                  Nil,
+                  Organization("com.example"),
+                  histos.central.ArtifactId.trusted("plug"),
+                  revision,
+                )
+                .mapError(Gate.Bundle(_))
+              upload = ZIO
+                .serviceWithZIO[Publisher](_.publish(artifactOf(staged, Nil)))
+                .mapError(PluginPublishFault.Publish(_))
+              packed <- counted(upload)((uploads, result) => readPublished(uploads, result)).mapError(Gate.Bundle(_))
+            yield
+              val uploads = packed.uploads
+              val entries = packed.entries
+              val payload = entries.collect:
+                case (name, bytes) if name.startsWith("META-INF/histos/rebuild/") && name.endsWith("Mark.scala") =>
+                  new String(bytes, StandardCharsets.UTF_8)
+              assertTrue(
+                classpath.paths.nonEmpty,
+                snapshot.closure.length == classpath.paths.length,
+                snapshot.closure.forall(_.role == ClosureRole.Compile),
+                snapshot.compiler.isEmpty,
+                snapshot.runtime.isEmpty,
+                snapshot.sources.nonEmpty,
+                tasty,
+                uploads == 1,
+                entries.contains(PluginBundle.Descriptor),
+                payload.exists(_.contains("from-graph")),
+                entries.keys.exists(_.endsWith(".tasty")),
+              )
+            compiled.provide(
+              Resolve.coursier,
+              ZLayer.succeed(ContentStore.in(repo.resolve("store"))),
+              RemoteCache.off,
+            )
+      }
+    },
+  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(8.minutes)
+
+  private enum Gate:
+    case Build(error: BuildError)
+    case Tool(error: histos.jdk.ToolchainError)
+    case Compile(error: GraphCompileError)
+    case Lock(error: histos.resolve.ResolveError)
+    case Bundle(error: PluginPublishFault)
+    case Disk(error: histos.workspace.IoFailure)
+    case Host(name: String)
+    case Cell
+    case Module
+
+  private final class Counting(inner: Publisher, hits: Ref[Int]) extends Publisher:
+    def publish(artifact: Artifact): zio.IO[PublishError, Published] =
+      hits.update(_ + 1) *> inner.publish(artifact)
+
+  private final case class Packed(uploads: Int, entries: Map[String, Array[Byte]]):
+    def text(name: String): Option[String] =
+      entries.get(name).map(bytes => new String(bytes, StandardCharsets.UTF_8))
+
+  private def publish(staged: StagedPlugin): ZIO[Any, PluginPublishFault, Packed] =
+    val upload = ZIO
+      .serviceWithZIO[Publisher](_.publish(artifactOf(staged, staged.dependencies)))
+      .mapError(PluginPublishFault.Publish(_))
+    counted(upload)((uploads, result) => readPublished(uploads, result))
+
+  private def readPublished(
+      uploads: Int,
+      result: Either[PluginPublishFault, Published],
+  ): ZIO[Any, PluginPublishFault, Packed] =
+    result match
+      case Left(fault)                             => ZIO.fail(fault)
+      case Right(Published.Snapshot(_, _))         => ZIO.succeed(Packed(uploads, Map.empty))
+      case Right(Published.Local(jar, _, _, _, _)) =>
+        ZIO
+          .attemptBlocking(Packed(uploads, unzip(jar)))
+          .mapError(_ => PluginPublishFault.Io(histos.workspace.IoFailure(jar, histos.workspace.IoFault.Read)))
+
+  /** The published jar is deleted with the workspace, so callers read it before `use` returns. */
+  private def counted[A, B](
+      effect: ZIO[Publisher, PluginPublishFault, A]
+  )(
+      use: (Int, Either[PluginPublishFault, A]) => ZIO[Any, PluginPublishFault, B]
+  ): ZIO[Any, PluginPublishFault, B] =
+    ZIO
+      .scoped {
+        Workspace
+          .work("plugin-upload")
+          .mapError(PluginPublishFault.Io(_))
+          .flatMap: root =>
+            for
+              hits <- Ref.make(0)
+              layer = Publisher.local(root) >>> ZLayer
+                .fromFunction((inner: Publisher) => Counting(inner, hits): Publisher)
+              result <- effect.either.provide(layer)
+              count  <- hits.get
+              used   <- use(count, result)
+            yield used
+      }
+
+  private def hostFacts: ZIO[Any, Gate, Unit] =
+    ZIO.foreachDiscard(List("user.home", "os.name", "os.arch", "java.home")): key =>
+      Option(System.getProperty(key)) match
+        case Some(value) if value.nonEmpty => TestSystem.putProperty(key, value)
+        case _                             => ZIO.fail(Gate.Host(key))
+
+  private def refuse(contract: StageContract, expected: RecipeError): ZIO[Any, PluginPublishFault, TestResult] =
+    ZIO
+      .fromEither(fixture)
+      .flatMap: snapshot =>
+        val capture = CompilationCapture.Recorded(snapshot.copy(stages = List(contract)))
+        ZIO
+          .fromEither(ask(PluginPublication.Rebuildable, capture, currentBlob, Nil))
+          .flatMap: request =>
+            counted(PluginBundle.publish(request)) { (uploads, result) =>
+              ZIO.succeed(assertTrue(uploads == 0, result == Left(PluginPublishFault.Recipe(expected))))
+            }
+
+  private def stage(
+      mode: PluginPublication,
+      capture: CompilationCapture,
+      current: List[SourceBytes],
+      dependencies: List[histos.central.MavenDependency],
+  ): Either[PluginPublishFault, StagedPlugin] =
+    ask(mode, capture, current, dependencies).flatMap(PluginBundle.stage)
+
+  private def ask(
+      mode: PluginPublication,
+      capture: CompilationCapture,
+      current: List[SourceBytes],
+      dependencies: List[histos.central.MavenDependency],
+  ): Either[PluginPublishFault, PluginPublishRequest] =
+    histos.central.ArtifactId.from("plug") match
+      case Left(_)         => Left(PluginPublishFault.Dependency("com.example", "plug", "0.1.0"))
+      case Right(artifact) =>
+        Right(
+          PluginPublishRequest(
+            mode,
+            node,
+            capture,
+            current,
+            List(EntryBytes("pkg/A.class", Chunk.fromArray(ContractFixtures.blob))),
+            None,
+            dependencies,
+            Organization("com.example"),
+            artifact,
+            revision,
+          )
+        )
+
+  private def artifactOf(staged: StagedPlugin, dependencies: List[histos.central.MavenDependency]): Artifact =
+    Artifact(
+      Organization("com.example"),
+      histos.central.ArtifactId.trusted("plug"),
+      revision,
+      staged.bytes,
+      dependencies,
+      histos.central.PomDocument(),
+      None,
+      None,
+    )
+
+  private def fixture: Either[PluginPublishFault, CompilationSnapshot] =
+    ContractFixtures.snapshot(ContractFixtures.blob) match
+      case Left(error)     => Left(PluginPublishFault.Seal(error))
+      case Right(snapshot) =>
+        Right(
+          CompilationSnapshot(
+            ProjectName("plug"),
+            snapshot.version,
+            snapshot.platform,
+            snapshot.sources,
+            snapshot.resources,
+            snapshot.settings,
+            snapshot.stages,
+            snapshot.closure,
+            snapshot.stageArtifacts,
+            snapshot.host,
+            snapshot.compiler,
+            snapshot.runtime,
+            snapshot.jdk,
+            snapshot.outputs,
+            snapshot.knownStages,
+          )
+        )
+
+  private def captured(
+      sources: List[histos.plugin.SelectedInput],
+      closure: List[ClosureArtifact],
+  ): Either[PluginPublishFault, CompilationCapture] =
+    fixture.map: snapshot =>
+      CompilationCapture.Recorded(snapshot.copy(sources = sources, closure = closure))
+
+  private def currentBlob: List[SourceBytes] =
+    List(SourceBytes(histos.plugin.RepoPath("src/A.scala"), Chunk.fromArray(ContractFixtures.blob)))
+
+  private val stageId: RecipeNodeId = RecipeNodeId("stage0")
+
+  private def hostKnown(name: EntryName): StageContract =
+    contract(StageAssurance.HostKnown, List(name), Nil)
+
+  private def hostKnownEmpty: StageContract =
+    contract(StageAssurance.HostKnown, Nil, Nil)
+
+  private def declared(required: List[StageBinding]): StageContract =
+    contract(StageAssurance.ProducerDeclared, List(EntryName("demo.Stage")), required)
+
+  private def contract(
+      assurance: StageAssurance,
+      entrypoints: List[EntryName],
+      required: List[StageBinding],
+  ): StageContract =
+    StageContract(
+      assurance,
+      entrypoints,
+      Nil,
+      CompilerConstraint.unconstrained,
+      required,
+      StageInputs(Nil, Nil, Nil),
+      StageRestrictions.v1,
+    )
+
+  private def unzip(path: Path): Map[String, Array[Byte]] =
+    val zip = new ZipFile(path.toFile)
+    try
+      zip.entries.asScala
+        .filterNot(_.isDirectory)
+        .map: entry =>
+          val stream = zip.getInputStream(entry)
+          try entry.getName -> stream.readAllBytes()
+          finally stream.close()
+        .toMap
+    finally zip.close()
+
+  private def hasTasty(root: Path): Boolean =
+    if !Files.isDirectory(root) then false
+    else
+      val walk = Files.walk(root)
+      try
+        walk.iterator.asScala.exists(path => Files.isRegularFile(path) && path.getFileName.toString.endsWith(".tasty"))
+      finally walk.close()
+
+  private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.writeString(path, text)
+      ()
+    }.orDie
+
+  private def read(path: Path): ZIO[Any, histos.workspace.IoFailure, Array[Byte]] =
+    ZIO
+      .attemptBlocking(Option.when(Files.isRegularFile(path))(Files.readAllBytes(path)))
+      .mapError(_ => histos.workspace.IoFailure(path, histos.workspace.IoFault.Read))
+      .flatMap:
+        case Some(bytes) => ZIO.succeed(bytes)
+        case None        => ZIO.fail(histos.workspace.IoFailure(path, histos.workspace.IoFault.Stat))
+end PluginPublicationSpec

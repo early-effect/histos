@@ -79,6 +79,20 @@ object Sources:
       paths.map: path =>
         PackagedSource(entryName(root, path), path)
 
+  /** Committed main sources, with [[prefer]] applied to unmanaged generated replacements. */
+  def published(
+      committedRoot: Path,
+      unmanagedRoot: Path,
+      version: ScalaVersion,
+      platform: Platform,
+  ): IO[CompileError, List[PackagedSource]] =
+    for
+      committed <- select(committedRoot, version, platform)
+      unmanaged <- select(unmanagedRoot, version, platform)
+    yield prefer(committedRoot, committed, unmanagedRoot, unmanaged).map: path =>
+      val root = if under(unmanagedRoot, path) then unmanagedRoot else committedRoot
+      PackagedSource(entryName(root, path), path)
+
   /** `src/test` for this platform. A package named `test` under `scala` is main code, so it is absent here. */
   def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
     collect(root, version, platform, Tree.Test)
@@ -133,6 +147,9 @@ object Sources:
 
   private val layout   = Set("src", "main")
   private val language = Set("scala", "java")
+
+  private def under(root: Path, path: Path): Boolean =
+    path.toAbsolutePath.normalize.startsWith(root.toAbsolutePath.normalize)
 
   private def entryName(root: Path, path: Path): String =
     val parts = root.relativize(path).iterator.asScala.map(_.toString).toList
