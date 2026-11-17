@@ -3,15 +3,20 @@ package histos.load
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{
   ApiDigest,
+  ArtifactFormat,
   ContentHash,
   DeclaredInput,
   DeclaredTask,
   MaterialInput,
+  PluginArgs,
   PluginDetail,
   PluginId,
+  PluginLinked,
+  PluginOrigin,
   PluginRunError,
   PluginTaskId,
   RepoPath,
+  VerifiedPluginManifest,
 }
 import histos.schedule.{Input, InputName, InputValue}
 import histos.zinc.GraphCompile
@@ -39,19 +44,28 @@ private[load] object PluginInputs:
       jars: List[String],
       launcher: ApiDigest,
       env: Map[String, String],
+      args: PluginArgs,
+      binding: Option[PluginLinked],
+      provenance: List[ProvenanceResult],
+      locations: List[Path],
   )
 
   def hash(request: HashRequest): IO[PluginRunError, Hashed] =
-    val HashRequest(repo, graph, plugin, task, id, jars, launcher, env) =
+    val HashRequest(repo, graph, plugin, task, id, jars, launcher, env, args, binding, provenance, locations) =
       request
     for
       declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, env, _))
       deps     <- compileInputs(repo, graph, task)
-      jarsIn   <- ZIO.foreach(jars.sorted)(jarInput).map(_.distinct)
+      jarsIn   <- ZIO.foreach(jars.sorted)(jarInput)
+      places   <- ZIO.foreach(locations.distinct.sortBy(_.toString))(path => jarInput(path.toString))
+      closed   <- provenanceInputs(provenance)
+      argsIn   <- named("plugin.args", InputValue.Text(argsLine(args)))
+      bound    <- named("plugin.binding", InputValue.Text(bindingLine(binding)))
       api      <- named("plugin.api", InputValue.Hash(digest(launcher.value)))
       taskIn   <- named("plugin.task", InputValue.Text(id.render))
+      bytes = (jarsIn ::: places).distinctBy(_.name.value)
     yield Hashed(
-      declared.map(_._1) ::: deps ::: jarsIn ::: List(api, taskIn),
+      declared.map(_._1) ::: deps ::: bytes ::: closed ::: List(argsIn, bound, api, taskIn),
       declared.map(_._2),
     )
 
@@ -290,6 +304,62 @@ private[load] object PluginInputs:
 
   private def starPlatform(platform: Option[Platform]): String =
     platform.fold("*")(_.token)
+
+  /** Unverified is a refusal. A verified empty artifact list still names its activation, so it is not `absent`. */
+  private def provenanceInputs(results: List[ProvenanceResult]): IO[PluginRunError, List[Input]] =
+    results match
+      case Nil =>
+        named("plugin.provenance", InputValue.Text("absent")).map(List(_))
+      case some =>
+        ZIO.foreach(some.zipWithIndex): (result, index) =>
+          result match
+            case ProvenanceResult.Unverified(source) =>
+              ZIO.fail(PluginRunError.Unverified(source))
+            case ProvenanceResult.Verified(manifest) =>
+              val sha = Sha256Digest.of(Chunk.fromArray(closureLine(manifest).getBytes(StandardCharsets.UTF_8)))
+              named(s"plugin.closure.$index", InputValue.Hash(sha))
+
+  private def closureLine(manifest: VerifiedPluginManifest): String =
+    val activation = manifest.activation
+    val origin     = activation.origin match
+      case PluginOrigin.Source(id, digest)            => s"source ${id.value} ${digest.value}"
+      case PluginOrigin.Published(coordinate, digest) => s"published ${coordinate.render} ${digest.value}"
+    val closure = activation.closure.map(identityLine).mkString(",")
+    val entries = manifest.artifacts
+      .map: artifact =>
+        val body = artifact.entries
+          .map(entry => s"${entry.path.value} ${entry.length} ${entry.digest.value}")
+          .mkString(",")
+        s"${identityLine(artifact.identity)} $body"
+      .mkString(";")
+    List(
+      s"source ${activation.source.value}",
+      s"service ${activation.activation.value}",
+      s"origin $origin",
+      s"defining ${identityLine(activation.defining)}",
+      s"closure $closure",
+      s"host ${activation.host.value}",
+      s"derived ${activation.derived.value}",
+      s"artifacts $entries",
+    ).mkString("\n")
+
+  private def identityLine(identity: histos.plugin.ArtifactIdentity): String =
+    val format = identity.format match
+      case ArtifactFormat.Jar       => "jar"
+      case ArtifactFormat.Directory => "directory"
+    s"$format ${identity.digest.value}"
+
+  private def argsLine(args: PluginArgs): String =
+    val texts = args.texts.map(item => s"${item.name.value}=${item.value}").sorted.mkString("\n")
+    val flags = args.flags.toList.map(_.value).sorted.mkString("\n")
+    s"texts\n$texts\nflags\n$flags"
+
+  private def bindingLine(binding: Option[PluginLinked]): String =
+    binding match
+      case None                                              => "unlinked"
+      case Some(PluginLinked.FromBinary(api))                => s"binary ${api.value}"
+      case Some(PluginLinked.FromSource(published, running)) =>
+        s"source ${published.value} ${running.value}"
 
   private def missing(path: String): PluginRunError =
     PluginRunError.Failed(

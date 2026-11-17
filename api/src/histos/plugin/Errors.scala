@@ -89,6 +89,7 @@ enum PluginRunError:
   case EngineLeak(binary: String)
   case Linkage(binary: String)
   case Closed
+  case Unverified(source: SourceId)
 
   def message: String = this match
     case Failed(detail)           => detail.value
@@ -102,4 +103,5 @@ enum PluginRunError:
     case EngineLeak(binary)       => s"plugin task links '$binary'"
     case Linkage(binary)          => s"plugin task is missing class $binary"
     case Closed                   => "plugin generation is closed"
+    case Unverified(source)       => s"plugin source ${source.value} has no verified closure"
 end PluginRunError
