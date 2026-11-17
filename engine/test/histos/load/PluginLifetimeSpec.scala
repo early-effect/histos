@@ -14,25 +14,20 @@ import scala.jdk.CollectionConverters.*
 import zio.test.*
 import zio.{Promise, Ref, Scope, ZIO, ZLayer}
 
-/** Red proof that wiring resources die before the loaded build is returned. */
+/** A wiring file is not a load input. Generation leases still close with their last holder. */
 object PluginLifetimeSpec extends ZIOSpecDefault:
   def spec = suite("plugin lifetime")(
-    test("a service acquired while loading is open for the caller and closed with that scope") {
+    test("a lone histos.wiring.scala is not compiled") {
       ZIO.scoped {
         for
           repo   <- Workspace.work("histos-p6-life").foldZIO(failure => ZIO.dieMessage(failure.message), ZIO.succeed)
-          marker <- ZIO.succeed(repo.resolve("marker.txt").toAbsolutePath.normalize)
           api    <- apiJar(repo.resolve("api.jar"))
           _      <- write(repo.resolve("histos.scala"), build)
-          _      <- write(repo.resolve("histos.wiring.scala"), wiring(marker))
-          during <- ZIO.scoped {
-            ZIO
-              .serviceWithZIO[Loader](_.load(repo, api))
-              .provideSome[Scope](ZLayer.succeed(silent) >>> Loader.live) *>
-              ZIO.attemptBlocking(Files.readString(marker)).orDie
-          }
-          after <- ZIO.attemptBlocking(Files.readString(marker)).orDie
-        yield assertTrue(during == "open", after == "closed")
+          _      <- write(repo.resolve("histos.wiring.scala"), "this is not scala {{{")
+          loaded <- ZIO
+            .serviceWithZIO[Loader](_.load(repo, api))
+            .provideSome[Scope](ZLayer.succeed(silent) >>> Loader.live)
+        yield assertTrue(loaded.catalog.isEmpty, loaded.graph.projects.nonEmpty)
       }
     },
     test("a retired generation stays open until its last lease releases") {
@@ -73,24 +68,6 @@ object PluginLifetimeSpec extends ZIOSpecDefault:
        |    val app = module("app", Jvm)(scala"3.10.1")
        |    Projects(app)
        |""".stripMargin
-
-  private def wiring(marker: Path): String =
-    s"""|import zio.{ZIO, ZLayer}
-        |
-        |object HistosWiring:
-        |  val layer: ZLayer[Any, Nothing, histos.plugin.Plugins] =
-        |    ZLayer.scoped:
-        |      ZIO.acquireRelease(
-        |        ZIO.attemptBlocking {
-        |          java.nio.file.Files.writeString(java.nio.file.Path.of("${marker.toString}"), "open")
-        |          histos.plugin.Plugins(zio.Chunk.empty)
-        |        }.orDie
-        |      )(_ =>
-        |        ZIO.attemptBlocking {
-        |          java.nio.file.Files.writeString(java.nio.file.Path.of("${marker.toString}"), "closed")
-        |        }.orDie
-        |      )
-        |""".stripMargin
 
   private def held(marker: Path): ZIO[Scope, Nothing, Unit] =
     ZIO.acquireRelease(

@@ -58,7 +58,7 @@ object BspMetalsSpec extends ZIOSpecDefault:
   )
 
   private val session = suite("session")(
-    test("inverseSources maps main, test, wiring, and plugin sources") {
+    test("inverseSources maps main, test, catalog, strategies, and plugin sources") {
       ZIO.scoped {
         Workspace.work("bsp-metals").flatMap { repo =>
           val keptModule = module("kept", Jvm)(scala"3.10.1")
@@ -68,6 +68,8 @@ object BspMetalsSpec extends ZIOSpecDefault:
             (bsp, _, _) =>
               for
                 _       <- write(repo.resolve("histos.scala"), "// build\n")
+                _       <- write(repo.resolve("histos.plugins.scala"), "object plugins\n")
+                _       <- write(repo.resolve("histos.strategies.scala"), "object strategies\n")
                 _       <- write(repo.resolve("histos.wiring.scala"), "object HistosWiring\n")
                 keptSrc <- write(repo.resolve("kept/src/main/scala/Kept.scala"), "class Kept\n")
                 testSrc <- write(repo.resolve("demo/test/scala/DemoTest.scala"), "class DemoTest\n")
@@ -75,33 +77,50 @@ object BspMetalsSpec extends ZIOSpecDefault:
                 ready   <- call(bsp, "build/initialize", Json.Obj(), 1)
                 main    <- call(bsp, "buildTarget/inverseSources", document(Bsp.fileUri(keptSrc)), 2)
                 tests   <- call(bsp, "buildTarget/inverseSources", document(Bsp.fileUri(testSrc)), 3)
-                wiring  <- call(
+                catalog <- call(
+                  bsp,
+                  "buildTarget/inverseSources",
+                  document(Bsp.fileUri(repo.resolve("histos.plugins.scala"))),
+                  4,
+                )
+                strategy <- call(
+                  bsp,
+                  "buildTarget/inverseSources",
+                  document(Bsp.fileUri(repo.resolve("histos.strategies.scala"))),
+                  5,
+                )
+                wiring <- call(
                   bsp,
                   "buildTarget/inverseSources",
                   document(Bsp.fileUri(repo.resolve("histos.wiring.scala"))),
-                  4,
+                  6,
                 )
-                plugin  <- call(bsp, "buildTarget/inverseSources", document(Bsp.fileUri(plugSrc)), 5)
+                plugin  <- call(bsp, "buildTarget/inverseSources", document(Bsp.fileUri(plugSrc)), 7)
                 missing <- call(
                   bsp,
                   "buildTarget/inverseSources",
                   document(Bsp.fileUri(repo.resolve("missing.scala"))),
-                  6,
+                  8,
                 )
               yield
-                val capability = parsed[Rpc.InitializeResult](ready).map(_.capabilities.inverseSourcesProvider)
-                val mainIds    = parsed[Rpc.InverseSourcesResult](main).map(_.targets.map(_.uri))
-                val testIds    = parsed[Rpc.InverseSourcesResult](tests).map(_.targets.map(_.uri))
-                val wiringIds  = parsed[Rpc.InverseSourcesResult](wiring).map(_.targets.map(_.uri))
-                val pluginIds  = parsed[Rpc.InverseSourcesResult](plugin).map(_.targets.map(_.uri).toSet)
-                val missingIds = parsed[Rpc.InverseSourcesResult](missing).map(_.targets)
-                val plugMain   = Bsp.mainUri(repo, "plug", scala3, Platform.Jvm)
+                val capability  = parsed[Rpc.InitializeResult](ready).map(_.capabilities.inverseSourcesProvider)
+                val mainIds     = parsed[Rpc.InverseSourcesResult](main).map(_.targets.map(_.uri))
+                val testIds     = parsed[Rpc.InverseSourcesResult](tests).map(_.targets.map(_.uri))
+                val catalogIds  = parsed[Rpc.InverseSourcesResult](catalog).map(_.targets.map(_.uri))
+                val strategyIds = parsed[Rpc.InverseSourcesResult](strategy).map(_.targets.map(_.uri))
+                val wiringIds   = parsed[Rpc.InverseSourcesResult](wiring).map(_.targets)
+                val pluginIds   = parsed[Rpc.InverseSourcesResult](plugin).map(_.targets.map(_.uri).toSet)
+                val missingIds  = parsed[Rpc.InverseSourcesResult](missing).map(_.targets)
+                val plugMain    = Bsp.mainUri(repo, "plug", scala3, Platform.Jvm)
+                val buildUri    = Bsp.buildUri(repo)
                 assertTrue(
                   capability == Right(true),
                   mainIds == Right(List(Bsp.mainUri(repo, "kept", scala3, Platform.Jvm))),
                   testIds == Right(List(Bsp.testUri(repo, "demo", scala3, Platform.Jvm))),
-                  wiringIds == Right(List(Bsp.buildUri(repo))),
-                  pluginIds == Right(Set(plugMain, Bsp.buildUri(repo))),
+                  catalogIds == Right(List(buildUri)),
+                  strategyIds == Right(List(buildUri)),
+                  wiringIds == Right(Nil),
+                  pluginIds == Right(Set(plugMain, buildUri)),
                   missingIds == Right(Nil),
                 )
           }

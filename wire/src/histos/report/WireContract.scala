@@ -32,6 +32,7 @@ import histos.plugin.{
   ArtifactIdentity,
   ArtifactManifestError,
   ArtifactPath,
+  ArtifactPathError,
   BindingClass,
   BootstrapError,
   BootstrapPlanError,
@@ -233,6 +234,7 @@ private[histos] object WireContract extends WireSupport:
   given JsonCodec[HostCompilerManifest] = JsonCodec.derived
   given JsonCodec[MaterializedTool]     = JsonCodec.derived
   given JsonCodec[HostCompilerSession]  = JsonCodec.derived
+  given JsonCodec[ArtifactPathError]    = JsonCodec.derived
   given JsonCodec[HostCompilerError]    = JsonCodec.derived
 
   given JsonCodec[ExecutionKind]         = JsonCodec.derived

@@ -15,6 +15,7 @@ import histos.resolve.{
   ResolveCell,
 }
 import histos.schedule.CacheConfig
+import histos.toolchain.HostCompilerPackage
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -91,13 +92,15 @@ object Assemble:
           .runtime(version)
           .mapError(error => AssembleError.Toolchain(error))
           .provideSome[Resolve](tools)
-        dirs      <- ZIO.fromEither(directories(libs, cells))
-        extra     <- embedded(repo, dirs, isLauncher(graph, target.name))
+        dirs <- ZIO.fromEither(directories(libs, cells))
+        launcher = isLauncher(graph, target.name)
+        extra     <- embedded(repo, dirs, launcher)
+        compiler  <- hostCompiler(launcher, version, jdk, tools)
         assembled <- pack(
           classes,
           runtime ++ jars.filterNot(runtime.contains),
           main,
-          extra,
+          extra ++ compiler,
           destination,
         )
       yield assembled
@@ -194,6 +197,26 @@ object Assemble:
             val fresh = classpath.artifacts.map(_.path).filterNot(acc.contains)
             acc ++ fresh,
         )
+
+  /** The lock generation `GraphCompile` just used. A plugin-library snapshot stays empty: its compiler list is a
+    * publication input, and it has digests without coordinates.
+    */
+  private def hostCompiler(
+      launcher: Boolean,
+      version: ScalaVersion,
+      jdk: JdkRuntime,
+      tools: ZLayer[Resolve, Nothing, LockedTools],
+  ): ZIO[Resolve & Scope, AssembleError, List[AssemblyFile]] =
+    if !launcher then ZIO.succeed(Nil)
+    else
+      ZIO
+        .serviceWithZIO[LockedTools](_.compiler(version))
+        .mapError(AssembleError.Resolve(_))
+        .flatMap: classpath =>
+          HostCompilerPackage
+            .files(version, jdk.version, classpath.artifacts)
+            .mapError(AssembleError.Host(_))
+        .provideSome[Resolve & Scope](tools)
 
   /** The bootstrap jar of library classes. A launcher also carries the identity resource when git names a commit. */
   private def embedded(

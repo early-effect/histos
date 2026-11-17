@@ -72,7 +72,7 @@ import zio.json.ast.Json
 import zio.{Chunk, Scope, UIO, ZIO, ZLayer}
 
 /** Core seed, optional strategies, custom policy, then main. One loader, one catalog instance. */
-private[load] object BootstrapLoad:
+private[histos] object BootstrapLoad:
   final case class Prepare(
       repo: Path,
       apiJar: Path,

@@ -28,7 +28,12 @@ object SourceWatch:
     }
     val shared = if modules.length == 1 then List(repo.resolve("src"), repo.resolve("test"))
     else Nil
-    (repo.resolve("histos.scala") :: owned ::: shared).distinct
+    (
+      repo.resolve("histos.scala") ::
+        repo.resolve("histos.plugins.scala") ::
+        repo.resolve("histos.strategies.scala") ::
+        owned ::: shared
+    ).distinct
 
   def take(roots: List[Path]): IO[WatchError, Snapshot] =
     take(roots, Set.empty)

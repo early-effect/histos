@@ -2,6 +2,7 @@ package histos.assembly
 
 import histos.pack.{AssemblyError, JarError}
 import histos.resolve.ResolveError
+import histos.toolchain.HostCompilerError
 import histos.zinc.GraphCompileError
 import histos.{ProjectName, ScalaVersion}
 import java.nio.file.Path
@@ -15,6 +16,7 @@ enum AssembleError:
   case NoModule(name: String)
   case NotAssembly(module: ProjectName)
   case NoClasses(module: ProjectName, version: ScalaVersion)
+  case Host(error: HostCompilerError)
   case Io(path: Path)
 
   def message: String = this match
@@ -27,5 +29,6 @@ enum AssembleError:
     case NotAssembly(module)        => s"'${module.value}' does not publish an assembly"
     case NoClasses(module, version) =>
       s"'${module.value}' has no ${version.value} classes"
-    case Io(path) => s"could not write $path"
+    case Host(error) => error.message
+    case Io(path)    => s"could not write $path"
 end AssembleError

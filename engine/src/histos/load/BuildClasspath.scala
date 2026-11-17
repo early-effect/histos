@@ -24,6 +24,12 @@ object BuildClasspath:
   val Entry: String   = "bootstrap/histos-api.jar"
   private val Program = "histos/cli/Main.class"
 
+  /** A distribution jar carries the program and the nested api jar. A classes directory is not one. */
+  def distribution(path: Path): IO[LoadError, Boolean] =
+    ZIO
+      .attemptBlocking(kind(path) == Kind.Assembly)
+      .mapError(_ => LoadError.Io(IoFailure(path, IoFault.Stat)))
+
   def apply(codeSource: Path, cache: Path): IO[LoadError, Path] =
     ZIO
       .attemptBlocking(kind(codeSource))

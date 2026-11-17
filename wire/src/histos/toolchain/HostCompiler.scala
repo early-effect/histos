@@ -1,9 +1,9 @@
 package histos.toolchain
 
 import histos.jdk.JdkVersion
-import histos.plugin.{ArtifactPath, ContentHash, EntryName}
+import histos.plugin.{ArtifactPath, ArtifactPathError, ContentHash, EntryName}
 import histos.workspace.IoFailure
-import histos.{Dep, ScalaVersion}
+import histos.{Dep, ScalaVersion, ScalaVersionError}
 
 import java.nio.file.Path
 
@@ -60,6 +60,12 @@ enum HostCompilerError:
   case Fingerprint(recorded: ContentHash, computed: ContentHash)
   case ManifestUnreadable
   case UnsupportedJdk(found: JdkVersion, required: JdkVersion)
+
+  /** `ArtifactPath.from` refused the packaged entry name. This is not a file read. */
+  case BadEntry(error: ArtifactPathError)
+
+  /** `ScalaVersion.from` refused the embedded compiler or the compiler coordinate. This is not a file read. */
+  case BadRevision(error: ScalaVersionError)
   case Io(failure: IoFailure)
 
   def message: String = this match
@@ -75,5 +81,7 @@ enum HostCompilerError:
     case ManifestUnreadable              => "the host compiler manifest could not be read"
     case UnsupportedJdk(found, required) =>
       s"JDK ${found.value} does not satisfy ${required.value}"
-    case Io(failure) => failure.message
+    case BadEntry(error)    => error.message
+    case BadRevision(error) => error.message
+    case Io(failure)        => failure.message
 end HostCompilerError

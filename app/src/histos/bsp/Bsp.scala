@@ -1455,10 +1455,13 @@ object Bsp:
 
     private def buildSources(graph: ProjectGraph): IO[BspError, List[Path]] =
       for
-        script  <- presentFile(repo.resolve("histos.scala"))
-        wiring  <- presentFile(repo.resolve("histos.wiring.scala"))
-        plugins <- pluginFiles(graph)
-      yield (script.toList ++ wiring.toList ++ plugins).distinctBy(_.toAbsolutePath.normalize.toString)
+        script     <- presentFile(repo.resolve("histos.scala"))
+        catalog    <- presentFile(repo.resolve("histos.plugins.scala"))
+        strategies <- presentFile(repo.resolve("histos.strategies.scala"))
+        plugins    <- pluginFiles(graph)
+      yield (script.toList ++ catalog.toList ++ strategies.toList ++ plugins).distinctBy(
+        _.toAbsolutePath.normalize.toString
+      )
 
     private def presentFile(path: Path): IO[BspError, Option[Path]] =
       ZIO

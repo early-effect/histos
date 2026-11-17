@@ -16,7 +16,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Clock, Ref, Scope, ZIO, ZLayer}
 
 /** Content-addressed build-file compile. A repeated key unpacks and does not start the compiler. */
-private[load] object BuildCache:
+private[histos] object BuildCache:
   type Env = ContentStore & CompilerStarts & Compilers & RemoteCache & PluginFlights
 
   def ephemeral: ZLayer[Scope, Nothing, Env] =
