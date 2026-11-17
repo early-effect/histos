@@ -31,6 +31,7 @@ import histos.plugin.{
   PluginId,
   PluginIo,
   PluginLoadError,
+  PluginRefusal,
   PluginRunError,
   PluginTaskError,
   PluginTaskId,
@@ -471,6 +472,7 @@ private object WireBuild extends WireSupport:
   given JsonCodec[RepositoryIo]                          = JsonCodec.derived
   given JsonCodec[DownloadFault]                         = JsonCodec.derived
   given JsonCodec[ArtifactMiss]                          = JsonCodec.derived
+  given JsonCodec[PluginRefusal]                         = JsonCodec.derived
   given JsonCodec[PluginLoadError]                       = JsonCodec.derived
   given JsonCodec[histos.format.ScalafmtConfError]       = JsonCodec.derived
   private val resolveErrorCodec: JsonCodec[ResolveError] = JsonCodec.derived

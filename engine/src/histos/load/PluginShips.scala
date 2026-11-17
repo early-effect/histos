@@ -30,13 +30,14 @@ private[load] object PluginShips:
       resolve: Resolve,
       launcher: ApiDigest,
       lock: Option[DependencyLock],
+      hosts: Set[String] = Set.empty,
   ): IO[LoadError, List[Path]] =
     val pins = graph.coordinates.collect:
       case PluginCoordinate.Published(dependency, link) => Pin(dependency, link)
     if pins.isEmpty then ZIO.succeed(Nil)
     else
       val repositories = BuildResolvers(graph.resolvers)
-      ZIO.foreach(pins)(pin => one(resolve, repositories, launcher, lock, pin)).map(_.flatten)
+      ZIO.foreach(pins)(pin => one(resolve, repositories, launcher, lock, hosts, pin)).map(_.flatten)
 
   private final case class Pin(dependency: Dep, link: LinkStrategy)
 
@@ -45,6 +46,7 @@ private[load] object PluginShips:
       repositories: Repositories,
       launcher: ApiDigest,
       lock: Option[DependencyLock],
+      hosts: Set[String],
       pin: Pin,
   ): IO[LoadError, List[Path]] =
     pin.link match
@@ -52,28 +54,29 @@ private[load] object PluginShips:
         ZIO.fail(LoadError.Plugin(PluginLoadError.ApiLink(pin.dependency)))
       case LinkStrategy.ExactBinary | LinkStrategy.Source | LinkStrategy.BinaryOrSource =>
         lock match
-          case Some(held) => fetched(resolve, held, launcher, pin)
-          case None       => solved(resolve, repositories, launcher, pin)
+          case Some(held) => fetched(resolve, held, launcher, hosts, pin).flatMap(refuse)
+          case None       => solved(resolve, repositories, launcher, hosts, pin).flatMap(refuse)
 
   private def solved(
       resolve: Resolve,
       repositories: Repositories,
       launcher: ApiDigest,
+      hosts: Set[String],
       pin: Pin,
-  ): IO[LoadError, List[Path]] =
+  ): IO[LoadError, Stamped] =
     resolve
       .resolvePlugin(pin.dependency, repositories)
       .mapError(LoadError.Resolve(_))
       .flatMap: classpath =>
-        direct(pin.dependency, classpath.artifacts).flatMap: path =>
-          stamped(path, pin.dependency, launcher).as(classpath.artifacts.map(_.path))
+        stampAll(pin.dependency, classpath.artifacts, launcher, hosts)
 
   private def fetched(
       resolve: Resolve,
       lock: DependencyLock,
       launcher: ApiDigest,
+      hosts: Set[String],
       pin: Pin,
-  ): IO[LoadError, List[Path]] =
+  ): IO[LoadError, Stamped] =
     ZIO
       .fromEither(PluginCells.locate(lock, pin.dependency))
       .mapError(LoadError.Plugin(_))
@@ -81,8 +84,7 @@ private[load] object PluginShips:
         ZIO
           .foreach(locked.artifacts)(artifact => resolve.fetch(artifact).mapError(LoadError.Resolve(_)))
           .flatMap: artifacts =>
-            direct(pin.dependency, artifacts).flatMap: path =>
-              stamped(path, pin.dependency, launcher).as(artifacts.map(_.path))
+            stampAll(pin.dependency, artifacts, launcher, hosts)
 
   /** The coordinate's own jar, not a transitive one. The published name and the `Dep` name both match a stub.
     */
@@ -102,33 +104,104 @@ private[load] object PluginShips:
               LoadError.Resolve(ResolveError.NotFound(dependency.organization, expected, dependency.revision.value))
             )
 
-  private def stamped(path: Path, dependency: Dep, launcher: ApiDigest): IO[LoadError, Unit] =
+  /** Paths plus the first binding drift. `jars` refuses that drift. A rebuildable publication may compile it instead.
+    */
+  private[load] final case class Stamped(paths: List[Path], drift: Option[PluginLoadError.BindingDrift])
+
+  /** Drift stays on the result so a rebuildable jar can be compiled instead of refused. */
+  private[load] def inspect(
+      graph: ProjectGraph,
+      resolve: Resolve,
+      launcher: ApiDigest,
+      lock: Option[DependencyLock],
+      hosts: Set[String] = Set.empty,
+  ): IO[LoadError, List[Stamped]] =
+    val pins = graph.coordinates.collect:
+      case PluginCoordinate.Published(dependency, link) => Pin(dependency, link)
+    if pins.isEmpty then ZIO.succeed(Nil)
+    else
+      val repositories = BuildResolvers(graph.resolvers)
+      ZIO.foreach(pins): pin =>
+        pin.link match
+          case LinkStrategy.Api =>
+            ZIO.fail(LoadError.Plugin(PluginLoadError.ApiLink(pin.dependency)))
+          case LinkStrategy.ExactBinary | LinkStrategy.Source | LinkStrategy.BinaryOrSource =>
+            lock match
+              case Some(held) => fetched(resolve, held, launcher, hosts, pin)
+              case None       => solved(resolve, repositories, launcher, hosts, pin)
+
+  /** Every jar that carries a version file is checked. A direct jar without one is unversioned. Another jar without one
+    * is an ordinary dependency and stays pinned. A host-identity jar is not a second API copy.
+    */
+  private def stampAll(
+      dependency: Dep,
+      artifacts: List[ResolvedArtifact],
+      launcher: ApiDigest,
+      hosts: Set[String],
+  ): IO[LoadError, Stamped] =
+    direct(dependency, artifacts).flatMap: root =>
+      ZIO
+        .foldLeft(artifacts)(Option.empty[PluginLoadError.BindingDrift]): (drift, artifact) =>
+          drift match
+            case some @ Some(_) => ZIO.succeed(some)
+            case None           =>
+              stamped(artifact.path, dependency, launcher, artifact.path == root, hosts)
+        .map(drift => Stamped(artifacts.map(_.path), drift))
+
+  private def refuse(stamped: Stamped): IO[LoadError, List[Path]] =
+    stamped.drift match
+      case Some(drift) => ZIO.fail(LoadError.Plugin(drift))
+      case None        => ZIO.succeed(stamped.paths)
+
+  private def stamped(
+      path: Path,
+      dependency: Dep,
+      launcher: ApiDigest,
+      root: Boolean,
+      hosts: Set[String],
+  ): IO[LoadError, Option[PluginLoadError.BindingDrift]] =
     val coordinate = PluginCoordinate.Published(dependency).render
+    fileHash(path).flatMap: hash =>
+      if hash == launcher.value || hosts.contains(hash) then ZIO.succeed(None)
+      else
+        versionText(path).flatMap:
+          case None if root => ZIO.fail(LoadError.Plugin(PluginLoadError.Unversioned(coordinate)))
+          case None         => ZIO.succeed(None)
+          case Some(raw)    =>
+            ApiDigest.from(raw) match
+              case Left(_) =>
+                ZIO.fail(LoadError.Plugin(PluginLoadError.Unversioned(coordinate)))
+              case Right(found) if found == launcher =>
+                ZIO.succeed(None)
+              case Right(found) =>
+                ZIO.succeed(Some(PluginLoadError.BindingDrift(path, found, launcher)))
+
+  private def fileHash(path: Path): IO[LoadError, String] =
+    ZIO
+      .attemptBlocking(java.nio.file.Files.readAllBytes(path))
+      .mapError(BuildFile.failed(path, IoFault.Read))
+      .map(bytes => histos.jdk.Sha256Digest.of(zio.Chunk.fromArray(bytes)).value)
+
+  private def versionText(path: Path): IO[LoadError, Option[String]] =
     ZIO.scoped:
       ZIO
         .acquireRelease(
           ZIO.attemptBlocking(new ZipFile(path.toFile)).mapError(BuildFile.failed(path, IoFault.Read))
         )(zip => ZIO.attemptBlocking(zip.close()).ignore)
         .flatMap: zip =>
-          zip.getEntry(ApiDigest.resource) match
-            case null =>
-              ZIO.fail(LoadError.Plugin(PluginLoadError.Unversioned(coordinate)))
-            case entry =>
+          Option(zip.getEntry(ApiDigest.resource)) match
+            case None =>
+              ZIO.succeed(None)
+            case Some(entry) =>
               ZIO
                 .attemptBlocking:
                   val stream = zip.getInputStream(entry)
                   try new String(stream.readAllBytes(), StandardCharsets.UTF_8)
                   finally stream.close()
                 .mapError(BuildFile.failed(path, IoFault.Read))
-                .flatMap: text =>
+                .map: text =>
                   val raw =
                     if text.endsWith("\n") then text.stripSuffix("\n").stripSuffix("\r")
                     else text
-                  ApiDigest.from(raw) match
-                    case Left(_) =>
-                      ZIO.fail(LoadError.Plugin(PluginLoadError.Unversioned(coordinate)))
-                    case Right(found) if found == launcher =>
-                      ZIO.unit
-                    case Right(found) =>
-                      ZIO.fail(LoadError.Plugin(PluginLoadError.VersionMismatch(dependency, found, launcher)))
+                  Some(raw)
 end PluginShips

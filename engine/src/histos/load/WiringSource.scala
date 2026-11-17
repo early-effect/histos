@@ -9,7 +9,6 @@ private[load] object WiringSource:
     """object WiringBuilt extends histos.plugin.WiringBuilt:
       |  type Failure = Any
       |  def build: zio.ZIO[zio.Scope, Any, histos.plugin.Plugins] =
-      |    zio.ZIO.scoped:
-      |      HistosWiring.layer.build.map(env => env.get[histos.plugin.Plugins])
+      |    HistosWiring.layer.build.map(env => env.get[histos.plugin.Plugins])
       |""".stripMargin
 end WiringSource

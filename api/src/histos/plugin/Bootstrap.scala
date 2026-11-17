@@ -39,13 +39,15 @@ enum BootstrapError:
   case SeedOutsideCatalog
   case MissingStrategy(path: RepoPath)
   case LateLoading
+  case AmbiguousScala(module: String)
 
   def message: String = this match
     case ResolutionConflict(catalog, main) =>
       s"main selects $main and the catalog selects $catalog"
-    case SeedOutsideCatalog    => "the strategy prerequisites are not in the plugin catalog"
-    case MissingStrategy(path) => s"strategy source ${path.value} is not in the catalog closure"
-    case LateLoading           => "plugin loading is configured after plugins have loaded"
+    case SeedOutsideCatalog     => "the strategy prerequisites are not in the plugin catalog"
+    case MissingStrategy(path)  => s"strategy source ${path.value} is not in the catalog closure"
+    case LateLoading            => "plugin loading is configured after plugins have loaded"
+    case AmbiguousScala(module) => s"module $module declares more than one Scala version"
 end BootstrapError
 
 /** Host-injected construction seam. Project code does not run this before the host does. */

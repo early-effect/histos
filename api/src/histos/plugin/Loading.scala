@@ -42,6 +42,11 @@ enum PluginRefusal:
   case NotExact
   case MissingRecipe
 
+  def message: String = this match
+    case NotExact      => "plugin binding is not exact"
+    case MissingRecipe => "plugin recipe is missing"
+end PluginRefusal
+
 enum PluginStrategyError:
   case Configuration(detail: PluginDetail)
   case Policy(detail: PluginDetail)
@@ -81,5 +86,9 @@ object PluginLoading:
           case LoadingMode.ExactOrRebuild =>
             context.binding match
               case BindingMatch.Exact => PluginLoadPlan.UseExactBinary
-              case BindingMatch.Drift => PluginLoadPlan.Rebuild
+              case BindingMatch.Drift =>
+                context.publication match
+                  case PublicationFact.Rebuildable => PluginLoadPlan.Rebuild
+                  case PublicationFact.BinaryOnly  => PluginLoadPlan.Reject(PluginRefusal.NotExact)
+                  case PublicationFact.Missing     => PluginLoadPlan.Reject(PluginRefusal.MissingRecipe)
 end PluginLoading
