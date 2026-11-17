@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.build.BuildEvent
+import histos.lock.{CallIdentity, LockEvent, LockReply}
 import histos.testrun.TestFeed
 import histos.theme.Theme
 
@@ -31,6 +32,7 @@ object Show:
       case BuildEvent.Err(text)          => Chunk(CompileConsole.Line.err(text))
       case BuildEvent.Status(text, role) =>
         Chunk(CompileConsole.Line.Out(Chunk(Part.Mark(text, role))))
+      case BuildEvent.Lock(event) => lockLines(event)
 
   /** `Layout` in the chunk is the column. A chunk without one leaves names unpadded. Escapes are not added. */
   def transcript(repo: Path, events: Chunk[BuildEvent]): (Chunk[String], Chunk[String]) =
@@ -75,6 +77,19 @@ object Show:
       case other                    =>
         shown.get.flatMap: frame =>
           CompileConsole.show(apply(repo, other, frame.column, appearance.log), frame.theme, appearance, out, err)
+
+  private def lockLines(event: LockEvent): Chunk[CompileConsole.Line] =
+    event match
+      case LockEvent.Offered(offer) =>
+        Chunk.fromIterable(CallIdentity.summary(offer).map(CompileConsole.Line.out))
+      case LockEvent.Replied(LockReply.Accept(id, _)) =>
+        Chunk(CompileConsole.Line.out(s"lock accepted ${id.value}"))
+      case LockEvent.Replied(LockReply.Decline(id)) =>
+        Chunk(CompileConsole.Line.out(s"lock declined ${id.value}"))
+      case LockEvent.Committed(committed) =>
+        Chunk(CompileConsole.Line.out(s"lock committed ${committed.revision.value}"))
+      case LockEvent.Blocked(_) =>
+        Chunk(CompileConsole.Line.out("lock blocked"))
 
   private def tested(feed: TestFeed, column: Int): Chunk[CompileConsole.Line] =
     feed match

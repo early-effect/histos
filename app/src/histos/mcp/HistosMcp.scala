@@ -95,7 +95,7 @@ object HistosMcp:
   given Schema[TestMode] =
     Schema.of(SchemaDoc.Enum(Some("test mode"), TestMode.values.toList.map(_.token)))
   given Schema[ResolveAction] =
-    Schema.of(SchemaDoc.Enum(Some("resolve action"), ResolveAction.values.toList.map(_.token)))
+    Schema.of(SchemaDoc.Enum(Some("resolve action"), ResolveAction.tokens))
   given Schema[WorkflowAction] =
     Schema.of(SchemaDoc.Enum(Some("workflow action"), WorkflowAction.values.toList.map(_.token)))
   given Schema[FormatMode] =
@@ -141,7 +141,11 @@ object HistosMcp:
       extent: CleanExtent = CleanExtent.Products,
   ) derives Schema,
         JsonCodec
-  final case class ResolveArgs(action: ResolveAction = ResolveAction.Verify) derives Schema, JsonCodec
+  final case class ResolveArgs(
+      action: ResolveAction = ResolveAction.Verify,
+      selectors: List[String] = Nil,
+  ) derives Schema,
+        JsonCodec
   final case class WorkflowArgs(action: WorkflowAction = WorkflowAction.Check) derives Schema, JsonCodec
   final case class FmtArgs(
       projects: List[String] = Nil,
@@ -344,7 +348,7 @@ object HistosMcp:
       resolving <- cleaning.tool[ResolveArgs](
         Names.resolve,
         "verify, update, or check dependencies. update stages plugin cells, loads that generation, then commits once.",
-      )(args => ask(Call.Resolve(args.action)))
+      )(args => ZIO.fromEither(resolveCall(args.action, args.selectors)).mapError(refused).flatMap(ask))
       flowing <- resolving.tool[WorkflowArgs](
         Names.workflow,
         "check or update workflow files. The launcher pin is not advanced.",
@@ -571,6 +575,15 @@ object HistosMcp:
         have <- acc
         one  <- PublishToken.from(token).left.map(Rejection.PublishToken(_))
       yield have :+ one
+
+  def resolveCall(action: ResolveAction, selectors: List[String]): Either[Rejection, Call] =
+    (action, selectors) match
+      case (ResolveAction.Refresh(_), raw) =>
+        names(raw).map(found => Call.Resolve(ResolveAction.Refresh(found)))
+      case (_, _ :: _) =>
+        Left(Rejection.ResolveAction(action.token))
+      case (other, Nil) =>
+        Right(Call.Resolve(other))
 
   private def names(raw: List[String]): Either[Rejection, List[ProjectName]] =
     raw.foldLeft[Either[Rejection, List[ProjectName]]](Right(Nil)): (acc, token) =>

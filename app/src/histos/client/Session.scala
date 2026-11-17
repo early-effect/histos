@@ -158,7 +158,7 @@ object Session:
   ): ZIO[Env, TransportError, CallResult] =
     Ref.make(Show.start).flatMap { frame =>
       Build
-        .attached(socket)
+        .attached(socket, envelope = histos.client.CallerFacts.mcp)
         .perform(call)
         .tap {
           case Beat.Heard(event) => Notice.show(repo, frame, event)
@@ -260,6 +260,7 @@ object Session:
             case Beat.Bytes(data)  => histos.build.Build.write(data)
             case Beat.Finished(_)  => ZIO.unit
           },
+          envelope = histos.client.CallerFacts.mcp,
         )
       build.perform(call).runCollect.mapError(TransportError.Remote(_)).flatMap { beats =>
         ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList, paint))

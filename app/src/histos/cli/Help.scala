@@ -126,7 +126,12 @@ object Help:
       "Refresh published version metadata each time. Move .next past the newest stable only when it has caught .next; keep an ahead catalog. The default is the next patch. A maven repository wins over ivy2 local. A remote answer requires a successful metadata refresh. Does not change histos.version.",
     ),
     Entry("portal", "publish", "histos portal", "Rehearse the Central portal on loopback."),
-    Entry("resolve", "dependencies", "histos resolve [--update | --check]", "Check the lock, or write it."),
+    Entry(
+      "resolve",
+      "dependencies",
+      "histos resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen]",
+      "Check the lock, or write it. --refresh does not revalidate snapshots.",
+    ),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),
     Entry("workflow", "ci", "histos workflow [--check | --update]", "Check generated workflows, or write them."),
     Entry(

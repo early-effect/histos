@@ -818,7 +818,7 @@ object Bsp:
         case _                                                                                     => false
 
     private def noteLock(error: BspError): UIO[Unit] =
-      val hint    = "histos resolve --update"
+      val hint    = BspConsent.updateHint
       val text    = error.message
       val message = if text.contains(hint) then text else s"$text Run `$hint`."
       val file    = repo.resolve("histos.scala")

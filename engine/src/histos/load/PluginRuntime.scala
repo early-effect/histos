@@ -77,21 +77,46 @@ trait PluginRuntime:
   def run(
       id: PluginTaskId,
       args: PluginArgs,
+      caller: InvocationContext,
+      events: PluginEvents.Invocation,
   ): ZIO[
     ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
     PluginFault,
     PluginOutput,
   ]
+
+  /** Generation-time runners have no initiating caller. The daemon passes the envelope instead. */
+  def run(
+      id: PluginTaskId,
+      args: PluginArgs,
+  ): ZIO[
+    ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
+    PluginFault,
+    PluginOutput,
+  ] =
+    run(id, args, PluginRuntime.standIn(id), PluginEvents.closedInvocation)
   def bind: ZIO[
     ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
     TaskError,
     Map[TaskId, IO[TaskError, TaskResult]],
   ]
   def links: List[PluginLink]
+end PluginRuntime
 
 object PluginRuntime:
   /** First line of a cache hit. The stored body is the rest of the text. */
   val CacheHit: String = "histos-cache hit"
+
+  /** The stand-in P8 replaces on the daemon path. It does not read the server environment. */
+  def standIn(id: PluginTaskId): InvocationContext =
+    InvocationContext(
+      InvocationId.derive(id.render),
+      ClientId("plugin-runtime"),
+      CommandIdentity.Task(id),
+      ExecutionKind.Local,
+      Interaction.Unattended,
+      OfflineSelection.Online,
+    )
 
   def cacheHit(body: String): String =
     s"$CacheHit\n$body"
@@ -133,6 +158,8 @@ object PluginRuntime:
     def run(
         id: PluginTaskId,
         args: PluginArgs,
+        caller: InvocationContext,
+        events: PluginEvents.Invocation,
     ): ZIO[
       ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
       PluginFault,
@@ -202,6 +229,8 @@ object PluginRuntime:
                     env,
                     scheduler,
                     lock,
+                    caller,
+                    events,
                   ),
               )
             )
@@ -255,6 +284,8 @@ object PluginRuntime:
         env: Map[String, String],
         scheduler: Scheduler,
         lock: IO[PluginFault, DependencyLock],
+        caller: InvocationContext,
+        events: PluginEvents.Invocation,
     ): ZIO[Resolve, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
@@ -274,7 +305,7 @@ object PluginRuntime:
             info  = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
             local = Step.run(
               Step.hermetic[String](info)(
-                produce(id, task, plugin, passed, made, compiled, linked, held, env)
+                produce(id, task, plugin, passed, made, compiled, linked, held, env, caller, events)
                   .mapError(error => PluginFault.Task(error))
               ) @@ PluginAspects.loader(threads) @@ PluginAspects
                 .declaredOutputs(repo, task, held)
@@ -328,6 +359,8 @@ object PluginRuntime:
         linked: List[histos.plugin.LinkedScript],
         held: Ref[Option[PluginOutput]],
         env: Map[String, String],
+        caller: InvocationContext,
+        events: PluginEvents.Invocation,
     ): IO[PluginRunError, String] =
       for
         hashed <- PluginInputs.hash(hashRequest(id, task, env, args))
@@ -339,15 +372,8 @@ object PluginRuntime:
             views(id.plugin),
             args,
             hashed.material,
-            InvocationContext(
-              InvocationId.derive(id.render),
-              ClientId("plugin-runtime"),
-              CommandIdentity.Task(id),
-              ExecutionKind.Local,
-              Interaction.Unattended,
-              OfflineSelection.Online,
-            ),
-            PluginEvents.closedInvocation,
+            caller,
+            events,
             compiled,
             linked,
           ),

@@ -20,4 +20,7 @@ enum BuildEvent:
 
   /** A tally or another line whose whole text has one role. */
   case Status(text: String, role: Role)
+
+  /** A lock fact on the build feed. The text is the summary. It is not a prompt. */
+  case Lock(event: histos.lock.LockEvent)
 end BuildEvent

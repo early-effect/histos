@@ -6,6 +6,7 @@ import histos.central.DeploymentId
 import histos.plugin.{CommandName, PluginTaskId}
 import histos.publish.PublishToken
 import histos.schedule.CacheNamespace
+import histos.lock.{DispositionSubject, LockMode, LockPrecedence, PrecedenceFault}
 import histos.server.{CleanExtent, ForgetFault, ForgetTarget, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.{SuitePattern, TestMode}
@@ -270,6 +271,25 @@ object Grammar:
   private val roots: Set[String] = CommandName.reserved.map(_.value)
 
   def parse(args: List[String]): IO[CliParseError, Command] =
+    parseLine(args).map(_.command)
+
+  /** A plugin token the built-in grammar does not own. `--lock` is still this command's disposition. */
+  def pluginLine(args: List[String]): IO[CliParseError, (List[String], Option[LockMode])] =
+    val (prefix, body) = args match
+      case "~" :: "--restart" :: rest => (List("~", "--restart"), rest)
+      case "~" :: rest                => (List("~"), rest)
+      case other                      => (Nil, other)
+    peelDisposition(body) match
+      case Left(fault)   => ZIO.fail(CliParseError.Lock(fault))
+      case Right(peeled) =>
+        peeled.refresh match
+          case Some(_) => ZIO.fail(CliParseError.Lock(PrecedenceFault.NotRefresh))
+          case None    =>
+            ZIO
+              .fromEither(LockPrecedence.admit(DispositionSubject.Prepare, peeled.lock).left.map(CliParseError.Lock(_)))
+              .map(mode => (prefix ++ peeled.args, mode))
+
+  def parseLine(args: List[String]): IO[CliParseError, InvocationLine] =
     args match
       case "~" :: Nil =>
         ZIO.fail(CliParseError.WatchCommand("watch needs a command"))
@@ -280,21 +300,91 @@ object Grammar:
           case "--restart" :: tail => (histos.server.WatchPolicy.Restart, tail)
           case other               => (histos.server.WatchPolicy.After, other)
         val (kept, argv) = peelRun(body)
-        prepared(kept).flatMap: ready =>
-          parseRoot(ready.args, argv)
-            .flatMap(command => withExcludes(command, ready))
-            .flatMap(command => watched(command, policy))
-            .map(command => Command.Watch(command, rest))
+        peelDisposition(kept) match
+          case Left(fault)   => ZIO.fail(CliParseError.Lock(fault))
+          case Right(peeled) =>
+            prepared(peeled.args).flatMap: ready =>
+              parseRoot(ready.args, argv)
+                .flatMap(command => withExcludes(command, ready))
+                .flatMap(command => watched(command, policy))
+                .flatMap(command => lineOf(command, peeled))
+                .map(line => InvocationLine(Command.Watch(line.command, rest), line.lock))
       case "--explain" :: Nil =>
         ZIO.fail(CliParseError.Pattern("--explain needs a check id"))
       case "--explain" :: id :: Nil =>
-        ZIO.succeed(Command.Explain(id))
+        ZIO.succeed(InvocationLine(Command.Explain(id), None))
       case "--explain" :: _ =>
         ZIO.fail(CliParseError.Pattern("--explain takes one check id"))
       case _ =>
         val (kept, argv) = peelRun(args)
-        prepared(kept).flatMap: ready =>
-          parseRoot(ready.args, argv).flatMap(command => withExcludes(command, ready))
+        peelDisposition(kept) match
+          case Left(fault)   => ZIO.fail(CliParseError.Lock(fault))
+          case Right(peeled) =>
+            prepared(peeled.args).flatMap: ready =>
+              parseRoot(ready.args, argv)
+                .flatMap(command => withExcludes(command, ready))
+                .flatMap(command => lineOf(command, peeled))
+
+  private final case class Disposition(
+      args: List[String],
+      lock: Option[histos.lock.LockMode],
+      refresh: Option[List[String]],
+  )
+
+  /** `--lock` and `--refresh` are peeled before zio-cli. A run's program arguments are already split off. */
+  private def peelDisposition(args: List[String]): Either[PrecedenceFault, Disposition] =
+    def loop(
+        rest: List[String],
+        kept: List[String],
+        lock: Option[histos.lock.LockMode],
+        refresh: Option[List[String]],
+        selecting: Boolean,
+    ): Either[PrecedenceFault, Disposition] =
+      rest match
+        case Nil           => Right(Disposition(kept.reverse, lock, refresh.map(_.reverse)))
+        case "--lock" :: _ => Left(PrecedenceFault.UnknownLock(""))
+        case head :: tail if head.startsWith("--lock=") =>
+          lock match
+            case Some(_) => Left(PrecedenceFault.RepeatedLock)
+            case None    =>
+              LockPrecedence.fromToken(head.drop("--lock=".length)) match
+                case Left(fault) => Left(fault)
+                case Right(mode) => loop(tail, kept, Some(mode), refresh, false)
+        case "--refresh" :: tail =>
+          refresh match
+            case Some(_) => Left(PrecedenceFault.RefreshRepeated)
+            case None    => loop(tail, kept, lock, Some(Nil), true)
+        case head :: tail if selecting && !head.startsWith("-") =>
+          refresh match
+            case Some(names) => loop(tail, kept, lock, Some(head :: names), true)
+            case None        => loop(tail, head :: kept, lock, refresh, false)
+        case head :: tail =>
+          loop(tail, head :: kept, lock, refresh, false)
+    loop(args, Nil, None, None, false)
+
+  private def lineOf(command: Command, peeled: Disposition): IO[CliParseError, InvocationLine] =
+    refreshed(command, peeled.refresh).flatMap: chosen =>
+      ZIO.fromEither(
+        LockPrecedence
+          .admit(LockGrammar.subject(chosen), peeled.lock)
+          .left
+          .map(CliParseError.Lock(_))
+          .map(mode => InvocationLine(chosen, mode))
+      )
+
+  private def refreshed(command: Command, refresh: Option[List[String]]): IO[CliParseError, Command] =
+    (command, refresh) match
+      case (Command.Resolve(ResolveAction.Verify), Some(raw)) =>
+        projectNames(raw).map(selectors => Command.Resolve(ResolveAction.Refresh(selectors)))
+      case (Command.Resolve(_), Some(_)) =>
+        ZIO.fail(CliParseError.Lock(PrecedenceFault.RefreshCombined))
+      case (_, Some(_)) =>
+        ZIO.fail(CliParseError.Lock(PrecedenceFault.NotRefresh))
+      case (other, None) =>
+        ZIO.succeed(other)
+
+  private def projectNames(raw: List[String]): IO[CliParseError, List[ProjectName]] =
+    ZIO.fromEither(parsedNames(raw))
 
   /** `--restart` repeats a program. Every other watched command runs, then polls. */
   private def watched(command: Command, policy: histos.server.WatchPolicy): IO[CliParseError, Command] =

@@ -491,6 +491,8 @@ object Calls:
       id: String,
       args: PluginArgs,
       say: Say,
+      caller: Option[histos.plugin.InvocationContext] = None,
+      events: histos.plugin.PluginEvents.Invocation = histos.plugin.PluginEvents.closedInvocation,
   ): ZIO[Resolve & histos.load.Loader & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     TaskId.from(id) match
       case Left(error)                             => fault(say, BuildFault.Task(error))
@@ -518,7 +520,7 @@ object Calls:
       case Right(_) =>
         PluginTaskId.parse(id) match
           case Left(error)   => fault(say, BuildFault.PluginTask(error))
-          case Right(taskId) => plugin(plugins, taskId, args, say)
+          case Right(taskId) => plugin(plugins, taskId, args, say, caller, events)
 
   def toolchain(
       machine: Machine,
@@ -538,8 +540,9 @@ object Calls:
       action: ResolveAction,
       say: Say,
       native: histos.native.NativeOrigin,
+      lock: Option[histos.lock.LockMode] = None,
   ): ZIO[Resolve & Loader, ServerError, Unit] =
-    resolveWork(repo, apiJar, action, native).foldZIO(
+    resolveWork(repo, apiJar, action, native, lock).foldZIO(
       {
         case error: LoadError    => fault(say, BuildFault.Load(error))
         case error: ResolveError => fault(say, BuildFault.Resolve(error))
@@ -556,6 +559,18 @@ object Calls:
       apiJar: Path,
       action: ResolveAction,
       native: histos.native.NativeOrigin,
+      lock: Option[histos.lock.LockMode] = None,
+  ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
+    LockDisposition.unapplied(Call.Resolve(action), lock) match
+      case Some(mode) => ZIO.fail(LockDisposition.refused(mode))
+      case None       => resolveBody(repo, apiJar, action, native, lock)
+
+  private def resolveBody(
+      repo: Path,
+      apiJar: Path,
+      action: ResolveAction,
+      native: histos.native.NativeOrigin,
+      lock: Option[histos.lock.LockMode],
   ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
     val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
       action match
@@ -597,11 +612,15 @@ object Calls:
               native,
             )
           yield text
-    followed.flatMap(text =>
-      Resolve
-        .readLock(repo)
-        .map(lock => DependencyLock.withEvictions(text, lock))
-    )
+        case ResolveAction.Refresh(selectors) =>
+          ZIO.succeed(LockDisposition.refreshText(selectors, lock))
+    followed.flatMap: text =>
+      action match
+        case ResolveAction.Refresh(_) => ZIO.succeed(text)
+        case _                        =>
+          Resolve
+            .readLock(repo)
+            .map(lock => DependencyLock.withEvictions(text, lock))
 
   private def pluginRequests(graph: ProjectGraph): List[PluginRequest] =
     graph.coordinates.collect:
@@ -1272,6 +1291,8 @@ object Calls:
       id: PluginTaskId,
       args: PluginArgs,
       say: Say,
+      caller: Option[histos.plugin.InvocationContext],
+      events: histos.plugin.PluginEvents.Invocation,
   ): ZIO[ContentStore & Resolve & histos.resolve.ResolutionService, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
       ZIO.scoped:
@@ -1282,7 +1303,7 @@ object Calls:
               error => fault(say, BuildFault.Remote(error)),
               remote =>
                 plugins
-                  .run(id, args)
+                  .run(id, args, caller.getOrElse(histos.load.PluginRuntime.standIn(id)), events)
                   .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
                     ZLayer.succeed(ContentStore.actions(store)),
                     ZLayer.succeed(remote),
