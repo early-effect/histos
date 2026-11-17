@@ -54,7 +54,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | P7 | P6 on main | `histos/plugin-p7` | `plug-p7` | #222 | merged | `./histos compile engine wire`; `./histos test engine --only '*PluginTaskIdentitySpec*'`; `./histos fmt --check`; real loader manifest before merge | merged as `82303e8` (#222). CI run 44012856100 on `79f6bc1` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `62b151c` (4 passed). The loader seal reached the task. |
 | P8 | P3, P6, P7 on main | `histos/plugin-p8` | `plug-p8` | #224 | merged | `./histos compile app wire client`; `./histos test app wire --only '*LockInvocationSpec*' '*LockOfferSpec*' '*LockPolicySpec*' '*RunCallSpec*' '*BatchRunSpec*'`; `./histos fmt --check` | merged as `b2c9632` (#224). CI run 44027154861 on `2d3023c` passed 7 failed 0, no test-clock warning. Local JVM gate: app 20 passed, wire 6 passed, `./histos fmt --check` unformatted 0. `./histos run doc` exited 0 on `2d3023c`. |
 | P9 | P2, P4, P6 on main | `histos/plugin-p9` | `plug-p9` | #223 | merged | tracked link check; `./histos fmt --check`; `./histos run doc` | merged as `db3a44c` (#223). CI run 44015702128 on `e5c5b3b` passed 7 failed 0. The test job was `./histos test --affected '[]'`. No test-clock warning. Local link scan 84 links, 0 missing. `./histos run doc` exited 0. |
-| P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | local gate on dirty `0d9c837`, no commit and no PR. Recorded under the P10 brief. |
+| P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | #225 | in progress | see the P10 brief | #225. Pin stays `0.4.2`. Recorded under the P10 brief. |
 
 - [x] P0. Spec and this board on `main` (`c60ee8d`, `ce6fd7f`)
 - [x] P1. Contracts, codecs, fixtures. Merged as #216 on `8f74a2e`. CI run 43931858280 on `7395b60`. Local gate: `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` on `80e20c8`
@@ -274,7 +274,7 @@ Ledger: R9 closes in the architecture doc because the bundle macro is retired. A
 
 ### P10 record
 
-Working tree on `0d9c83706be477162c18bcf8a1a76246e7eab557`, dirty. No commit. No PR. `Ship("histos").next` stayed `0.4.4`. Root `histos.scala` gained no plugin. `ReviewedLocksSpec` and `examples/expected-lock-repair.txt` were not created.
+Local evidence was taken on dirty `0d9c83706be477162c18bcf8a1a76246e7eab557`. The PR is #225. `Ship("histos").next` stayed `0.4.4`. Root `histos.scala` gained no plugin. `ReviewedLocksSpec` and `examples/expected-lock-repair.txt` were not created.
 
 After review, `histos.version` is `0.4.2` again. `0.4.4-0d9c83706be4-SNAPSHOT` names parent commit `0d9c837` and is not on the snapshot channel. Maven Central and Sonatype both 404 that coordinate. CI cannot install it. The setup action SHA stays `4a49a640bc8345737c22160b4e67b028d61cd908`, the one already on main. This diff does not publish, tag, or release. `histos update` was not run.
 
@@ -289,7 +289,7 @@ The combined `./histos test api wire engine app plugin-testkit` exited 1 on `ld:
 
 Rows left open, and why:
 
-- P10 checkbox and the work-plan Closed boxes: no PR number. A7 is not checked.
+- P10 checkbox and the work-plan Closed boxes stay open until merge. The PR is #225. A7 is not checked.
 - Architecture A5-A8 stay open. The local jars are not those proofs.
 - Architecture R9 is checked. The bundle macro and `WiringSource` are deleted, and a lone `histos.wiring.scala` is not compiled.
 - Completion native client and MCP, the P4/P7 line, and the review line stay open.
