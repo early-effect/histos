@@ -1,6 +1,6 @@
 # Writing a plugin
 
-These contracts are the ones the compiler fixtures typecheck. The assembled-host proof is recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md). `histos.version` in `build.properties` is `0.4.2`. That pin does not run this catalog protocol. This repository's `histos.scala` declares no plugins.
+These contracts are the ones the compiler fixtures typecheck. The assembled-host proof is recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md). `histos.version` in `build.properties` is `0.4.4-8c61390d3c7a-SNAPSHOT`, the assembled host packed from `8c61390`. This repository's `histos.scala` declares no plugins.
 
 A plugin is a constructor-injected ZIO service. A coordinate makes its types available. It does not install a service or a task. The registration key is the capability interface. A task is a separate `HistosPlugin` activation, even when it is the same class.
 

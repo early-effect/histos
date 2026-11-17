@@ -1,1 +1,1 @@
-{"name":"histos","argv":["./histos","bsp"],"version":"0.4.2","bspVersion":"2.2.0","languages":["scala"],"graph":"8cd2abf47368b45dddb52ada9004ced01dd3f0cbb6074a20504831a8c11b4bad"}
+{"name":"histos","argv":["./histos","bsp"],"version":"0.4.4-8c61390d3c7a-SNAPSHOT","bspVersion":"2.2.0","languages":["scala"],"graph":"e6adc57a09419169ced3ada5f6c1c0f34c73025e940c6b25f11e979e77a29d7a"}
