@@ -9,9 +9,9 @@ import zio.{Chunk, ZIO}
 
 import zio.{IO, UIO}
 
-/** What one command links and runs with, read once from [[Machine]]: the environment children start from, the Scala
-  * Native origin, and Node. Node is chosen at the first Js launch and kept for the rest of the command, so a command
-  * that launches no Js does not look for it.
+/** What one command links and runs with, read once from [[histos.jdk.Machine]]: the environment children start from,
+  * the Scala Native origin, and Node. Node is chosen at the first Js launch and kept for the rest of the command, so a
+  * command that launches no Js does not look for it.
   */
 final class Runtimes private (
     val env: Map[String, String],

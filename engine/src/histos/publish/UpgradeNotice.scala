@@ -10,7 +10,8 @@ import java.time.{Duration as JavaDuration, Instant}
 import zio.{Duration, URIO, ZIO}
 import zio.durationInt
 
-/** Outside CI, one cached read a day of the newest published release. A pin that release passed gets a [[PinLag]].
+/** Outside CI, one cached read a day of the newest published release. A pin that release passed gets a
+  * [[histos.version.PinLag]].
   */
 object UpgradeNotice:
   val Window: Duration = 1.day

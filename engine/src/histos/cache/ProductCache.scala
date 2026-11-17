@@ -8,8 +8,9 @@ import java.nio.file.{Files, Path}
 
 import zio.{Chunk, IO, ZIO}
 
-/** The local blob of a compile, link, or package, read and written through [[RemoteCache.find]] and
-  * [[RemoteCache.store]]. `find` checks the download against its digest before these bytes are installed.
+/** The local blob of a compile, link, or package, read and written through [[histos.schedule.RemoteCache.find]] and
+  * [[histos.schedule.RemoteCache.store]]. `find` checks the download against its digest before these bytes are
+  * installed.
   */
 object ProductCache:
   /** Put a remote hit into the local store. A timeout is a miss. A mismatched download fails. `Off` does nothing. */

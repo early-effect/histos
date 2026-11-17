@@ -56,7 +56,7 @@ object DoctorSurface:
     */
   type Needs = Reads & Stdio & CommandRunner
 
-  /** The live reads. An edge adds its own [[Stdio]] and [[CommandRunner]]. */
+  /** The live reads. An edge adds its own [[histos.cli.Stdio]] and [[CommandRunner]]. */
   val reads: ULayer[Reads] =
     ReleaseFeed.live ++ GitRead.live ++ ZLayer.succeed(Net.live) ++ GhAuth.live ++ KeyServer.central
 

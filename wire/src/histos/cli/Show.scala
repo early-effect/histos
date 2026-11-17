@@ -9,7 +9,7 @@ import java.nio.file.Path
 
 import zio.{Chunk, Ref, ZIO}
 
-/** Console lines for one [[BuildEvent]]. The event is not rewritten into this text.
+/** Console lines for one [[histos.build.BuildEvent]]. The event is not rewritten into this text.
   */
 object Show:
   /** The column and the theme remembered from silent events. */

@@ -22,7 +22,8 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One jar of the Scala Native standard library or the compiler plugin. The names go through [[ArtifactName]].
+/** One jar of the Scala Native standard library or the compiler plugin. The names go through
+  * [[histos.resolve.ArtifactName]].
   */
 enum NativeComponent:
   case Nativelib, CLib, PosixLib, WindowsLib, JavaLib, AuxLib, ScalaLib,
