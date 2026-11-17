@@ -304,7 +304,7 @@ These are the next plans. None of them is authorized by the pin PR. A milestone 
 - M1. Daemon consent (A5). Wire `LockCoordinator` into the daemon. An offer receives a `LockReply`, and the watch loop keeps that answer. Redirected CLI, unnegotiated MCP, and unnegotiated BSP stay diagnoses. Consent is not read from the server environment or from program stdin.
 - M2. Refresh. `resolve --refresh` currently does not revalidate and says so. Decide whether it revalidates before changing the command. The parser still rejects frozen, local, and a combination with update or check.
 - M3. Published pin grammar. Do not invent the lock lines. After Russ names them, add `ReviewedLocksSpec` and `examples/expected-lock-repair.txt`, and compiler-prove the published examples.
-- M4. Lock strategy context. A custom `LockStrategy` sees revision, intent, drift, and diff. The built-in exact-or-rebuild behavior stays. Frozen-miss stays a typed refusal and does not solve.
+- M4. Lock strategy context. A custom `LockStrategy` sees revision, intent, drift, and diff. The built-in exact-or-rebuild behavior stays. Frozen-miss stays a typed refusal and does not solve. Branch `histos/plugin-m4`. In progress.
 - M5. Compiler and runtime identity. Record both lists on the cell snapshot. P4 left them empty on purpose. The publication spec asserts the lists.
 - M6. Installed-host proof. Close R1 through R8, R10 through R14, A1 through A4, A6, and A8 only from a fixture that executes the sentence, on the pinned host. That includes a native client and MCP as two callers, stage inputs, offline refusal, a TASTy seal, and a second published load. A local `ld: library 'crypto' not found` is not the native gate. CI is.
 

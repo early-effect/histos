@@ -291,7 +291,7 @@ enum LockTextError:
 end LockTextError
 
 /** Text forms shared by the lock document and the commit journal. */
-private[resolve] object LockCodec:
+private[histos] object LockCodec:
   def content(text: String): ContentHash =
     Digests.content(text.getBytes(StandardCharsets.UTF_8))
 
