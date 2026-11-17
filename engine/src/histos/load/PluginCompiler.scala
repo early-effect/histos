@@ -66,6 +66,7 @@ final case class PluginCompileJob(
     offline: Boolean = false,
     caller: Map[String, String] = Map.empty,
     probe: UIO[Unit] = ZIO.unit,
+    flags: ScalacFlags = ScalacFlags.empty,
 )
 
 final case class PluginCompileResult(
@@ -224,7 +225,7 @@ object PluginCompiler:
     PluginCompileKey.of(
       job.session.manifest.scalaVersion,
       job.session.jdk,
-      ScalacFlags.empty.canonical,
+      job.flags.canonical,
       selected,
       job.settings,
       job.stages,
@@ -237,7 +238,7 @@ object PluginCompiler:
 
   private def compileRequest(job: PluginCompileJob, apis: List[Sha256]): CompileRequest =
     CompileRequest(
-      CompileToolchain(job.session.manifest.scalaVersion, Platform.Jvm, jdkRuntime(job.session), ScalacFlags.empty),
+      CompileToolchain(job.session.manifest.scalaVersion, Platform.Jvm, jdkRuntime(job.session), job.flags),
       job.sources,
       job.classpath ++ job.apiJars,
       job.classes,

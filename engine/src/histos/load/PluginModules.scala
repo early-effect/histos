@@ -1,12 +1,15 @@
 package histos.load
 
-import histos.plugin.{PluginCoordinate, PluginLoadError}
+import histos.cache.ContentStore
+import histos.plugin.{BootstrapError, InputKey, PluginCoordinate, PluginLoadError, SemanticSetting}
+import histos.resolve.{ClasspathScope, Repositories, Resolve, ResolveCell}
+import histos.schedule.RemoteCache
+import histos.toolchain.{HostCompilerError, HostCompilerSession, HostToolRole}
 import histos.workspace.{IoFailure, IoFault}
-import histos.zinc.{CompileError, GraphCompile, Sources}
+import histos.zinc.{CompileError, CompilerStarts, Compilers, GraphCompile, Sources}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{Files, Path}
-import java.util.zip.{ZipException, ZipFile}
+import java.nio.file.{Files, Path, StandardCopyOption}
 
 import scala.jdk.CollectionConverters.*
 
@@ -21,15 +24,56 @@ private[load] object PluginModules:
       graph: ProjectGraph,
       boundary: List[Path],
   ): ZIO[Scope, LoadError, List[Path]] =
+    run(repo, graph, boundary, None, None, Set.empty).provideSomeLayer[Scope](BuildCache.ephemeral)
+
+  def compile(
+      repo: Path,
+      graph: ProjectGraph,
+      boundary: List[Path],
+      resolve: Resolve,
+  ): ZIO[Scope, LoadError, List[Path]] =
+    run(repo, graph, boundary, Some(resolve), None, Set.empty).provideSomeLayer[Scope](BuildCache.ephemeral)
+
+  /** Java, resources, flags, and a content-addressed class directory. A missing host bridge is typed. */
+  def compileCached(
+      repo: Path,
+      graph: ProjectGraph,
+      boundary: List[Path],
+      resolve: Option[Resolve],
+      session: Option[HostCompilerSession],
+      skip: Set[ProjectName] = Set.empty,
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
+    run(repo, graph, boundary, resolve, session, skip)
+
+  private def run(
+      repo: Path,
+      graph: ProjectGraph,
+      boundary: List[Path],
+      resolve: Option[Resolve],
+      session: Option[HostCompilerSession],
+      skip: Set[ProjectName],
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
+    walk(repo, graph, boundary, resolve, session, skip)
+
+  private def walk(
+      repo: Path,
+      graph: ProjectGraph,
+      boundary: List[Path],
+      resolve: Option[Resolve],
+      session: Option[HostCompilerSession],
+      skip: Set[ProjectName],
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     ZIO
       .fromEither(ordered(graph))
       .flatMap: modules =>
         val all   = graph.projects.collect { case module: Module => module }
         val roots = coordinates(graph)
         ZIO.foldLeft(modules)(List.empty[Path]): (classpath, module) =>
-          val need = if roots.contains(module.name) then Need.Required else Need.Optional
-          compileOne(repo, all, module, boundary ++ classpath, need).map: added =>
-            classpath ++ added
+          if skip.contains(module.name) then ZIO.succeed(classpath)
+          else
+            val need = if roots.contains(module.name) then Need.Required else Need.Optional
+            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session).map: added =>
+              classpath ++ added
 
   private def coordinates(graph: ProjectGraph): Set[ProjectName] =
     graph.coordinates.collect { case PluginCoordinate.Module(name) => name }.toSet
@@ -72,8 +116,12 @@ private[load] object PluginModules:
       module: Module,
       classpath: List[Path],
       need: Need,
-  ): ZIO[Scope, LoadError, List[Path]] =
+      resolve: Option[Resolve],
+      session: Option[HostCompilerSession],
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     versionOf(module) match
+      case None if module.versions.all.length > 1 =>
+        ZIO.fail(LoadError.Bootstrap(BootstrapError.AmbiguousScala(module.name.value)))
       case None =>
         missing(module, need)
       case Some(version) =>
@@ -84,20 +132,18 @@ private[load] object PluginModules:
             case None =>
               missing(module, need)
             case Some(base) =>
-              onBoundary(base, classpath).flatMap:
-                case true  => ZIO.succeed(Nil)
-                case false =>
-                  Sources
-                    .select(base, version, Platform.Jvm)
-                    .mapError(failed)
-                    .flatMap: found =>
-                      val sources = scalaSources(found)
-                      if sources.isEmpty then missing(module, need)
-                      else
-                        for
-                          out <- BuildFile.tempDir("histos-plugin")
-                          _   <- BuildFile.compileSources(sources, classpath, out)
-                        yield List(out)
+              Sources
+                .select(base, version, Platform.Jvm)
+                .mapError(failed)
+                .flatMap: found =>
+                  if found.isEmpty then missing(module, need)
+                  else
+                    for
+                      extra <- externals(module, version, resolve)
+                      out   <- BuildFile.tempDir("histos-plugin")
+                      _     <- emit(repo, module, base, found, classpath ++ extra, out, session)
+                      _     <- copyResources(base, out)
+                    yield extra :+ out
 
   /** The wiring compiler is this process. A module that names it uses that source tree. One declared version uses that
     * version. Several versions, none of them this compiler, are not a guess.
@@ -112,40 +158,128 @@ private[load] object PluginModules:
           case only :: Nil => Some(only)
           case _           => None
 
-  /** The running process already loaded this module: its sources define [[histos.HistosBuild]] and the boundary jar
-    * contains that class. Compiling it again, against an assembly, collides with packages the assembly also contains.
-    * The plugin links the boundary jar.
-    */
-  private def onBoundary(base: Path, boundary: List[Path]): IO[LoadError, Boolean] =
-    ZIO
-      .attemptBlocking(definesHost(base) && boundary.exists(hasHost))
-      .mapError(_ => LoadError.Io(IoFailure(base, IoFault.Walk)))
+  private def emit(
+      repo: Path,
+      module: Module,
+      base: Path,
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+      session: Option[HostCompilerSession],
+  ): ZIO[BuildCache.Env, LoadError, Unit] =
+    val java = sources.exists(path => Option(path.getFileName).exists(_.toString.endsWith(".java")))
+    session match
+      case Some(hosted) =>
+        hostedCompile(repo, module, base, sources, classpath, out, hosted)
+      case None if java =>
+        ZIO.fail(LoadError.HostCompiler(HostCompilerError.EntryAbsent(HostToolRole.Bridge)))
+      case None =>
+        for
+          mark <- resourceMark(base)
+          _    <- BuildCache.compile(sources, classpath, out, module.flags.canonical + mark)
+        yield ()
 
-  private def definesHost(base: Path): Boolean =
-    if !Files.isDirectory(base) then false
-    else
-      val walk = Files.walk(base)
+  private def hostedCompile(
+      repo: Path,
+      module: Module,
+      base: Path,
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+      session: HostCompilerSession,
+  ): ZIO[BuildCache.Env, LoadError, Unit] =
+    for
+      settings <- resourceSettings(base)
+      _        <- PluginCompiler
+        .compile(
+          PluginCompileJob(
+            module.name,
+            session,
+            repo,
+            repo,
+            sources,
+            classpath,
+            classes = out,
+            analysis = out.resolve("analysis"),
+            settings = settings,
+            flags = module.flags,
+          )
+        )
+        .mapError(compiled)
+        .unit
+    yield ()
+
+  private def externals(
+      module: Module,
+      version: ScalaVersion,
+      resolve: Option[Resolve],
+  ): IO[LoadError, List[Path]] =
+    resolve match
+      case None                                   => ZIO.succeed(Nil)
+      case Some(_) if module.dependencies.isEmpty => ZIO.succeed(Nil)
+      case Some(service)                          =>
+        val cell = ResolveCell(
+          module.name,
+          module.dependencies,
+          version,
+          Platform.Jvm,
+          Repositories.central,
+          ClasspathScope.Compile,
+        )
+        service.resolve(cell).mapBoth(LoadError.Resolve(_), _.artifacts.map(_.path))
+
+  private def copyResources(base: Path, out: Path): IO[LoadError, Unit] =
+    val resources = base.resolve("main").resolve("resources")
+    ZIO
+      .attemptBlocking(copyTree(resources, out))
+      .mapError(_ => LoadError.Io(IoFailure(resources, IoFault.Read)))
+
+  private def copyTree(resources: Path, out: Path): Unit =
+    if Files.isDirectory(resources) then
+      val walk = Files.walk(resources)
       try
-        walk.iterator.asScala.exists: path =>
-          Files.isRegularFile(path) &&
-            Option(path.getFileName).exists(_.toString.endsWith(".scala")) &&
-            Files.readString(path).contains("trait HistosBuild")
+        walk.iterator.asScala.foreach: path =>
+          if Files.isRegularFile(path) then
+            val dest = out.resolve(resources.relativize(path))
+            Option(dest.getParent).foreach(parent => Files.createDirectories(parent))
+            Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
       finally walk.close()
 
-  private def hasHost(jar: Path): Boolean =
-    if !Files.isRegularFile(jar) then false
+  private def resourceMark(base: Path): IO[LoadError, String] =
+    resourceSettings(base).map(settings => settings.map(_.value).mkString(","))
+
+  private def resourceSettings(base: Path): IO[LoadError, List[SemanticSetting]] =
+    val resources = base.resolve("main").resolve("resources")
+    ZIO
+      .attemptBlocking(resourceHashes(resources))
+      .mapError(_ => LoadError.Io(IoFailure(resources, IoFault.Read)))
+      .flatMap: hashes =>
+        hashes match
+          case Nil => ZIO.succeed(Nil)
+          case _   =>
+            ZIO.succeed(List(SemanticSetting(InputKey.trusted("resources"), hashes.mkString(","))))
+
+  private def resourceHashes(resources: Path): List[String] =
+    if !Files.isDirectory(resources) then Nil
     else
+      val walk = Files.walk(resources)
       try
-        val zip = new ZipFile(jar.toFile)
-        try zip.getEntry(HostClass) != null
-        finally zip.close()
-      catch case _: ZipException => false
+        walk.iterator.asScala.toList
+          .filter(Files.isRegularFile(_))
+          .sortBy(_.toString)
+          .map: path =>
+            val relative = resources.relativize(path).toString.replace('\\', '/')
+            val bytes    = Files.readAllBytes(path)
+            s"$relative:${histos.plugin.Digests.sha256(bytes)}"
+      finally walk.close()
 
-  private val HostClass: String = "histos/HistosBuild.class"
-
-  private def scalaSources(paths: List[Path]): List[Path] =
-    paths.filter: path =>
-      Option(path.getFileName).exists(_.toString.endsWith(".scala"))
+  private def compiled(error: PluginCompileError): LoadError =
+    error match
+      case PluginCompileError.Host(found)    => LoadError.HostCompiler(found)
+      case PluginCompileError.Compile(found) =>
+        LoadError.CompileFailed(List(CompilerMessage.fromCompiler(found.message)))
+      case other =>
+        LoadError.CompileFailed(List(CompilerMessage.fromCompiler(other.message)))
 
   private def missing(module: Module, need: Need): ZIO[Any, LoadError, List[Path]] =
     need match

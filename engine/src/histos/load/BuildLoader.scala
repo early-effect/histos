@@ -1,7 +1,8 @@
 package histos.load
 
 import java.net.{URL, URLClassLoader}
-import java.util.concurrent.atomic.AtomicReference
+import java.nio.file.Path
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 import scala.jdk.OptionConverters.*
 
@@ -30,6 +31,18 @@ private[load] final case class Refusal(binary: String, requester: Option[Class[?
 /** Build classes plus plugin jars. Refused names are thrown before this loader searches its own URLs. */
 private[load] final class BuildLoader(urls: Array[URL], parent: ClassLoader) extends URLClassLoader(urls, parent):
   private val refused = new AtomicReference[Option[Refusal]](None)
+  private val shut    = new AtomicBoolean(false)
+
+  /** Directory URLs stay readable after `URLClassLoader.close`, so this is the closed bit. */
+  private[load] def isClosed: Boolean = shut.get()
+
+  override def close(): Unit =
+    super.close()
+    shut.set(true)
+
+  /** Append one output directory or jar. Parent-owned classes stay on the parent. */
+  def add(path: Path): Unit =
+    addURL(path.toUri.toURL)
 
   /** The latest refusal, which this clears. */
   def takeRefused: Option[Refusal] =

@@ -2,7 +2,10 @@ package histos.load
 
 import histos.workspace.{IoFailure, IoFault}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
+
+import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
@@ -16,21 +19,46 @@ private[load] object ClassHome:
     else if name.startsWith("histos.") then ClassHome.Refused
     else ClassHome.Open
 
-  /** Api surface a build file may name: root `histos`, plugins, versions, supply chain, and doctor. Never a plugin jar.
+  /** Packages present in the running API artifact, plus the host process packages. Engine packages are not in that
+    * artifact, so they stay refused.
     */
   def boundary(name: String): Boolean =
-    name.startsWith("zio.") ||
-      name.startsWith("izumi.reflect.") ||
-      name.startsWith("scala.") ||
-      name.startsWith("histos.version.") ||
-      name.startsWith("histos.plugin.") ||
-      name.startsWith("histos.supply.") ||
-      name.startsWith("histos.doctor.") ||
-      root(name)
+    hostProcess(name) || exported.contains(packageOf(name))
 
-  /** Package `histos` with no subpackage. `histos.HistosBuild` is in. `histos.schedule.Sendable` is not. */
-  private def root(name: String): Boolean =
-    name.startsWith("histos.") && !name.substring("histos.".length).contains('.')
+  private def hostProcess(name: String): Boolean =
+    name.startsWith("zio.") || name.startsWith("izumi.reflect.") || name.startsWith("scala.")
+
+  private def packageOf(name: String): String =
+    val dot = name.lastIndexOf('.')
+    if dot < 0 then "" else name.substring(0, dot)
+
+  private lazy val exported: Set[String] =
+    histos.load.Boundary.codeSource(classOf[histos.HistosBuild]) match
+      case Some(path) if Files.isDirectory(path) => packagesInTree(path)
+      case Some(path)                            => packagesInJar(path)
+      case None                                  => Set.empty
+
+  private def packagesInTree(root: Path): Set[String] =
+    val walk = Files.walk(root)
+    try
+      walk.iterator.asScala.foldLeft(Set.empty[String]): (seen, path) =>
+        val classEntry = Files.isRegularFile(path) && Option(path.getFileName).exists(name => classFile(name.toString))
+        if classEntry then
+          seen + packageOf(root.relativize(path).toString.replace('\\', '/').stripSuffix(".class").replace('/', '.'))
+        else seen
+    finally walk.close()
+
+  private def packagesInJar(path: Path): Set[String] =
+    val zip = new ZipFile(path.toFile)
+    try
+      zip.entries.asScala.foldLeft(Set.empty[String]): (seen, entry) =>
+        val name = entry.getName
+        if classFile(name) then seen + packageOf(name.stripSuffix(".class").replace('/', '.'))
+        else seen
+    finally zip.close()
+
+  private def classFile(name: String): Boolean =
+    name.endsWith(".class") && !name.startsWith("META-INF/")
 end ClassHome
 
 /** Jars the api classloader already supplies. A plugin cell must not put a second copy on a flat classpath. */

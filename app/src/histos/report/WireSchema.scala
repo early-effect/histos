@@ -32,6 +32,7 @@ import histos.plugin.{
   PluginId,
   PluginIo,
   PluginLoadError,
+  PluginRefusal,
   PluginRunError,
   PluginTaskError,
   PluginTaskId,
@@ -444,6 +445,8 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[DownloadFault] = Schema.derived
 
   given Schema[ArtifactMiss] = Schema.derived
+
+  given Schema[PluginRefusal] = Schema.derived
 
   given Schema[PluginLoadError] = Schema.derived
 

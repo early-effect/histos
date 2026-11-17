@@ -57,14 +57,30 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       yield BuildFile.notesOf(reporter, repo.resolve("histos.scala"), source)
 
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
-    open(repo, apiJar, ShipSource.Follow)
+    catalogued(repo, apiJar, None)
 
   def loadLocked(
       repo: Path,
       apiJar: Path,
       lock: DependencyLock,
   ): ZIO[Scope, LoadError, LoadedBuild] =
-    ZIO.succeed(lock) *> open(repo, apiJar, ShipSource.Solve)
+    ZIO.succeed(lock) *> catalogued(repo, apiJar, Some(histos.lock.LockMode.Update))
+
+  /** A catalog uses the first-load protocol. Update still solves: the override is `Update`, and a lock file does not
+    * choose it. No catalog keeps the graph's own resolution.
+    */
+  private def catalogued(
+      repo: Path,
+      apiJar: Path,
+      mode: Option[histos.lock.LockMode],
+  ): ZIO[Scope, LoadError, LoadedBuild] =
+    val catalog = repo.resolve("histos.plugins.scala")
+    ZIO.ifZIO(exists(catalog))(
+      BootstrapLoad
+        .prepare(resolve, BootstrapLoad.Prepare(repo, apiJar, lockMode = mode))
+        .provideSomeLayer[Scope](BuildCache.ephemeral),
+      open(repo, apiJar, if mode.isDefined then ShipSource.Solve else ShipSource.Follow),
+    )
 
   private enum ShipSource:
     case Follow
@@ -72,24 +88,41 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
 
   private def open(repo: Path, apiJar: Path, source: ShipSource): ZIO[Scope, LoadError, LoadedBuild] =
     for
-      text       <- readBuild(repo)
-      launcher   <- digestOf(apiJar)
-      boundary   <- Boundary.jars(apiJar)
-      out        <- BuildFile.tempDir("histos-classes")
-      sourceFile <- BuildFile.writeTemp(text)
-      _          <- BuildFile.compileLabeled(List(sourceFile -> "histos.scala"), boundary, out)
-      graph      <- readGraph(out)
-      modules    <- PluginModules.compile(repo, graph, boundary)
-      ships      <- shipsOf(repo, graph, launcher, source)
-      plugins = modules ++ ships
-      wired   <- compileWiring(repo, boundary ++ plugins, out)
-      opened  <- ZIO.acquireRelease(BuildFile.open(out, plugins))(BuildFile.close)
-      threads <- PluginThreads.make(opened.build)
-      builds  <- BuildFile.entries(out, opened.build)
-      build   <- BuildFile.select(builds)
-      loaded  <- assemble(wired, opened.build, threads, graph, launcher)
-      runtime <- PluginRuntime.loaded(repo, loaded.graph, opened.build, threads, loaded.links, launcher)
-    yield LoadedBuild(loaded.graph, runtime, build)
+      text     <- readBuild(repo)
+      launcher <- digestOf(apiJar)
+      boundary <- Boundary.jars(apiJar)
+      leases   <- GenerationLeases.make
+      _        <- ZIO.addFinalizer(leases.retire)
+      loaded   <- inGeneration(repo, source, text, boundary, launcher, leases).onError(_ => leases.discard)
+    yield loaded
+
+  /** Wiring loader and the class directories it reads. A short loader that only reads the graph stays in its own scope.
+    */
+  private def inGeneration(
+      repo: Path,
+      source: ShipSource,
+      text: String,
+      boundary: List[Path],
+      launcher: ApiDigest,
+      leases: GenerationLeases,
+  ): ZIO[Any, LoadError, LoadedBuild] =
+    leases.use:
+      for
+        out        <- BuildFile.tempDir("histos-classes")
+        sourceFile <- BuildFile.writeTemp(text)
+        _          <- BuildFile.compileLabeled(List(sourceFile -> "histos.scala"), boundary, out)
+        graph      <- readGraph(out)
+        modules    <- PluginModules.compile(repo, graph, boundary, resolve)
+        ships      <- shipsOf(repo, graph, launcher, source)
+        plugins = modules ++ ships
+        wired   <- compileWiring(repo, boundary ++ plugins, out)
+        opened  <- ZIO.acquireRelease(BuildFile.open(out, plugins))(BuildFile.close)
+        threads <- PluginThreads.make(opened.build)
+        builds  <- BuildFile.entries(out, opened.build)
+        build   <- BuildFile.select(builds)
+        loaded  <- assemble(wired, opened.build, threads, graph, launcher, leases).onError(_ => leases.discard)
+        runtime <- PluginRuntime.loaded(repo, loaded.graph, opened.build, threads, loaded.links, launcher, leases)
+      yield LoadedBuild(loaded.graph, runtime, build)
 
   /** No published pin reads no lock and calls no resolver. */
   private def shipsOf(
@@ -117,7 +150,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
                 .flatMap: lock =>
                   PluginShips.jars(graph, resolve, launcher, Some(lock))
 
-  /** The graph decides the wiring classpath, so it is read before that compile. The loader closes with the graph. */
+  /** The graph decides the wiring classpath, so it is read before that compile. This loader closes with the read. */
   private def readGraph(out: Path): IO[LoadError, histos.ProjectGraph] =
     ZIO.scoped:
       for
@@ -157,22 +190,38 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       threads: PluginThreads,
       graph: histos.ProjectGraph,
       launcher: ApiDigest,
+      leases: GenerationLeases,
   ): IO[LoadError, Assembled] =
     if !wired then ZIO.succeed(Assembled(graph, Nil))
     else
       for
-        built      <- readBuilt(loader, threads)
+        built      <- readBuilt(loader, threads, leases)
         registered <- ZIO.foreach(built.values.toList): plugin =>
           ZIO
             .attempt(RegisteredPlugin(plugin.id, plugin.contribute)(plugin))
             .mapError(thrown => LoadError.Plugin(PluginLoadError.Construction(thrown.getClass.getName)))
       yield Assembled(graph.withPlugins(registered), linksOf(registered, graph, launcher))
 
-  private def readBuilt(loader: ClassLoader, threads: PluginThreads): IO[LoadError, Plugins] =
-    threads.run:
-      ZIO.scoped:
-        loadWiring(loader).flatMap: built =>
-          built.build.mapError(error => LoadError.Plugin(PluginLoadError.Construction(error.toString)))
+  private def readBuilt(
+      loader: ClassLoader,
+      threads: PluginThreads,
+      leases: GenerationLeases,
+  ): IO[LoadError, Plugins] =
+    threads
+      .run(
+        loadWiring(loader).flatMap: wiring =>
+          leases.use(wiring.build.mapError(activation))
+      )
+      .onError(_ => leases.discard)
+
+  private def activation(error: Any): LoadError =
+    error match
+      case setup: histos.plugin.ServiceSetupError =>
+        LoadError.Plugin(
+          PluginLoadError.Activation(histos.plugin.ServiceActivationError.Setup(setup.diagnosis))
+        )
+      case other =>
+        LoadError.Plugin(PluginLoadError.Construction(other.getClass.getName))
 
   private def loadWiring(loader: ClassLoader): IO[LoadError, WiringBuilt] =
     ZIO

@@ -1,5 +1,6 @@
 package histos.plugin
 
+import histos.lock.LockStrategyError
 import histos.{Dep, ProjectName}
 
 import java.nio.file.Path
@@ -19,6 +20,13 @@ enum PluginLoadError:
   case Io(op: PluginIo)
   case Construction(detail: String)
   case Recipe(error: RecipeError)
+  case BindingDrift(path: Path, found: ApiDigest, launcher: ApiDigest)
+  case ClasspathConflict(binary: String, left: Path, right: Path)
+  case Policy(error: LockStrategyError)
+  case Loading(error: PluginStrategyError)
+  case Activation(error: ServiceActivationError)
+  case Refused(path: Path, refusal: PluginRefusal)
+  case Publication(path: Path)
 
   def message: String = this match
     case Unlocked(coordinate)    => s"plugin $coordinate is not in the lock"
@@ -30,14 +38,23 @@ enum PluginLoadError:
       s"plugin ${PluginCoordinate.Published(dependency).render} uses LinkStrategy.Api, which is refused"
     case NoSource(coordinate) =>
       s"plugin ${coordinate.render} needs sources, and this loader does not have them"
-    case ReservedPackage(binary)        => s"'$binary' is in a reserved package"
-    case EngineLeak(coordinate, binary) => s"plugin ${coordinate.render} links '$binary'"
-    case BuildLeak(binary)              => s"the build links '$binary', and no plugin class asked for it"
-    case IdMismatch(declared, found)    => s"plugin ${declared.value} loaded as ${found.value}"
-    case Defect(coordinate, binary)     => s"plugin ${coordinate.render} failed while loading ($binary)"
-    case Io(op)                         => s"plugin ${op.word} failed at ${op.location}"
-    case Construction(detail)           => s"plugin construction failed ($detail)"
-    case Recipe(error)                  => error.message
+    case ReservedPackage(binary)             => s"'$binary' is in a reserved package"
+    case EngineLeak(coordinate, binary)      => s"plugin ${coordinate.render} links '$binary'"
+    case BuildLeak(binary)                   => s"the build links '$binary', and no plugin class asked for it"
+    case IdMismatch(declared, found)         => s"plugin ${declared.value} loaded as ${found.value}"
+    case Defect(coordinate, binary)          => s"plugin ${coordinate.render} failed while loading ($binary)"
+    case Io(op)                              => s"plugin ${op.word} failed at ${op.location}"
+    case Construction(detail)                => s"plugin construction failed ($detail)"
+    case Recipe(error)                       => error.message
+    case BindingDrift(path, found, launcher) =>
+      s"plugin binding at $path is ${found.value} and this process loads ${launcher.value}"
+    case ClasspathConflict(binary, left, right) =>
+      s"class $binary is defined by $left and $right"
+    case Policy(error)          => error.message
+    case Loading(error)         => error.message
+    case Activation(error)      => error.message
+    case Refused(path, refusal) => s"plugin at $path was refused: ${refusal.message}"
+    case Publication(path)      => s"plugin publication at $path did not decode"
 end PluginLoadError
 
 enum PluginIo:
@@ -71,6 +88,7 @@ enum PluginRunError:
   case Defect(binary: String)
   case EngineLeak(binary: String)
   case Linkage(binary: String)
+  case Closed
 
   def message: String = this match
     case Failed(detail)           => detail.value
@@ -83,4 +101,5 @@ enum PluginRunError:
     case Defect(binary)           => s"plugin task failed ($binary)"
     case EngineLeak(binary)       => s"plugin task links '$binary'"
     case Linkage(binary)          => s"plugin task is missing class $binary"
+    case Closed                   => "plugin generation is closed"
 end PluginRunError
