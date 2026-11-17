@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin stayed `0.4.2`. A5 through A8 stayed open. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. A5 through A8 stay open until their milestones close. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
@@ -294,3 +294,18 @@ Rows left open, and why:
 - Architecture R9 is checked. The bundle macro and `WiringSource` are deleted, and a lone `histos.wiring.scala` is not compiled.
 - Completion native client and MCP, the P4/P7 line, and the review line stay open.
 - `.bsp/histos.json` was restored. Not part of this diff.
+
+Snapshot `0.4.4-8c61390d3c7a-SNAPSHOT` was published from clean `8c61390`. The launcher timestamp is `0.4.4-8c61390d3c7a-20261117.120003-1`. The pointer `0.4.4-SNAPSHOT` moved to `0.4.4-20261117.120023-2` and is not the pin. `Ship.next` stays `0.4.4`. No release was cut.
+
+## Remaining milestones
+
+These are the next plans. None of them is authorized by the pin PR. A milestone that changes what a command writes stops for Russ before that behavior is chosen.
+
+- M1. Daemon consent (A5). Wire `LockCoordinator` into the daemon. An offer receives a `LockReply`, and the watch loop keeps that answer. Redirected CLI, unnegotiated MCP, and unnegotiated BSP stay diagnoses. Consent is not read from the server environment or from program stdin.
+- M2. Refresh. `resolve --refresh` currently does not revalidate and says so. Decide whether it revalidates before changing the command. The parser still rejects frozen, local, and a combination with update or check.
+- M3. Published pin grammar. Do not invent the lock lines. After Russ names them, add `ReviewedLocksSpec` and `examples/expected-lock-repair.txt`, and compiler-prove the published examples.
+- M4. Lock strategy context. A custom `LockStrategy` sees revision, intent, drift, and diff. The built-in exact-or-rebuild behavior stays. Frozen-miss stays a typed refusal and does not solve.
+- M5. Compiler and runtime identity. Record both lists on the cell snapshot. P4 left them empty on purpose. The publication spec asserts the lists.
+- M6. Installed-host proof. Close R1 through R8, R10 through R14, A1 through A4, A6, and A8 only from a fixture that executes the sentence, on the pinned host. That includes a native client and MCP as two callers, stage inputs, offline refusal, a TASTy seal, and a second published load. A local `ld: library 'crypto' not found` is not the native gate. CI is.
+
+Not scheduled: the `cache-seed` 404 on pushes to `main`, and the four JDK `Unsafe` lines from a runner that does not pass the allow flag.
