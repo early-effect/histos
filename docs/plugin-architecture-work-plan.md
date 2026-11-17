@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin is `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`. A5 through A8 stay open until their milestones close. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin moves in #233 from `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`, to `0.5.0-7c073bd2f203-SNAPSHOT`, packed from `7c073bd2`. The launcher timestamp is `0.5.0-7c073bd2f203-20261117.233941-1`. The pointer `0.5.0-SNAPSHOT` moved to `0.5.0-20261117.234019-6` and is not the pin. M1, M4, M5, and M6 are merged. Architecture rows A5 through A8 stay open. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
@@ -301,11 +301,11 @@ Snapshot `0.4.4-8c61390d3c7a-SNAPSHOT` was published from clean `8c61390`. The l
 
 These are the next plans. None of them is authorized by the pin PR. A milestone that changes what a command writes stops for Russ before that behavior is chosen.
 
-- M1. Daemon consent (A5). Wire `LockCoordinator` into the daemon. An offer receives a `LockReply`, and the watch loop keeps that answer. Redirected CLI, unnegotiated MCP, and unnegotiated BSP stay diagnoses. Consent is not read from the server environment or from program stdin. Branch `histos/plugin-m1`. In progress. Ordinary commands do not call `prepare`. A dependency lock is `Corrupt` and is not rewritten.
-- M2. Refresh. `resolve --refresh` currently does not revalidate and says so. Decide whether it revalidates before changing the command. The parser still rejects frozen, local, and a combination with update or check.
+- M1. Daemon consent (A5). Merged as `b120b2df` (#232). CI run 44198375987 on `ff643ed3` ran `./histos test --affected '["app"]'`: 47 passed, 0 failed, no test-clock warning. Ordinary commands do not call `prepare`. A dependency lock is `Corrupt` and is not rewritten. The architecture checklist row stays open.
+- M2. Refresh. `resolve --refresh` currently does not revalidate and says so. It revalidates retained snapshot locators through the session coordinator once M1 is on main. The parser still rejects frozen, local, and a combination with update or check. A dependency lock stays `Corrupt` and is not rewritten.
 - M3. Published pin grammar. Do not invent the lock lines. After Russ names them, add `ReviewedLocksSpec` and `examples/expected-lock-repair.txt`, and compiler-prove the published examples.
-- M4. Lock strategy context. A custom `LockStrategy` sees revision, intent, drift, and diff. The built-in exact-or-rebuild behavior stays. Frozen-miss stays a typed refusal and does not solve. Branch `histos/plugin-m4`. In progress.
-- M5. Compiler and runtime identity. Record both lists on the cell snapshot. P4 left them empty on purpose. The publication spec asserts the lists.
-- M6. Installed-host proof. Close R1 through R8, R10 through R14, A1 through A4, A6, and A8 only from a fixture that executes the sentence, on the pinned host. That includes a native client and MCP as two callers, stage inputs, offline refusal, a TASTy seal, and a second published load. A local `ld: library 'crypto' not found` is not the native gate. CI is. Branch `histos/plugin-m6`. In progress. The native client process was not spawned.
+- M4. Lock strategy context. Merged as `8caeeb74` (#229). CI run 44198380924 on `24d93882` ran `./histos test --affected '["engine","app"]'`: app 37 passed, engine 129 passed, 0 failed, no test-clock warning.
+- M5. Compiler and runtime identity. Merged as `460ca294` (#230). CI run 44199493705 on `6e5377df` ran `./histos test --affected '["engine","app"]'`: app 47 passed, engine 130 passed, 0 failed, no test-clock warning.
+- M6. Installed-host proof. Merged as `7c073bd2` (#231). CI run 44199500059 on `9614742a` ran `./histos test --affected '["app"]'`: 66 passed, 0 failed, no test-clock warning. The native client process was not spawned, so the architecture rows stay open.
 
 Not scheduled: the `cache-seed` 404 on pushes to `main`, and the four JDK `Unsafe` lines from a runner that does not pass the allow flag.
