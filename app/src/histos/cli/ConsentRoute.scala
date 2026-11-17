@@ -20,7 +20,7 @@ enum ConsentDecision:
   /** No negotiation. A diagnosis, never a prompt. */
   case Diagnosis(noted: Noted)
 
-  /** Redirected CLI. The summary and both rerun commands, and [[LockTransactionError.ConsentRequired]]. */
+  /** Redirected CLI. The summary and both rerun commands, and [[histos.lock.LockTransactionError.ConsentRequired]]. */
   case Required(
       error: LockTransactionError.ConsentRequired,
       summary: List[String],
