@@ -77,181 +77,190 @@ object Perform:
       say: Say,
       edges: Edges[R],
       relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
+      caller: Option[histos.plugin.InvocationContext] = None,
+      events: histos.plugin.PluginEvents.Invocation = histos.plugin.PluginEvents.closedInvocation,
+      lock: Option[histos.lock.LockMode] = None,
   ): ZIO[
     R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
       histos.resolve.ResolutionService & histos.format.Formatters & IvyRoot,
     ServerError,
     Unit,
   ] =
-    loaded match
-      case Left(fault) => Calls.finish(say, CallResult.Fault(fault))
-      case Right(have) =>
-        def follow[R1](body: ZIO[R1, ServerError, Unit]): ZIO[R1, ServerError, Unit] =
-          if track then Calls.tracked(runs, say)(body) else body
+    LockDisposition.unapplied(call, lock) match
+      case Some(mode) =>
+        Calls.finish(say, CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode))))
+      case None =>
+        loaded match
+          case Left(fault) => Calls.finish(say, CallResult.Fault(fault))
+          case Right(have) =>
+            def follow[R1](body: ZIO[R1, ServerError, Unit]): ZIO[R1, ServerError, Unit] =
+              if track then Calls.tracked(runs, say)(body) else body
 
-        def held[R1](use: LoadedBuild => ZIO[R1, ServerError, Unit]): ZIO[R1, ServerError, Unit] =
-          have match
-            case Some(build) => use(build)
-            case None        =>
-              Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed)))
+            def held[R1](use: LoadedBuild => ZIO[R1, ServerError, Unit]): ZIO[R1, ServerError, Unit] =
+              have match
+                case Some(build) => use(build)
+                case None        =>
+                  Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed)))
 
-        def withJdk[R1](
-            use: histos.jdk.JdkRuntime => ZIO[R1, ServerError, Unit]
-        ): ZIO[R1, ServerError, Unit] =
-          GraphCompile
-            .jdk(machine)
-            .foldZIO(
-              error => Calls.finish(say, jdkMissed(call, error)),
-              use,
-            )
+            def withJdk[R1](
+                use: histos.jdk.JdkRuntime => ZIO[R1, ServerError, Unit]
+            ): ZIO[R1, ServerError, Unit] =
+              GraphCompile
+                .jdk(machine)
+                .foldZIO(
+                  error => Calls.finish(say, jdkMissed(call, error)),
+                  use,
+                )
 
-        call match
-          case Call.Compile(projects) =>
-            held(build => follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say))))
-          case Call.Test(projects, patterns, mode) =>
-            held(build =>
-              follow(
-                withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
-              )
-            )
-          case Call.PublishLocal(tokens) =>
-            held(build =>
-              follow(
-                withJdk(jdk =>
-                  Calls.publishLocal(
-                    repo,
-                    build.graph,
-                    build.build,
-                    machine,
-                    jdk,
-                    tokens.map(_.value),
-                    say,
-                    build.plugins.launcher,
+            call match
+              case Call.Compile(projects) =>
+                held(build => follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say))))
+              case Call.Test(projects, patterns, mode) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
                   )
                 )
-              )
-            )
-          case Call.PublishSnapshots(projects) =>
-            held(build =>
-              follow(
-                withJdk(jdk =>
-                  Calls.publishSnapshots(
-                    repo,
-                    build.graph,
-                    build.build,
-                    machine,
-                    jdk,
-                    projects,
-                    say,
-                    build.plugins.launcher,
+              case Call.PublishLocal(tokens) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.publishLocal(
+                        repo,
+                        build.graph,
+                        build.build,
+                        machine,
+                        jdk,
+                        tokens.map(_.value),
+                        say,
+                        build.plugins.launcher,
+                      )
+                    )
                   )
                 )
-              )
-            )
-          case Call.PublishRelease(projects, automatic) =>
-            held(build =>
-              follow(
-                withJdk(jdk =>
-                  Calls.publishRelease(
-                    repo,
-                    build.graph,
-                    build.build,
-                    machine,
-                    jdk,
-                    projects,
-                    automatic,
-                    say,
-                    build.plugins.launcher,
+              case Call.PublishSnapshots(projects) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.publishSnapshots(
+                        repo,
+                        build.graph,
+                        build.build,
+                        machine,
+                        jdk,
+                        projects,
+                        say,
+                        build.plugins.launcher,
+                      )
+                    )
                   )
                 )
-              )
-            )
-          case Call.PublishPromote(id) =>
-            follow(Calls.promote(repo, machine, id.value, say))
-          case Call.PublishDrop(id) =>
-            held(build => follow(Calls.drop(repo, build.graph, machine, id.value, say)))
-          case Call.PublishAssets(tokens) =>
-            held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
-          case Call.Assembly(modules) =>
-            held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
-          case Call.Run(id, platform, launch, args) =>
-            held(build =>
-              follow(
-                withJdk(jdk =>
-                  Calls.run(
-                    repo,
-                    build.graph,
-                    jdk,
-                    machine,
-                    id,
-                    platform,
-                    launch,
-                    args,
-                    say,
-                    edges.compiled,
-                    relay,
+              case Call.PublishRelease(projects, automatic) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.publishRelease(
+                        repo,
+                        build.graph,
+                        build.build,
+                        machine,
+                        jdk,
+                        projects,
+                        automatic,
+                        say,
+                        build.plugins.launcher,
+                      )
+                    )
                   )
                 )
-              )
-            )
-          case Call.Task(id, args) =>
-            held(build => follow(Calls.task(repo, build.graph, build.plugins, machine, id, args, say)))
-          case Call.Graph =>
-            held(build => Calls.graph(build.graph, build.plugins, say))
-          case Call.Cancel(id) =>
-            Calls.cancel(runs, id, say)
-          case Call.Resolve(action) =>
-            Calls.resolve(repo, apiJar, action, say, machine.native)
-          case Call.Workflow(action) =>
-            held(build => Calls.workflow(repo, build, action, say))
-          case Call.Format(targets, mode) =>
-            held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
-          case Call.Clean(Nil, CleanExtent.Products) =>
-            Calls.wipe(repo, say)
-          case Call.Clean(Nil, CleanExtent.Full) =>
-            Calls.cleanFull(repo, say)
-          case Call.Clean(projects, CleanExtent.Products) =>
-            held(build => Calls.clean(repo, build.graph, projects, say))
-          case Call.Clean(_, CleanExtent.Full) =>
-            Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-          case Call.PreviewCompile(projects) =>
-            held(build => Calls.previewCompile(repo, build.graph, projects, say))
-          case Call.PreviewTest(projects, patterns, _) =>
-            held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
-          case Call.PreviewPublishLocal(tokens) =>
-            held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))
-          case Call.PreviewPublishSnapshots(projects) =>
-            held(build => Calls.previewPublishSnapshots(repo, build.graph, projects, machine.env, say))
-          case Call.PreviewClean(Nil, CleanExtent.Products) =>
-            Calls.previewCleanAll(repo, say)
-          case Call.PreviewClean(Nil, CleanExtent.Full) =>
-            Calls.previewCleanFull(repo, say)
-          case Call.PreviewClean(projects, CleanExtent.Products) =>
-            held(build => Calls.previewClean(repo, build.graph, projects, say))
-          case Call.PreviewClean(_, CleanExtent.Full) =>
-            Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-          case Call.PreviewRun(id, platform) =>
-            held(build => Calls.previewRun(build.graph, id, platform, say))
-          case Call.Version =>
-            Calls.version(repo, version, say)
-          case Call.CachePath =>
-            Calls.cachePath(say)
-          case Call.CacheList =>
-            Calls.cacheList(say)
-          case Call.CacheClean(mode) =>
-            Calls.cacheClean(mode, say)
-          case Call.CachePromote(from, to) =>
-            Calls.cachePromote(from, to, say)
-          case Call.CacheForget(target) =>
-            Calls.cacheForget(repo, target, say)
-          case Call.CacheVerify(projects) =>
-            held(build => follow(withJdk(jdk => Calls.cacheVerify(repo, build.graph, projects, jdk, machine, say))))
-          case Call.Watch(inner, policy) =>
-            edges.watch(inner, policy, say)
-          case Call.Reload =>
-            edges.reload
-          case Call.Reboot(onto) =>
-            edges.reboot(onto)
-          case Call.Bsp =>
-            edges.bsp
+              case Call.PublishPromote(id) =>
+                follow(Calls.promote(repo, machine, id.value, say))
+              case Call.PublishDrop(id) =>
+                held(build => follow(Calls.drop(repo, build.graph, machine, id.value, say)))
+              case Call.PublishAssets(tokens) =>
+                held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
+              case Call.Assembly(modules) =>
+                held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
+              case Call.Run(id, platform, launch, args) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.run(
+                        repo,
+                        build.graph,
+                        jdk,
+                        machine,
+                        id,
+                        platform,
+                        launch,
+                        args,
+                        say,
+                        edges.compiled,
+                        relay,
+                      )
+                    )
+                  )
+                )
+              case Call.Task(id, args) =>
+                held(build =>
+                  follow(Calls.task(repo, build.graph, build.plugins, machine, id, args, say, caller, events))
+                )
+              case Call.Graph =>
+                held(build => Calls.graph(build.graph, build.plugins, say))
+              case Call.Cancel(id) =>
+                Calls.cancel(runs, id, say)
+              case Call.Resolve(action) =>
+                Calls.resolve(repo, apiJar, action, say, machine.native, lock)
+              case Call.Workflow(action) =>
+                held(build => Calls.workflow(repo, build, action, say))
+              case Call.Format(targets, mode) =>
+                held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
+              case Call.Clean(Nil, CleanExtent.Products) =>
+                Calls.wipe(repo, say)
+              case Call.Clean(Nil, CleanExtent.Full) =>
+                Calls.cleanFull(repo, say)
+              case Call.Clean(projects, CleanExtent.Products) =>
+                held(build => Calls.clean(repo, build.graph, projects, say))
+              case Call.Clean(_, CleanExtent.Full) =>
+                Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
+              case Call.PreviewCompile(projects) =>
+                held(build => Calls.previewCompile(repo, build.graph, projects, say))
+              case Call.PreviewTest(projects, patterns, _) =>
+                held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
+              case Call.PreviewPublishLocal(tokens) =>
+                held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))
+              case Call.PreviewPublishSnapshots(projects) =>
+                held(build => Calls.previewPublishSnapshots(repo, build.graph, projects, machine.env, say))
+              case Call.PreviewClean(Nil, CleanExtent.Products) =>
+                Calls.previewCleanAll(repo, say)
+              case Call.PreviewClean(Nil, CleanExtent.Full) =>
+                Calls.previewCleanFull(repo, say)
+              case Call.PreviewClean(projects, CleanExtent.Products) =>
+                held(build => Calls.previewClean(repo, build.graph, projects, say))
+              case Call.PreviewClean(_, CleanExtent.Full) =>
+                Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
+              case Call.PreviewRun(id, platform) =>
+                held(build => Calls.previewRun(build.graph, id, platform, say))
+              case Call.Version =>
+                Calls.version(repo, version, say)
+              case Call.CachePath =>
+                Calls.cachePath(say)
+              case Call.CacheList =>
+                Calls.cacheList(say)
+              case Call.CacheClean(mode) =>
+                Calls.cacheClean(mode, say)
+              case Call.CachePromote(from, to) =>
+                Calls.cachePromote(from, to, say)
+              case Call.CacheForget(target) =>
+                Calls.cacheForget(repo, target, say)
+              case Call.CacheVerify(projects) =>
+                held(build => follow(withJdk(jdk => Calls.cacheVerify(repo, build.graph, projects, jdk, machine, say))))
+              case Call.Watch(inner, policy) =>
+                edges.watch(inner, policy, say)
+              case Call.Reload =>
+                edges.reload
+              case Call.Reboot(onto) =>
+                edges.reboot(onto)
+              case Call.Bsp =>
+                edges.bsp
 end Perform

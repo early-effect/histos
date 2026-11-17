@@ -7,6 +7,8 @@ import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult}
 import histos.resolve.Resolve
 import histos.process.{StdinFeed, Terminal}
+import histos.client.CallerFacts
+import histos.lock.InvocationEnvelope
 import histos.server.{Call, Client, Feed, Message, Perform, Say, ServerError}
 import histos.task.RunId
 
@@ -51,10 +53,14 @@ object Build:
       out.flush()
     }.ignore
 
-  def attached(socket: Path, terminal: Terminal = Terminal.Detached): Build[Any] =
+  def attached(
+      socket: Path,
+      terminal: Terminal = Terminal.Detached,
+      envelope: Call => UIO[InvocationEnvelope] = CallerFacts.detached,
+  ): Build[Any] =
     new Build[Any]:
       def perform(call: Call): ZStream[Any, ServerError, Beat] =
-        Client.talk(socket, call, terminal).map {
+        ZStream.unwrap(envelope(call).map(ready => Client.talk(socket, ready, terminal))).map {
           case Feed.Event(event)  => Beat.Heard(event)
           case Feed.Output(bytes) => Beat.Bytes(bytes)
           case Feed.Done(result)  => Beat.Finished(result)
@@ -71,6 +77,7 @@ object Build:
       edges: Say => Perform.Edges[R],
       hear: Beat => UIO[Unit],
       terminal: Terminal = Terminal.Detached,
+      envelope: Call => UIO[InvocationEnvelope] = CallerFacts.detached,
   ): Build[R] =
     new Build[R]:
       def perform(call: Call): ZStream[R, ServerError, Beat] =
@@ -105,9 +112,24 @@ object Build:
                   histos.zinc.CompileMemo.provide(
                     histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
                       relay(terminal, call)(stdin =>
-                        Perform
-                          .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say), stdin)
-                          .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                        envelope(call).flatMap: ready =>
+                          Perform
+                            .run(
+                              repo,
+                              apiJar,
+                              loaded,
+                              machine,
+                              runs,
+                              track,
+                              version,
+                              call,
+                              say,
+                              edges(say),
+                              stdin,
+                              caller = Some(ready.context),
+                              lock = ready.lock,
+                            )
+                            .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
                     )
                   )

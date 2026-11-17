@@ -6,6 +6,7 @@ import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
 import histos.server.{Attendance, Call, Message, RunBytes, RunLaunch, ServerError, ServerFile, ServerStamp, Successor}
 import histos.report.CallResult
+import histos.report.WireJson.given zio.json.JsonCodec[histos.lock.InvocationEnvelope]
 
 import java.nio.file.{Files, Path, StandardOpenOption}
 
@@ -151,17 +152,20 @@ object Main extends ZIOAppDefault:
       call: Call,
       appearance: Appearance,
   ): ZIO[Scope, Nothing, Either[ServerError, Int]] =
-    ZIO.attemptBlocking(Frame.put(session.output, call.toJson)).orDie.flatMap {
-      case Left(_)  => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Write(socket))))
-      case Right(_) =>
-        ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
-          case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
-          case Right(head) =>
-            ready(head) match
-              case Left(error) => ZIO.succeed(Left(error))
-              case Right(_)    =>
-                copyInput(call, session.output) *> frames(repo, socket, session.input, Show.start, appearance)
-        }
+    val prompts = unistd.isatty(0) == 1 && unistd.isatty(1) == 1
+    CallerFacts.native(call, environment, prompts).flatMap { posted =>
+      ZIO.attemptBlocking(Frame.put(session.output, posted.toJson)).orDie.flatMap {
+        case Left(_)  => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Write(socket))))
+        case Right(_) =>
+          ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
+            case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
+            case Right(head) =>
+              ready(head) match
+                case Left(error) => ZIO.succeed(Left(error))
+                case Right(_)    =>
+                  copyInput(call, session.output) *> frames(repo, socket, session.input, Show.start, appearance)
+          }
+      }
     }
 
   /** Stdin frames start after the call is written, so this fiber is the socket's only writer. */

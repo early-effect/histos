@@ -9,7 +9,7 @@ import histos.{Module, ProjectGraph, ProjectName}
 
 import java.nio.file.Path
 
-import zio.{Exit, Promise, Ref, ZIO}
+import zio.{Exit, Promise, Ref, UIO, ZIO}
 
 /** Run one operation, then again after a source save. The inner exit does not end the session.
   */
@@ -124,6 +124,7 @@ object Watching:
       say: Say,
       run: ZIO[R, ServerError, Unit],
       roots: ZIO[R, ServerError, Watched],
+      changed: List[Path] => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[R, ServerError, Unit] =
     Ref.make(false).flatMap { running =>
       def loop: ZIO[R, ServerError, Unit] =
@@ -142,12 +143,13 @@ object Watching:
                       .foldZIO(
                         error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
                         woke =>
-                          ZIO.foreachDiscard(woke)(path =>
-                            Calls.tell(
-                              say,
-                              Lines.watching(Lines.relative(repo, path)),
-                            )
-                          ) *> loop,
+                          changed(woke) *>
+                            ZIO.foreachDiscard(woke)(path =>
+                              Calls.tell(
+                                say,
+                                Lines.watching(Lines.relative(repo, path)),
+                              )
+                            ) *> loop,
                       ),
               )
           }
