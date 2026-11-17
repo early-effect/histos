@@ -51,7 +51,7 @@ private[load] object BuildFile:
     )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).ignore)
 
   /** Each path is rewritten to its label in a diagnostic, which is `label:line:column: error: message` when the
-    * compiler placed it. The build file compiles from a temp copy, and the generated wiring file is not a repo path.
+    * compiler placed it. The build file compiles from a temp copy.
     */
   private[load] def compileLabeled(
       labeled: List[(Path, String)],

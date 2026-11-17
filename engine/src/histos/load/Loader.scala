@@ -1,15 +1,7 @@
 package histos.load
 
 import histos.jdk.Sha256Digest
-import histos.plugin.{
-  ApiDigest,
-  PluginCoordinate,
-  PluginLinked,
-  PluginLoadError,
-  Plugins,
-  RegisteredPlugin,
-  WiringBuilt,
-}
+import histos.plugin.{ApiDigest, PluginCoordinate, PluginLoadError}
 import histos.resolve.{DependencyLock, Resolve}
 import histos.Resolution
 import histos.workspace.{IoFailure, IoFault}
@@ -39,8 +31,9 @@ object Loader:
     zio.ZLayer.fromZIO(zio.ZIO.serviceWith[Resolve](LoaderLive(_)))
 
 /** Compiles `histos.scala`, reads the graph, compiles in-repo plugin modules, then ship pins. A locked graph fetches
-  * those pins. A solve asks `Resolve`. `histos.wiring.scala` is compiled against those classes. `loadLocked` solves
-  * even when the graph is locked: `resolve update` writes the cells afterwards.
+  * those pins. A solve asks `Resolve`. A catalog load of a distribution jar checks its compiler payload. A classes
+  * directory does not. `histos.wiring.scala` is not compiled. `loadLocked` solves even when the graph is locked:
+  * `resolve update` writes the cells afterwards.
   */
 private final class LoaderLive(resolve: Resolve) extends Loader:
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
@@ -76,9 +69,10 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
   ): ZIO[Scope, LoadError, LoadedBuild] =
     val catalog = repo.resolve("histos.plugins.scala")
     ZIO.ifZIO(exists(catalog))(
-      BootstrapLoad
-        .prepare(resolve, BootstrapLoad.Prepare(repo, apiJar, lockMode = mode))
-        .provideSomeLayer[Scope](BuildCache.ephemeral),
+      payloadOf.flatMap: payload =>
+        BootstrapLoad
+          .prepare(resolve, BootstrapLoad.Prepare(repo, apiJar, payload = payload, lockMode = mode))
+          .provideSomeLayer[Scope](BuildCache.ephemeral),
       open(repo, apiJar, if mode.isDefined then ShipSource.Solve else ShipSource.Follow),
     )
 
@@ -115,23 +109,21 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
         modules    <- PluginModules.compile(repo, graph, boundary, resolve)
         ships      <- shipsOf(repo, graph, launcher, source)
         plugins = modules ++ ships
-        wired   <- compileWiring(repo, boundary ++ plugins, out)
         opened  <- ZIO.acquireRelease(BuildFile.open(out, plugins))(BuildFile.close)
         threads <- PluginThreads.make(opened.build)
         builds  <- BuildFile.entries(out, opened.build)
         build   <- BuildFile.select(builds)
-        loaded  <- assemble(wired, opened.build, threads, graph, launcher, leases).onError(_ => leases.discard)
         runtime <- PluginRuntime.loaded(
           repo,
-          loaded.graph,
+          graph,
           opened.build,
           threads,
-          loaded.links,
+          Nil,
           launcher,
           leases,
           Nil,
         )
-      yield LoadedBuild(loaded.graph, runtime, build)
+      yield LoadedBuild(graph, runtime, build)
 
   /** No published pin reads no lock and calls no resolver. */
   private def shipsOf(
@@ -159,7 +151,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
                 .flatMap: lock =>
                   PluginShips.jars(graph, resolve, launcher, Some(lock))
 
-  /** The graph decides the wiring classpath, so it is read before that compile. This loader closes with the read. */
+  /** The graph is read before plugin modules compile. This loader closes with the read. */
   private def readGraph(out: Path): IO[LoadError, histos.ProjectGraph] =
     ZIO.scoped:
       for
@@ -170,101 +162,12 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
         graph   <- graphOf(opened.build, threads, build)
       yield graph
 
-  /** The wiring sees the api and the plugin class directories. It does not see the engine. The generated object calls
-    * `HistosWiring.layer`.
-    */
-  private def compileWiring(
-      repo: Path,
-      classpath: List[Path],
-      out: Path,
-  ): ZIO[Scope, LoadError, Boolean] =
-    val wiring = repo.resolve("histos.wiring.scala")
-    ZIO.ifZIO(exists(wiring))(
-      for
-        generated <- BuildFile.writeTemp(WiringSource.generated)
-        _         <- BuildFile.compileLabeled(
-          List(wiring -> "histos.wiring.scala", generated -> WiringSource.label),
-          classpath,
-          out,
-        )
-      yield true,
-      ZIO.succeed(false),
-    )
-
-  private final case class Assembled(graph: histos.ProjectGraph, links: List[PluginLink])
-
-  private def assemble(
-      wired: Boolean,
-      loader: BuildLoader,
-      threads: PluginThreads,
-      graph: histos.ProjectGraph,
-      launcher: ApiDigest,
-      leases: GenerationLeases,
-  ): IO[LoadError, Assembled] =
-    if !wired then ZIO.succeed(Assembled(graph, Nil))
-    else
-      for
-        built      <- readBuilt(loader, threads, leases)
-        registered <- ZIO.foreach(built.values.toList): plugin =>
-          ZIO
-            .attempt(RegisteredPlugin(plugin.id, plugin.contribute)(plugin))
-            .mapError(thrown => LoadError.Plugin(PluginLoadError.Construction(thrown.getClass.getName)))
-      yield Assembled(graph.withPlugins(registered), linksOf(registered, graph, launcher))
-
-  private def readBuilt(
-      loader: ClassLoader,
-      threads: PluginThreads,
-      leases: GenerationLeases,
-  ): IO[LoadError, Plugins] =
-    threads
-      .run(
-        loadWiring(loader).flatMap: wiring =>
-          leases.use(wiring.build.mapError(activation))
-      )
-      .onError(_ => leases.discard)
-
-  private def activation(error: Any): LoadError =
-    error match
-      case setup: histos.plugin.ServiceSetupError =>
-        LoadError.Plugin(
-          PluginLoadError.Activation(histos.plugin.ServiceActivationError.Setup(setup.diagnosis))
-        )
-      case other =>
-        LoadError.Plugin(PluginLoadError.Construction(other.getClass.getName))
-
-  private def loadWiring(loader: ClassLoader): IO[LoadError, WiringBuilt] =
-    ZIO
-      .attemptBlocking:
-        val cls = loader.loadClass("WiringBuilt$")
-        cls.getField("MODULE$").get(null)
-      .mapError(thrown => LoadError.Plugin(PluginLoadError.Construction(thrown.getClass.getName)))
-      .flatMap:
-        case null =>
-          ZIO.fail(LoadError.Plugin(PluginLoadError.Construction("WiringBuilt")))
-        case built: WiringBuilt =>
-          ZIO.succeed(built)
-        case other =>
-          ZIO.fail(LoadError.Plugin(PluginLoadError.Construction(other.getClass.getName)))
-
-  /** A module coordinate was compiled here. A ship pin arrived as a jar. Both at once is not split per value yet. */
-  private def linksOf(
-      registered: List[RegisteredPlugin],
-      graph: histos.ProjectGraph,
-      launcher: ApiDigest,
-  ): List[PluginLink] =
-    val linked =
-      if publishedOnly(graph) then PluginLinked.FromBinary(launcher)
-      else PluginLinked.FromSource(launcher, launcher)
-    registered.map(plugin => PluginLink(plugin.id, linked, Nil))
-
-  private def publishedOnly(graph: histos.ProjectGraph): Boolean =
-    val published = graph.coordinates.exists:
-      case histos.plugin.PluginCoordinate.Published(_, _) => true
-      case histos.plugin.PluginCoordinate.Module(_)       => false
-    val modules = graph.coordinates.exists:
-      case histos.plugin.PluginCoordinate.Module(_)       => true
-      case histos.plugin.PluginCoordinate.Published(_, _) => false
-    published && !modules
+  /** A distribution jar is the compiler payload. A classes directory, and any other code source, is not. */
+  private def payloadOf: IO[LoadError, Option[Path]] =
+    Boundary.codeSource(classOf[histos.HistosBuild]) match
+      case None       => ZIO.succeed(None)
+      case Some(path) =>
+        BuildClasspath.distribution(path).map(found => Option.when(found)(path))
 
   private def readBuild(repo: Path): IO[LoadError, String] =
     val source = repo.resolve("histos.scala")

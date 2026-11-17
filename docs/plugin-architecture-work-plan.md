@@ -18,7 +18,7 @@ Merge: squash-merge each implementation PR when its named gate is green on that 
 
 `./histos` runs `~/.histos` toolchains from the pin or `.histos/toolchain`. Edited engine code runs when that toolchain compiles and tests this tree. P10 is the unit that publishes a host and moves the pin. Until then, proof is the named `./histos test` gates.
 
-Baseline for the spec's current-state table is `e0027a3`. The spec landed in `c60ee8d`. Pin in `build.properties` is `0.4.2`. `Ship.next` is `0.4.4`. Root `histos.scala` declares no plugins.
+Baseline for the spec's current-state table is `e0027a3`. The spec landed in `c60ee8d`. `Ship.next` stays `0.4.4`. After review, `histos.version` is `0.4.2`. `0.4.4-0d9c83706be4-SNAPSHOT` names parent commit `0d9c837` and is not on the snapshot channel. Root `histos.scala` declares no plugins.
 
 ## Standing rules
 
@@ -54,7 +54,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | P7 | P6 on main | `histos/plugin-p7` | `plug-p7` | #222 | merged | `./histos compile engine wire`; `./histos test engine --only '*PluginTaskIdentitySpec*'`; `./histos fmt --check`; real loader manifest before merge | merged as `82303e8` (#222). CI run 44012856100 on `79f6bc1` passed 7 failed 0, no test-clock warning. Local gate exit 0 on `62b151c` (4 passed). The loader seal reached the task. |
 | P8 | P3, P6, P7 on main | `histos/plugin-p8` | `plug-p8` | #224 | merged | `./histos compile app wire client`; `./histos test app wire --only '*LockInvocationSpec*' '*LockOfferSpec*' '*LockPolicySpec*' '*RunCallSpec*' '*BatchRunSpec*'`; `./histos fmt --check` | merged as `b2c9632` (#224). CI run 44027154861 on `2d3023c` passed 7 failed 0, no test-clock warning. Local JVM gate: app 20 passed, wire 6 passed, `./histos fmt --check` unformatted 0. `./histos run doc` exited 0 on `2d3023c`. |
 | P9 | P2, P4, P6 on main | `histos/plugin-p9` | `plug-p9` | #223 | merged | tracked link check; `./histos fmt --check`; `./histos run doc` | merged as `db3a44c` (#223). CI run 44015702128 on `e5c5b3b` passed 7 failed 0. The test job was `./histos test --affected '[]'`. No test-clock warning. Local link scan 84 links, 0 missing. `./histos run doc` exited 0. |
-| P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | |
+| P10 | P2 through P9 | `histos/plugin-p10` | `plug-p10` | | pending | see the P10 brief | local gate on dirty `0d9c837`, no commit and no PR. Recorded under the P10 brief. |
 
 - [x] P0. Spec and this board on `main` (`c60ee8d`, `ce6fd7f`)
 - [x] P1. Contracts, codecs, fixtures. Merged as #216 on `8f74a2e`. CI run 43931858280 on `7395b60`. Local gate: `./histos compile api wire engine`; `./histos test api wire engine --only '*PluginContractsSpec*' '*PluginWireSpec*' '*ContractModelsSpec*'`; `./histos fmt --check` on `80e20c8`
@@ -80,7 +80,7 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | R6 only the root stamp is checked | P6 | | | [ ] |
 | R7 local plugin compile omits external jars | P6 | | | [ ] |
 | R8 temporary compile lacks settings, resources, and a persistent cache | P5 primitive, P6 adopts it | | | [ ] |
-| R9 `Any`/`Nothing` macro contracts and setup `toString` | P1 contracts, P2 activation, P10 retires the macro | | | [ ] |
+| R9 `Any`/`Nothing` macro contracts and setup `toString` | P1 contracts, P2 activation, P10 retires the macro | | dirty `0d9c837`: macro files deleted; wiring file is not compiled | [ ] |
 | R10 `readBuilt` scope ends before retained values | P2 builder, P6 live loader | | | [ ] |
 | R11 export whitelist omits theme and step | P6 | | | [ ] |
 | R12 `CompileInputs.remember` uses `ClockLive` | P5 | | | [ ] |
@@ -90,10 +90,10 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | A2 early strategy file before remaining loads | P1 data, P6 proof | | | [ ] |
 | A3 registration key is the capability interface | P2 | | | [ ] |
 | A4 recipe, TASTy direction, and closure | P4, P5, P6 | | | [ ] |
-| A5 consent, write, adoption, resume | P3 store, P8 and P10 once-only | | | [ ] |
-| A6 caller context, not server env or stdin | P8 | | | [ ] |
-| A7 shim and pin may run old code | P10 | | | [ ] |
-| A8 host compiler tools are not solved from the project lock | P5, P10 packages them | | | [ ] |
+| A5 consent, write, adoption, resume | P3 store, P8 and P10 once-only | | dirty `0d9c837`: local lock re-run, not an architecture close | [ ] |
+| A6 caller context, not server env or stdin | P8 | | dirty `0d9c837`: local caller re-run, not an architecture close | [ ] |
+| A7 shim and pin may run old code | P10 | | dirty `0d9c837`: local jars are not a channel publish and not A7 | [ ] |
+| A8 host compiler tools are not solved from the project lock | P5, P10 packages them | | dirty `0d9c837`: local manifest fingerprint, not an architecture close | [ ] |
 
 ## Briefs
 
@@ -270,4 +270,27 @@ Gate, after the local pin proof.
 
 Record host identity, commands, and the decisive fixture outputs in this file. Then close the matching rows in the architecture doc's ledger and completion checklist from those proofs, or name the owner decision that blocked a row.
 
-Ledger: A7, the installed repeat of A5, A8, and the A-to-B and repair gates. R9 closes when the bundle macro is retired.
+Ledger: R9 closes in the architecture doc because the bundle macro is retired. A5-A8 stay open there. The work-plan Closed boxes stay open until a PR number exists. A7 is not checked.
+
+### P10 record
+
+Working tree on `0d9c83706be477162c18bcf8a1a76246e7eab557`, dirty. No commit. No PR. `Ship("histos").next` stayed `0.4.4`. Root `histos.scala` gained no plugin. `ReviewedLocksSpec` and `examples/expected-lock-repair.txt` were not created.
+
+After review, `histos.version` is `0.4.2` again. `0.4.4-0d9c83706be4-SNAPSHOT` names parent commit `0d9c837` and is not on the snapshot channel. Maven Central and Sonatype both 404 that coordinate. CI cannot install it. The setup action SHA stays `4a49a640bc8345737c22160b4e67b028d61cd908`, the one already on main. This diff does not publish, tag, or release. `histos update` was not run.
+
+Local jars are evidence of a local pack. They are not a channel publish and not A7.
+
+- J1, packed by the 0.4.2 process: `dist/histos.jar` sha256 `8d886289348fb00f23e325d5265bd790bdda05761be96aaaec77f69e22d2ac7c`. `bootstrap/compiler/` was absent, so `HostCompilerManifest` was absent. The ivy library jar `~/.ivy2/local/rocks.earlyeffect/histos/0.4.4-0d9c83706be4-SNAPSHOT/jars/histos.jar` is a different file, sha256 `23dbaeb64fce626d590f4f385c3204f455282a237e2899a8703530589384de52`, and also has no compiler payload.
+- J2, packed by J1: `dist/histos.jar` sha256 `da4a6f8399e1b8fd47430ec5163fd20f709830367f089d05a7c91275d06c5b5e`. `bootstrap/compiler/manifest.json` is schema 1, Scala `3.10.1`, JDK `25.0.5.0.3`, 21 tools, roles Compiler, Bridge, Interfaces, Runtime, and Support. Fingerprint `0ec0c17b8f397a30cf33ffd7c48acd90c2cc1eefb728ac6691708a82d3d2ee66`. Bridge digest `5b4e5f158d08206b357ccb3d4640af7b5969d73f7b8d034cc69e88f8fa5806dc`.
+
+`PluginArchitectureIntegrationSpec` names, as local evidence and not A7: the packaged closure materializes and the bridge digest matches the jar; a missing bridge is `EntryAbsent` and does not solve; a corrupt bridge is `BadDigest` and does not solve; the packaged host rebuilds a mixed module, then a second load adds no compiler starts; a lone `histos.wiring.scala` is not compiled. The checkout `dependencies.lock` contains `tool compiler 3.10.1 jvm`. The integration fixture lock is the bytes `fixture\n` and contains no compiler cell.
+
+The combined `./histos test api wire engine app plugin-testkit` exited 1 on `ld: library 'crypto' not found` before engine finished. `./histos test engine` then exited 0, 111 passed. JDK `Unsafe` warnings were printed by the 0.4.2 runner. They are not claimed gone.
+
+Rows left open, and why:
+
+- P10 checkbox and the work-plan Closed boxes: no PR number. A7 is not checked.
+- Architecture A5-A8 stay open. The local jars are not those proofs.
+- Architecture R9 is checked. The bundle macro and `WiringSource` are deleted, and a lone `histos.wiring.scala` is not compiled.
+- Completion native client and MCP, the P4/P7 line, and the review line stay open.
+- `.bsp/histos.json` was restored. Not part of this diff.

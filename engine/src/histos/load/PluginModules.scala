@@ -15,8 +15,8 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, Scope, ZIO}
 
-/** In-repo plugin modules, compiled so the wiring can name them. Upstream modules compile first. A ship pin is not
-  * resolved here.
+/** In-repo plugin modules, compiled so a later build file can name them. Upstream modules compile first. A ship pin is
+  * not resolved here.
   */
 private[load] object PluginModules:
   def compile(
@@ -145,8 +145,8 @@ private[load] object PluginModules:
                       _     <- copyResources(base, out)
                     yield extra :+ out
 
-  /** The wiring compiler is this process. A module that names it uses that source tree. One declared version uses that
-    * version. Several versions, none of them this compiler, are not a guess.
+  /** The plugin module compiler is this process. A module that names it uses that source tree. One declared version
+    * uses that version. Several versions, none of them this compiler, are not a guess.
     */
   private def versionOf(module: Module): Option[ScalaVersion] =
     val versions = module.versions.all

@@ -1,6 +1,6 @@
 # Writing a plugin
 
-These contracts are the ones the compiler fixtures typecheck. [plugin-architecture.md](plugin-architecture.md) stays a proposed design until the assembled host. `histos.version` in `build.properties` is `0.4.2`. That pin does not run this catalog protocol. This repository's `histos.scala` declares no plugins.
+These contracts are the ones the compiler fixtures typecheck. The assembled-host proof is recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md). `histos.version` in `build.properties` is `0.4.2`. That pin does not run this catalog protocol. This repository's `histos.scala` declares no plugins.
 
 A plugin is a constructor-injected ZIO service. A coordinate makes its types available. It does not install a service or a task. The registration key is the capability interface. A task is a separate `HistosPlugin` activation, even when it is the same class.
 
@@ -115,4 +115,4 @@ A published plugin coordinate in Scala is a `dep"..."` literal. The lock stores 
 
 ## Migration
 
-Scaffold sources still mention `histos.wiring.scala`. That edit is not this change. A consumer moves coordinates off `Projects.plugins` onto the catalog, sets `resolution` there when the build should lock, and moves wiring onto `services` with interface keys. Early policy stays on the strategy file, and main does not repeat it unless it means to replace the graph lock strategy. A producer marks the module `.pluginLibrary`, or passes `PluginPublication.BinaryOnly`. This repository's `histos.scala` does not do that move.
+Scaffold does not write `histos.wiring.scala`. A file with that name is not a load input, a BSP build source, or a watch root. A consumer moves coordinates off `Projects.plugins` onto the catalog, sets `resolution` there when the build should lock, and moves activation onto `services` with interface keys. Early policy stays on the strategy file, and main does not repeat it unless it means to replace the graph lock strategy. A producer marks the module `.pluginLibrary`, or passes `PluginPublication.BinaryOnly`. This repository's `histos.scala` does not do that move.

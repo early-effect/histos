@@ -59,27 +59,34 @@ object Fingerprint:
     val pin   = resolution match
       case Resolution.Lock  => tagged(repo.resolve("dependencies.lock"))
       case Resolution.Solve => ZIO.succeed(Chunk.empty[Byte])
-    val wiring = repo.resolve("histos.wiring.scala")
+    val plugins    = repo.resolve("histos.plugins.scala")
+    val strategies = repo.resolve("histos.strategies.scala")
     for
       built <- tagged(build)
-      wired <- tagged(wiring)
+      plugs <- tagged(plugins)
+      plans <- tagged(strategies)
       lock  <- pin
-    yield Sha256Digest.of(built ++ Chunk.single(0.toByte) ++ wired ++ lock).value
+    yield Sha256Digest
+      .of(
+        built ++ Chunk.single(0.toByte) ++ plugs ++ Chunk.single(0.toByte) ++ plans ++ lock
+      )
+      .value
 
   private[server] def trusted(raw: String): Fingerprint = raw
 
   /** The files [[read]] hashes. An unnamed directory is not a root. */
   def roots(repo: Path, resolution: Resolution): UIO[List[Path]] =
-    val build  = repo.resolve("histos.scala")
-    val wiring = repo.resolve("histos.wiring.scala")
-    val lock   = repo.resolve("dependencies.lock")
+    val build      = repo.resolve("histos.scala")
+    val plugins    = repo.resolve("histos.plugins.scala")
+    val strategies = repo.resolve("histos.strategies.scala")
+    val lock       = repo.resolve("dependencies.lock")
     ZIO
       .attemptBlocking {
-        val wired  = if Files.isRegularFile(wiring) then List(wiring) else Nil
-        val pinned = resolution match
+        val catalog = List(plugins, strategies).filter(Files.isRegularFile(_))
+        val pinned  = resolution match
           case Resolution.Lock  => List(lock)
           case Resolution.Solve => Nil
-        (build :: wired ++ pinned).distinct
+        (build :: catalog ++ pinned).distinct
       }
       .orElseSucceed:
         resolution match

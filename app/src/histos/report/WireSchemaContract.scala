@@ -32,6 +32,7 @@ import histos.plugin.{
   ArtifactIdentity,
   ArtifactManifestError,
   ArtifactPath,
+  ArtifactPathError,
   BindingClass,
   BindingKind,
   BootstrapError,
@@ -189,6 +190,7 @@ private object WireSchemaContract extends WireSchemaSupport:
   given Schema[HostCompilerManifest] = Schema.derived
   given Schema[MaterializedTool]     = Schema.derived
   given Schema[HostCompilerSession]  = Schema.derived
+  given Schema[ArtifactPathError]    = Schema.derived
   given Schema[HostCompilerError]    = Schema.derived
 
   given Schema[ExecutionKind]         = Schema.derived

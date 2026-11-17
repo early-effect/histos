@@ -1,12 +1,12 @@
 # Histos plugin architecture and dependency-lock transactions
 
-**Status:** Reviewed proposed architecture, approved documentation handoff. Two review rounds closed six design findings (four major, two minor), with zero open design issues. D1-D15 remain final; D16 clarifies relevant test cleanup without changing architecture. All compiler/runtime gates remain unverified.
+**Status:** Reviewed proposed architecture, approved documentation handoff. Two review rounds closed six design findings (four major, two minor), with zero open design issues. D1-D15 remain final; D16 clarifies relevant test cleanup without changing architecture. R9 is the assembled-host row this diff closes. A5-A8 stay open. The other ledger rows stay open.
 
 **Document:** `docs/plugin-architecture.md`. Docs-only approval covers saving this handoff and document checks, not feature implementation, commit, push, PR, publishing, or release.
 
 **Historical baseline:** Clean `main`, `e0027a30926add6103700cba41e9ac7dc79e665e`, inspected on 2026-11-16. Findings describe that baseline, not a newly audited implementation.
 
-**Owner:** Russ. Mechanisms remain proposed implementation work. No feature implementation or compiler/runtime verification has been performed.
+**Owner:** Russ. R9 is the row this diff closes. A5-A8 stay open. Local jars are recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md).
 
 ## Handoff Summary
 
@@ -189,7 +189,7 @@ Add `def services: BuildServices = BuildServices.default` to `HistosBuild`.
 | --- | --- |
 | `BuildServices.default` | `Plan[NoExtraServices, Nothing]`, with explicit empty marker and genuinely infallible default. |
 | `.withLocks` | `def withLocks[E1 <: ServiceSetupError](layer: ZLayer[GenerationAmbient,E1,LockStrategy]): Plan[S,E \| E1]`; replaces one named core slot. |
-| `.add[A]` | `def add[A: Tag]: AddPartiallyApplied[S,E,A]`; builder captures Tag and exposes `apply[E1 <: ServiceSetupError](layer: ZLayer[GenerationAmbient & CoreServices & S,E1,A]): Plan[S & A,E \| E1]`. |
+| `.add[A]` | `inline def add[A](using Tag[A]): AddPartiallyApplied[S, E, A]`. The partially applied `apply` takes the layer. |
 | `.tasks[P]` | `def tasks[P <: HistosPlugin: Tag]: TasksPartiallyApplied[S,E,P]`; same typed layer contract returning `Plan[S & P,E \| E1]`, exporting `P` and registering that exact instance as task capability. |
 | `Plan.activate` | `ZIO[GenerationAmbient & CoreServices & Scope, ServiceActivationError \| E, ActivatedBuildServices]`. It stays in candidate generation scope. |
 | `StrategyServices.withLocks` | Same interface-keyed input/error contract before remaining plugins load. |
@@ -243,7 +243,7 @@ P1 also makes the necessary caller/result-shape adaptations so these contracts c
 
 ### Author-Facing Examples
 
-Fences use portable Scala and text Markdown. The nine Scala fences from the locked catalog through the producer build are the strings `PluginBootstrapSpec` compiles in `the spec author fixtures compile`. [plugins.md](plugins.md) links to those strings and does not copy them. The `ReviewedLocksSpec` fence and the lock-repair transcript are still proposed text. They are not compiler fixtures, and the transcript is not a tracked file. The landed `add` method is `inline def add[A](using Tag[A])`. The call sites in those strings are unchanged. This document stays proposed until P10.
+Fences use portable Scala and text Markdown. The nine Scala fences from the locked catalog through the producer build are the strings `PluginBootstrapSpec` compiles in `the spec author fixtures compile`. [plugins.md](plugins.md) links to those strings and does not copy them. The `ReviewedLocksSpec` fence and the lock-repair transcript are still proposed text. They are not compiler fixtures, and the transcript is not a tracked file. They were not added. The landed `add` method is `inline def add[A](using Tag[A])`. The call sites in those strings are unchanged. Assembled-host proof is in the work plan. Open ledger rows stay proposed.
 
 #### Normal locked consumer: two files
 
@@ -880,7 +880,7 @@ External evidence already consulted: [Bazel lockfile](https://bazel.build/extern
 
 ## Design Review Ledger
 
-Original research R1-R7 is preserved; R8-R14 are focused additional observations. All remain open: static findings are not executable verification.
+Original research R1-R7 is preserved; R8-R14 are focused additional observations. R9 is closed in this diff. The other rows stay open: static findings are not executable verification.
 
 | ID/category | Finding | Owner, response, required proof | Closed |
 | --- | --- | --- | --- |
@@ -892,7 +892,7 @@ Original research R1-R7 is preserved; R8-R14 are focused additional observations
 | R6, transitive binding | Only root stamp checked before loading closure. | P6 full helper/runtime validation; helper-only mismatch and binary-only refusal. | [ ] |
 | R7, local external jars | PluginModules omits module resolved external jars. | P6 candidate/frozen complete local DAG; external-import failure then working first load. | [ ] |
 | R8, local reuse | Temporary Scala-only path lacks full settings/resources/persistent cache. | P5 primitive/P6 adoption; Java/resources/flags plus zero compiler on second load. P6 closes. | [ ] |
-| R9, errors/typing | Any/Nothing macro contracts; unconstrained setup toString. | P1/P2 typed contracts/structured errors; P10 retires old wiring macros. Compiler/failure proofs. | [ ] |
+| R9, errors/typing | Any/Nothing macro contracts; unconstrained setup toString. | P1/P2 typed contracts/structured errors. P10 deleted the bundle macro and `WiringSource`. A lone `histos.wiring.scala` is not compiled. | [x] |
 | R10, scope | readBuilt inner scope ends before retained values. | P2/P6 generation construction; service alive through task and released final lease. P6 closes. | [ ] |
 | R11, boundary | Handwritten export whitelist omits theme/step API packages. | P6 reviewed actual export manifest; exported APIs work, engine/duplicates still fail. | [ ] |
 | R12, clock | CompileInputs.remember uses ClockLive.instant. | P5 effect clock and deterministic test-clock assertion; no global audit. | [ ] |
@@ -902,10 +902,10 @@ Original research R1-R7 is preserved; R8-R14 are focused additional observations
 | A2, typed bootstrap | Main services too late for remaining input loading. | B2 resolved by D14/D15; P6 proves first-run `histos.strategies.scala` without prior cache. Executable gate remains open. | [ ] |
 | A3, service keys | Concrete key not capability registration contract. | P2 interface/projection/duplicates/missing service/setup/scope proofs. | [ ] |
 | A4, recipe/TASTy | Closure/stages/compiler direction must be complete. | P4/P5/P6 typed supported model/refusal/closure; P6 closes assembled fixture. | [ ] |
-| A5, transaction | Consent/write/adoption/resume races. | P3 dedicated review, P8 parity, P10 assembled once-only gate. | [ ] |
-| A6, CI/transport | Server env/stdin cannot select caller repair; frozen differs from fresh check. | P8 common envelope/separate replies, no-solve/no-write each client kind. | [ ] |
-| A7, self-host | Shim/pin may run old code. | P10 toolchain/source identity, adoption and assembled transcripts. | [ ] |
-| A8, host compiler tools | Existing Zinc module path obtains compiler/bridge via LockedTools; it cannot implicitly solve a new host version in frozen fallback. | P5 supplied HostCompilerBundle and missing-bridge zero-solver test; P10 packages/adopts it from existing host tool inputs and proves frozen host drift. | [ ] |
+| A5, transaction | Consent/write/adoption/resume races. | P3 store and P8 parity. A local re-run does not close this row. | [ ] |
+| A6, CI/transport | Server env/stdin cannot select caller repair; frozen differs from fresh check. | P8 envelope. A local caller re-run does not close this row. | [ ] |
+| A7, self-host | Shim/pin may run old code. | The pin is `0.4.2`. A local jar is not a channel publish and does not close this row. | [ ] |
+| A8, host compiler tools | Existing Zinc module path obtains compiler/bridge via LockedTools; it cannot implicitly solve a new host version in frozen fallback. | P5 supplied the bundle. Local packaging of the launcher closure does not close this row. | [ ] |
 | V1, review | Two rounds completed; six design findings verified and closed, none open. | Round 2 accepted AR1-AR6 with no new/reopened findings. Design review is complete; implementation proof remains pending. | [x] |
 
 Review response format: issue ID, severity, section/path, required change, writer response, owning PR, reviewer verification. Escalate product choices to Russ; explain declined mechanisms. Resolving wording does not close executable findings.
@@ -925,7 +925,7 @@ Review response format: issue ID, severity, section/path, required change, write
 
 **Reviewer verification, round 2:** Reviewer read the full revision and reused source/ZIO evidence. Verified AR1's complete compiler payload/JDK/scoped materialization independent of Resolve/LockedTools; AR2's generation-only ambient and per-invocation context/event handles; AR3's stage input/trust/offline boundary; AR4's complete raw class/TASTy/resource/metadata seal and valid regression fixture; AR5's foundation contracts and production landing gates; and AR6's portable GFM/relative links. All six design findings are closed.
 
-Read-only checks confirmed clean e0027a3, all 39 unique repository-link targets tracked and destination-relative, 10 Scala fences plus one text fence paired, and no absolute local filesystem links. No compiler, runtime test, or probe ran. Rendered Markdown review is post-creation and distinct from scaladoc. All R1-R14/A1-A8 and future compiler/runtime gates remain open. These administrative closure edits change no mechanism and require no architecture re-review.
+Read-only checks confirmed clean e0027a3, all 39 unique repository-link targets tracked and destination-relative, 10 Scala fences plus one text fence paired, and no absolute local filesystem links. No compiler, runtime test, or probe ran for that review. Rendered Markdown review is post-creation and distinct from scaladoc. At that review, R1-R14 and A1-A8 were open. P10 closes R9 in this diff. A5-A8 stay open. These administrative closure edits change no mechanism and require no architecture re-review.
 
 ### Writer Revision Responses
 
@@ -955,17 +955,17 @@ Document gate:
 
 Later implementation gate:
 
-- [ ] Exact consumer/producer/service-only/task/local/published examples compiler-proven.
-- [ ] R1-R14 reproduced failing-first then green.
-- [ ] Complete helper/stage fallback, binary-only/unsupported/integrity/frozen/offline/refresh paths proven.
-- [ ] Consent/stale writers/interruption/adoption/once-only execution proven.
-- [ ] All client entrypoints use common caller context/coordinator; two concurrent callers share one constructed generation with isolated invocation data/events.
-- [ ] A-to-B mixed rebuild uses complete distribution tools with no B project cell, zero solves, unchanged lock; declared stage inputs/offline restrictions and complete TASTy seals proven.
-- [ ] P4/P7 repeat real producer-consumer proof after P5/P6 landing, not only contract fixtures.
-- [ ] Second unchanged local/published loads zero compiler; host/full-key changes invalidate.
-- [ ] Assembled host actually executes edited sources; self-host/scaffold/BSP/watch migration complete.
-- [ ] Format, affected full tests without quick, workflow, docs checks run.
-- [ ] Hard-unit and whole-change review complete; no unauthorized merge/release.
+- [ ] Exact consumer/producer/service-only/task/local/published examples compiler-proven. This unit did not compile a published consumer or producer.
+- [ ] R1-R14 reproduced failing-first then green. Failing-first reproduction stays with the merged units, so this bundle line stays open.
+- [ ] Complete helper/stage fallback, binary-only/unsupported/integrity/frozen/offline/refresh paths proven. This unit did not run helper, stage, binary-only, frozen, offline, or refresh fixtures.
+- [ ] Consent/stale writers/interruption/adoption/once-only execution proven. This unit did not run consent or once-only fixtures.
+- [ ] All client entrypoints use common caller context/coordinator; two concurrent callers share one constructed generation with isolated invocation data/events. A native client process and MCP were not run.
+- [ ] A-to-B mixed rebuild uses complete distribution tools with no B project cell, zero solves, unchanged lock; declared stage inputs/offline restrictions and complete TASTy seals proven. This unit did not prove stage inputs, offline refusal, or a TASTy seal.
+- [ ] P4/P7 repeat real producer-consumer proof after P5/P6 landing, not only contract fixtures. Those landing gates already merged. This unit did not publish a new producer.
+- [ ] Second unchanged local/published loads zero compiler; host/full-key changes invalidate. The second load here is a local module, and a published load was not run.
+- [ ] Assembled host actually executes edited sources; self-host/scaffold/BSP/watch migration complete. The pin is `0.4.2`, so this checkout's engine is not the running host.
+- [ ] Format, affected full tests without quick, workflow, docs checks run. The combined `./histos test api wire engine app plugin-testkit` exited 1 on `ld: library 'crypto' not found` before engine finished.
+- [ ] Hard-unit and whole-change review complete; no unauthorized merge/release. The parent reviews this unit. No release was cut.
 
 ## PR Plan
 
