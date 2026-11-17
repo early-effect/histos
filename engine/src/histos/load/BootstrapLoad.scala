@@ -3,14 +3,21 @@ package histos.load
 import histos.cache.ContentStore
 import histos.jdk.Sha256Digest
 import histos.lock.{
+  DeclarationDrift,
   ExecutionKind,
+  LockChange,
   LockDecision,
   LockDefaults,
+  LockDiff,
+  LockDiffEntry,
   LockMode,
   LockPhase,
   LockRefusal,
+  LockRevisionState,
   LockStage,
   LockStrategy,
+  LockSubject,
+  NecessaryScope,
 }
 import histos.plugin.{
   ActivationManifest,
@@ -45,11 +52,13 @@ import histos.plugin.{
 }
 import histos.PluginRef
 import histos.report.WireJson.given
-import histos.resolve.Resolve
+import histos.resolve.{DependencyLock, LinkToken, LockCodec, LockedPlugin, Resolve}
 import histos.toolchain.{HostCompilerInputs, HostCompilerSession, HostToolRole}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{
   CatalogSpec,
+  Dep,
+  DepKind,
   HistosBuild,
   Organized,
   PluginPublication,
@@ -61,6 +70,7 @@ import histos.{
   Splits,
 }
 import java.lang.reflect.Modifier
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
@@ -233,8 +243,9 @@ private[histos] object BootstrapLoad:
     val wanted = catalog.entries
     val graph  = slice(full, wanted)
     for
+      context  <- lockContext(request, full)
       decision <- locks
-        .decide(lockContext(request))
+        .decide(context)
         .mapError(error => LoadError.Plugin(PluginLoadError.Policy(error)))
       solving = decision match
         case LockDecision.OfferRepair | LockDecision.Update | LockDecision.LocalSolve => Some(resolve)
@@ -669,15 +680,55 @@ private[histos] object BootstrapLoad:
       def emit(event: histos.plugin.GenerationPluginEvent) = ZIO.unit
     ZLayer.succeed[histos.plugin.BuildContext](context) ++ ZLayer.succeed[PluginEvents.Generation](events)
 
-  private def lockContext(request: Prepare): histos.lock.LockContext =
+  /** Facts for one decision. The diff is the whole catalog against the lock, not this phase's slice. */
+  private def lockContext(
+      request: Prepare,
+      graph: ProjectGraph,
+  ): ZIO[Any, LoadError, histos.lock.LockContext] =
+    val path = request.repo.resolve("dependencies.lock")
+    lockBody(path).map:
+      case None =>
+        context(request, graph.intent, LockRevisionState.Absent, DeclarationDrift.Same, LockDiff(Nil))
+      case Some(text) =>
+        val revision = LockRevisionState.Present(LockCodec.revision(text))
+        DependencyLock.parse(text) match
+          case Left(_) =>
+            context(
+              request,
+              graph.intent,
+              revision,
+              DeclarationDrift.Changed(declarationHash(graph.coordinates)),
+              LockDiff(Nil),
+            )
+          case Right(lock) =>
+            val diff  = pluginDiff(graph.coordinates, lock.plugins)
+            val drift =
+              if diff.entries.isEmpty then DeclarationDrift.Same
+              else DeclarationDrift.Changed(declarationHash(graph.coordinates))
+            context(request, graph.intent, revision, drift, diff)
+
+  private def lockBody(path: Path): ZIO[Any, LoadError, Option[String]] =
+    ZIO
+      .attemptBlocking:
+        if Files.isRegularFile(path) then Some(Files.readString(path, StandardCharsets.UTF_8))
+        else None
+      .mapError(BuildFile.failed(path, IoFault.Read))
+
+  private def context(
+      request: Prepare,
+      intent: ResolutionIntent,
+      revision: LockRevisionState,
+      drift: DeclarationDrift,
+      diff: LockDiff,
+  ): histos.lock.LockContext =
     histos.lock.LockContext(
       LockPhase.Plugins,
       LockStage.Discovery,
       request.execution,
-      ResolutionIntent.Inherit,
-      histos.lock.LockRevisionState.Absent,
-      histos.lock.DeclarationDrift.Same,
-      histos.lock.NecessaryScope(histos.plugin.PluginDetail.trusted("plugins"), histos.lock.LockDiff(Nil)),
+      intent,
+      revision,
+      drift,
+      scope(diff),
       None,
       InvocationContext(
         InvocationId.derive("prepare"),
@@ -689,6 +740,77 @@ private[histos] object BootstrapLoad:
       ),
       PluginEvents.closedInvocation,
     )
+
+  private def scope(diff: LockDiff): NecessaryScope =
+    val count = diff.entries.length
+    val text  = if count == 1 then "1 lock change" else s"$count lock changes"
+    NecessaryScope(histos.plugin.PluginDetail.trusted(text), diff)
+
+  private def pluginDiff(coordinates: List[PluginCoordinate], locked: List[LockedPlugin]): LockDiff =
+    val (matched, used) =
+      coordinates.foldLeft((List.empty[LockDiffEntry], Set.empty[PluginKey])): (state, coordinate) =>
+        val (entries, seen) = state
+        coordinate match
+          case PluginCoordinate.Module(_) =>
+            (entries, seen)
+          case PluginCoordinate.Published(dependency, link) =>
+            val key = keyOf(dependency)
+            locked.find(plugin => keyOf(plugin) == key) match
+              case None =>
+                (entries :+ row(coordinate, LockChange.Added, None, Some(pinHash(coordinate))), seen)
+              case Some(plugin) if plugin.link == link =>
+                (entries, seen + key)
+              case Some(plugin) =>
+                val previous = pinned(plugin)
+                (
+                  entries :+ row(coordinate, LockChange.Changed, Some(pinHash(previous)), Some(pinHash(coordinate))),
+                  seen + key,
+                )
+    val removed = locked.flatMap: plugin =>
+      val key = keyOf(plugin)
+      if used.contains(key) then Nil
+      else
+        val coordinate = pinned(plugin)
+        List(row(coordinate, LockChange.Removed, Some(pinHash(coordinate)), None))
+    LockDiff(matched ++ removed)
+
+  /** A lock row has no dependency kind. A ship pin is a binary coordinate. */
+  private def pinned(plugin: LockedPlugin): PluginCoordinate =
+    PluginCoordinate.Published(
+      Dep.trusted(plugin.organization, plugin.name, plugin.revision, DepKind.Binary),
+      plugin.link,
+    )
+
+  private def declarationHash(coordinates: List[PluginCoordinate]): ContentHash =
+    val text = coordinates.flatMap:
+      case coordinate @ PluginCoordinate.Published(_, link) =>
+        List(s"${coordinate.render} ${LinkToken.render(link)}")
+      case PluginCoordinate.Module(_) =>
+        Nil
+    LockCodec.content(text.mkString("\n"))
+
+  private def pinHash(coordinate: PluginCoordinate): ContentHash =
+    coordinate match
+      case published @ PluginCoordinate.Published(_, link) =>
+        LockCodec.content(s"${published.render} ${LinkToken.render(link)}")
+      case PluginCoordinate.Module(name) =>
+        LockCodec.content(name.value)
+
+  private def row(
+      coordinate: PluginCoordinate,
+      change: LockChange,
+      before: Option[ContentHash],
+      after: Option[ContentHash],
+  ): LockDiffEntry =
+    LockDiffEntry(coordinate, change, LockSubject.Artifact, before, after)
+
+  private def keyOf(dependency: Dep): PluginKey =
+    PluginKey(dependency.organization, dependency.name, dependency.revision.value)
+
+  private def keyOf(plugin: LockedPlugin): PluginKey =
+    PluginKey(plugin.organization, plugin.name, plugin.revision)
+
+  private final case class PluginKey(organization: String, name: String, revision: String)
 
   private def loadContext(
       request: Prepare,
