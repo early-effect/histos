@@ -6,7 +6,7 @@ import histos.*
 import histos.cache.ContentStore
 import histos.central.{Artifact, Layout, PublishError, Published, Publisher, Revision}
 import histos.contracts.ContractFixtures
-import histos.jdk.Machine
+import histos.jdk.{JdkMajor, JdkVersion, Machine}
 import histos.plugin.{
   ArtifactFormat,
   ArtifactIdentity,
@@ -28,11 +28,37 @@ import histos.plugin.{
   StageInputs,
   StageRestrictions,
 }
-import histos.resolve.{BuildResolvers, ClasspathScope, LockedTools, ResolutionService, Resolve}
+import histos.resolve.{
+  BuildResolvers,
+  Classpath,
+  ClasspathScope,
+  LockedArtifact,
+  LockedTools,
+  Repositories,
+  Repository,
+  ResolutionService,
+  Resolve,
+  ResolveCell,
+  ResolveError,
+  ResolvedArtifact,
+  ToolRequest,
+}
 import histos.schedule.RemoteCache
 import histos.version.{ReleaseVersion, ShipNumber}
 import histos.workspace.Workspace
-import histos.zinc.{CompilationCapture, CompilationSnapshot, GraphCompile, GraphCompileError, ScalacClasspath, Sources}
+import histos.zinc.{
+  CellCapture,
+  CompilationCapture,
+  CompilationSnapshot,
+  CompileError,
+  CompileReplay,
+  CompilerPart,
+  GraphCompile,
+  GraphCompileError,
+  ScalacClasspath,
+  Sources,
+  ToolchainMiss,
+}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -183,6 +209,53 @@ object PluginPublicationSpec extends ZIOSpecDefault:
           case _                                      => false
         assertTrue(uploads == 0, changed)
     },
+    test("an empty toolchain list fails capture") {
+      val jdk         = JdkVersion.trusted("21", JdkMajor.trusted(21))
+      val bridge      = Path.of("bridge.jar")
+      val jar         = Path.of("compiler.jar")
+      val library     = Path.of("library.jar")
+      val runtimeMiss = CellCapture
+        .record(
+          Path.of("repo"),
+          ProjectName("plug"),
+          version,
+          Platform.Jvm,
+          Nil,
+          Path.of("unmanaged"),
+          Path.of("src"),
+          Path.of("classes"),
+          Nil,
+          jdk,
+          Nil,
+          List(jar),
+          bridge,
+        )
+        .either
+      val compilerMiss = CellCapture
+        .record(
+          Path.of("repo"),
+          ProjectName("plug"),
+          version,
+          Platform.Jvm,
+          Nil,
+          Path.of("unmanaged"),
+          Path.of("src"),
+          Path.of("classes"),
+          Nil,
+          jdk,
+          List(library),
+          Nil,
+          bridge,
+        )
+        .either
+      runtimeMiss
+        .zip(compilerMiss)
+        .map: (runtime, compiler) =>
+          assertTrue(
+            runtime == Left(missing(CompilerPart.Library)),
+            compiler == Left(missing(CompilerPart.Scala3Compiler)),
+          )
+    },
     test("a GraphCompile snapshot publishes the jar it compiled") {
       ZIO.scoped {
         Workspace
@@ -190,87 +263,187 @@ object PluginPublicationSpec extends ZIOSpecDefault:
           .flatMap: repo =>
             val source =
               repo.resolve("plug").resolve("src").resolve("main").resolve("scala").resolve("demo").resolve("Mark.scala")
-            val built    = Projects(module("plug", Jvm)(version).pluginLibrary)
-            val compiled = for
-              _       <- write(source, "package demo\n\nobject Mark:\n  def token = \"from-graph\"\n")
-              _       <- hostFacts
-              graph   <- ZIO.fromEither(built).mapError(Gate.Build(_))
-              machine <- Machine.load(repo).mapError(Gate.Tool(_))
-              jdk     <- GraphCompile.jdk(machine).mapError(Gate.Compile(_))
-              cells   <- GraphCompile
-                .run(repo, graph, List(ProjectName("plug")), jdk, machine.native, Some(Platform.Jvm), _ => ZIO.unit)
-                .mapError(Gate.Compile(_))
-              found <- cells match
-                case cell :: Nil => ZIO.succeed(cell)
-                case _           => ZIO.fail(Gate.Cell)
-              opened <- ResolutionService.open(repo, graph).mapError(Gate.Lock(_))
-              lock   <- opened.current
-              tools  <- LockedTools.make(lock, graph)
-              module <- graph.projects.collect { case item: Module => item } match
-                case item :: Nil => ZIO.succeed(item)
-                case _           => ZIO.fail(Gate.Module)
-              classpath <- ScalacClasspath
-                .of(
-                  repo,
-                  module,
-                  Nil,
-                  version,
-                  Platform.Jvm,
-                  lock,
-                  BuildResolvers(graph.resolvers),
-                  ClasspathScope.Compile,
+            val built = Projects(module("plug", Jvm)(version).pluginLibrary)
+            Ref
+              .make(0)
+              .flatMap: fetches =>
+                val compiled = for
+                  _        <- write(source, "package demo\n\nobject Mark:\n  def token = \"from-graph\"\n")
+                  _        <- hostFacts
+                  graph    <- ZIO.fromEither(built).mapError(Gate.Build(_))
+                  machine  <- Machine.load(repo).mapError(Gate.Tool(_))
+                  jdk      <- GraphCompile.jdk(machine).mapError(Gate.Compile(_))
+                  missed   <- compileCell(repo, graph, jdk, machine.native)
+                  _        <- fetches.set(0)
+                  hit      <- compileCell(repo, graph, jdk, machine.native)
+                  resolved <- fetches.get
+                  opened   <- ResolutionService.open(repo, graph).mapError(Gate.Lock(_))
+                  lock     <- opened.current
+                  tools    <- LockedTools.make(lock, graph)
+                  module   <- graph.projects.collect { case item: Module => item } match
+                    case item :: Nil => ZIO.succeed(item)
+                    case _           => ZIO.fail(Gate.Module)
+                  classpath <- ScalacClasspath
+                    .of(
+                      repo,
+                      module,
+                      Nil,
+                      version,
+                      Platform.Jvm,
+                      lock,
+                      BuildResolvers(graph.resolvers),
+                      ClasspathScope.Compile,
+                    )
+                    .provideSomeLayer(ZLayer.succeed(tools))
+                    .mapError(error => Gate.Compile(error))
+                  tasty    <- ZIO.attemptBlocking(hasTasty(missed.classes)).orDie
+                  analysis <- GraphCompile.analysisDirOf(missed.classes) match
+                    case Some(path) => ZIO.succeed(path)
+                    case None       => ZIO.fail(Gate.Cell)
+                  loaded <- ZIO
+                    .attemptBlocking(CompileReplay.recordedToolchain(analysis))
+                    .mapError(_ => Gate.Disk(histos.workspace.IoFailure(analysis, histos.workspace.IoFault.Read)))
+                  toolsJars <- loaded match
+                    case Some(recorded) => ZIO.succeed(recorded)
+                    case None           => ZIO.fail(Gate.Cell)
+                  compilerIds <- identities(toolsJars.bridge :: toolsJars.compiler)
+                  runtimeIds  <- identities(toolsJars.runtime)
+                  staged      <- PluginBundle
+                    .library(
+                      PluginPublication.Rebuildable,
+                      node,
+                      hit.capture,
+                      repo,
+                      hit.classes,
+                      Nil,
+                      Nil,
+                      Organization("com.example"),
+                      histos.central.ArtifactId.trusted("plug"),
+                      revision,
+                    )
+                    .mapError(Gate.Bundle(_))
+                  upload = ZIO
+                    .serviceWithZIO[Publisher](_.publish(artifactOf(staged, Nil)))
+                    .mapError(PluginPublishFault.Publish(_))
+                  packed <- counted(upload)((uploads, result) => readPublished(uploads, result))
+                    .mapError(Gate.Bundle(_))
+                yield
+                  val uploads = packed.uploads
+                  val entries = packed.entries
+                  val payload = entries.collect:
+                    case (name, bytes) if name.startsWith("META-INF/histos/rebuild/") && name.endsWith("Mark.scala") =>
+                      new String(bytes, StandardCharsets.UTF_8)
+                  val json = packed.text(PluginBundle.Descriptor)
+                  assertTrue(
+                    classpath.paths.nonEmpty,
+                    missed.closure.length == classpath.paths.length,
+                    missed.closure.forall(_.role == ClosureRole.Compile),
+                    missed.compiler == compilerIds,
+                    missed.runtime == runtimeIds,
+                    hit.compiler == compilerIds,
+                    hit.runtime == runtimeIds,
+                    missed.compiler.nonEmpty,
+                    missed.runtime.nonEmpty,
+                    missed.compiler.forall(_.format == ArtifactFormat.Jar),
+                    missed.runtime.forall(_.format == ArtifactFormat.Jar),
+                    resolved == 0,
+                    hit.changed == false,
+                    hit.classesWritten.contains(0),
+                    missed.sources.nonEmpty,
+                    tasty,
+                    uploads == 1,
+                    entries.contains(PluginBundle.Descriptor),
+                    payload.exists(_.contains("from-graph")),
+                    entries.keys.exists(_.endsWith(".tasty")),
+                    json.exists(text => compilerIds.forall(item => text.contains(item.digest.value))),
+                    json.exists(text => runtimeIds.forall(item => text.contains(item.digest.value))),
+                  )
+                compiled.provide(
+                  Resolve.coursier >>> ZLayer.fromFunction(counting(fetches)),
+                  ZLayer.succeed(ContentStore.in(repo.resolve("store"))),
+                  RemoteCache.off,
                 )
-                .provideSomeLayer(ZLayer.succeed(tools))
-                .mapError(error => Gate.Compile(error))
-              tasty    <- ZIO.attemptBlocking(hasTasty(found.classes)).orDie
-              snapshot <- found.capture match
-                case CompilationCapture.Recorded(shot) => ZIO.succeed(shot)
-                case CompilationCapture.Unrecorded     => ZIO.fail(Gate.Cell)
-              staged <- PluginBundle
-                .library(
-                  PluginPublication.Rebuildable,
-                  node,
-                  found.capture,
-                  repo,
-                  found.classes,
-                  Nil,
-                  Nil,
-                  Organization("com.example"),
-                  histos.central.ArtifactId.trusted("plug"),
-                  revision,
-                )
-                .mapError(Gate.Bundle(_))
-              upload = ZIO
-                .serviceWithZIO[Publisher](_.publish(artifactOf(staged, Nil)))
-                .mapError(PluginPublishFault.Publish(_))
-              packed <- counted(upload)((uploads, result) => readPublished(uploads, result)).mapError(Gate.Bundle(_))
-            yield
-              val uploads = packed.uploads
-              val entries = packed.entries
-              val payload = entries.collect:
-                case (name, bytes) if name.startsWith("META-INF/histos/rebuild/") && name.endsWith("Mark.scala") =>
-                  new String(bytes, StandardCharsets.UTF_8)
-              assertTrue(
-                classpath.paths.nonEmpty,
-                snapshot.closure.length == classpath.paths.length,
-                snapshot.closure.forall(_.role == ClosureRole.Compile),
-                snapshot.compiler.isEmpty,
-                snapshot.runtime.isEmpty,
-                snapshot.sources.nonEmpty,
-                tasty,
-                uploads == 1,
-                entries.contains(PluginBundle.Descriptor),
-                payload.exists(_.contains("from-graph")),
-                entries.keys.exists(_.endsWith(".tasty")),
-              )
-            compiled.provide(
-              Resolve.coursier,
-              ZLayer.succeed(ContentStore.in(repo.resolve("store"))),
-              RemoteCache.off,
-            )
       }
     },
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(8.minutes)
+
+  private final case class Shot(
+      classes: Path,
+      capture: CompilationCapture,
+      closure: List[ClosureArtifact],
+      compiler: List[ArtifactIdentity],
+      runtime: List[ArtifactIdentity],
+      sources: List[histos.plugin.SelectedInput],
+      changed: Boolean,
+      classesWritten: Option[Int],
+  )
+
+  private def compileCell(
+      repo: Path,
+      graph: ProjectGraph,
+      jdk: histos.jdk.JdkRuntime,
+      native: histos.native.NativeOrigin,
+  ): ZIO[Resolve & ContentStore & RemoteCache, Gate, Shot] =
+    GraphCompile
+      .run(repo, graph, List(ProjectName("plug")), jdk, native, Some(Platform.Jvm), _ => ZIO.unit)
+      .mapError(Gate.Compile(_))
+      .flatMap:
+        case cell :: Nil =>
+          cell.capture match
+            case CompilationCapture.Recorded(shot) =>
+              ZIO.succeed(
+                Shot(
+                  cell.classes,
+                  cell.capture,
+                  shot.closure,
+                  shot.compiler,
+                  shot.runtime,
+                  shot.sources,
+                  cell.changed,
+                  cell.classesWritten,
+                )
+              )
+            case CompilationCapture.Unrecorded => ZIO.fail(Gate.Cell)
+        case _ => ZIO.fail(Gate.Cell)
+
+  private def identities(paths: List[Path]): ZIO[Any, Gate, List[ArtifactIdentity]] =
+    ZIO.foreach(paths): path =>
+      ZIO
+        .attemptBlocking(ArtifactIdentity(ArtifactFormat.Jar, Digests.content(Files.readAllBytes(path))))
+        .mapError(_ => Gate.Disk(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
+
+  private def missing(part: CompilerPart): GraphCompileError =
+    GraphCompileError.Failed(
+      ProjectName("plug"),
+      version,
+      Platform.Jvm,
+      CompileError.Toolchain(ToolchainMiss.Missing(version, part)),
+    )
+
+  private def counting(hits: Ref[Int])(inner: Resolve): Resolve =
+    CountingResolve(inner, hits)
+
+  private final class CountingResolve(inner: Resolve, hits: Ref[Int]) extends Resolve:
+    def resolveTool(request: ToolRequest): zio.IO[ResolveError, Classpath] =
+      inner.resolveTool(request)
+
+    def resolve(cell: ResolveCell): zio.IO[ResolveError, Classpath] =
+      inner.resolve(cell)
+
+    def fetch(artifact: LockedArtifact): zio.IO[ResolveError, ResolvedArtifact] =
+      hits.update(_ + 1) *> inner.fetch(artifact)
+
+    def resolvePlugin(dependency: Dep, repositories: Repositories): zio.IO[ResolveError, Classpath] =
+      inner.resolvePlugin(dependency, repositories)
+
+    def sources(
+        organization: String,
+        name: String,
+        revision: String,
+        repository: Repository,
+    ): zio.IO[ResolveError, ResolvedArtifact] =
+      inner.sources(organization, name, revision, repository)
+  end CountingResolve
 
   private enum Gate:
     case Build(error: BuildError)

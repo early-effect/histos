@@ -551,7 +551,17 @@ object GraphCompile:
       upstreams: Map[CellKey, Path],
   )
 
-  private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss], closure: Option[List[Path]])
+  private final case class CapturedToolchain(runtime: List[Path], compiler: List[Path], bridge: Path)
+
+  private final case class CellResult(
+      cell: CompiledCell,
+      miss: Option[KeyMiss],
+      closure: Option[List[Path]],
+      toolchain: Option[CapturedToolchain],
+  )
+
+  /** Closure paths a plugin-library hit reads. Resolving them again hashes the compiler jars. */
+  private val ClosureFile = "replay.closure"
 
   /** Lock checksums and source bytes. A hit does not fetch project jars or open a compiler. A module that compiles
     * against the host api still hashes that jar. The caller listed the sources and this hashes each path relative to
@@ -692,10 +702,16 @@ object GraphCompile:
               case None    => ZIO.succeed(Option.empty[List[Path]])
               case Some(_) =>
                 assembled match
-                  case Some(resolved) => ZIO.succeed(Some(CellCapture.classpath(resolved, cells)))
-                  case None           =>
-                    classpathOf(plan, module, cells, version, platform).map: resolved =>
-                      Some(CellCapture.classpath(resolved, cells))
+                  case Some(resolved) =>
+                    val paths = CellCapture.classpath(resolved, cells)
+                    writeClosure(analysis, paths).as(Some(paths))
+                  case None =>
+                    readClosure(analysis).flatMap:
+                      case Some(paths) => ZIO.succeed(Some(paths))
+                      case None        =>
+                        classpathOf(plan, module, cells, version, platform).flatMap: resolved =>
+                          val paths = CellCapture.classpath(resolved, cells)
+                          writeClosure(analysis, paths).as(Some(paths))
             _ <- forgetMeasurements(plan, version, platform, classes).mapError(failed)
           yield CellResult(
             CompiledCell(
@@ -711,11 +727,24 @@ object GraphCompile:
             ),
             output.miss,
             closure,
+            Some(CapturedToolchain(output.runtime, output.compiler, output.bridge)),
           )
       _        <- copyResources(plan, module, version, platform, base, compiled.cell.classes)
-      recorded <- compiled.closure match
-        case None        => ZIO.succeed(compiled.cell)
-        case Some(paths) =>
+      recorded <- (compiled.closure, compiled.toolchain) match
+        case (None, _)       => ZIO.succeed(compiled.cell)
+        case (Some(_), None) =>
+          val part = ScalaSeries.of(version) match
+            case Some(ScalaSeries.Scala2(13)) => CompilerPart.Compiler
+            case _                            => CompilerPart.Scala3Compiler
+          ZIO.fail(
+            GraphCompileError.Failed(
+              module.name,
+              version,
+              platform,
+              CompileError.Toolchain(ToolchainMiss.Missing(version, part)),
+            )
+          )
+        case (Some(paths), Some(tools)) =>
           CellCapture
             .record(
               plan.repo,
@@ -728,12 +757,14 @@ object GraphCompile:
               compiled.cell.classes,
               paths,
               plan.jdk.version,
+              tools.runtime,
+              tools.compiler,
+              tools.bridge,
             )
             .map(capture => compiled.cell.copy(capture = capture))
     yield compiled.copy(cell = recorded)
 
-  /** A replayed plugin library still resolves this. The snapshot closure is the classpath, and a hit does not otherwise
-    * fetch it.
+  /** A plugin-library hit reads the closure file instead. This is the miss, and the hit that has no recorded closure.
     */
   private def classpathOf(
       plan: CompilePlan,
@@ -757,6 +788,28 @@ object GraphCompile:
         )
       )
       .provideSomeLayer(ZLayer.succeed(plan.tools))
+
+  private def writeClosure(analysis: Path, paths: List[Path]): IO[GraphCompileError, Unit] =
+    val file = analysis.resolve(ClosureFile)
+    ZIO
+      .attemptBlocking {
+        Files.createDirectories(analysis)
+        val text = paths.map(_.toAbsolutePath.normalize.toString).mkString("\n")
+        Files.writeString(file, if text.isEmpty then "" else text + "\n")
+      }
+      .mapError(_ => GraphCompileError.Output(file))
+      .unit
+
+  private def readClosure(analysis: Path): IO[GraphCompileError, Option[List[Path]]] =
+    val file = analysis.resolve(ClosureFile)
+    ZIO
+      .attemptBlocking {
+        if !Files.isRegularFile(file) then None
+        else
+          val lines = Files.readString(file).split("\n", -1).toList.map(_.trim).filter(_.nonEmpty)
+          Some(lines.map(line => Path.of(line)))
+      }
+      .mapError(_ => GraphCompileError.Output(file))
 
   /** Unmanaged resources and generated assets, after compile and after a product restore. The ownership list lives in
     * the analysis directory, so a class-directory wipe does not forget which files this sync owns.
@@ -810,6 +863,7 @@ object GraphCompile:
               sources = Some(SourceCount(0, 0)),
               classesWritten = Some(0),
             ),
+            None,
             None,
             None,
           )

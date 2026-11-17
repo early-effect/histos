@@ -74,6 +74,11 @@ final case class CompileOutput(
     sources: Option[SourceCount],
     classesWritten: Option[Int],
     miss: Option[KeyMiss],
+    /** Library jars this compile put on the classpath. Not the project's dependencies. */
+    runtime: List[Path],
+    /** Compiler classpath, without the bridge jar. */
+    compiler: List[Path],
+    bridge: Path,
 ):
   def facts: CompileFacts =
     CompileFacts(changed, sources, classesWritten)
@@ -459,7 +464,14 @@ object JvmCompile:
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
       _      <- ProductCache.stage(remote, store, key).mapError(carried)
-      hit    <- CompileReplay.load(store, key, request)
+      hit    <- CompileReplay.load(
+        store,
+        key,
+        request,
+        artifacts.runtime,
+        artifacts.compiler,
+        artifacts.bridge,
+      )
       output <- hit match
         case Some(found) =>
           CompileInputs.remember(store, request.analysis, rows).as(found)
@@ -472,7 +484,14 @@ object JvmCompile:
               )
             keep <- stable(request, rows)
             _    <- ZIO.when(keep)(
-              CompileReplay.save(store, written.key, request) *>
+              CompileReplay.save(
+                store,
+                written.key,
+                request,
+                written.runtime,
+                written.compiler,
+                written.bridge,
+              ) *>
                 ProductCache.publish(remote, store, written.key).mapError(carried) *>
                 CompileInputs.remember(store, request.analysis, rows)
             )
@@ -667,6 +686,9 @@ object JvmCompile:
               files,
               writtenClasses(before, request.classes),
               None,
+              prepared.runtime,
+              prepared.compilerJars,
+              prepared.bridge,
             ),
             fingerprint(zip).map(Remembered(_, result)),
           )

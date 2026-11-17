@@ -26,7 +26,9 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, ZIO}
 
-/** The snapshot a plugin-library compile leaves on its cell. Compiler and runtime identity stay empty. */
+/** The snapshot a plugin-library compile leaves on its cell. Compiler jars are the bridge, then the compiler classpath.
+  * Runtime jars are the library jars that compile loaded. An empty list fails.
+  */
 object CellCapture:
   def record(
       repo: Path,
@@ -39,43 +41,74 @@ object CellCapture:
       classes: Path,
       classpath: List[Path],
       jdk: JdkVersion,
+      runtime: List[Path],
+      compiler: List[Path],
+      bridge: Path,
   ): IO[GraphCompileError, CompilationCapture] =
-    val refused = (error: histos.AssetError) => GraphCompileError.Assets(module, version, platform, error)
-    for
-      inputs    <- selected(repo, module, version, platform, unmanagedRoot, sources, SourceKind.Scala)
-      resources <- histos.pack.Resources
-        .filesAt(sourceBase.resolve("main").resolve("resources"))
-        .mapError(refused)
-      listed <- selected(
-        repo,
-        module,
-        version,
-        platform,
-        unmanagedRoot,
-        resources.map(_._2),
-        SourceKind.Resource,
+    if compiler.isEmpty then ZIO.fail(missing(module, version, platform, compilerPart(version)))
+    else if runtime.isEmpty then ZIO.fail(missing(module, version, platform, CompilerPart.Library))
+    else
+      val refused = (error: histos.AssetError) => GraphCompileError.Assets(module, version, platform, error)
+      for
+        inputs    <- selected(repo, module, version, platform, unmanagedRoot, sources, SourceKind.Scala)
+        resources <- histos.pack.Resources
+          .filesAt(sourceBase.resolve("main").resolve("resources"))
+          .mapError(refused)
+        listed <- selected(
+          repo,
+          module,
+          version,
+          platform,
+          unmanagedRoot,
+          resources.map(_._2),
+          SourceKind.Resource,
+        )
+        outputs   <- seal(module, version, platform, classes)
+        closure   <- ZIO.foreach(classpath)(member(module, version, platform, _))
+        compilers <- sealJars(module, version, platform, bridge :: compiler)
+        libraries <- sealJars(module, version, platform, runtime)
+      yield CompilationCapture.Recorded(
+        CompilationSnapshot(
+          module,
+          version,
+          platform,
+          inputs,
+          listed,
+          Nil,
+          Nil,
+          closure,
+          Nil,
+          Nil,
+          compilers,
+          libraries,
+          jdk,
+          outputs,
+          Nil,
+        )
       )
-      outputs <- seal(module, version, platform, classes)
-      closure <- ZIO.foreach(classpath)(member(module, version, platform, _))
-    yield CompilationCapture.Recorded(
-      CompilationSnapshot(
-        module,
-        version,
-        platform,
-        inputs,
-        listed,
-        Nil,
-        Nil,
-        closure,
-        Nil,
-        Nil,
-        Nil,
-        Nil,
-        jdk,
-        outputs,
-        Nil,
-      )
-    )
+
+  private def compilerPart(version: ScalaVersion): CompilerPart =
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala2(13)) => CompilerPart.Compiler
+      case _                            => CompilerPart.Scala3Compiler
+
+  private def missing(
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+      part: CompilerPart,
+  ): GraphCompileError =
+    GraphCompileError.Failed(module, version, platform, CompileError.Toolchain(ToolchainMiss.Missing(version, part)))
+
+  private def sealJars(
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+      paths: List[Path],
+  ): IO[GraphCompileError, List[ArtifactIdentity]] =
+    ZIO.foreach(paths): path =>
+      hashFile(module, version, platform, path).map: hash =>
+        ArtifactIdentity(ArtifactFormat.Jar, ContentHash.trusted(hash.value))
 
   /** Scalac sees the runtime, then upstream class directories, then jars. This cell's own classes stay the output. */
   def classpath(assembled: ScalacClasspath, upstream: List[UpstreamCell]): List[Path] =
