@@ -38,7 +38,7 @@ Stable ABI shims. Scala.js or Native plugin execution. Producer-build replay. A 
 
 ## Now
 
-P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin moves in #233 from `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`, to `0.5.0-7c073bd2f203-SNAPSHOT`, packed from `7c073bd2`. It moves in #235 from that pin to `0.5.0-4f4783276259-SNAPSHOT`, packed from `4f478327`. The launcher timestamp is `0.5.0-4f4783276259-20261118.014705-1`. The pointer `0.5.0-SNAPSHOT` moved to `0.5.0-20261118.014743-7` and is not the pin. M1, M2, M4, M5, and M6 are merged. Architecture rows A5 through A8 stay open. Later units must not invent the behaviors named in the P1 notes.
+P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main` as `8f74a2e` (#216). P2 is on `main` as `0073b37` (#217). P3 is on `main` as `f60ae81` (#218). P5 is on `main` as `86e0bc1` (#219). P4 is on `main` as `250c089` (#220). P6 is on `main` as `23037d9` (#221). P7 is on `main` as `82303e8` (#222). P9 is on `main` as `db3a44c` (#223). P8 is on `main` as `b2c9632` (#224). P10 is on `main` as `8dbccf1` (#225). The pin moves in #226 to `0.4.4-8c61390d3c7a-SNAPSHOT`, packed from `8c61390`. The 0.5.0 pin moves in #233 from `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`, to `0.5.0-7c073bd2f203-SNAPSHOT`, packed from `7c073bd2`. It moves in #235 from that pin to `0.5.0-4f4783276259-SNAPSHOT`, packed from `4f478327`. The launcher timestamp is `0.5.0-4f4783276259-20261118.014705-1`. The pointer `0.5.0-SNAPSHOT` moved to `0.5.0-20261118.014743-7` and is not the pin. M1, M2, M4, M5, and M6 are merged. The pin moves in #239 to `0.5.0-36642bcc3ec5-SNAPSHOT`, packed from `36642bcc`. The launcher timestamp is `0.5.0-36642bcc3ec5-20261118.143102-1`. The pointer moved to `0.5.0-20261118.143142-8` and is not the pin. Architecture rows A5 through A8 closed on #240. CI run 44338066046 on `09ccb7e` passed publish, test, scaladoc, format, and client. The squash is `e96c5d32`. Later units must not invent the behaviors named in the P1 notes.
 
 ## Units
 
@@ -90,10 +90,10 @@ P0 is on `main`. The spec is `c60ee8d`. This board is `ce6fd7f`. P1 is on `main`
 | A2 early strategy file before remaining loads | P1 data, P6 proof | | | [ ] |
 | A3 registration key is the capability interface | P2 | | | [ ] |
 | A4 recipe, TASTy direction, and closure | P4, P5, P6 | | | [ ] |
-| A5 consent, write, adoption, resume | P3 store, P8 and P10 once-only | | dirty `0d9c837`: local lock re-run, not an architecture close | [ ] |
-| A6 caller context, not server env or stdin | P8 | | dirty `0d9c837`: local caller re-run, not an architecture close | [ ] |
-| A7 shim and pin may run old code | P10 | | dirty `0d9c837`: local jars are not a channel publish and not A7 | [ ] |
-| A8 host compiler tools are not solved from the project lock | P5, P10 packages them | | dirty `0d9c837`: local manifest fingerprint, not an architecture close | [ ] |
+| A5 consent, write, adoption, resume | P3 store, P8 and P10 once-only | | CI run 44338066046 on `09ccb7e` (#240). The test job installed the local jar and ran `./histos test app --only '*LockInvocationSpec*' '*InstalledCompilerPayloadSpec*'`: 9 passed, 0 failed, no test-clock warning. | [x] |
+| A6 caller context, not server env or stdin | P8 | | CI run 44338066046 on `09ccb7e` (#240). The client job linked the native client and `./histos run host` printed `host`. | [x] |
+| A7 shim and pin may run old code | P10 | | CI run 44338066046 on `09ccb7e` (#240). The test job's `./histos version` first line was the locally packed manifest version and differed from the pin in `build.properties`. | [x] |
+| A8 host compiler tools are not solved from the project lock | P5, P10 packages them | | CI run 44338066046 on `09ccb7e` (#240). `InstalledCompilerPayloadSpec` passed on that installed jar and left `dependencies.lock` unchanged. | [x] |
 
 ## Briefs
 

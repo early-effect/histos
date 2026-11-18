@@ -1,12 +1,12 @@
 # Histos plugin architecture and dependency-lock transactions
 
-**Status:** Reviewed proposed architecture, approved documentation handoff. Two review rounds closed six design findings (four major, two minor), with zero open design issues. D1-D15 remain final; D16 clarifies relevant test cleanup without changing architecture. R9 is the assembled-host row this diff closes. A5-A8 stay open. The other ledger rows stay open.
+**Status:** Reviewed proposed architecture, approved documentation handoff. Two review rounds closed six design findings (four major, two minor), with zero open design issues. D1-D15 remain final; D16 clarifies relevant test cleanup without changing architecture. R9 is the assembled-host row this diff closes. A5 through A8 are closed on the work plan by #240. The other ledger rows stay open.
 
 **Document:** `docs/plugin-architecture.md`. Docs-only approval covers saving this handoff and document checks, not feature implementation, commit, push, PR, publishing, or release.
 
 **Historical baseline:** Clean `main`, `e0027a30926add6103700cba41e9ac7dc79e665e`, inspected on 2026-11-16. Findings describe that baseline, not a newly audited implementation.
 
-**Owner:** Russ. R9 is the row this diff closes. A5-A8 stay open. Local jars are recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md).
+**Owner:** Russ. R9 is the row this diff closes. A5 through A8 are closed on [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md).
 
 ## Handoff Summary
 
@@ -903,10 +903,10 @@ Original research R1-R7 is preserved; R8-R14 are focused additional observations
 | A2, typed bootstrap | Main services too late for remaining input loading. | B2 resolved by D14/D15; P6 proves first-run `histos.strategies.scala` without prior cache. Executable gate remains open. | [ ] |
 | A3, service keys | Concrete key not capability registration contract. | P2 interface/projection/duplicates/missing service/setup/scope proofs. | [ ] |
 | A4, recipe/TASTy | Closure/stages/compiler direction must be complete. | P4/P5/P6 typed supported model/refusal/closure; P6 closes assembled fixture. | [ ] |
-| A5, transaction | Consent/write/adoption/resume races. | P3 store and P8 parity. A local re-run does not close this row. | [ ] |
-| A6, CI/transport | Server env/stdin cannot select caller repair; frozen differs from fresh check. | P8 envelope. A local caller re-run does not close this row. | [ ] |
-| A7, self-host | Shim/pin may run old code. | The pin is `0.5.0-a67fddcd62fb-SNAPSHOT`, packed from `a67fddc`. This row stays open until that pin's CI is green. | [ ] |
-| A8, host compiler tools | Existing Zinc module path obtains compiler/bridge via LockedTools; it cannot implicitly solve a new host version in frozen fallback. | P5 supplied the bundle. Local packaging of the launcher closure does not close this row. | [ ] |
+| A5, transaction | Consent/write/adoption/resume races. | CI run 44338066046 on `09ccb7e` (#240). LockInvocationSpec passed on the locally packed jar. | [x] |
+| A6, CI/transport | Server env/stdin cannot select caller repair; frozen differs from fresh check. | CI run 44338066046 on `09ccb7e` (#240). The client job linked the native client and `./histos run host` printed `host`. | [x] |
+| A7, self-host | Shim/pin may run old code. | CI run 44338066046 on `09ccb7e` (#240). `./histos version` first line was the locally packed manifest version and differed from the pin in `build.properties`. | [x] |
+| A8, host compiler tools | Existing Zinc module path obtains compiler/bridge via LockedTools; it cannot implicitly solve a new host version in frozen fallback. | CI run 44338066046 on `09ccb7e` (#240). InstalledCompilerPayloadSpec passed on that jar and left `dependencies.lock` unchanged. | [x] |
 | V1, review | Two rounds completed; six design findings verified and closed, none open. | Round 2 accepted AR1-AR6 with no new/reopened findings. Design review is complete; implementation proof remains pending. | [x] |
 
 Review response format: issue ID, severity, section/path, required change, writer response, owning PR, reviewer verification. Escalate product choices to Russ; explain declined mechanisms. Resolving wording does not close executable findings.
