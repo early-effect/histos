@@ -489,9 +489,16 @@ private[histos] object BootstrapLoad:
         case ExecutionKind.Ci    => plugins.bootstrapLocks.ci
     CoreLocks(mode)
 
+  /** `Central` stays the empty declaration, which the resolve treats as Central. A listed set is the declaration. */
+  private def catalogResolvers(declared: histos.plugin.PluginResolvers): List[histos.Resolver] =
+    declared match
+      case histos.plugin.PluginResolvers.Central       => Nil
+      case histos.plugin.PluginResolvers.Listed(found) => found
+
   private def localGraph(plugins: HistosPlugins, defs: List[ProjectDef]): ZIO[Any, LoadError, ProjectGraph] =
     val settings = Organized.Settings(
       resolution = plugins.resolution,
+      resolvers = catalogResolvers(plugins.resolvers),
       pluginSources = plugins.sources.entries,
       intent = ResolutionIntent.Select(plugins.resolution),
     )

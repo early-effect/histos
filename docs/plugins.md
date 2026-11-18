@@ -66,14 +66,14 @@ Positive text, compiled by `the spec author fixtures compile` in [PluginBootstra
 
 | Example | Fixture |
 | --- | --- |
-| Locked catalog | [locked catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1033-L1044) |
-| Main services and tasks | [consumer](../engine/test/histos/load/PluginBootstrapSpec.scala#L1115-L1130) |
-| Early policy, then another plugin | [advanced catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1045-L1066), [strategies](../engine/test/histos/load/PluginBootstrapSpec.scala#L1104-L1114) |
-| Local module, helper, external library | [local catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1067-L1086) |
-| Producer services | [ReviewedLocks.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L923-L967) |
-| Producer task | [ReviewTasks.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L969-L1004) |
-| Typed setup error | [CheckedReviewLabel.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L1006-L1030) |
-| Producer build | [producer](../engine/test/histos/load/PluginBootstrapSpec.scala#L1087-L1100) |
+| Locked catalog | [locked catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1126-L1137) |
+| Main services and tasks | [consumer](../engine/test/histos/load/PluginBootstrapSpec.scala#L1208-L1223) |
+| Early policy, then another plugin | [advanced catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1138-L1159), [strategies](../engine/test/histos/load/PluginBootstrapSpec.scala#L1197-L1207) |
+| Local module, helper, external library | [local catalog](../engine/test/histos/load/PluginBootstrapSpec.scala#L1160-L1179) |
+| Producer services | [ReviewedLocks.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L1016-L1060) |
+| Producer task | [ReviewTasks.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L1062-L1097) |
+| Typed setup error | [CheckedReviewLabel.scala](../engine/test/histos/load/PluginBootstrapSpec.scala#L1099-L1123) |
+| Producer build | [producer](../engine/test/histos/load/PluginBootstrapSpec.scala#L1180-L1193) |
 
 `.pluginLibrary` and `.pluginLibrary(PluginPublication.BinaryOnly)` also typecheck as the [publication snippet](../api/test/histos/plugin/PluginContractsSpec.scala#L110-L115).
 
@@ -82,6 +82,8 @@ Positive text, compiled by `the spec author fixtures compile` in [PluginBootstra
 A services-only plan is `withLocks` and nothing else. [exactNothing](../api/test/histos/plugin/PluginContractsSpec.scala#L59) expects `Plan[NoExtraServices, Nothing]`, and [the call](../api/test/histos/plugin/PluginContractsSpec.scala#L197) is `BuildServices.default.withLocks(Reviewed.layer)`. The strategies fixture is the services-only file. Omit `.add` and `.tasks` unless a capability or a task should actually run.
 
 The local catalog names a helper with `dependsOn` and one external library. The load proofs are `a local module and an external jar load` in `PluginBootstrapSpec` and `a local module compile sees its external jar` in [PluginClosureSpec.scala](../engine/test/histos/load/PluginClosureSpec.scala).
+
+A resolver on the catalog is where that module's libraries are resolved. Main is compiled after the module, so a resolver written only on the graph is too late. `PluginResolvers.Central` is Central. A listed set is that set, with Central last when the author names it. The proof is `a catalog resolver reaches a local plugin dependency` in `PluginBootstrapSpec`.
 
 These strings do not compile. They are `typeChecks` fixtures in [BuildServicesSpec.scala](../api/test/histos/plugin/BuildServicesSpec.scala):
 
@@ -180,6 +182,7 @@ Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 
 - [x] Helper-only drift is `BindingDrift` while the root stamp matches. `InstalledHostProofSpec`, "R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches".
 - [ ] Binary-only helper drift is refused.
 - [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
+- [ ] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency".
 - [x] A service built for the generation stays alive through the task and is released when that generation ends. `InstalledHostProofSpec`, "R10 a generation service is alive for the task and closed after the last lease".
 
 ### Cache what the inputs actually are
