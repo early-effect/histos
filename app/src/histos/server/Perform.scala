@@ -76,6 +76,7 @@ object Perform:
       call: Call,
       say: Say,
       edges: Edges[R],
+      desk: ConsentDesk,
       relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
       caller: Option[histos.plugin.InvocationContext] = None,
       events: histos.plugin.PluginEvents.Invocation = histos.plugin.PluginEvents.closedInvocation,
@@ -210,7 +211,7 @@ object Perform:
               case Call.Cancel(id) =>
                 Calls.cancel(runs, id, say)
               case Call.Resolve(action) =>
-                Calls.resolve(repo, apiJar, action, say, machine.native, lock)
+                Calls.resolve(repo, apiJar, action, say, machine.native, desk, caller, lock)
               case Call.Workflow(action) =>
                 held(build => Calls.workflow(repo, build, action, say))
               case Call.Format(targets, mode) =>

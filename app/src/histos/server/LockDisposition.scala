@@ -1,8 +1,7 @@
 package histos.server
 
-import histos.lock.{LockMode, LockPrecedence, LockTransactionError}
+import histos.lock.{LockMode, LockTransactionError}
 import histos.resolve.ResolveError
-import histos.ProjectName
 
 /** Which explicit `--lock` mode this call actually applies. Anything else fails before a write. */
 object LockDisposition:
@@ -22,14 +21,4 @@ object LockDisposition:
 
   def refused(mode: LockMode): ResolveError =
     ResolveError.Transaction(LockTransactionError.Unapplied(mode))
-
-  /** The refresh request was recorded. No snapshot was revalidated and the lock was not written. */
-  def refreshText(selectors: List[ProjectName], lock: Option[LockMode]): String =
-    val listed = selectors match
-      case Nil   => "all"
-      case names => names.map(_.value).mkString(",")
-    val disposition = lock match
-      case Some(mode) => LockPrecedence.token(mode)
-      case None       => "absent"
-    s"snapshot refresh was not applied\ndisposition $disposition\nselectors $listed\nNo lock write."
 end LockDisposition

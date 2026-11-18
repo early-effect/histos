@@ -9,7 +9,7 @@ import histos.resolve.Resolve
 import histos.process.{StdinFeed, Terminal}
 import histos.client.CallerFacts
 import histos.lock.InvocationEnvelope
-import histos.server.{Call, Client, Feed, Message, Perform, Say, ServerError}
+import histos.server.{Call, Client, ConsentDesk, Feed, Message, Perform, Say, ServerError}
 import histos.task.RunId
 
 import java.nio.file.Path
@@ -113,23 +113,34 @@ object Build:
                     histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
                       relay(terminal, call)(stdin =>
                         envelope(call).flatMap: ready =>
-                          Perform
-                            .run(
+                          // This process is the session. The daemon desk is not in scope.
+                          ConsentDesk
+                            .open(
                               repo,
-                              apiJar,
-                              loaded,
-                              machine,
-                              runs,
-                              track,
-                              version,
-                              call,
-                              say,
-                              edges(say),
-                              stdin,
-                              caller = Some(ready.context),
-                              lock = ready.lock,
+                              ConsentDesk.strategy(ready.context.execution, ready.lock),
+                              ConsentDesk.command,
+                              ConsentDesk.preparer(repo),
+                              ConsentDesk.feed(say),
                             )
-                            .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                            .flatMap: desk =>
+                              Perform
+                                .run(
+                                  repo,
+                                  apiJar,
+                                  loaded,
+                                  machine,
+                                  runs,
+                                  track,
+                                  version,
+                                  call,
+                                  say,
+                                  edges(say),
+                                  desk,
+                                  stdin,
+                                  caller = Some(ready.context),
+                                  lock = ready.lock,
+                                )
+                                .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
                     )
                   )

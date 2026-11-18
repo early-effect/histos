@@ -728,6 +728,7 @@ object Daemon:
                                 target,
                                 out,
                                 edges(out, compiled, relay),
+                                desk,
                                 relay,
                                 caller = Some(envelope.context),
                                 events = events,
