@@ -1,0 +1,11 @@
+Lock repair required: app compile/test and module-tools plugin closure
+Policy: offer (project default, local client)
+Proposal: <proposal-id>, base lock: <revision>
+- app: removed direct and transitive artifacts
++ app: added direct and necessary transitive artifacts
++ module-tools: binary, recipe, helper inputs
+Unrelated entries and pinned SNAPSHOT bytes retained.
+Accept this proposal? [y/N]
+Lock committed: <new-revision>
+Plugin module-tools: rebuilt for host <api-digest> (API binding changed)
+Resuming: histos compile app

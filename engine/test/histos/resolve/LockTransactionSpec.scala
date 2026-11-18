@@ -23,6 +23,7 @@ import histos.plugin.{
   InvocationContext,
   InvocationId,
   InvocationPluginEvent,
+  LinkStrategy,
   LockRevision,
   OfflineSelection,
   PluginCoordinate,
@@ -32,7 +33,7 @@ import histos.plugin.{
   ResolutionIntent,
 }
 import histos.workspace.Workspace
-import histos.ProjectName
+import histos.{ArtifactBase, Organization, Platform, ProjectName, SbtSeries}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -451,11 +452,50 @@ object LockTransactionSpec extends ZIOSpecDefault:
             case PrepareOutcome.Offered(_) | PrepareOutcome.Committed(_, _) | PrepareOutcome.Blocked(_) =>
               assertTrue(false)
     },
-    test("a published pin is refused instead of written as a module") {
-      val dep      = histos.Dep.java("com.example", "plugin", histos.LibraryRevision.trusted("1.0.0"))
-      val document =
-        LockDocument(List(VersionedPin(PluginCoordinate.Published(dep), LockSubject.Artifact, hash("pub"), None)), Nil)
-      assertTrue(LockDocument.roundTrip(document).isLeft, LockDocument.roundTrip(original).isRight)
+    test("a plain published pin round-trips with its link word") {
+      val java   = histos.Dep.java("com.example", "plugin", histos.LibraryRevision.trusted("1.0.0"))
+      val binary = histos.Dep.binary("com.example", "seedplug", histos.LibraryRevision.trusted("1.0.0"))
+      val full   = histos.Dep.full("com.example", "seedplug", histos.LibraryRevision.trusted("1.2.0"))
+      val exact  = published(java, LinkStrategy.ExactBinary, LockSubject.Artifact, "java", None)
+      val linked = published(
+        binary,
+        LinkStrategy.BinaryOrSource,
+        LockSubject.Checksum,
+        "binary",
+        Some(SnapshotLocator(shots, hash("loc"))),
+      )
+      val sourced = published(full, LinkStrategy.Source, LockSubject.Recipe, "full", None)
+      val text    = LockDocument.render(exact)
+      assertTrue(
+        LockDocument.roundTrip(exact) == Right(exact),
+        LockDocument.roundTrip(linked) == Right(linked),
+        LockDocument.roundTrip(sourced) == Right(sourced),
+        LockDocument.roundTrip(original) == Right(original),
+        text == s"pin com.example:plugin:1.0.0 exact-binary artifact ${hash("java").value}\n",
+        LockDocument.render(linked).contains("pin com.example::seedplug:1.0.0 binary-or-source checksum"),
+        LockDocument.render(sourced).contains("pin com.example:::seedplug:1.2.0 source recipe"),
+      )
+    },
+    test("api and a dependency that is not a plain coordinate do not round-trip") {
+      val java     = histos.Dep.java("com.example", "plugin", histos.LibraryRevision.trusted("1.0.0"))
+      val api      = published(java, LinkStrategy.Api, LockSubject.Artifact, "api", None)
+      val excluded = java.excluding(Organization("org.example"), ArtifactBase("gone"))
+      val filtered = java.on(Platform.Jvm)
+      val compile  = java.compileOnly
+      val series   = histos.Dep.binary(
+        "com.example",
+        "seedplug",
+        histos.LibraryRevision.trusted("1.0.0"),
+        sbtSeries = Some(SbtSeries("1.0")),
+      )
+      assertTrue(
+        LockDocument.roundTrip(api) == Left(LockTextError.Bad(PluginDetail("api is not a pin link"))),
+        LockDocument.roundTrip(published(excluded, LinkStrategy.ExactBinary, LockSubject.Artifact, "ex", None)).isLeft,
+        LockDocument.roundTrip(published(filtered, LinkStrategy.ExactBinary, LockSubject.Artifact, "on", None)).isLeft,
+        LockDocument.roundTrip(published(compile, LinkStrategy.ExactBinary, LockSubject.Artifact, "co", None)).isLeft,
+        LockDocument.roundTrip(published(series, LinkStrategy.Source, LockSubject.Artifact, "sbt", None)).isLeft,
+        LockDocument.roundTrip(original) == Right(original),
+      )
     },
     test("consent against an absent lock commits that base") {
       ZIO.scoped:
@@ -559,6 +599,18 @@ object LockTransactionSpec extends ZIOSpecDefault:
 
   private def pin(coordinate: PluginCoordinate, label: String): VersionedPin =
     VersionedPin(coordinate, LockSubject.Artifact, hash(label), None)
+
+  private def published(
+      dependency: histos.Dep,
+      link: LinkStrategy,
+      subject: LockSubject,
+      label: String,
+      locator: Option[SnapshotLocator],
+  ): LockDocument =
+    LockDocument(
+      List(VersionedPin(PluginCoordinate.Published(dependency, link), subject, hash(label), locator)),
+      Nil,
+    )
 
   private def hash(text: String): ContentHash =
     Digests.content(text.getBytes(StandardCharsets.UTF_8))

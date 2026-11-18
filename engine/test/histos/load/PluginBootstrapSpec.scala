@@ -395,6 +395,37 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("the reviewed locks spec compiles") {
+      ZIO.scoped {
+        for
+          root     <- work("histos-reviewed-spec")
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          zioTest  <- ZIO
+            .fromOption(Boundary.codeSource(classOf[zio.test.ZIOSpecDefault]))
+            .orElseFail(LoadError.Io(IoFailure(Path.of("zio-test"), IoFault.Read)))
+          locks    <- repoText("examples/reviewed-locks/src/com/example/reviewed/ReviewedLocks.scala")
+          spec     <- repoText("examples/reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala")
+          harness  <- repoText("plugin-testkit/src/histos/plugin/testkit/LockHarness.scala")
+          repair   <- repoText("examples/expected-lock-repair.txt")
+          produced <- compileSources(
+            root.resolve("spec"),
+            List(
+              "ReviewedLocks.scala"     -> locks,
+              "LockHarness.scala"       -> harness,
+              "ReviewedLocksSpec.scala" -> spec,
+            ),
+            boundary :+ zioTest,
+          )
+          directory <- ZIO.attemptBlocking(Files.isDirectory(produced)).orDie
+        yield assertTrue(
+          directory,
+          repair.startsWith("Lock repair required:"),
+          repair.contains("Accept this proposal? [y/N]"),
+          repair.endsWith("Resuming: histos compile app\n"),
+        )
+      }
+    },
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private val emptyCatalog: String =
@@ -880,6 +911,18 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
       loader match
         case build: BuildLoader => build.isClosed
         case _                  => false
+
+  /** A suite's work directory is empty. `HISTOS_REPO` is the checkout. */
+  private def repoText(relative: String): ZIO[Any, LoadError, String] =
+    ZIO
+      .attemptBlocking(Option(System.getenv("HISTOS_REPO")))
+      .orDie
+      .flatMap:
+        case Some(root) if root.nonEmpty =>
+          val path = Path.of(root).resolve(relative)
+          ZIO.attemptBlocking(Files.readString(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
+        case _ =>
+          ZIO.fail(LoadError.Io(IoFailure(Path.of(relative), IoFault.Read)))
 
   private def compileSources(
       root: Path,
