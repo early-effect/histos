@@ -266,6 +266,30 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("a duplicate export fails") {
+      hosted { (root, _) =>
+        for
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          name     <- exportedEntry(api)
+          jar      <- externalJar(root.resolve("ext.jar"), boundary.filterNot(_ == api))
+          _        <- ZIO.attemptBlocking(addEntry(jar, name, Array[Byte](9, 9, 9))).orDie
+          _        <- write(root.resolve("histos.plugins.scala"), moduleCatalog)
+          _        <- write(root.resolve("helper/src/demo/Use.scala"), useSource)
+          _        <- write(root.resolve("histos.scala"), plainMain)
+          exit     <- prepare(root, api, extResolve(jar)).either
+        yield (exit, name, api, jar)
+      }.map { ran =>
+        val (exit, name, api, jar) = ran.value
+        assertTrue(
+          exit.rejects {
+            case LoadError.Plugin(PluginLoadError.ClasspathConflict(binary, left, right)) =>
+              binary == name && ((left == api && right == jar) || (left == jar && right == api))
+            case _ => false
+          }
+        )
+      }
+    },
     test("a late main withPluginLoading is refused") {
       hosted { (root, _) =>
         for
@@ -927,6 +951,22 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         ZIO.dieMessage("resolvePlugin")
       def sources(organization: String, name: String, revision: String, repository: Repository) =
         ZIO.dieMessage("sources")
+
+  private def exportedEntry(api: Path): UIO[String] =
+    ZIO
+      .attemptBlocking {
+        val zip = new java.util.zip.ZipFile(api.toFile)
+        try
+          zip.entries.asScala
+            .map(_.getName)
+            .find(name => name.startsWith("histos/") && name.endsWith(".class"))
+        finally zip.close()
+      }
+      .orDie
+      .flatMap {
+        case Some(name) => ZIO.succeed(name)
+        case None       => ZIO.dieMessage("api jar exports no histos class")
+      }
 
   private def stdlibJar(path: Path): UIO[Path] =
     ZIO.attemptBlocking {

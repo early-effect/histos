@@ -173,25 +173,31 @@ Already proven on `0.5.0-36642bcc3ec5-SNAPSHOT`, packed from `36642bcc`. CI run 
 
 Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 134999536356, command `./histos test --affected '["app"]'`. `BspMetalsSpec` passed 9. The app suite passed 75, including `InstalledHostProofSpec`. No test-clock warning.
 
+Proved on #242, head `1432671a`, squash `104f9aca`. CI run 44366420546, test job 135025861460, command `./histos test --affected '["engine","app"]'`. The engine suite passed 148, including the frozen load, the binary-only helper refusal, the catalog resolver, and the unsupported publication stage.
+
+Proved on #244, head `0319ba8e`, squash `a91069ce`. CI run 44372823054, test job 135055870275, command `./histos test --affected '["engine","app"]'`. The engine suite passed 149, including the standard-library filter.
+
+Proved on #246, head `dd27cb09`, squash `6e005f23`. CI run 44379976909, test job 135073537704, command `./histos test --affected '["engine","app"]'`. The engine suite passed 151, including both `PublishSelectSpec` tests.
+
 ### Load a plugin correctly
 
 - [x] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles. `BspMetalsSpec`, "a comment that names HistosBuild stays a build source".
 - [x] Main inherits the catalog resolution. A conflicting main selection is refused. `InstalledHostProofSpec`, "A1 a catalog intent is what main inherits and a conflicting main resolution is ResolutionConflict".
-- [ ] A frozen load of a locked catalog does not solve.
+- [x] A frozen load of a locked catalog does not solve. `PluginBootstrapSpec`, "a frozen miss does not solve". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
 - [x] The first run loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs. `InstalledHostProofSpec`, "A2 histos.strategies.scala runs after the core seed and before the remaining solve".
 - [x] Registration is the capability interface. An intersection key is refused. `InstalledHostProofSpec`, "A3 registration is the capability interface and an intersection key is refused".
-- [ ] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs.
+- [ ] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs. `BuildServicesSpec`, "a duplicate service is refused before its layer runs", "a second withLocks is refused before its layer runs", and "an empty label keeps the previous generation and surfaces the diagnosis".
 - [x] Helper-only drift is `BindingDrift` while the root stamp matches. `InstalledHostProofSpec`, "R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches".
-- [ ] Binary-only helper drift is refused.
+- [x] Binary-only helper drift is refused. `PluginBootstrapSpec`, "binary-only helper drift is refused". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
 - [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
-- [ ] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency".
-- [ ] A resolved standard library is not a second copy beside the assembly. `PluginBootstrapSpec`, "a resolved standard library is not a second copy beside the assembly".
+- [x] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
+- [x] A resolved standard library is not a second copy beside the assembly. `PluginBootstrapSpec`, "a resolved standard library is not a second copy beside the assembly". `./histos test --affected '["engine","app"]'` on `0319ba8e` (#244), run 44372823054, test job 135055870275.
 - [x] A service built for the generation stays alive through the task and is released when that generation ends. `InstalledHostProofSpec`, "R10 a generation service is alive for the task and closed after the last lease".
 
 ### Cache what the inputs actually are
 
 - [x] Old plugin bytes reuse their task output. New bytes change the key and the output. `InstalledHostProofSpec`, "R1 old plugin bytes reuse a stale task output and new bytes change the key and the output".
-- [ ] An empty artifact or mixed provenance does not return a stale task result.
+- [ ] An empty artifact or mixed provenance does not return a stale task result. `PluginTaskIdentitySpec`, "an unverified closure is not an empty artifact list" and "mixed provenance does not return a stale task result".
 - [x] Replacing the host API jar misses the compile cache unless the input hash is of those bytes. `InstalledHostProofSpec`, "R3 a host-API byte change misses the compile cache".
 - [x] A second load of the same Java sources, resources, and compiler flags starts no compiler. `InstalledHostProofSpec`, "R8 settings and resources reach the compile and a second identical load starts the compiler zero times".
 - [x] `CompileInputs.remember` follows the test clock. `InstalledHostProofSpec`, "R12 CompileInputs.remember stamps the analysis with the test clock".
@@ -200,10 +206,10 @@ Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 
 
 - [x] The package key changes when the only difference is the API stamp bytes a local publish injects. `InstalledHostProofSpec`, "R2 stamp bytes change the package key and leave the product digest".
 - [x] The published source jar includes generated replacements. The recipe includes compile-only inputs, and those inputs stay off the consumer POM. `InstalledHostProofSpec`, "R4 a generated replacement from Sources.prefer is the published rebuild entry" and "R5 a compile-only input is in the recipe and absent from the consumer POM".
-- [ ] A publication the recipe does not support uploads nothing.
-- [ ] A compile-only snapshot does not refuse the ship. A snapshot the POM would fetch does. `PublishSelectSpec`, "a compile-only snapshot does not refuse the ship" and "a pom snapshot dependency refuses the ship".
+- [x] A publication the recipe does not support uploads nothing. `PluginPublicationSpec`, "an unknown stage refuses publication before an upload". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
+- [x] A compile-only snapshot does not refuse the ship. A snapshot the POM would fetch does. `PublishSelectSpec`, "a compile-only snapshot does not refuse the ship" and "a pom snapshot dependency refuses the ship". `./histos test --affected '["engine","app"]'` on `dd27cb09` (#246), run 44379976909, test job 135073537704.
 - [x] The export manifest includes the theme and step packages. An engine reference is refused. `InstalledHostProofSpec`, "R11 theme and step are exported and an engine package is refused".
-- [ ] A duplicate export fails.
+- [ ] A duplicate export fails. `PluginBootstrapSpec`, "a duplicate export fails".
 - [x] A compile failure and a scheduler failure stay distinct from a task failure after bind. `InstalledHostProofSpec`, "R13 a compile failure and a scheduler failure stay distinct through bind".
 - [x] A TASTy entry-byte change changes the seal, and the consumer sees it. `InstalledHostProofSpec`, "A4 a TASTy entry-byte change changes the seal and the consumer sees it".
 
