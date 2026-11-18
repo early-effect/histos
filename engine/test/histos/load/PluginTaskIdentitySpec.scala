@@ -146,6 +146,30 @@ object PluginTaskIdentitySpec extends ZIOSpecDefault:
         }
         .provideSomeLayer[Scope](driveLayer)
     },
+    test("mixed provenance does not return a stale task result") {
+      ZIO
+        .scoped {
+          for
+            root  <- work("histos-p7-mixed")
+            cache <- memory
+            kept  <- manifest("real-bytes", "echo", launcher)
+            binding = PluginLinked.FromBinary(launcher)
+            filled <- drive(root, LabelTask("sealed"), List(kept), binding, cache, PluginArgs.empty)
+            mixed  <- drive(
+              root,
+              LabelTask("other"),
+              List(kept, ProvenanceResult.Unverified(SourceId("echo"))),
+              binding,
+              cache,
+              PluginArgs.empty,
+            ).either
+          yield assertTrue(
+            filled == "sealed[][]",
+            mixed == Left(PluginFault.Task(PluginRunError.Unverified(SourceId("echo")))),
+          )
+        }
+        .provideSomeLayer[Scope](driveLayer)
+    },
     test("compile and scheduler failures stay distinct through bind") {
       ZIO
         .scoped {

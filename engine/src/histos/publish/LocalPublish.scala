@@ -439,7 +439,7 @@ object LocalPublish:
       module <- ZIO.fromEither(moduleOf(graph, cell.module))
       packed <- sourcesOf(repo, graph, cell)
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
-      stamp  <- versionStamp(repo, graph, cell, api)
+      stamp  <- versionStamp(repo, graph, cell, module, api)
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
       ready  <- preparedLibrary(repo, cell, module, stamp, deps, group, name, job.revision)
@@ -828,17 +828,17 @@ object LocalPublish:
         case Javadoc   => s"$stem-javadoc.jar"
   end Scratch
 
-  /** The binary jar of a module the graph names as a plugin. The sources jar is left alone. */
+  /** The binary jar of a plugin library, and of a module the graph names as a plugin. The sources jar is left alone.
+    * Catalog coordinates stay on the load graph, so publication does not wait for this graph to name the module.
+    */
   private def versionStamp(
       repo: Path,
       graph: ProjectGraph,
       cell: histos.zinc.CompiledCell,
+      module: Module,
       api: ApiDigest,
   ): ZIO[Any, LocalPublishError, List[(String, Path)]] =
-    val named = graph.coordinates.exists:
-      case PluginCoordinate.Module(name)    => name == cell.module
-      case PluginCoordinate.Published(_, _) => false
-    if !named then ZIO.succeed(Nil)
+    if !versioned(graph, module) then ZIO.succeed(Nil)
     else
       val path = repo
         .resolve(".histos")
@@ -850,6 +850,11 @@ object LocalPublish:
         .writeString(path, s"${api.value}\n")
         .mapError(_ => LocalPublishError.Io(path.toString))
         .as(List(ApiDigest.resource -> path))
+
+  private[histos] def versioned(graph: ProjectGraph, module: Module): Boolean =
+    module.pluginLibrary.isDefined || graph.coordinates.exists:
+      case PluginCoordinate.Module(name)    => name == module.name
+      case PluginCoordinate.Published(_, _) => false
 
   private def scratch(
       repo: Path,

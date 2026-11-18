@@ -306,8 +306,8 @@ object Projects:
     */
   def organization(organization: Organization): Organized = Organized.empty.organization(organization)
 
-  /** Repositories this build resolves from. The list is not Central unless `central` is in it. An empty list, from
-    * [[apply]], is Central.
+  /** Repositories this build adds. Ivy local, Sonatype snapshots, and Maven Central are always searched. A repository
+    * already listed keeps that place.
     */
   def resolvers(first: Resolver, rest: Resolver*): Organized = Organized.empty.resolvers(first, rest*)
 

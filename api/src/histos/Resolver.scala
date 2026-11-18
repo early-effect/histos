@@ -31,10 +31,10 @@ enum RepositoryUrlError:
     case Bad(raw) => s"'$raw' is not a repository url"
 end RepositoryUrlError
 
-/** A repository the build asks. `IvyLocal` is not one of these. */
+/** A repository the build adds. Ivy local is not one of these: a resolve always searches it. */
 enum Resolver:
   case Central
   case Maven(url: RepositoryUrl)
 
-/** The default when a build lists none: Maven Central, and nothing else. */
+/** Maven Central. */
 val central: Resolver = Resolver.Central
