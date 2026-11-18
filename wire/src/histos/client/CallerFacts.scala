@@ -69,9 +69,11 @@ object CallerFacts:
       .orElseSucceed(Map.empty)
       .flatMap(env => envelope(client, call, execution(env), interaction(prompts), lock))
 
-  /** A fresh id for this process. `Random` is not on the socket writer's environment. */
+  /** A fresh id for this process. `UUID.randomUUID` needs `SecureRandom`, which the native client cannot link. */
+  private val ticks = new java.util.concurrent.atomic.AtomicLong(System.nanoTime())
+
   private def fresh: UIO[InvocationId] =
-    ZIO.succeed(java.util.UUID.randomUUID()).map(id => InvocationId.derive(id.toString))
+    ZIO.succeed(InvocationId.derive(ticks.incrementAndGet().toString + ":" + System.nanoTime().toString))
 
   private def truthy(raw: Option[String]): Boolean =
     raw.map(_.trim.toLowerCase) match
