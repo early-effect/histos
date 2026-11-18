@@ -645,7 +645,8 @@ ensure_toolchain() {
     esac
   fi
   # A runner skips the kit unless this install was asked to link. An explicit yes still places it.
-  if [ "$2" = yes ] || ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
+  # A call with one argument leaves $2 unset, and set -u must not reject it.
+  if [ "${2-}" = yes ] || ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
 }
 client_mode() {
   mode=$1
