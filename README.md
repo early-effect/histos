@@ -118,7 +118,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `UpstreamCells.read` is that choice. Compile, test, the quick stamp, run, assembly, publish, scaladoc, and BSP all use it.
 
-`Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`.
+`Projects` also carries the organization, license, developers, scm, url, resolvers, runner tools, CI settings, coverage excludes, formatting, plugins, and the ship catalog. `Projects.locked` pins jars to `dependencies.lock`. A resolve always searches ivy local (`~/.ivy2/local`), then the resolvers the build listed, then Sonatype snapshots, then Maven Central. A repository the build already listed keeps that place.
 
 ## Commands
 
@@ -307,7 +307,7 @@ A plugin is a constructor-injected service. A coordinate does not install it. `h
 
 A command name the grammar owns is reserved. `acp` is reserved and has no command.
 
-A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar. Authors do not write that file.
+A plugin task's `run` is called inside a `Scope` that closes when the task returns. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope, which stays open across saves until the build or a plugin source changes. `src/main/resources` and `src/test/resources` are copied into the class directories, and `.resources` adds generated files. The binary jar of a `.pluginLibrary`, and of a module the graph names as a plugin, carries `META-INF/histos/version`, the sha256 of the host api jar. Authors do not write that file.
 
 `.pluginLibrary` publishes a plugin library with a rebuild recipe. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and no recipe.
 

@@ -3,7 +3,7 @@ package histos.program
 import histos.cache.{ContentStore, LinkerStarts}
 import histos.jdk.{Machine, Toolchain}
 import histos.native.{NativeError, NativeLink, NativeLinkRequest, NativeOrigin, NativeToolchain}
-import histos.resolve.{DependencyLock, LockedTools, Repositories, ResolutionService, Resolve}
+import histos.resolve.{BuildResolvers, DependencyLock, LockedTools, ResolutionService, Resolve}
 import histos.schedule.RemoteCache
 import histos.{ClangMajor, Resolution, ToolCatalog}
 
@@ -97,7 +97,7 @@ object ClientLink:
       tools = LockedTools(
         DependencyLock(Nil),
         ToolCatalog.default,
-        Repositories.central,
+        BuildResolvers(Nil),
         resolve,
         Some(service),
       )

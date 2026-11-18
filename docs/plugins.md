@@ -125,7 +125,7 @@ A root command uses `CommandName`. A name in `CommandName.reserved` is refused. 
 
 ## Publication
 
-`.pluginLibrary` means `PluginPublication.Rebuildable`. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and publishes no rebuild recipe. Authors do not hand-write that metadata. A module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar.
+`.pluginLibrary` means `PluginPublication.Rebuildable`. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and publishes no rebuild recipe. Authors do not hand-write that metadata. That jar carries `META-INF/histos/version`, the sha256 of the host api jar. A module the graph names as a plugin carries the same line. The proof is `a plugin library is stamped when the graph names no coordinate` in `VersionStampSpec`.
 
 A helper is an ordinary module the plugin module `dependsOn`. Compile-only dependencies stay off the consumer POM. Binary-only publication is `binary-only keeps binding metadata and makes no rebuild claim` in [PluginPublicationSpec.scala](../engine/test/histos/publish/PluginPublicationSpec.scala). Drift of a binary-only helper is `binary-only helper drift is refused` in `PluginBootstrapSpec`. Drift of a rebuildable helper rebuilds: `helper drift rebuilds when the publication carries sources`.
 
