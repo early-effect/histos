@@ -23,11 +23,38 @@ import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
-import histos.plugin.{ApiDigest, PluginArgs, PluginCoordinate, PluginRunError, PluginTaskId}
+import histos.plugin.{
+  ApiDigest,
+  ClientId,
+  CommandIdentity,
+  Interaction,
+  InvocationContext,
+  InvocationId,
+  OfflineSelection,
+  PluginArgs,
+  PluginCoordinate,
+  PluginDetail,
+  PluginEvents,
+  PluginRunError,
+  PluginTaskId,
+  ResolutionIntent,
+}
 import histos.publish.{IvyRoot, LauncherPin, LauncherScript, PublishedShim, PublishRun, ReleaseError, ScriptError}
-import histos.resolve.{BuildResolvers, DependencyLock, PluginRequest, PluginUpdate, Resolve, ResolveError}
+import histos.lock.{ExecutionKind, LockBlocked, LockMode, LockRefusal, LockStrategyError, LockTransactionError}
+import histos.resolve.{
+  BuildResolvers,
+  DependencyLock,
+  LockRepairError,
+  LockStoreFault,
+  PluginRequest,
+  PluginUpdate,
+  PrepareOutcome,
+  PrepareRequest,
+  Resolve,
+  ResolveError,
+}
 import histos.schedule.{CacheConfig, CacheError, CacheNamespace, RemoteCache}
-import histos.workspace.IoFailure
+import histos.workspace.{IoFailure, IoFault}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
@@ -49,7 +76,8 @@ import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
 
 import java.io.OutputStream
-import java.nio.file.Path
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicReference
 
 /** One CLI message, sent as a frame or kept for a tool result. */
@@ -540,9 +568,11 @@ object Calls:
       action: ResolveAction,
       say: Say,
       native: histos.native.NativeOrigin,
-      lock: Option[histos.lock.LockMode] = None,
+      desk: ConsentDesk,
+      caller: Option[InvocationContext],
+      lock: Option[LockMode] = None,
   ): ZIO[Resolve & Loader, ServerError, Unit] =
-    resolveWork(repo, apiJar, action, native, lock).foldZIO(
+    resolveWork(repo, apiJar, action, native, desk, caller, lock).foldZIO(
       {
         case error: LoadError    => fault(say, BuildFault.Load(error))
         case error: ResolveError => fault(say, BuildFault.Resolve(error))
@@ -559,18 +589,47 @@ object Calls:
       apiJar: Path,
       action: ResolveAction,
       native: histos.native.NativeOrigin,
-      lock: Option[histos.lock.LockMode] = None,
+      desk: ConsentDesk,
+      caller: Option[InvocationContext],
+      lock: Option[LockMode] = None,
   ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
     LockDisposition.unapplied(Call.Resolve(action), lock) match
       case Some(mode) => ZIO.fail(LockDisposition.refused(mode))
-      case None       => resolveBody(repo, apiJar, action, native, lock)
+      case None       => resolveBody(repo, apiJar, action, native, desk, caller, lock)
+
+  /** Re-read retained snapshot locators through the session desk. No selector is every retained locator. */
+  private[histos] def refresh(
+      desk: ConsentDesk,
+      repo: Path,
+      selectors: List[ProjectName],
+      lock: Option[LockMode],
+      caller: Option[InvocationContext],
+  ): IO[ResolveError, String] =
+    val mode = lock match
+      case Some(chosen) => chosen
+      case None         => LockMode.Offer
+    val request = PrepareRequest(
+      refreshContext(caller, selectors),
+      ResolutionIntent.Inherit,
+      PluginEvents.closedInvocation,
+      Some(mode),
+      refresh = true,
+    )
+    val path = repo.resolve("dependencies.lock")
+    for
+      before  <- readLockText(path)
+      outcome <- desk.prepare(request).mapError(refreshFailure)
+      text    <- refreshText(outcome, before, path)
+    yield text
 
   private def resolveBody(
       repo: Path,
       apiJar: Path,
       action: ResolveAction,
       native: histos.native.NativeOrigin,
-      lock: Option[histos.lock.LockMode],
+      desk: ConsentDesk,
+      caller: Option[InvocationContext],
+      lock: Option[LockMode],
   ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
     val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
       action match
@@ -613,7 +672,7 @@ object Calls:
             )
           yield text
         case ResolveAction.Refresh(selectors) =>
-          ZIO.succeed(LockDisposition.refreshText(selectors, lock))
+          refresh(desk, repo, selectors, lock, caller)
     followed.flatMap: text =>
       action match
         case ResolveAction.Refresh(_) => ZIO.succeed(text)
@@ -621,6 +680,88 @@ object Calls:
           Resolve
             .readLock(repo)
             .map(lock => DependencyLock.withEvictions(text, lock))
+
+  private def refreshContext(caller: Option[InvocationContext], selectors: List[ProjectName]): InvocationContext =
+    val command = CommandIdentity.Refresh(selectors)
+    caller match
+      case Some(found) => found.copy(command = command)
+      case None        =>
+        InvocationContext(
+          InvocationId.derive("resolve-refresh"),
+          ClientId("cli"),
+          command,
+          ExecutionKind.Local,
+          Interaction.Offers,
+          OfflineSelection.Online,
+        )
+
+  private def refreshText(outcome: PrepareOutcome, before: String, path: Path): IO[ResolveError, String] =
+    outcome match
+      case PrepareOutcome.Selected(_) =>
+        ZIO.succeed("no locator changed\nNo lock write.")
+      case PrepareOutcome.Offered(offer) =>
+        ZIO.succeed(s"snapshot refresh offered ${offer.proposal.value}\nNo lock write.")
+      case PrepareOutcome.Committed(_, _) =>
+        readLockText(path).map: after =>
+          val names = changedLocators(before, after)
+          s"snapshot refresh committed\nlocators ${names.mkString(",")}"
+      case PrepareOutcome.Blocked(blocked) =>
+        ZIO.fail(blockedFailure(blocked))
+
+  private def changedLocators(before: String, after: String): List[String] =
+    val previous = retainLines(before).toMap
+    retainLines(after).flatMap: (name, digest) =>
+      previous.get(name) match
+        case Some(old) if old != digest => List(name)
+        case Some(_)                    => Nil
+        case None                       => List(name)
+
+  private def retainLines(text: String): List[(String, String)] =
+    text.linesIterator.foldLeft(List.empty[(String, String)]): (acc, line) =>
+      line.split(" ", -1).toList match
+        case "retain" :: name :: digest :: Nil => acc :+ ((name, digest))
+        case _                                 => acc
+
+  private def readLockText(path: Path): IO[ResolveError, String] =
+    ZIO
+      .attemptBlocking:
+        if Files.isRegularFile(path) then Files.readString(path, StandardCharsets.UTF_8) else ""
+      .mapError(_ => ResolveError.Io(IoFailure(path, IoFault.Read)))
+
+  private def refreshFailure(error: LockRepairError): ResolveError =
+    ConsentDesk.reportOf(error) match
+      case ConsentReport.Transaction(typed) => typed
+      case ConsentReport.Corrupt(detail)    => ResolveError.LockDetail(detail)
+      case ConsentReport.Unreported(found)  => unreported(found)
+
+  private def unreported(error: LockRepairError): ResolveError =
+    error match
+      case LockRepairError.Transaction(typed) => ResolveError.Transaction(typed)
+      case LockRepairError.Solve(detail)      => ResolveError.LockDetail(detail)
+      case LockRepairError.Strategy(found)    => ResolveError.LockDetail(strategyDetail(found))
+      case LockRepairError.Store(fault)       => storeFailure(fault)
+      case LockRepairError.Transition(_, _)   =>
+        ResolveError.LockDetail(PluginDetail("the lock repair transition is illegal"))
+
+  private def strategyDetail(error: LockStrategyError): PluginDetail =
+    error match
+      case LockStrategyError.Configuration(detail) => detail
+      case LockStrategyError.Adapter(detail)       => detail
+      case LockStrategyError.Policy(detail)        => detail
+
+  private def storeFailure(fault: LockStoreFault): ResolveError =
+    fault match
+      case LockStoreFault.Corrupt(detail)   => ResolveError.LockDetail(detail)
+      case LockStoreFault.StaleBase         => ResolveError.LockDetail(PluginDetail("the lock revision moved"))
+      case LockStoreFault.Unreadable        => ResolveError.LockDetail(PluginDetail("the lock could not be read"))
+      case LockStoreFault.Unwritable        => ResolveError.LockDetail(PluginDetail("the lock could not be written"))
+      case LockStoreFault.AtomicUnavailable =>
+        ResolveError.Transaction(LockTransactionError.AtomicUnavailable)
+
+  private def blockedFailure(blocked: LockBlocked): ResolveError =
+    blocked.refusal match
+      case LockRefusal.FrozenDrift    => ResolveError.Transaction(LockTransactionError.Unapplied(LockMode.Frozen))
+      case LockRefusal.Policy(detail) => ResolveError.LockDetail(detail)
 
   private def pluginRequests(graph: ProjectGraph): List[PluginRequest] =
     graph.coordinates.collect:

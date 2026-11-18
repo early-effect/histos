@@ -4,10 +4,12 @@ import histos.doctor.Noted
 import histos.lock.{
   ExecutionKind,
   LockBlocked,
+  LockEvent,
   LockMode,
   LockRefusal,
   LockReply,
   LockRevisionState,
+  LockSubject,
   LockTransactionError,
   NecessaryScope,
 }
@@ -23,12 +25,24 @@ import histos.plugin.{
   InvocationId,
   InvocationPluginEvent,
   OfflineSelection,
+  PluginCoordinate,
   PluginDetail,
   PluginEventError,
   ProposalId,
   ResolutionIntent,
 }
-import histos.resolve.{ResolutionSnapshot, SnapshotProvenance, SnapshotSelection}
+import histos.resolve.{
+  LockDocument,
+  LocatorName,
+  LockStoreFault,
+  ResolutionSnapshot,
+  ResolveError,
+  SnapshotLocator,
+  SnapshotProvenance,
+  SnapshotSelection,
+  VersionedPin,
+}
+import histos.workspace.Workspace
 import histos.report.{Rejection, WireJson}
 import histos.testrun.TestMode
 import histos.ProjectName
@@ -36,9 +50,9 @@ import histos.ProjectName
 import WireJson.given
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
-import zio.{Queue, Ref, ZIO}
+import zio.{Queue, Ref, Scope, UIO, ZIO}
 import zio.json.*
 import zio.test.*
 
@@ -194,8 +208,6 @@ object LockInvocationSpec extends ZIOSpecDefault:
       val watch            = Call.Watch(compile, WatchPolicy.After)
       val offered          = LockTransactionError.Unapplied(LockMode.Offer).message
       val frozen           = LockTransactionError.Unapplied(LockMode.Frozen).message
-      val quiet            = LockDisposition.refreshText(Nil, None)
-      val named            = LockDisposition.refreshText(List(app), Some(LockMode.Offer))
       val help             = histos.cli.Help.entries.find(_.name == "resolve").map(_.about).getOrElse("")
       val verifySelectors  = histos.mcp.HistosMcp.resolveCall(ResolveAction.Verify, List("app"))
       val refreshSelectors = histos.mcp.HistosMcp.resolveCall(ResolveAction.Refresh(Nil), List("app"))
@@ -220,17 +232,148 @@ object LockInvocationSpec extends ZIOSpecDefault:
         offered == "the offer was not applied",
         frozen.contains("frozen"),
         frozen.contains("was not applied"),
-        quiet.contains("snapshot refresh was not applied"),
-        quiet.contains("No lock write."),
-        quiet.contains("disposition absent"),
-        !quiet.contains("offer"),
-        !quiet.contains("refresh mutable"),
-        named.contains("disposition offer"),
-        named.contains("selectors app"),
-        !help.contains("refresh mutable snapshots"),
+        help.contains("revalidates retained snapshot locators"),
+        help.contains("no fetch"),
+        !help.contains("does not revalidate"),
+        !help.contains("snapshot refresh was not applied"),
         verifySelectors == Left(Rejection.ResolveAction("verify")),
         refreshSelectors == Right(Call.Resolve(ResolveAction.Refresh(List(app)))),
       )
+    },
+    test("refresh revalidates retained locators") {
+      val shots = LocatorName("shots")
+      val tools = LocatorName("tools")
+      val pin   = VersionedPin(
+        PluginCoordinate.Module(ProjectName("app")),
+        LockSubject.Artifact,
+        hash("app-1"),
+        None,
+      )
+      def document(shotsDigest: ContentHash, toolsDigest: ContentHash) =
+        LockDocument(List(pin), List(SnapshotLocator(shots, shotsDigest), SnapshotLocator(tools, toolsDigest)))
+      def open(root: Path, seen: Ref[List[LockEvent]]) =
+        ConsentDesk.open(
+          root,
+          ConsentDesk.strategy(ExecutionKind.Local, Some(LockMode.Offer)),
+          ConsentDesk.command,
+          ConsentDesk.preparer(root),
+          event => seen.update(_ :+ event),
+        )
+      def scene(
+          root: Path,
+          shotsBytes: String,
+          toolsBytes: String,
+          shotsDigest: ContentHash,
+          toolsDigest: ContentHash,
+      ) =
+        for
+          _ <- writeText(root.resolve("dependencies.lock"), LockDocument.render(document(shotsDigest, toolsDigest)))
+          _ <- writeBytes(root.resolve(shots.value), shotsBytes)
+          _ <- writeBytes(root.resolve(tools.value), toolsBytes)
+        yield ()
+      ZIO.scoped:
+        for
+          offerRoot <- temp("histos-refresh-offer")
+          oldShots  = hash("snap-1")
+          newShots  = hash("snap-2")
+          toolsHash = hash("tools-1")
+          _         <- scene(offerRoot, "snap-2", "tools-1", oldShots, toolsHash)
+          offered   <- Ref.make(List.empty[LockEvent])
+          offerDesk <- open(offerRoot, offered)
+          offerText <- Calls.refresh(offerDesk, offerRoot, Nil, Some(LockMode.Offer), None)
+          held      <- readText(offerRoot.resolve("dependencies.lock"))
+          events    <- offered.get
+          accepted  <- events.collectFirst { case LockEvent.Offered(found) => found } match
+            case Some(found) =>
+              offerDesk
+                .answer(LockReply.Accept(found.proposal, found.base))
+                .foldZIO(
+                  error => ZIO.dieMessage(error.message),
+                  _ => readText(offerRoot.resolve("dependencies.lock")),
+                )
+            case None => ZIO.dieMessage("refresh did not offer")
+          updateRoot <- temp("histos-refresh-update")
+          _          <- scene(updateRoot, "snap-2", "tools-1", oldShots, toolsHash)
+          updateSeen <- Ref.make(List.empty[LockEvent])
+          updateDesk <- open(updateRoot, updateSeen)
+          updateText <- Calls.refresh(
+            updateDesk,
+            updateRoot,
+            List(ProjectName("shots")),
+            Some(LockMode.Update),
+            None,
+          )
+          written     <- readText(updateRoot.resolve("dependencies.lock"))
+          toolsBytes  <- readBytes(updateRoot.resolve(tools.value))
+          defaultRoot <- temp("histos-refresh-default")
+          _           <- scene(defaultRoot, "snap-2", "tools-1", oldShots, toolsHash)
+          defaultSeen <- Ref.make(List.empty[LockEvent])
+          defaultDesk <- open(defaultRoot, defaultSeen)
+          defaultText <- Calls.refresh(defaultDesk, defaultRoot, Nil, None, None)
+          defaultLock <- readText(defaultRoot.resolve("dependencies.lock"))
+          defaultFeed <- defaultSeen.get
+          quietRoot   <- temp("histos-refresh-quiet")
+          _           <- scene(quietRoot, "snap-1", "tools-1", oldShots, toolsHash)
+          quietSeen   <- Ref.make(List.empty[LockEvent])
+          quietDesk   <- open(quietRoot, quietSeen)
+          quietText   <- Calls.refresh(quietDesk, quietRoot, Nil, None, None)
+          quietLock   <- readText(quietRoot.resolve("dependencies.lock"))
+          cellRoot    <- temp("histos-refresh-cell")
+          cell = "cell app 3.8.1 jvm\nartifact com.example demo 1.0.0\n"
+          _           <- writeText(cellRoot.resolve("dependencies.lock"), cell)
+          cellSeen    <- Ref.make(List.empty[LockEvent])
+          cellDesk    <- open(cellRoot, cellSeen)
+          refused     <- Calls.refresh(cellDesk, cellRoot, Nil, Some(LockMode.Update), None).exit
+          cellAfter   <- readText(cellRoot.resolve("dependencies.lock"))
+          missingRoot <- temp("histos-refresh-missing")
+          _           <- writeText(
+            missingRoot.resolve("dependencies.lock"),
+            LockDocument.render(document(oldShots, toolsHash)),
+          )
+          _           <- writeBytes(missingRoot.resolve(shots.value), "snap-1")
+          _           <- writeBytes(missingRoot.resolve(tools.value), "tools-1")
+          missingSeen <- Ref.make(List.empty[LockEvent])
+          missingDesk <- open(missingRoot, missingSeen)
+          unknown     <- Calls
+            .refresh(missingDesk, missingRoot, List(ProjectName("missing")), Some(LockMode.Update), None)
+            .exit
+          missingLock <- readText(missingRoot.resolve("dependencies.lock"))
+        yield
+          val corrupt = refused match
+            case zio.Exit.Success(_)     => false
+            case zio.Exit.Failure(cause) =>
+              cause.failureOption match
+                case Some(ResolveError.LockDetail(detail)) =>
+                  detail.value == "line 1 is not a lock record" &&
+                  detail.value != LockStoreFault.Corrupt(detail).toString
+                case Some(_) => false
+                case None    => false
+          val unknownError = unknown match
+            case zio.Exit.Success(_)     => false
+            case zio.Exit.Failure(cause) =>
+              cause.failureOption.contains(
+                ResolveError.Transaction(LockTransactionError.UnknownSelector(ProjectName("missing")))
+              )
+          val expected = LockDocument.render(document(newShots, toolsHash))
+          assertTrue(
+            namedOffer(events, offerText),
+            !offerText.contains("snapshot refresh was not applied"),
+            !offerText.contains("committed"),
+            held == LockDocument.render(document(oldShots, toolsHash)),
+            accepted == expected,
+            updateText == s"snapshot refresh committed\nlocators shots",
+            written == expected,
+            toolsBytes.toList == "tools-1".getBytes(utf8).toList,
+            namedOffer(defaultFeed, defaultText),
+            !defaultText.contains("committed"),
+            defaultLock == LockDocument.render(document(oldShots, toolsHash)),
+            quietText == "no locator changed\nNo lock write.",
+            quietLock == LockDocument.render(document(oldShots, toolsHash)),
+            corrupt,
+            cellAfter == cell,
+            unknownError,
+            missingLock == LockDocument.render(document(oldShots, toolsHash)),
+          )
     },
     test("an ephemeral snapshot does not solve for a frozen caller") {
       val ephemeral = snapshot(SnapshotSelection.Ephemeral)
@@ -277,4 +420,26 @@ object LockInvocationSpec extends ZIOSpecDefault:
       yield assertTrue(programs.toList == List(stdin), replies.toList == List(reply))
     },
   )
+
+  private def namedOffer(events: List[LockEvent], text: String): Boolean =
+    events match
+      case LockEvent.Offered(found) :: Nil =>
+        text == s"snapshot refresh offered ${found.proposal.value}\nNo lock write."
+      case _ => false
+
+  private def writeText(path: Path, text: String): UIO[Unit] =
+    ZIO.attemptBlocking(Files.writeString(path, text, utf8)).orDie.unit
+
+  private def writeBytes(path: Path, text: String): UIO[Unit] =
+    ZIO.attemptBlocking(Files.write(path, text.getBytes(utf8))).orDie.unit
+
+  private def readText(path: Path): UIO[String] =
+    ZIO.attemptBlocking(Files.readString(path, utf8)).orDie
+
+  private def readBytes(path: Path): UIO[Array[Byte]] =
+    ZIO.attemptBlocking(Files.readAllBytes(path)).orDie
+
+  private def temp(prefix: String): ZIO[Scope, Nothing, Path] =
+    ZIO.acquireRelease(ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie): path =>
+      ZIO.attemptBlocking(Workspace.deleteSync(path)).orDie
 end LockInvocationSpec

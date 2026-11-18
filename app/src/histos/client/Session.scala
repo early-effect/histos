@@ -9,10 +9,12 @@ import histos.mcp.Notice
 import histos.plugin.PluginArgs
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.publish.LauncherError
+import histos.lock.ExecutionKind
 import histos.server.{
   Attach,
   Call,
   Calls,
+  ConsentDesk,
   Decision,
   Feed,
   Fingerprint,
@@ -310,24 +312,35 @@ object Session:
         .open(repo, mode)
         .mapError(ServerError.Resolve(_))
         .flatMap { report =>
-          histos.zinc.CompileMemo.provide(
-            histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-              Perform
-                .run(
-                  repo,
-                  apiJar,
-                  loaded,
-                  machine,
-                  desk.runs,
-                  track = true,
-                  shown,
-                  call,
-                  say,
-                  sessionEdges(repo, apiJar, machine, desk)(say),
-                )
-                .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+          // This process is the session. The daemon desk is not in scope.
+          ConsentDesk
+            .open(
+              repo,
+              ConsentDesk.strategy(ExecutionKind.Local, None),
+              ConsentDesk.command,
+              ConsentDesk.preparer(repo),
+              ConsentDesk.feed(say),
             )
-          )
+            .flatMap: consent =>
+              histos.zinc.CompileMemo.provide(
+                histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                  Perform
+                    .run(
+                      repo,
+                      apiJar,
+                      loaded,
+                      machine,
+                      desk.runs,
+                      track = true,
+                      shown,
+                      call,
+                      say,
+                      sessionEdges(repo, apiJar, machine, desk)(say),
+                      consent,
+                    )
+                    .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                )
+              )
         }
     }
 

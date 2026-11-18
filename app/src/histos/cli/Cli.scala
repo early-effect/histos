@@ -7,11 +7,13 @@ import histos.bsp.{Bsp, Connection, Frame}
 import histos.central.{PortalServer, ReleaseFeed}
 import histos.client.CallerFacts
 import histos.build.{Beat, Build, BuildEvent}
+import histos.lock.ExecutionKind
 import histos.load.LoadedBuild
 import histos.server.{
   Attach,
   Call,
   Calls,
+  ConsentDesk,
   ForgetTarget,
   Client,
   Daemon,
@@ -865,7 +867,7 @@ object Cli:
       apiJar: Path,
       inner: Call,
       policy: WatchPolicy,
-  )(using appearance: Appearance): URIO[Local, Completed] =
+  )(using appearance: Appearance, choice: LockChoice): URIO[Local, Completed] =
     Ref
       .make(Completed(CliExit.Success, "", "", Playback.Held))
       .flatMap { result =>
@@ -976,7 +978,7 @@ object Cli:
       apiJar: Path,
       call: Call,
       say: Say,
-  ): ZIO[Local, ServerError, Unit] =
+  )(using choice: LockChoice): ZIO[Local, ServerError, Unit] =
     ZIO.serviceWithZIO[Machine] { machine =>
       Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
         versionText(repo).orElseSucceed("").flatMap { shown =>
@@ -988,27 +990,38 @@ object Cli:
               .open(repo, mode)
               .mapError(ServerError.Resolve(_))
               .flatMap { report =>
-                val ran = (relay: histos.process.RunRelay) =>
-                  histos.zinc.CompileMemo.provide(
-                    histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                      Perform
-                        .run(
-                          repo,
-                          apiJar,
-                          loaded,
-                          machine,
-                          runs,
-                          track = false,
-                          shown,
-                          call,
-                          say,
-                          cliEdges(repo, say),
-                          relay,
-                        )
-                        .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
-                    )
+                // This process is the session. The daemon desk is not in scope.
+                ConsentDesk
+                  .open(
+                    repo,
+                    ConsentDesk.strategy(ExecutionKind.Local, choice.mode),
+                    ConsentDesk.command,
+                    ConsentDesk.preparer(repo),
+                    ConsentDesk.feed(say),
                   )
-                Build.relay(histos.process.Terminal.Owned, call)(ran)
+                  .flatMap: desk =>
+                    val ran = (relay: histos.process.RunRelay) =>
+                      histos.zinc.CompileMemo.provide(
+                        histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                          Perform
+                            .run(
+                              repo,
+                              apiJar,
+                              loaded,
+                              machine,
+                              runs,
+                              track = false,
+                              shown,
+                              call,
+                              say,
+                              cliEdges(repo, say),
+                              desk,
+                              relay,
+                            )
+                            .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
+                        )
+                      )
+                    Build.relay(histos.process.Terminal.Owned, call)(ran)
               }
           }
         }
@@ -1673,23 +1686,33 @@ object Cli:
       resolveLocal(repo, apiJar, action),
     )
 
+  /** The daemon is absent on this path, so this process is the session. Not a second coordinator beside one. */
   private def resolveLocal(
       repo: Path,
       apiJar: Path,
       action: ResolveAction,
   )(using choice: LockChoice): URIO[Local, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
-      Calls
-        .resolveWork(repo, apiJar, action, machine.native, choice.mode)
-        .fold(
-          {
-            case error: LoadError =>
-              held("", CallResult.Fault(BuildFault.Load(error)))
-            case error: ResolveError =>
-              held("", CallResult.Fault(BuildFault.Resolve(error)))
-          },
-          text => held(text, CallResult.reported()),
+      ConsentDesk
+        .open(
+          repo,
+          ConsentDesk.strategy(ExecutionKind.Local, choice.mode),
+          ConsentDesk.command,
+          ConsentDesk.preparer(repo),
+          _ => ZIO.unit,
         )
+        .flatMap: desk =>
+          Calls
+            .resolveWork(repo, apiJar, action, machine.native, desk, None, choice.mode)
+            .fold(
+              {
+                case error: LoadError =>
+                  held("", CallResult.Fault(BuildFault.Load(error)))
+                case error: ResolveError =>
+                  held("", CallResult.Fault(BuildFault.Resolve(error)))
+              },
+              text => held(text, CallResult.reported()),
+            )
 
   private def workflow(
       repo: Path,

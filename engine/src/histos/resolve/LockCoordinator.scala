@@ -65,10 +65,12 @@ final case class Inspection(
     declarations: ContentHash,
     phases: List[PhaseInspection],
     preview: histos.lock.LockDiff = histos.lock.LockDiff(Nil),
+    refreshed: List[SnapshotLocator] = Nil,
 )
 
 enum PrepareFault:
   case Solve(detail: PluginDetail)
+  case Transaction(error: LockTransactionError)
 
 enum PrepareOutcome:
   case Offered(offer: LockOffer)
@@ -516,7 +518,8 @@ final class LockCoordinator private (
 
   private def liftPrepare(fault: PrepareFault): LockRepairError =
     fault match
-      case PrepareFault.Solve(detail) => LockRepairError.Solve(detail)
+      case PrepareFault.Solve(detail)      => LockRepairError.Solve(detail)
+      case PrepareFault.Transaction(error) => LockRepairError.Transaction(error)
 
   private def liftMerge(fault: MergeFault): LockRepairError =
     fault match

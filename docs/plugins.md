@@ -105,7 +105,7 @@ On this loader, `Frozen` and `UsePinned` materialize pins and do not solve. `Off
 
 A published plugin coordinate in Scala is a `dep"..."` literal. The lock stores it as a `plugin` line. There is no other published-pin syntax.
 
-`histos resolve` fetches the lock and checks each sha256. `resolve --update` solves and writes it. `resolve --check` fails when a fresh solve differs.
+`histos resolve` fetches the lock and checks each sha256. `resolve --update` solves and writes it. `resolve --check` fails when a fresh solve differs. `resolve --refresh` revalidates retained snapshot locators and does not fetch. Offer is the default and `--lock=update` commits. No selector means every retained locator. A dependency lock is not rewritten.
 
 ## Test kit
 

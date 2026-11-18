@@ -2,6 +2,7 @@ package histos.lock
 
 import histos.plugin.{ClientId, CommandIdentity, ContentHash, InvocationContext, InvocationId, LockRevision, ProposalId}
 import histos.server.Call
+import histos.ProjectName
 
 /** The call and the caller, as data. A bare [[histos.server.Call]] on the socket is protocol skew, not an inferred
   * caller.
@@ -64,6 +65,9 @@ enum LockTransactionError:
   /** This command does not apply the mode. Nothing was solved and the lock was not written. */
   case Unapplied(mode: LockMode)
 
+  /** A refresh selector names no retained locator. The lock was not written. */
+  case UnknownSelector(name: ProjectName)
+
   def message: String = this match
     case StaleProposal(_)   => "the lock proposal does not match the current revision"
     case RefreshRequired    => "the repair needs an explicit snapshot refresh"
@@ -73,6 +77,7 @@ enum LockTransactionError:
       mode match
         case LockMode.Offer => "the offer was not applied"
         case other          => s"--lock=${LockPrecedence.token(other)} was not applied"
+    case UnknownSelector(name) => s"${name.value} is not a retained snapshot"
 end LockTransactionError
 
 /** Lock facts for the event channel. P8 publishes them on the live build feed. */

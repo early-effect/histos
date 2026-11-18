@@ -4,7 +4,7 @@ import histos.doctor.{Diagnostic, Noted, Suggest}
 import histos.lock.LockTransactionError
 import histos.format.ScalafmtConfError
 import histos.jdk.Sha256
-import histos.plugin.PluginLoadError
+import histos.plugin.{PluginDetail, PluginLoadError}
 import histos.workspace.IoFailure
 import histos.{Dep, DepKind, Platform, ProjectName, ScalaVersion}
 
@@ -36,6 +36,9 @@ enum ResolveError:
   case Download(misses: ::[ArtifactMiss])
   case Scalafmt(error: ScalafmtConfError)
   case Transaction(error: LockTransactionError)
+
+  /** A lock refusal that is already a detail. Corrupt bytes use this, not `toString`. */
+  case LockDetail(detail: PluginDetail)
 
   /** Every artifact that failed did so in transit, after Coursier's own retries, so a later fetch may succeed. */
   def transient: Boolean = this match
@@ -73,6 +76,7 @@ enum ResolveError:
       ("could not download:" :: misses.map(miss => s"${miss.url}: ${miss.detail}")).mkString("\n")
     case ResolveError.Scalafmt(error)    => error.message
     case ResolveError.Transaction(error) => error.message
+    case ResolveError.LockDetail(detail) => detail.value
 
   def diagnose: Diagnostic = this match
     case ResolveError.LockDrift(_, _, _, _, changed) =>

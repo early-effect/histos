@@ -55,7 +55,11 @@ object RepairScope:
         drift match
           case DeclarationDrift.Same       => LockDecision.UsePinned
           case DeclarationDrift.Changed(_) => LockDecision.OfferRepair
-      case LockMode.Update => LockDecision.Update
+      // Unchanged bytes stay pinned. Update must not rewrite them.
+      case LockMode.Update =>
+        drift match
+          case DeclarationDrift.Same       => LockDecision.UsePinned
+          case DeclarationDrift.Changed(_) => LockDecision.Update
       case LockMode.Local  => LockDecision.LocalSolve
       case LockMode.Frozen => LockDecision.Frozen
 

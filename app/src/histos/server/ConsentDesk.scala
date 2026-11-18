@@ -1,42 +1,34 @@
 package histos.server
 
 import histos.lock.{
-  DeclarationDrift,
   ExecutionKind,
   LockContext,
   LockDecision,
   LockDefaults,
-  LockDiff,
   LockEvent,
   LockMode,
-  LockPhase,
   LockReply,
   LockStrategy,
   LockStrategyError,
 }
-import histos.plugin.{Digests, PluginCoordinate, PluginDetail, ProposalId}
+import histos.plugin.{PluginDetail, ProposalId}
 import histos.resolve.{
+  DocumentPreparer,
   GenerationOwner,
-  Inspection,
   LockCoordinator,
-  LockDocument,
   LockPreparer,
   LockRepairError,
   LockStore,
   LockStoreFault,
-  PhaseInspection,
-  PrepareFault,
   PrepareOutcome,
   PrepareRequest,
   RepairScope,
   ResolutionSnapshot,
   ResolveError,
-  SnapshotLocator,
-  Solved,
   SuspendedCommand,
 }
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import zio.{IO, Ref, UIO, ZIO}
 
@@ -173,70 +165,3 @@ enum ConsentReport:
   case Transaction(error: ResolveError.Transaction)
   case Corrupt(detail: PluginDetail)
   case Unreported(error: LockRepairError)
-
-/** The parsed document is the solve. Refresh re-reads retained files named in that document and does not fetch. */
-private final class DocumentPreparer(root: Path) extends LockPreparer:
-  def inspect(
-      request: PrepareRequest,
-      revision: histos.lock.LockRevisionState,
-      document: LockDocument,
-  ): IO[PrepareFault, Inspection] =
-    val same =
-      revision match
-        case histos.lock.LockRevisionState.Absent | histos.lock.LockRevisionState.Present(_) =>
-          DeclarationDrift.Same
-    ZIO.succeed(
-      Inspection(
-        LockDocument.candidate(document),
-        List(phase(LockPhase.Seed, same), phase(LockPhase.Plugins, same), phase(LockPhase.Graph, same)),
-        LockDiff(Nil),
-      )
-    )
-
-  def solve(request: PrepareRequest, inspection: Inspection): IO[PrepareFault, Solved] =
-    LockStore
-      .open(root)
-      .flatMap(_.read)
-      .mapError(unread)
-      .flatMap: loaded =>
-        if request.refresh then refreshed(loaded.document)
-        else ZIO.succeed(Solved(closure(loaded.document), loaded.document.pins, Nil, Nil))
-
-  private def phase(known: LockPhase, drift: DeclarationDrift): PhaseInspection =
-    known match
-      case LockPhase.Seed    => PhaseInspection(LockPhase.Seed, drift)
-      case LockPhase.Plugins => PhaseInspection(LockPhase.Plugins, drift)
-      case LockPhase.Graph   => PhaseInspection(LockPhase.Graph, drift)
-
-  private def closure(document: LockDocument): List[PluginCoordinate] =
-    document.pins.foldLeft(List.empty[PluginCoordinate]): (seen, pin) =>
-      if seen.contains(pin.coordinate) then seen else seen :+ pin.coordinate
-
-  private def refreshed(document: LockDocument): IO[PrepareFault, Solved] =
-    ZIO.foreach(document.retained)(reread).map { located =>
-      Solved(closure(document), document.pins, document.retained.map(_.name), located)
-    }
-
-  /** The locator name is the file in the repository root. */
-  private def reread(locator: SnapshotLocator): IO[PrepareFault, SnapshotLocator] =
-    val path = root.resolve(locator.name.value)
-    ZIO
-      .attemptBlocking(Files.isRegularFile(path))
-      .mapError(_ => PrepareFault.Solve(PluginDetail("a retained snapshot could not be read")))
-      .flatMap:
-        case false => ZIO.fail(PrepareFault.Solve(PluginDetail("a retained snapshot is not a file")))
-        case true  =>
-          ZIO
-            .attemptBlocking(Files.readAllBytes(path))
-            .mapBoth(
-              _ => PrepareFault.Solve(PluginDetail("a retained snapshot could not be read")),
-              bytes => SnapshotLocator(locator.name, Digests.content(bytes)),
-            )
-
-  private def unread(fault: LockStoreFault): PrepareFault =
-    fault match
-      case LockStoreFault.Corrupt(detail) => PrepareFault.Solve(detail)
-      case LockStoreFault.StaleBase | LockStoreFault.AtomicUnavailable | LockStoreFault.Unreadable |
-          LockStoreFault.Unwritable =>
-        PrepareFault.Solve(PluginDetail("the lock could not be read"))
-end DocumentPreparer

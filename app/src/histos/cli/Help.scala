@@ -130,7 +130,7 @@ object Help:
       "resolve",
       "dependencies",
       "histos resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen]",
-      "Check the lock, or write it. --refresh does not revalidate snapshots.",
+      "Check the lock, or write it. --refresh revalidates retained snapshot locators: offer by default, --lock=update commits, no selector means every retained locator, no fetch, and a dependency lock is not rewritten.",
     ),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),
     Entry("workflow", "ci", "histos workflow [--check | --update]", "Check generated workflows, or write them."),
