@@ -98,6 +98,8 @@ object HostTask:
   private def place(root: Path, id: String): IO[HostProof, Unit] =
     for
       _ <- write(root.resolve("histos.scala"), build)
+      // Absent, the launcher exits before a server exists. The toolchain file does not replace it.
+      _ <- write(root.resolve("build.properties"), s"histos.version=$id\n")
       _ <- write(root.resolve("dependencies.lock"), lockText)
       _ <- write(root.resolve("shots"), shotsBytes)
       _ <- write(root.resolve("tools"), toolsBytes)
@@ -138,8 +140,22 @@ object HostTask:
       readRecord(file).flatMap:
         case Some(parsed)     => ZIO.succeed(parsed)
         case None if left > 0 => ZIO.sleep(pollGap) *> poll(left - 1)
-        case None             => ZIO.fail(HostProof.ServerSilent(file))
+        case None             => serverNote(root).flatMap(note => ZIO.fail(HostProof.ServerSilent(file, note)))
     poll(polls)
+
+  /** The launcher's own line, when the scratch server exits before `server.json`. */
+  private def serverNote(root: Path): UIO[String] =
+    ZIO
+      .attemptBlocking {
+        val log = root.resolve(".histos").resolve("server.log")
+        if !Files.isRegularFile(log) then ""
+        else
+          val text = Files.readString(log).trim
+          val end  = text.indexOf('\n')
+          val line = if end < 0 then text else text.substring(0, end).trim
+          if line.length <= 200 then line else line.substring(0, 200)
+      }
+      .orElseSucceed("")
 
   private def readRecord(file: Path): IO[HostProof, Option[ServerFile]] =
     ZIO

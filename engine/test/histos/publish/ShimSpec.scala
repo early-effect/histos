@@ -75,6 +75,14 @@ object ShimSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("an explicit client link failure fails the install") {
+      ZIO.scoped {
+        for
+          failed <- runnerInstall(client = true, linkFails = true).exit
+          plain  <- runnerInstall(client = false, linkFails = true)
+        yield assertTrue(failed.isFailure, !plain.kit, !plain.log.contains("toolchain client"))
+      }
+    },
     test("a local asset manifest copies the staged ivy jar") {
       ZIO.scoped {
         for copied <- ivyAssetInstall
@@ -123,7 +131,10 @@ object ShimSpec extends ZIOSpecDefault:
   private final case class IvyCopy(installed: Chunk[Byte], staged: Chunk[Byte], log: String)
 
   /** Seeds a dist toolchain and a kit under `HISTOS_ASSETS`. `CI` is set. `HISTOS_CLIENT=on` must not link. */
-  private def runnerInstall(client: Boolean): ZIO[Scope, java.io.IOException, RunnerInstall] =
+  private def runnerInstall(
+      client: Boolean,
+      linkFails: Boolean = false,
+  ): ZIO[Scope, java.io.IOException, RunnerInstall] =
     val jarBytes = "jar".getBytes(StandardCharsets.UTF_8)
     val kitBytes = "kit".getBytes(StandardCharsets.UTF_8)
     val manifest = distInstallManifest(digest(jarBytes), digest(kitBytes))
@@ -137,7 +148,7 @@ object ShimSpec extends ZIOSpecDefault:
           assets = root.resolve("assets")
           tool   = home.resolve("toolchains").resolve(installVersion)
           log    = root.resolve("java.log")
-          _ <- write(bin.resolve("java"), javaStub)
+          _ <- write(bin.resolve("java"), if linkFails then javaLinkFailStub else javaStub)
           _ <- write(tool.resolve("histos.jar"), jarBytes)
           _ <- write(tool.resolve("manifest.json"), manifest.getBytes(StandardCharsets.UTF_8))
           _ <- write(assets.resolve("client-kit.zip"), kitBytes)
@@ -260,6 +271,19 @@ object ShimSpec extends ZIOSpecDefault:
         case error                      => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString))
       }
       .unit
+
+  private val javaLinkFailStub =
+    """|#!/bin/sh
+       |if [ "$1" = "-version" ]; then
+       |  echo 'openjdk version "25.0.1"' >&2
+       |  exit 0
+       |fi
+       |printf '%s\n' "$*" >> "$JAVA_LOG"
+       |case "$*" in
+       |  *toolchain\ client*) exit 1 ;;
+       |esac
+       |exit 0
+       |""".stripMargin
 
   private val javaStub =
     """|#!/bin/sh

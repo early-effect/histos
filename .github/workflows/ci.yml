@@ -39,9 +39,8 @@ jobs:
           fi
           modules=$(./histos affected --base "$base" || echo '["all"]')
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
-  test:
-    needs: affected
-    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
+  publish:
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -50,6 +49,110 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: early-effect/histos/.github/actions/setup@36642bcc3ec518a6af424b72b7e0d1f8b38c9333 # 36642bcc3ec518a6af424b72b7e0d1f8b38c9333
+      - run: ./histos doctor --preflight publish
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llvm
+        with:
+          path: "${{ runner.temp }}/llvm"
+          key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            expected="b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ -n "$LD_LIBRARY_PATH" ]; then
+            echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+          fi
+      - run: "./histos publish local"
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          manifest=dist/install/manifest.json
+          [ -f "$manifest" ] || { echo "dist/install/manifest.json is missing" >&2; exit 1; }
+          mkdir -p host/assets
+          cp "$manifest" host/assets/manifest.json
+          kit=$(json_string "$manifest" clientKit)
+          version=$(json_string "$manifest" version)
+          org=$(json_string "$manifest" ivyOrganisation)
+          module=$(json_string "$manifest" ivyModule)
+          rev=$(json_string "$manifest" ivyRevision)
+          [ -n "$kit" ] && [ -n "$version" ] && [ -n "$org" ] && [ -n "$module" ] && [ -n "$rev" ] || { echo "manifest is missing a host field" >&2; exit 1; }
+          src="dist/install/$kit"
+          [ -f "$src" ] || { echo "client kit is missing" >&2; exit 1; }
+          cp "$src" "host/assets/$kit"
+          jar="$HOME/.histos/toolchains/$version/histos.jar"
+          [ -f "$jar" ] || { echo "toolchain jar is missing" >&2; exit 1; }
+          dest="host/ivy/$org/$module/$rev/jars"
+          mkdir -p "$dest"
+          cp "$jar" "$dest/$module.jar"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host
+          path: host
+          if-no-files-found: error
+  test:
+    needs: [affected, publish]
+    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host
+          path: host
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          manifest=host/assets/manifest.json
+          version=$(json_string "$manifest" version)
+          [ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
+          assets="$GITHUB_WORKSPACE/host/assets"
+          ivy="$GITHUB_WORKSPACE/host/ivy"
+          HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
+          mkdir -p .histos
+          printf '%s\n' "$version" > .histos/toolchain
       - run: ./histos doctor --preflight test
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -103,6 +206,40 @@ jobs:
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          version=$(json_string host/assets/manifest.json version)
+          [ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
+          shown=$(./histos version | awk 'NR == 1 { print; exit }')
+          [ "$shown" = "histos $version" ]
+          pin=$(awk '
+            {
+              line = $0
+              gsub(/^[ \t]+/, "", line)
+              if (index(line, "histos.version=") == 1) {
+                value = substr(line, 16)
+                gsub(/[ \t\r]+$/, "", value)
+                print value
+                exit
+              }
+            }
+          ' build.properties)
+          [ -n "$pin" ] || { echo "build.properties has no histos.version" >&2; exit 1; }
+          [ "$shown" != "histos $pin" ]
+      - run: "./histos test app --only '*LockInvocationSpec*' '*InstalledCompilerPayloadSpec*'"
       - run: "./histos test --affected '${{ needs.affected.outputs.modules }}'"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
@@ -133,13 +270,41 @@ jobs:
       - run: "./histos run versions"
   scaladoc:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    needs: [publish]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@36642bcc3ec518a6af424b72b7e0d1f8b38c9333 # 36642bcc3ec518a6af424b72b7e0d1f8b38c9333
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host
+          path: host
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          manifest=host/assets/manifest.json
+          version=$(json_string "$manifest" version)
+          [ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
+          assets="$GITHUB_WORKSPACE/host/assets"
+          ivy="$GITHUB_WORKSPACE/host/ivy"
+          HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
+          mkdir -p .histos
+          printf '%s\n' "$version" > .histos/toolchain
       - run: ./histos doctor --preflight scaladoc
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
@@ -176,19 +341,112 @@ jobs:
       - run: "./histos run doc"
   format:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    needs: [publish]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@36642bcc3ec518a6af424b72b7e0d1f8b38c9333 # 36642bcc3ec518a6af424b72b7e0d1f8b38c9333
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host
+          path: host
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          manifest=host/assets/manifest.json
+          version=$(json_string "$manifest" version)
+          [ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
+          assets="$GITHUB_WORKSPACE/host/assets"
+          ivy="$GITHUB_WORKSPACE/host/ivy"
+          HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
+          mkdir -p .histos
+          printf '%s\n' "$version" > .histos/toolchain
       - run: ./histos doctor --preflight format
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos fmt --check"
+  client:
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    needs: [publish]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llvm
+        with:
+          path: "${{ runner.temp }}/llvm"
+          key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            expected="b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ -n "$LD_LIBRARY_PATH" ]; then
+            echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host
+          path: host
+      - run: |
+          set -eu
+          json_string() {
+            awk -v key="$2" '
+              {
+                line = $0
+                gsub(/^[ \t]+/, "", line)
+                needle = "\"" key "\""
+                if (index(line, needle) == 1) {
+                  n = split(line, parts, "\"")
+                  if (n >= 4) { print parts[4]; exit }
+                }
+              }
+            ' "$1"
+          }
+          manifest=host/assets/manifest.json
+          version=$(json_string "$manifest" version)
+          [ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
+          assets="$GITHUB_WORKSPACE/host/assets"
+          ivy="$GITHUB_WORKSPACE/host/ivy"
+          HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --client "$version"
+          mkdir -p .histos
+          printf '%s\n' "$version" > .histos/toolchain
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos run host"
   cache-seed:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04

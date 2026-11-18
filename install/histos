@@ -704,7 +704,7 @@ link_client_dots() {
   rm -f "$link_log"
   return "$link_status"
 }
-# Ask once per jar sha, from install and update only. A decline is remembered. CI never links.
+# Ask once per jar sha, from install and update only. A decline is remembered. An explicit client is a required link.
 offer_client() {
   dir=$1
   mode=$(client_mode "$2")
@@ -741,7 +741,9 @@ offer_client() {
   if link_client "$jar"; then
     printf '%s\n' "$sha" > "$dir/client.stamp"
     rm -f "$dir/client.choice"
+    return 0
   fi
+  [ "$mode" = yes ] && return 1
   return 0
 }
 exec_jar() {
@@ -875,7 +877,7 @@ histos help self"
         selected=$(resolve_channel "$selected")
         ensure_toolchain "$selected" "$(client_mode "$client_flag")"
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
-        offer_client "$home/toolchains/$selected" "$client_flag"
+        offer_client "$home/toolchains/$selected" "$client_flag" || exit 1
         exit 0
         ;;
       client)
@@ -965,7 +967,7 @@ histos help toolchain" ;;
       write_default "$next"
       selected=$(resolve_channel "$next")
       ensure_toolchain "$selected" "$(client_mode "$client_flag")"
-      offer_client "$home/toolchains/$selected" "$client_flag"
+      offer_client "$home/toolchains/$selected" "$client_flag" || exit 1
       exit 0
     fi
     selected=$(resolve_channel "$next")
@@ -974,7 +976,7 @@ histos help toolchain" ;;
     version=$(driver_id update "$selected" "$local_id")
     ensure_toolchain "$version" "$(client_mode "$client_flag")"
     jar=$home/toolchains/$version/histos.jar
-    offer_client "$(dirname "$jar")" "$client_flag"
+    offer_client "$(dirname "$jar")" "$client_flag" || exit 1
     # The previous record is gone before version runs, so the new driver does not talk to that server.
     retire_server "$repo"
     exec_jar "$jar" "$repo" version
