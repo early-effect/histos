@@ -878,6 +878,8 @@ root org.scala-lang scala3-compiler_3 3.10.1 closure build
 root org.scala-lang scala3-sbt-bridge 3.10.1 closure build
 root org.jline jline-reader 4.3.1 closure build
 root org.jline jline-terminal-jni 4.3.1 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-lang scala3-compiler_3 3.10.1 786e93def1988c1c59d6348d335333f3624cfaee0d4191cbcc9040b46aa11992 central
 artifact org.scala-lang scala3-sbt-bridge 3.10.1 5b4e5f158d08206b357ccb3d4640af7b5969d73f7b8d034cc69e88f8fa5806dc central
@@ -909,6 +911,8 @@ root org.scala-lang scala3-compiler_3 3.10.0 closure build
 root org.scala-lang scala3-sbt-bridge 3.10.0 closure build
 root org.jline jline-reader 4.3.1 closure build
 root org.jline jline-terminal-jni 4.3.1 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scala3-sbt-bridge 3.10.0 c74f713b223693b361a5204c2d319b926565cf394370462fe7777e20c9022439 central
@@ -938,6 +942,8 @@ root org.scala-lang scala3-compiler_3 3.9.0 closure build
 root org.scala-lang scala3-sbt-bridge 3.9.0 closure build
 root org.jline jline-reader 4.3.1 closure build
 root org.jline jline-terminal-jni 4.3.1 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-lang scala3-compiler_3 3.9.0 3e2c09a5ca6cef17a55f2f66e123815f9c4ea061fce20d0e9d2371989405a61a central
 artifact org.scala-lang scala3-sbt-bridge 3.9.0 25f2c099d7d3db2acf504e6e5c9df10e235c56c6eb9d55d399e823baca4fc004 central
@@ -971,6 +977,7 @@ root org.scala-native javalib_native0.5_3 0.5.13-20261111-9be93b7-SNAPSHOT singl
 root org.scala-native auxlib_native0.5_3 0.5.13-20261111-9be93b7-SNAPSHOT single build
 root org.scala-native scalalib_native0.5_3 3.10.0+0.5.13-20261111-9be93b7-SNAPSHOT single build
 root org.scala-native scala3lib_native0.5_3 3.10.0+0.5.13-20261111-9be93b7-SNAPSHOT single build
+resolver ivy-local
 resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-native nscplugin_3.10.0 0.5.13-20261111-9be93b7-SNAPSHOT c229ed7bbbe5ad9a9cb737663ad767ebeb5ff16b6125cc61a0f384913a91461e maven:https://central.sonatype.com/repository/maven-snapshots/
@@ -986,6 +993,7 @@ tool nativelinker 3.9.0 native:0.5.13-20261111-9be93b7-SNAPSHOT
 root org.scala-native tools_3 0.5.13-20261111-9be93b7-SNAPSHOT single build
 root org.scala-native nir_3 0.5.13-20261111-9be93b7-SNAPSHOT single build
 root org.scala-native util_3 0.5.13-20261111-9be93b7-SNAPSHOT single build
+resolver ivy-local
 resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-native tools_3 0.5.13-20261111-9be93b7-SNAPSHOT 07280c6de4975a4652ed80b42a699f98676ba8ad5db6be06f3e82eab4393cabc maven:https://central.sonatype.com/repository/maven-snapshots/
@@ -994,6 +1002,7 @@ artifact org.scala-native util_3 0.5.13-20261111-9be93b7-SNAPSHOT 73e8e578ebc7d5
 tool nativesuite 3.9.0 native:0.5.13-20261111-9be93b7-SNAPSHOT
 root org.scala-native test-runner_3 0.5.13-20261111-9be93b7-SNAPSHOT closure build
 root org.scala-lang scala-library 2.13.18 single build
+resolver ivy-local
 resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-native test-runner_3 0.5.13-20261111-9be93b7-SNAPSHOT c95e152836d4d2786b20adcdcb0d26d6c870a376b6bdd8337112772bf74c28f2 maven:https://central.sonatype.com/repository/maven-snapshots/
@@ -1006,6 +1015,8 @@ artifact org.scala-native util_3 0.5.13-20261111-9be93b7-SNAPSHOT 73e8e578ebc7d5
 evict org.scala-lang scala-library 2.13.8 2.13.18
 tool scalafmtdynamic 2.13.18 jvm
 root org.scalameta scalafmt-dynamic-core_2.13 3.11.5 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scalameta scalafmt-dynamic-core_2.13 3.11.5 f55a6614c5815f4435451eaf24b0b0a771fc26a2b3603cc8f4428ccfc6ae96c0 central
 artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
@@ -1015,6 +1026,8 @@ artifact com.typesafe config 1.4.9 47d13e3196c84f2a8ccd014ae563738c3da5b7406b38e
 tool scalafmtcore 2.13.18 jvm
 root org.scalameta scalafmt-core_2.13 3.11.5 closure build
 root org.scala-lang scala-reflect 2.13.18 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scalameta scalafmt-core_2.13 3.11.5 301fffd68a5723390d62ce62b075ed2e9c84003a0994634951638c4df6eb77f8 central
 artifact org.scala-lang scala-reflect 2.13.18 6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b central
