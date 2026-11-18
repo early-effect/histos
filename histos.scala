@@ -1,5 +1,5 @@
 import histos.*
-import histos.plugin.SecretName
+import histos.plugin.{JobName, SecretName, TaskName}
 import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
@@ -126,7 +126,9 @@ object build extends HistosBuild:
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .scalafmt
-      .docCheck(
+      .docCheck
+      .verify(VerifyTask(JobName("client"), VerifyRun.BuiltIn(TaskName("host")), ClientLink.Native))
+      .publishLocalSuite(
         ships(
           Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
         ),
