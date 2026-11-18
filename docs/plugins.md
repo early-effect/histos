@@ -171,18 +171,20 @@ Already proven on `0.5.0-36642bcc3ec5-SNAPSHOT`, packed from `36642bcc`. CI run 
 
 Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 134999536356, command `./histos test --affected '["app"]'`. `BspMetalsSpec` passed 9. The app suite passed 75, including `InstalledHostProofSpec`. No test-clock warning.
 
+Proved on #242, head `1432671`, squash `104f9aca`. CI run 44366420546, test job 135025861460, command `./histos test --affected '["engine","app"]'`. Engine passed 148, including `PluginBootstrapSpec`. App passed 75. No test-clock warning.
+
 ### Load a plugin correctly
 
 - [x] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles. `BspMetalsSpec`, "a comment that names HistosBuild stays a build source".
 - [x] Main inherits the catalog resolution. A conflicting main selection is refused. `InstalledHostProofSpec`, "A1 a catalog intent is what main inherits and a conflicting main resolution is ResolutionConflict".
-- [ ] A frozen load of a locked catalog does not solve.
+- [x] A frozen load of a locked catalog does not solve. `PluginBootstrapSpec`, "a frozen miss does not solve".
 - [x] The first run loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs. `InstalledHostProofSpec`, "A2 histos.strategies.scala runs after the core seed and before the remaining solve".
 - [x] Registration is the capability interface. An intersection key is refused. `InstalledHostProofSpec`, "A3 registration is the capability interface and an intersection key is refused".
 - [ ] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs.
 - [x] Helper-only drift is `BindingDrift` while the root stamp matches. `InstalledHostProofSpec`, "R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches".
-- [ ] Binary-only helper drift is refused.
+- [x] Binary-only helper drift is refused. `PluginBootstrapSpec`, "binary-only helper drift is refused".
 - [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
-- [ ] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency".
+- [x] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency".
 - [x] A service built for the generation stays alive through the task and is released when that generation ends. `InstalledHostProofSpec`, "R10 a generation service is alive for the task and closed after the last lease".
 
 ### Cache what the inputs actually are
