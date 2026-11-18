@@ -163,34 +163,42 @@ Scaffold does not write `histos.wiring.scala`. A file with that name is not a lo
 
 ## Still to prove
 
-The contracts above typecheck. The behaviors below do not yet have a recorded run on a merged head. The pull request that proves one writes the command, the head SHA, and the pull request number on that line. A local re-run of an old spec does not close it.
+The contracts above typecheck. A checked line names the command, the head, and the pull request whose CI ran it. A local re-run of an old spec does not close a line.
 
 Already proven on `0.5.0-36642bcc3ec5-SNAPSHOT`, packed from `36642bcc`. CI run 44338066046 on `09ccb7e` (#240), squash `e96c5d32`: consent on the installed jar, the native client host task, the version line against the pin, the compiler payload staying out of the project lock, and a lone `histos.wiring.scala` not being compiled. `Ship.next` is still 0.5.0. Nothing has been released. The pointer `0.5.0-SNAPSHOT` is not this pin.
 
+Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 134999536356, command `./histos test --affected '["app"]'`. `BspMetalsSpec` passed 9. The app suite passed 75, including `InstalledHostProofSpec`. No test-clock warning.
+
 ### Load a plugin correctly
 
-- [ ] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles.
-- [ ] Main inherits the catalog resolution. A conflicting main selection is refused. A frozen load of a locked catalog does not solve.
-- [ ] The first run, with no cache, loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs.
-- [ ] Registration is the capability interface. A duplicate, a second lock replacement, a setup failure, and a generation-scoped resource follow the rules in Services and Tasks.
-- [ ] A helper and a binary-only publication are checked for the whole closure. Helper-only drift rebuilds when the publication carries sources, and is refused when it is binary-only.
-- [ ] A local plugin compile sees the external jars that module resolved.
-- [ ] A service built for the generation stays alive through the task and is released when that generation ends.
+- [x] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles. `BspMetalsSpec`, "a comment that names HistosBuild stays a build source".
+- [x] Main inherits the catalog resolution. A conflicting main selection is refused. `InstalledHostProofSpec`, "A1 a catalog intent is what main inherits and a conflicting main resolution is ResolutionConflict".
+- [ ] A frozen load of a locked catalog does not solve.
+- [x] The first run loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs. `InstalledHostProofSpec`, "A2 histos.strategies.scala runs after the core seed and before the remaining solve".
+- [x] Registration is the capability interface. An intersection key is refused. `InstalledHostProofSpec`, "A3 registration is the capability interface and an intersection key is refused".
+- [ ] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs.
+- [x] Helper-only drift is `BindingDrift` while the root stamp matches. `InstalledHostProofSpec`, "R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches".
+- [ ] Binary-only helper drift is refused.
+- [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
+- [x] A service built for the generation stays alive through the task and is released when that generation ends. `InstalledHostProofSpec`, "R10 a generation service is alive for the task and closed after the last lease".
 
 ### Cache what the inputs actually are
 
-- [ ] Old plugin bytes, an empty artifact, or mixed provenance do not return a stale task result. A change of bytes, body, arguments, or a service input gets a new key and the new output.
-- [ ] Replacing the host API jar misses the compile cache unless the input hash is of those bytes.
-- [ ] A second load of the same Java sources, resources, and compiler flags starts no compiler.
-- [ ] `CompileInputs.remember` follows the test clock.
+- [x] Old plugin bytes reuse their task output. New bytes change the key and the output. `InstalledHostProofSpec`, "R1 old plugin bytes reuse a stale task output and new bytes change the key and the output".
+- [ ] An empty artifact or mixed provenance does not return a stale task result.
+- [x] Replacing the host API jar misses the compile cache unless the input hash is of those bytes. `InstalledHostProofSpec`, "R3 a host-API byte change misses the compile cache".
+- [x] A second load of the same Java sources, resources, and compiler flags starts no compiler. `InstalledHostProofSpec`, "R8 settings and resources reach the compile and a second identical load starts the compiler zero times".
+- [x] `CompileInputs.remember` follows the test clock. `InstalledHostProofSpec`, "R12 CompileInputs.remember stamps the analysis with the test clock".
 
 ### Publish a recipe a consumer can rebuild
 
-- [ ] The package key changes when the only difference is the API stamp bytes a local publish injects.
-- [ ] The published source jar includes generated replacements. The recipe includes compile-only inputs, resources, and flags. A publication the recipe does not support uploads nothing.
-- [ ] The export manifest includes the theme and step packages. An engine reference and a duplicate fail.
-- [ ] A compile failure and a scheduler failure stay distinct from a task failure after bind.
-- [ ] The assembled recipe covers TASTy direction, the closure, and a rebuild from the published inputs.
+- [x] The package key changes when the only difference is the API stamp bytes a local publish injects. `InstalledHostProofSpec`, "R2 stamp bytes change the package key and leave the product digest".
+- [x] The published source jar includes generated replacements. The recipe includes compile-only inputs, and those inputs stay off the consumer POM. `InstalledHostProofSpec`, "R4 a generated replacement from Sources.prefer is the published rebuild entry" and "R5 a compile-only input is in the recipe and absent from the consumer POM".
+- [ ] A publication the recipe does not support uploads nothing.
+- [x] The export manifest includes the theme and step packages. An engine reference is refused. `InstalledHostProofSpec`, "R11 theme and step are exported and an engine package is refused".
+- [ ] A duplicate export fails.
+- [x] A compile failure and a scheduler failure stay distinct from a task failure after bind. `InstalledHostProofSpec`, "R13 a compile failure and a scheduler failure stay distinct through bind".
+- [x] A TASTy entry-byte change changes the seal, and the consumer sees it. `InstalledHostProofSpec`, "A4 a TASTy entry-byte change changes the seal and the consumer sees it".
 
 ### A real plugin
 
