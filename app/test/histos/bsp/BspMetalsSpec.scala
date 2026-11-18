@@ -12,6 +12,7 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileMemo, Compilers, GraphCompile}
 
 import java.nio.file.{Files, Path}
+import java.util.zip.{ZipEntry, ZipOutputStream}
 
 import zio.json.*
 import zio.json.ast.Json
@@ -129,6 +130,37 @@ object BspMetalsSpec extends ZIOSpecDefault:
                   missingIds == Right(Nil),
                 )
           }
+        }
+      }
+    },
+    test("a comment that names HistosBuild stays a build source") {
+      ZIO.scoped {
+        Workspace.work("bsp-metals-host").flatMap { repo =>
+          val plug = module("plug", Jvm)(scala"3.10.1")
+          for
+            host   <- hostJar(repo.resolve("host.jar"))
+            result <- open(
+              repo,
+              Projects.locked.plugins(PluginSources.module(plug))(plug),
+              DependencyLock(Nil),
+              List(host),
+            ) { (bsp, _, _) =>
+              for
+                _       <- write(repo.resolve("histos.scala"), "// build\n")
+                _       <- write(repo.resolve("histos.plugins.scala"), "object plugins\n")
+                plugSrc <- write(
+                  repo.resolve("plug/src/main/scala/Plug.scala"),
+                  "class Plug\n// trait HistosBuild\n",
+                )
+                _      <- call(bsp, "build/initialize", Json.Obj(), 1)
+                plugin <- call(bsp, "buildTarget/inverseSources", document(Bsp.fileUri(plugSrc)), 2)
+              yield
+                val pluginIds = parsed[Rpc.InverseSourcesResult](plugin).map(_.targets.map(_.uri).toSet)
+                val plugMain  = Bsp.mainUri(repo, "plug", scala3, Platform.Jvm)
+                val buildUri  = Bsp.buildUri(repo)
+                assertTrue(pluginIds == Right(Set(plugMain, buildUri)))
+            }
+          yield result
         }
       }
     },
@@ -351,6 +383,7 @@ object BspMetalsSpec extends ZIOSpecDefault:
       repo: Path,
       built: Either[BuildError, ProjectGraph],
       lock: DependencyLock,
+      classpath: List[Path] = Nil,
   )(
       use: (Bsp.Session, Runtimes, Ref[Chunk[String]]) => ZIO[
         Scope & Resolve & ContentStore & CompileMemo & RemoteCache & Compilers & ResolutionService,
@@ -371,7 +404,7 @@ object BspMetalsSpec extends ZIOSpecDefault:
           graph,
           jdk,
           runtimes,
-          Nil,
+          classpath,
           line => notes.update(_ :+ line),
           ZIO.succeed(BuildNotes(false, Nil)),
           gate => gate,
@@ -413,6 +446,18 @@ object BspMetalsSpec extends ZIOSpecDefault:
 
   private def parsed[A: JsonCodec](line: String): Either[String, A] =
     line.fromJson[Rpc.RpcOk[A]].map(_.result).left.map(error => s"$error :: $line")
+
+  private def hostJar(path: Path): ZIO[Any, Nothing, Path] =
+    ZIO.attemptBlocking {
+      Files.createDirectories(path.getParent)
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        out.putNextEntry(new ZipEntry("histos/HistosBuild.class"))
+        out.write(Array[Byte](0, 1, 2))
+        out.closeEntry()
+      finally out.close()
+      path
+    }.orDie
 
   private def write(path: Path, text: String): ZIO[Any, IoFailure, Path] =
     val stored = Option(path.getParent) match

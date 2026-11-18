@@ -1507,14 +1507,11 @@ object Bsp:
         .attemptBlocking(definesHost(base) && buildClasspath.exists(hasHost))
         .mapError(_ => BspError.Io(IoFailure(base, IoFault.Walk)))
 
+    /** A source tree is the host only when it already holds the host class file. A comment that names the trait is not
+      * that file.
+      */
     private def definesHost(base: Path): Boolean =
-      if !Files.isDirectory(base) then false
-      else
-        val walk = Files.walk(base)
-        try
-          walk.iterator.asScala.exists: path =>
-            Files.isRegularFile(path) && scalaSource(path) && Files.readString(path).contains("trait HistosBuild")
-        finally walk.close()
+      Files.isRegularFile(base.resolve("histos").resolve("HistosBuild.class"))
 
     private def hasHost(jar: Path): Boolean =
       if !Files.isRegularFile(jar) then false
