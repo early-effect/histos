@@ -2,7 +2,7 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.plugin.{BootstrapError, InputKey, PluginCoordinate, PluginLoadError, SemanticSetting}
-import histos.resolve.{ClasspathScope, Repositories, Resolve, ResolveCell}
+import histos.resolve.{BuildResolvers, ClasspathScope, Repositories, Resolve, ResolveCell}
 import histos.schedule.RemoteCache
 import histos.toolchain.{HostCompilerError, HostCompilerSession, HostToolRole}
 import histos.workspace.{IoFailure, IoFault}
@@ -66,13 +66,14 @@ private[load] object PluginModules:
     ZIO
       .fromEither(ordered(graph))
       .flatMap: modules =>
-        val all   = graph.projects.collect { case module: Module => module }
-        val roots = coordinates(graph)
+        val all          = graph.projects.collect { case module: Module => module }
+        val roots        = coordinates(graph)
+        val repositories = BuildResolvers(graph.resolvers)
         ZIO.foldLeft(modules)(List.empty[Path]): (classpath, module) =>
           if skip.contains(module.name) then ZIO.succeed(classpath)
           else
             val need = if roots.contains(module.name) then Need.Required else Need.Optional
-            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session).map: added =>
+            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session, repositories).map: added =>
               classpath ++ added
 
   private def coordinates(graph: ProjectGraph): Set[ProjectName] =
@@ -118,6 +119,7 @@ private[load] object PluginModules:
       need: Need,
       resolve: Option[Resolve],
       session: Option[HostCompilerSession],
+      repositories: Repositories,
   ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     versionOf(module) match
       case None if module.versions.all.length > 1 =>
@@ -139,7 +141,7 @@ private[load] object PluginModules:
                   if found.isEmpty then missing(module, need)
                   else
                     for
-                      extra <- externals(module, version, resolve)
+                      extra <- externals(module, version, resolve, repositories)
                       out   <- BuildFile.tempDir("histos-plugin")
                       _     <- emit(repo, module, base, found, classpath ++ extra, out, session)
                       _     <- copyResources(base, out)
@@ -209,10 +211,14 @@ private[load] object PluginModules:
         .unit
     yield ()
 
+  /** A catalog module's libraries use that graph's repositories. Main is compiled after this, so its resolvers are not
+    * this classpath. An empty declaration stays Central.
+    */
   private def externals(
       module: Module,
       version: ScalaVersion,
       resolve: Option[Resolve],
+      repositories: Repositories,
   ): IO[LoadError, List[Path]] =
     resolve match
       case None                                   => ZIO.succeed(Nil)
@@ -223,7 +229,7 @@ private[load] object PluginModules:
           module.dependencies,
           version,
           Platform.Jvm,
-          Repositories.central,
+          repositories,
           ClasspathScope.Compile,
         )
         service.resolve(cell).mapBoth(LoadError.Resolve(_), _.artifacts.map(_.path))

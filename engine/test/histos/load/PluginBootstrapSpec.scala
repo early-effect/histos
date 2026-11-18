@@ -127,6 +127,21 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("a catalog resolver reaches a local plugin dependency") {
+      hosted { (root, _) =>
+        for
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          jar      <- externalJar(root.resolve("ext.jar"), boundary.filterNot(_ == api))
+          seen     <- Ref.make(List.empty[String])
+          _        <- write(root.resolve("histos.plugins.scala"), resolverCatalog)
+          _        <- write(root.resolve("helper/src/Noted.scala"), "object Noted\n")
+          _        <- write(root.resolve("histos.scala"), plainMain)
+          _        <- prepare(root, api, repoResolve(jar, seen))
+          urls     <- seen.get
+        yield urls
+      }.map(ran => assertTrue(ran.value.contains("maven:https://snapshots.example.test/maven")))
+    },
     test("a local module and an external jar load") {
       hosted { (root, _) =>
         for
@@ -512,6 +527,26 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
        |  def sources = PluginCatalog(PluginSources.ship(dep"com.example::missing:1.0.0"))
        |""".stripMargin
 
+  private val resolverCatalog: String =
+    """|import histos.*
+       |import histos.plugin.*
+       |
+       |object plugins extends HistosPlugins:
+       |  val helper = module("helper", Jvm)(scala"3.10.1")
+       |    .in(ProjectPath("helper"))
+       |    .libraryDependencies(dep"demo:ext:1")
+       |
+       |  override def resolvers =
+       |    PluginResolvers.Listed(
+       |      List(
+       |        Resolver.Maven(RepositoryUrl("https://snapshots.example.test/maven")),
+       |        Resolver.Central,
+       |      )
+       |    )
+       |
+       |  def sources = PluginCatalog(PluginSources.module(helper))
+       |""".stripMargin
+
   private val moduleCatalog: String =
     """|import histos.*
        |import histos.plugin.*
@@ -843,6 +878,21 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
           val extra = own.copy(name = dependency.name + "-helper", path = helper)
           ZIO.succeed(Classpath(List(own, extra), Nil))
         else ZIO.dieMessage(dependency.name)
+      def sources(organization: String, name: String, revision: String, repository: Repository) =
+        ZIO.dieMessage("sources")
+
+  private def repoResolve(path: Path, seen: Ref[List[String]]): Resolve =
+    new Resolve:
+      def resolveTool(request: histos.resolve.ToolRequest) = ZIO.dieMessage("resolveTool")
+      def resolve(cell: histos.resolve.ResolveCell)        =
+        val urls = cell.repositories.all.map(Repository.token)
+        seen.update(_ ++ urls) *>
+          (cell.dependencies match
+            case dependency :: _ => ZIO.succeed(Classpath(List(artifact(dependency, path)), Nil))
+            case Nil             => ZIO.dieMessage("resolve"))
+      def fetch(artifact: histos.resolve.LockedArtifact)                            = ZIO.dieMessage("fetch")
+      def resolvePlugin(dependency: Dep, repositories: histos.resolve.Repositories) =
+        ZIO.dieMessage("resolvePlugin")
       def sources(organization: String, name: String, revision: String, repository: Repository) =
         ZIO.dieMessage("sources")
 
