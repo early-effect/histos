@@ -37,5 +37,13 @@ object HostTaskSpec extends ZIOSpecDefault:
           HostVerdict.Failed(HostProof.Neither)
       )
     },
+    test("a silent server keeps the launcher line") {
+      val path = java.nio.file.Path.of("scratch")
+      val note = "launcher pin is absent: scratch/build.properties"
+      assertTrue(
+        HostProof.ServerSilent(path, note).message.contains(note),
+        HostProof.ServerSilent(path, "").message == s"the scratch server wrote no server.json at ${path.toString}",
+      )
+    },
   )
 end HostTaskSpec

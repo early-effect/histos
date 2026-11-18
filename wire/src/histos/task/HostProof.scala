@@ -21,19 +21,21 @@ end HostIo
 /** `Io` names the path and the kind. It does not carry an exception message. */
 enum HostProof:
   case ClientAbsent(path: Path)
-  case ServerSilent(path: Path)
+  case ServerSilent(path: Path, note: String)
   case Frozen
   case ExitedZero
   case Neither
   case Io(path: Path, kind: HostIo)
 
   def message: String = this match
-    case ClientAbsent(path) => s"histos-client is not executable at ${path.toString}"
-    case ServerSilent(path) => s"the scratch server wrote no server.json at ${path.toString}"
-    case Frozen             => "the client printed a frozen lock marker"
-    case ExitedZero         => "the client exited 0"
-    case Neither            => "the client printed neither consent nor a frozen marker"
-    case Io(path, kind)     => s"${kind.message} ${path.toString}"
+    case ClientAbsent(path)       => s"histos-client is not executable at ${path.toString}"
+    case ServerSilent(path, note) =>
+      val where = s"the scratch server wrote no server.json at ${path.toString}"
+      if note.isEmpty then where else s"$where\n$note"
+    case Frozen         => "the client printed a frozen lock marker"
+    case ExitedZero     => "the client exited 0"
+    case Neither        => "the client printed neither consent nor a frozen marker"
+    case Io(path, kind) => s"${kind.message} ${path.toString}"
 end HostProof
 
 /** Consent, or one of the output proofs. A missing file is not a verdict. */
