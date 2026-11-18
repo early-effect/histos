@@ -34,7 +34,7 @@ Frozen CI stays frozen. A locked build keeps its snapshot bytes until someone as
 
 ## How a producer uses it
 
-The plugin is a normal JVM module. It depends on `histos-api` as `compileOnly`. Its public capability is a trait. The implementation is a ZLayer. The module is marked `.pluginLibrary`, which publishes the rebuildable bundle bound to the host API that compiled it. A helper is an ordinary module the plugin `dependsOn`. Compile-only dependencies stay off the consumer POM.
+The plugin is a normal JVM module. It depends on `histos-api` as `compileOnly`. Its public capability is a trait. The implementation is a ZLayer. The module is marked `.pluginLibrary`, which publishes the rebuildable bundle bound to the host API that compiled it. A helper is an ordinary module the plugin `dependsOn`. Compile-only dependencies stay off the consumer POM. A compile-only snapshot does not refuse that publication. A snapshot the POM would fetch still does. The proof is `a compile-only snapshot does not refuse the ship` and `a pom snapshot dependency refuses the ship` in `PublishSelectSpec`.
 
 The producer build's catalog names that module. Its `services` registers the layer by the trait. There is no `histos.wiring.scala`. Publishing is `./histos publish snapshots` of that module. The consumer does not need the producer's repository.
 
@@ -201,6 +201,7 @@ Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 
 - [x] The package key changes when the only difference is the API stamp bytes a local publish injects. `InstalledHostProofSpec`, "R2 stamp bytes change the package key and leave the product digest".
 - [x] The published source jar includes generated replacements. The recipe includes compile-only inputs, and those inputs stay off the consumer POM. `InstalledHostProofSpec`, "R4 a generated replacement from Sources.prefer is the published rebuild entry" and "R5 a compile-only input is in the recipe and absent from the consumer POM".
 - [ ] A publication the recipe does not support uploads nothing.
+- [ ] A compile-only snapshot does not refuse the ship. A snapshot the POM would fetch does. `PublishSelectSpec`, "a compile-only snapshot does not refuse the ship" and "a pom snapshot dependency refuses the ship".
 - [x] The export manifest includes the theme and step packages. An engine reference is refused. `InstalledHostProofSpec`, "R11 theme and step are exported and an engine package is refused".
 - [ ] A duplicate export fails.
 - [x] A compile failure and a scheduler failure stay distinct from a task failure after bind. `InstalledHostProofSpec`, "R13 a compile failure and a scheduler failure stay distinct through bind".

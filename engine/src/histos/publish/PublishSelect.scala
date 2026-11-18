@@ -3,7 +3,7 @@ package histos.publish
 import histos.central.Revision
 import histos.select.SelectError
 import histos.version.ShipName
-import histos.{Aggregate, Module, ProjectGraph, ProjectName, Publication}
+import histos.{Aggregate, DepLink, Module, ProjectGraph, ProjectName, Publication}
 
 /** What a publish token named. A ship wins over a module with the same text. */
 enum PublishName:
@@ -23,10 +23,11 @@ final case class Picked(
 )
 
 /** Publish names are not compile names. A ship, an aggregate, then a module. An unknown token is an error. A snapshot
-  * dependency is another ship's snapshot coordinate, or a library revision ending in `-SNAPSHOT`. A module in the same
-  * ship is that ship's own version. An assembly may depend on a module that no ship owns: that module is compiled and
-  * packed, and it is not published. A library, an application, or an sbt plugin may not. An owned module that this run
-  * did not select is still unpublished.
+  * dependency is another ship's snapshot coordinate, or a pom dependency whose revision ends in `-SNAPSHOT`.
+  * Compile-only is absent from the pom, so that snapshot does not refuse the ship. A module in the same ship is that
+  * ship's own version. An assembly may depend on a module that no ship owns: that module is compiled and packed, and it
+  * is not published. A library, an application, or an sbt plugin may not. An owned module that this run did not select
+  * is still unpublished.
   */
 object PublishSelect:
   def snapshotCoordinate(revision: String): Boolean =
@@ -244,7 +245,7 @@ object PublishSelect:
   ): Option[String] =
     module.dependencies
       .collectFirst:
-        case dep if snapshotCoordinate(dep.revision.value) =>
+        case dep if dep.link != DepLink.CompileOnly && snapshotCoordinate(dep.revision.value) =>
           s"${dep.organization}:${dep.name}:${dep.revision.value}"
       .orElse:
         upstream(module).collectFirst:
