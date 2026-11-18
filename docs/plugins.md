@@ -165,7 +165,7 @@ A published plugin coordinate in Scala is a `dep"..."` literal. The lock stores 
 
 Scaffold does not write `histos.wiring.scala`. A file with that name is not a load input, a BSP build source, or a watch root. A consumer moves coordinates off `Projects.plugins` onto the catalog, sets `resolution` there when the build should lock, and moves activation onto `services` with interface keys. Early policy stays on the strategy file, and main does not repeat it unless it means to replace the graph lock strategy. A producer marks the module `.pluginLibrary`, or passes `PluginPublication.BinaryOnly`. This repository's `histos.scala` does not do that move.
 
-## Still to prove
+## Proof
 
 The contracts above typecheck. A checked line names the command, the head, and the pull request whose CI ran it. A local re-run of an old spec does not close a line.
 
@@ -179,6 +179,8 @@ Proved on #244, head `0319ba8e`, squash `a91069ce`. CI run 44372823054, test job
 
 Proved on #246, head `dd27cb09`, squash `6e005f23`. CI run 44379976909, test job 135073537704, command `./histos test --affected '["engine","app"]'`. The engine suite passed 151, including both `PublishSelectSpec` tests.
 
+Proved on #247, head `ff08fd9c`, squash `886930da`. CI run 44395818199, test job 135129902823, command `./histos test --affected '["api","wire","client","central","engine","app","plugin-testkit"]'`. The api suite passed 31 on JVM and 31 on Native, including the duplicate service, the second `withLocks`, and the empty label. The engine suite passed 160 on JVM, including the duplicate export and the mixed provenance refusal.
+
 ### Load a plugin correctly
 
 - [x] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles. `BspMetalsSpec`, "a comment that names HistosBuild stays a build source".
@@ -186,7 +188,7 @@ Proved on #246, head `dd27cb09`, squash `6e005f23`. CI run 44379976909, test job
 - [x] A frozen load of a locked catalog does not solve. `PluginBootstrapSpec`, "a frozen miss does not solve". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
 - [x] The first run loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs. `InstalledHostProofSpec`, "A2 histos.strategies.scala runs after the core seed and before the remaining solve".
 - [x] Registration is the capability interface. An intersection key is refused. `InstalledHostProofSpec`, "A3 registration is the capability interface and an intersection key is refused".
-- [ ] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs. `BuildServicesSpec`, "a duplicate service is refused before its layer runs", "a second withLocks is refused before its layer runs", and "an empty label keeps the previous generation and surfaces the diagnosis".
+- [x] A duplicate service, a second lock replacement, and a setup failure are refused before the layer runs. `BuildServicesSpec`, "a duplicate service is refused before its layer runs", "a second withLocks is refused before its layer runs", and "an empty label keeps the previous generation and surfaces the diagnosis". `./histos test --affected '["api","wire","client","central","engine","app","plugin-testkit"]'` on `ff08fd9c` (#247), run 44395818199, test job 135129902823. The api suite passed 31 on JVM and 31 on Native.
 - [x] Helper-only drift is `BindingDrift` while the root stamp matches. `InstalledHostProofSpec`, "R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches".
 - [x] Binary-only helper drift is refused. `PluginBootstrapSpec`, "binary-only helper drift is refused". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
 - [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
@@ -197,7 +199,7 @@ Proved on #246, head `dd27cb09`, squash `6e005f23`. CI run 44379976909, test job
 ### Cache what the inputs actually are
 
 - [x] Old plugin bytes reuse their task output. New bytes change the key and the output. `InstalledHostProofSpec`, "R1 old plugin bytes reuse a stale task output and new bytes change the key and the output".
-- [ ] An empty artifact or mixed provenance does not return a stale task result. `PluginTaskIdentitySpec`, "an unverified closure is not an empty artifact list" and "mixed provenance does not return a stale task result".
+- [x] An empty artifact or mixed provenance does not return a stale task result. `PluginTaskIdentitySpec`, "an unverified closure is not an empty artifact list" and "mixed provenance does not return a stale task result". `./histos test --affected '["api","wire","client","central","engine","app","plugin-testkit"]'` on `ff08fd9c` (#247), run 44395818199, test job 135129902823.
 - [x] Replacing the host API jar misses the compile cache unless the input hash is of those bytes. `InstalledHostProofSpec`, "R3 a host-API byte change misses the compile cache".
 - [x] A second load of the same Java sources, resources, and compiler flags starts no compiler. `InstalledHostProofSpec`, "R8 settings and resources reach the compile and a second identical load starts the compiler zero times".
 - [x] `CompileInputs.remember` follows the test clock. `InstalledHostProofSpec`, "R12 CompileInputs.remember stamps the analysis with the test clock".
@@ -209,11 +211,11 @@ Proved on #246, head `dd27cb09`, squash `6e005f23`. CI run 44379976909, test job
 - [x] A publication the recipe does not support uploads nothing. `PluginPublicationSpec`, "an unknown stage refuses publication before an upload". `./histos test --affected '["engine","app"]'` on `1432671a` (#242), run 44366420546, test job 135025861460.
 - [x] A compile-only snapshot does not refuse the ship. A snapshot the POM would fetch does. `PublishSelectSpec`, "a compile-only snapshot does not refuse the ship" and "a pom snapshot dependency refuses the ship". `./histos test --affected '["engine","app"]'` on `dd27cb09` (#246), run 44379976909, test job 135073537704.
 - [x] The export manifest includes the theme and step packages. An engine reference is refused. `InstalledHostProofSpec`, "R11 theme and step are exported and an engine package is refused".
-- [ ] A duplicate export fails. `PluginBootstrapSpec`, "a duplicate export fails".
+- [x] A duplicate export fails. `PluginBootstrapSpec`, "a duplicate export fails". `./histos test --affected '["api","wire","client","central","engine","app","plugin-testkit"]'` on `ff08fd9c` (#247), run 44395818199, test job 135129902823. The engine suite passed 160 on JVM.
 - [x] A compile failure and a scheduler failure stay distinct from a task failure after bind. `InstalledHostProofSpec`, "R13 a compile failure and a scheduler failure stay distinct through bind".
 - [x] A TASTy entry-byte change changes the seal, and the consumer sees it. `InstalledHostProofSpec`, "A4 a TASTy entry-byte change changes the seal and the consumer sees it".
 
 ### A real plugin
 
-- [ ] Specular publishes `specular-histos` from the catalog and `.pluginLibrary`, with no `histos.wiring.scala`, on this histos pin. The coordinate stays `0.0.3-SNAPSHOT`.
-- [ ] Terret loads that snapshot from the catalog and runs the service or task it registers. Terret stays unlocked.
+- [x] Specular publishes `specular-histos` from the catalog and `.pluginLibrary`, with no `histos.wiring.scala`, on this histos pin. The coordinate stays `0.0.3-SNAPSHOT`. `./histos publish snapshots specular-histos` from `782bbef` published `0.0.3-782bbef123b1-SNAPSHOT`. PR #148, squash `8929e31`. CI run 44396544143, test job 135129024981, command `./histos test --affected '["all"]'`.
+- [x] Terret loads that snapshot from the catalog and runs `site`. `./histos graph` printed the plugin and `command site`. `./histos site` printed `built the docs site` and wrote `target/site/index.html`. Head `ef4bf86`, PR #12, squash `ea4d89c`. Catalog resolution stays `Lock`, and main stays locked. CI run 44396547252, test job 135128809435, command `./histos test --affected '["all"]'`.
