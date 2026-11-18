@@ -1,8 +1,52 @@
 # Writing a plugin
 
-These contracts are the ones the compiler fixtures typecheck. The assembled-host proof is recorded in [plugin-architecture-work-plan.md](plugin-architecture-work-plan.md). `histos.version` in `build.properties` is `0.5.0-a67fddcd62fb-SNAPSHOT`, the assembled host packed from `a67fddc`. This repository's `histos.scala` declares no plugins.
+Compile, package, and link are expensive. A result that is wrong, or a skip that hides a real change, is a failure even when the command was fast. Histos does that work only when the code it depends on changed. A plugin is how a build grows a capability without putting that capability in the histos binary.
 
-A plugin is a constructor-injected ZIO service. A coordinate makes its types available. It does not install a service or a task. The registration key is the capability interface. A task is a separate `HistosPlugin` activation, even when it is the same class.
+That capability has to install itself honestly: the right classes, the right host compiler, a rebuild when the host moves, and a cache that misses when the inputs changed. Specular is the producer this is aimed at. It turns a Scala test into a documentation site. Terret, and any other library, takes that as a dependency.
+
+The previous shape could not do that. The build named plugins on the graph, and `histos.wiring.scala` installed them after main had already been compiled, so main could not see the plugin's types. A coordinate on the classpath was treated as the plugin being on. A published jar was a binary bound to the histos that compiled it. When the host API moved, that binary was a guess. The cache keyed on the wrong bytes, so a skip could hide a stamp, a generated source, or a swapped host API. Failures came out as strings.
+
+## The strategy
+
+Three files, and most builds use two.
+
+`histos.plugins.scala` is read before any plugin exists. It names coordinates, resolvers, and whether the build locks. It imports no plugin class. The host can prepare plugin classes because the request for them does not depend on them.
+
+`histos.scala` is the build. Once the classes exist, `services` turns a capability on by its interface. A task is a separate activation, and only when the plugin has a command. A coordinate does not install a service. Registering a concrete class, or registering the same interface twice, is refused before the layer runs.
+
+`histos.strategies.scala` is optional. It exists when the policy that loads the remaining plugins is itself a plugin. It runs after a small core seed and before the rest. An ordinary consumer never writes it. There is no required wiring file.
+
+Lock intent lives on the catalog, before plugins load. Main inherits it. A main file that picks a different resolution is refused. A lock file on disk does not decide.
+
+A service is a constructor-injected ZLayer. Its setup error is a typed enum. A resource scoped to the generation outlives one task and ends when that generation ends. The host owns the Scala, ZIO, and compiler identity. The plugin sees the exported API. It does not reach into the engine.
+
+Publication defaults to a rebuildable bundle: sources, generated sources, resources, flags, compile-only inputs, and the helper closure. The jar records the host API it was built against. An exact match uses the published binary. Drift recompiles that bundle against this host and caches the result. Frozen CI does that from the pinned inputs and does not solve. Binary-only is explicit: binding metadata, no recipe, and drift is a refusal.
+
+## Why this wins
+
+The host can compile a build that uses a plugin, because the request for the plugin does not import the plugin.
+
+Turning a capability on is a typed line in the build, keyed by the interface the consumer programs against. Two plugins that claim that interface fail before either layer runs. A classpath entry cannot become behavior on its own.
+
+A host upgrade does not strand the plugin and does not replay the producer's build. The recipe is the inputs. The host compiler is the compiler. The cache key is those bytes, so a skip means those bytes did not change.
+
+Frozen CI stays frozen. A locked build keeps its snapshot bytes until someone asks to refresh. An unlocked build solves.
+
+## How a producer uses it
+
+The plugin is a normal JVM module. It depends on `histos-api` as `compileOnly`. Its public capability is a trait. The implementation is a ZLayer. The module is marked `.pluginLibrary`, which publishes the rebuildable bundle bound to the host API that compiled it. A helper is an ordinary module the plugin `dependsOn`. Compile-only dependencies stay off the consumer POM.
+
+The producer build's catalog names that module. Its `services` registers the layer by the trait. There is no `histos.wiring.scala`. Publishing is `./histos publish snapshots` of that module. The consumer does not need the producer's repository.
+
+## How a consumer uses it
+
+The catalog names the published coordinate. That line does not import the plugin. Lock intent, when the build wants a lock, is set on the catalog and the graph inherits it. An unlocked build keeps solving.
+
+`histos.scala` imports the trait and turns the service on with the consumer's own configuration. That is the file that imports the plugin. `histos run <plugin>/<task>` runs a command when the plugin has one. A service with no command does not need a dummy task.
+
+On an exact host match, the consumer runs the published binary. When the host API has moved, Histos recompiles the published sources against the consumer's host and caches that compile.
+
+The sections below are the contracts. The compiler fixtures they name are the examples. This repository's `histos.scala` declares no plugins.
 
 ## Files
 
@@ -116,3 +160,39 @@ A published plugin coordinate in Scala is a `dep"..."` literal. The lock stores 
 ## Migration
 
 Scaffold does not write `histos.wiring.scala`. A file with that name is not a load input, a BSP build source, or a watch root. A consumer moves coordinates off `Projects.plugins` onto the catalog, sets `resolution` there when the build should lock, and moves activation onto `services` with interface keys. Early policy stays on the strategy file, and main does not repeat it unless it means to replace the graph lock strategy. A producer marks the module `.pluginLibrary`, or passes `PluginPublication.BinaryOnly`. This repository's `histos.scala` does not do that move.
+
+## Still to prove
+
+The contracts above typecheck. The behaviors below do not yet have a recorded run on a merged head. The pull request that proves one writes the command, the head SHA, and the pull request number on that line. A local re-run of an old spec does not close it.
+
+Already proven on `0.5.0-36642bcc3ec5-SNAPSHOT`, packed from `36642bcc`. CI run 44338066046 on `09ccb7e` (#240), squash `e96c5d32`: consent on the installed jar, the native client host task, the version line against the pin, the compiler payload staying out of the project lock, and a lone `histos.wiring.scala` not being compiled. `Ship.next` is still 0.5.0. Nothing has been released. The pointer `0.5.0-SNAPSHOT` is not this pin.
+
+### Load a plugin correctly
+
+- [ ] BSP does not treat a source file as the host build because its text contains `trait HistosBuild`. A comment with that text still compiles.
+- [ ] Main inherits the catalog resolution. A conflicting main selection is refused. A frozen load of a locked catalog does not solve.
+- [ ] The first run, with no cache, loads `histos.strategies.scala` after the core seed and before the other plugins, and that policy runs.
+- [ ] Registration is the capability interface. A duplicate, a second lock replacement, a setup failure, and a generation-scoped resource follow the rules in Services and Tasks.
+- [ ] A helper and a binary-only publication are checked for the whole closure. Helper-only drift rebuilds when the publication carries sources, and is refused when it is binary-only.
+- [ ] A local plugin compile sees the external jars that module resolved.
+- [ ] A service built for the generation stays alive through the task and is released when that generation ends.
+
+### Cache what the inputs actually are
+
+- [ ] Old plugin bytes, an empty artifact, or mixed provenance do not return a stale task result. A change of bytes, body, arguments, or a service input gets a new key and the new output.
+- [ ] Replacing the host API jar misses the compile cache unless the input hash is of those bytes.
+- [ ] A second load of the same Java sources, resources, and compiler flags starts no compiler.
+- [ ] `CompileInputs.remember` follows the test clock.
+
+### Publish a recipe a consumer can rebuild
+
+- [ ] The package key changes when the only difference is the API stamp bytes a local publish injects.
+- [ ] The published source jar includes generated replacements. The recipe includes compile-only inputs, resources, and flags. A publication the recipe does not support uploads nothing.
+- [ ] The export manifest includes the theme and step packages. An engine reference and a duplicate fail.
+- [ ] A compile failure and a scheduler failure stay distinct from a task failure after bind.
+- [ ] The assembled recipe covers TASTy direction, the closure, and a rebuild from the published inputs.
+
+### A real plugin
+
+- [ ] Specular publishes `specular-histos` from the catalog and `.pluginLibrary`, with no `histos.wiring.scala`, on this histos pin. The coordinate stays `0.0.3-SNAPSHOT`.
+- [ ] Terret loads that snapshot from the catalog and runs the service or task it registers. Terret stays unlocked.
