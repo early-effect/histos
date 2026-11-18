@@ -89,6 +89,19 @@ object ShimSpec extends ZIOSpecDefault:
         yield assertTrue(copied.installed == copied.staged, !copied.log.contains("coursier"))
       }
     },
+    test("a one-argument install does not read an unset client flag") {
+      ZIO.scoped {
+        for
+          runner <- oneArg(ci = true)
+          local  <- oneArg(ci = false)
+        yield assertTrue(
+          runner.ran,
+          !runner.kit,
+          local.ran,
+          local.kit,
+        )
+      }
+    },
   )
 
   private def kind(root: Path, text: String): ZIO[Any, java.io.IOException, String] =
@@ -129,6 +142,92 @@ object ShimSpec extends ZIOSpecDefault:
   private final case class RunnerInstall(log: String, kit: Boolean)
 
   private final case class IvyCopy(installed: Chunk[Byte], staged: Chunk[Byte], log: String)
+
+  private final case class OneArg(ran: Boolean, kit: Boolean)
+
+  /** A normal command installs a missing toolchain with one argument. `CI` decides the kit. */
+  private def oneArg(ci: Boolean): ZIO[Scope, java.io.IOException, OneArg] =
+    val jarBytes = "staged-ivy-jar".getBytes(StandardCharsets.UTF_8)
+    val kitBytes = "kit".getBytes(StandardCharsets.UTF_8)
+    val org      = "rocks.earlyeffect"
+    val module   = "histos"
+    script match
+      case Left(message) => ZIO.fail(new java.io.IOException(message))
+      case Right(file)   =>
+        for
+          root <- Workspace.work("histos-shim-one-arg").orDieWith(error => new java.io.IOException(error.message))
+          bin    = root.resolve("bin")
+          home   = root.resolve("home")
+          assets = root.resolve("assets")
+          ivy    = root.resolve("ivy")
+          staged = ivy.resolve(org).resolve(module).resolve(installVersion).resolve("jars").resolve(s"$module.jar")
+          tool   = home.resolve("toolchains").resolve(installVersion)
+          log    = root.resolve("java.log")
+          _      <- write(root.resolve("build.properties"), s"histos.version=$installVersion\n")
+          _      <- write(staged, jarBytes)
+          _      <- write(assets.resolve("client-kit.zip"), kitBytes)
+          _      <- write(assets.resolve("manifest.json"), oneArgManifest(org, module, digest(kitBytes)))
+          _      <- write(bin.resolve("java"), javaStub)
+          _      <- executable(bin.resolve("java"))
+          _      <- runOneArg(file, root, bin, home, assets, ivy, log, ci)
+          result <- ZIO.attemptBlocking {
+            val recorded = if Files.isRegularFile(log) then Files.readString(log) else ""
+            val placed   = Files.isRegularFile(tool.resolve("client-kit.zip"))
+            OneArg(recorded.contains("version"), placed)
+          }.orDie
+        yield result
+
+  private def oneArgManifest(org: String, module: String, kitSha: String): String =
+    s"""{
+       |  "version": "$installVersion",
+       |  "group": "$org",
+       |  "artifact": "$module",
+       |  "revision": "$installVersion",
+       |  "ivyOrganisation": "$org",
+       |  "ivyModule": "$module",
+       |  "ivyRevision": "$installVersion",
+       |  "clientKit": "client-kit.zip",
+       |  "clientKitSha256": "$kitSha"
+       |}
+       |""".stripMargin
+
+  private def runOneArg(
+      shim: Path,
+      root: Path,
+      bin: Path,
+      home: Path,
+      assets: Path,
+      ivy: Path,
+      log: Path,
+      ci: Boolean,
+  ): ZIO[Any, java.io.IOException, Unit] =
+    ZIO
+      .attemptBlocking {
+        val builder = new ProcessBuilder(shim.toString, "version")
+        builder.directory(root.toFile)
+        builder.redirectErrorStream(true)
+        val env = builder.environment()
+        env.put("CI", if ci then "true" else "false")
+        env.put("HISTOS_HOME", home.toString)
+        env.put("HISTOS_ASSETS", assets.toString)
+        env.put("HISTOS_IVY", ivy.toString)
+        env.put("JAVA_LOG", log.toString)
+        val inherited = Option(env.get("PATH")).getOrElse("")
+        env.put("PATH", bin.toString + java.io.File.pathSeparator + inherited)
+        val process  = builder.start()
+        val finished = process.waitFor(30, TimeUnit.SECONDS)
+        val out      = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+        if !finished then
+          process.destroyForcibly()
+          throw new java.io.IOException(s"shim timed out: $out")
+        val code = process.exitValue()
+        if code != 0 then throw new java.io.IOException(s"shim exited $code: $out")
+      }
+      .mapError {
+        case error: java.io.IOException => error
+        case error                      => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString))
+      }
+      .unit
 
   /** Seeds a dist toolchain and a kit under `HISTOS_ASSETS`. `CI` is set. `HISTOS_CLIENT=on` must not link. */
   private def runnerInstall(
