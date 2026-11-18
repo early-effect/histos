@@ -51,7 +51,7 @@ These strings do not compile. They are `typeChecks` fixtures in [BuildServicesSp
 
 The loader also refuses a late main override: `a late main withPluginLoading is refused`.
 
-The `ReviewedLocksSpec` fence in the architecture doc is not a compiler fixture. The compiled kit use is [PluginHarnessSpec.scala](../plugin-testkit/test/histos/plugin/testkit/PluginHarnessSpec.scala). The lock-repair transcript in the architecture doc is not a file in this tree.
+The reviewed-locks spec is [ReviewedLocksSpec.scala](../examples/reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala). `PluginBootstrapSpec` compiles it. The lock-repair transcript is [expected-lock-repair.txt](../examples/expected-lock-repair.txt). The compiled kit use is [PluginHarnessSpec.scala](../plugin-testkit/test/histos/plugin/testkit/PluginHarnessSpec.scala).
 
 ## Services
 

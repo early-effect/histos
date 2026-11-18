@@ -9,6 +9,7 @@ import histos.plugin.{
   Digests,
   GenerationId,
   InvocationId,
+  LinkStrategy,
   LockRevision,
   PluginDetail,
   PluginDetailError,
@@ -18,7 +19,7 @@ import histos.plugin.{
   ResolveVerb,
   Tokens,
 }
-import histos.{ProjectName, Resolution}
+import histos.{Dep, ProjectName, Resolution}
 
 import java.nio.charset.StandardCharsets
 
@@ -84,7 +85,11 @@ object LockDocument:
     if lines.isEmpty then "" else lines.mkString("\n") + "\n"
 
   def renderPin(pin: VersionedPin): String =
-    val head = s"pin ${pin.coordinate.render} ${LockCodec.subject(pin.subject)} ${pin.digest.value}"
+    val head = pin.coordinate match
+      case histos.plugin.PluginCoordinate.Published(_, link) =>
+        s"pin ${pin.coordinate.render} ${LinkToken.render(link)} ${LockCodec.subject(pin.subject)} ${pin.digest.value}"
+      case histos.plugin.PluginCoordinate.Module(_) =>
+        s"pin ${pin.coordinate.render} ${LockCodec.subject(pin.subject)} ${pin.digest.value}"
     pin.locator match
       case None          => head
       case Some(locator) => s"$head at ${locator.name.value} ${locator.digest.value}"
@@ -219,6 +224,12 @@ object LockDocument:
 
   private def parseLine(line: String, number: Int): Either[LockTextError, Acc => Acc] =
     line.split(" ", -1).toList match
+      // A colon marks a Dep literal. A module name has none, so the old pin line stays a module.
+      case "pin" :: coordinate :: link :: subject :: digest :: Nil if coordinate.contains(':') =>
+        publishedPin(coordinate, link, subject, digest, None, number)
+      case "pin" :: coordinate :: link :: subject :: digest :: "at" :: locator :: locatorDigest :: Nil
+          if coordinate.contains(':') =>
+        publishedPin(coordinate, link, subject, digest, Some(locator -> locatorDigest), number)
       case "pin" :: module :: subject :: digest :: Nil =>
         for
           name <- moduleName(module, number)
@@ -248,6 +259,39 @@ object LockDocument:
           hash    <- contentAt(digest, number)
         yield acc => acc.copy(retained = SnapshotLocator(located, hash) :: acc.retained)
       case _ => Left(LockTextError.BadLine(number))
+
+  private def publishedPin(
+      coordinate: String,
+      link: String,
+      subject: String,
+      digest: String,
+      locator: Option[(String, String)],
+      number: Int,
+  ): Either[LockTextError, Acc => Acc] =
+    for
+      dependency <- Dep.from(coordinate).left.map(_ => LockTextError.BadLine(number))
+      strategy   <- pinLink(link, number)
+      kind       <- LockCodec.parseSubject(subject).toRight(LockTextError.BadLine(number))
+      hash       <- contentAt(digest, number)
+      located    <- locator match
+        case None                => Right(None)
+        case Some(name -> bytes) =>
+          for
+            parsed  <- locatorAt(name, number)
+            located <- contentAt(bytes, number)
+          yield Some(SnapshotLocator(parsed, located))
+    yield acc =>
+      acc.copy(pins =
+        VersionedPin(histos.plugin.PluginCoordinate.Published(dependency, strategy), kind, hash, located) :: acc.pins
+      )
+
+  private def pinLink(raw: String, number: Int): Either[LockTextError, LinkStrategy] =
+    raw match
+      case "exact-binary"     => Right(LinkStrategy.ExactBinary)
+      case "source"           => Right(LinkStrategy.Source)
+      case "binary-or-source" => Right(LinkStrategy.BinaryOrSource)
+      case "api"              => Left(LockTextError.Bad(PluginDetail("api is not a pin link")))
+      case _                  => Left(LockTextError.BadLine(number))
 
   private def moduleName(raw: String, number: Int): Either[LockTextError, ProjectName] =
     ProjectName.from(raw).left.map(_ => LockTextError.BadLine(number))

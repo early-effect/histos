@@ -243,7 +243,7 @@ P1 also makes the necessary caller/result-shape adaptations so these contracts c
 
 ### Author-Facing Examples
 
-Fences use portable Scala and text Markdown. The nine Scala fences from the locked catalog through the producer build are the strings `PluginBootstrapSpec` compiles in `the spec author fixtures compile`. [plugins.md](plugins.md) links to those strings and does not copy them. The `ReviewedLocksSpec` fence and the lock-repair transcript are still proposed text. They are not compiler fixtures, and the transcript is not a tracked file. They were not added. The landed `add` method is `inline def add[A](using Tag[A])`. The call sites in those strings are unchanged. Assembled-host proof is in the work plan. Open ledger rows stay proposed.
+Fences use portable Scala and text Markdown. The nine Scala fences from the locked catalog through the producer build are the strings `PluginBootstrapSpec` compiles in `the spec author fixtures compile`. [plugins.md](plugins.md) links to those strings and does not copy them. `ReviewedLocksSpec` is `examples/reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala`. `PluginBootstrapSpec` compiles that file with `ReviewedLocks.scala` and `LockHarness`. The lock-repair transcript is `examples/expected-lock-repair.txt`. The landed `add` method is `inline def add[A](using Tag[A])`. The call sites in those strings are unchanged. Assembled-host proof is in the work plan. Open ledger rows stay proposed.
 
 #### Normal locked consumer: two files
 
@@ -723,7 +723,7 @@ Common `InvocationEnvelope(context, call)` wraps existing Call. Structured `Lock
 
 Expected local output uses complete structured diff; this abbreviated transcript names its shape:
 
-Planned transcript: `examples/expected-lock-repair.txt`.
+The transcript file is `examples/expected-lock-repair.txt`.
 
 ```text
 Lock repair required: app compile/test and module-tools plugin closure
@@ -801,7 +801,7 @@ A small `plugin-testkit` module depends on existing API/ZIO, not production engi
 
 Proposed pure `LockHarness.missingLock(execution: ExecutionKind): LockContext` supplies an explicit locked Graph/Discovery fixture with absent revision and stable fixture command/declarations. Scoped task helpers provide real nested scopes and record finalizers. The fixture below depends on the local kit module during implementation; a published kit is a test-only dependency matched to the producing host, never automatically added to plugin production dependencies.
 
-Planned producer test fixture: `reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala`.
+The producer test is `examples/reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala`. `PluginBootstrapSpec` compiles it with `ReviewedLocks.scala` and `LockHarness`.
 
 ```scala
 package com.example.reviewed
@@ -822,6 +822,7 @@ object ReviewedLocksSpec extends ZIOSpecDefault:
   )
 
   def spec = decisions
+end ReviewedLocksSpec
 ```
 
 | Risk | Sufficient proof and owner |
