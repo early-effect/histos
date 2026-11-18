@@ -85,6 +85,8 @@ The local catalog names a helper with `dependsOn` and one external library. The 
 
 A resolver on the catalog is where that module's libraries are resolved. Main is compiled after the module, so a resolver written only on the graph is too late. `PluginResolvers.Central` is Central. A listed set is that set, with Central last when the author names it. The proof is `a catalog resolver reaches a local plugin dependency` in `PluginBootstrapSpec`.
 
+A resolved `scala-library` or `scala3-library` is dropped from that classpath. The compiler already supplies the runtime inside the assembly, and a second copy is a different `scala` package. The proof is `a resolved standard library is not a second copy beside the assembly` in `PluginBootstrapSpec`.
+
 These strings do not compile. They are `typeChecks` fixtures in [BuildServicesSpec.scala](../api/test/histos/plugin/BuildServicesSpec.scala):
 
 | Refusal | Fixture | Boundary that does compile |
@@ -183,6 +185,7 @@ Proved on #241, head `a363b38`, squash `6c0100d2`. CI run 44354664859, test job 
 - [ ] Binary-only helper drift is refused.
 - [x] A local plugin compile sees the external jars that module resolved. `InstalledHostProofSpec`, "R7 a local plugin compile sees its external jar".
 - [ ] A resolver declared on the catalog is where a local plugin module resolves its libraries. `PluginBootstrapSpec`, "a catalog resolver reaches a local plugin dependency".
+- [ ] A resolved standard library is not a second copy beside the assembly. `PluginBootstrapSpec`, "a resolved standard library is not a second copy beside the assembly".
 - [x] A service built for the generation stays alive through the task and is released when that generation ends. `InstalledHostProofSpec`, "R10 a generation service is alive for the task and closed after the last lease".
 
 ### Cache what the inputs actually are

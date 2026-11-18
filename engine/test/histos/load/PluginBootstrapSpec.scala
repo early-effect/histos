@@ -142,6 +142,23 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         yield urls
       }.map(ran => assertTrue(ran.value.contains("maven:https://snapshots.example.test/maven")))
     },
+    test("a resolved standard library is not a second copy beside the assembly") {
+      hosted { (root, _) =>
+        for
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          jar      <- externalJar(root.resolve("ext.jar"), boundary.filterNot(_ == api))
+          stdlib   <- stdlibJar(root.resolve("scala3-library_3-3.3.8.jar"))
+          _        <- write(root.resolve("histos.plugins.scala"), resolverCatalog)
+          _        <- write(root.resolve("helper/src/Noted.scala"), "object Noted\n")
+          _        <- write(root.resolve("histos.scala"), plainMain)
+          loaded   <- prepare(root, api, extraResolve(jar, stdlib))
+          found = urls(loaded.build).map(path => Option(path.getFileName).map(_.toString).getOrElse(""))
+        yield found
+      }.map(ran =>
+        assertTrue(ran.value.exists(_.startsWith("ext")), !ran.value.exists(_.startsWith("scala3-library_")))
+      )
+    },
     test("a local module and an external jar load") {
       hosted { (root, _) =>
         for
@@ -895,6 +912,30 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         ZIO.dieMessage("resolvePlugin")
       def sources(organization: String, name: String, revision: String, repository: Repository) =
         ZIO.dieMessage("sources")
+
+  private def extraResolve(path: Path, extra: Path): Resolve =
+    new Resolve:
+      def resolveTool(request: histos.resolve.ToolRequest) = ZIO.dieMessage("resolveTool")
+      def resolve(cell: histos.resolve.ResolveCell)        =
+        cell.dependencies match
+          case dependency :: _ =>
+            ZIO.succeed(Classpath(List(artifact(dependency, path), artifact(dependency, extra)), Nil))
+          case Nil =>
+            ZIO.dieMessage("resolve")
+      def fetch(artifact: histos.resolve.LockedArtifact)                            = ZIO.dieMessage("fetch")
+      def resolvePlugin(dependency: Dep, repositories: histos.resolve.Repositories) =
+        ZIO.dieMessage("resolvePlugin")
+      def sources(organization: String, name: String, revision: String, repository: Repository) =
+        ZIO.dieMessage("sources")
+
+  private def stdlibJar(path: Path): UIO[Path] =
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try writeEntry(out, "histos/HistosBuild.class", Array[Byte](9, 9, 9))
+      finally out.close()
+      path
+    }.orDie
 
   private def extResolve(path: Path): Resolve =
     new Resolve:

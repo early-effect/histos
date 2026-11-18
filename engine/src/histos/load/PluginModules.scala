@@ -212,7 +212,8 @@ private[load] object PluginModules:
     yield ()
 
   /** A catalog module's libraries use that graph's repositories. Main is compiled after this, so its resolvers are not
-    * this classpath. An empty declaration stays Central.
+    * this classpath. An empty declaration stays Central. A resolved `scala-library` or `scala3-library` is dropped: the
+    * compiler already supplies that runtime, and a second copy disagrees with the assembly.
     */
   private def externals(
       module: Module,
@@ -232,7 +233,12 @@ private[load] object PluginModules:
           repositories,
           ClasspathScope.Compile,
         )
-        service.resolve(cell).mapBoth(LoadError.Resolve(_), _.artifacts.map(_.path))
+        service
+          .resolve(cell)
+          .mapBoth(
+            LoadError.Resolve(_),
+            found => found.artifacts.map(_.path).filterNot(histos.zinc.JvmCompile.isStandardLibrary),
+          )
 
   private def copyResources(base: Path, out: Path): IO[LoadError, Unit] =
     val resources = base.resolve("main").resolve("resources")
