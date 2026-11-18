@@ -545,6 +545,15 @@ object Calls:
               error => fault(say, BuildFault.Task(error)),
               result => told(say, result.render) *> ok(say),
             )
+      case Right(found) if found == TaskId.Host =>
+        if args != PluginArgs.empty then reject(say, Rejection.TaskArguments(found.value))
+        else
+          HostTask
+            .fromRepo(repo, machine)
+            .foldZIO(
+              error => fault(say, BuildFault.Task(error)),
+              result => told(say, result.render) *> ok(say),
+            )
       case Right(_) =>
         PluginTaskId.parse(id) match
           case Left(error)   => fault(say, BuildFault.PluginTask(error))
@@ -597,7 +606,10 @@ object Calls:
       case Some(mode) => ZIO.fail(LockDisposition.refused(mode))
       case None       => resolveBody(repo, apiJar, action, native, desk, caller, lock)
 
-  /** Re-read retained snapshot locators through the session desk. No selector is every retained locator. */
+  /** Re-read retained snapshot locators through the session desk. No selector is every retained locator. An absent mode
+    * is the desk strategy, so the caller's execution kind chooses offer or frozen. An unattended offer is consent, not
+    * a successful write.
+    */
   private[histos] def refresh(
       desk: ConsentDesk,
       repo: Path,
@@ -605,21 +617,18 @@ object Calls:
       lock: Option[LockMode],
       caller: Option[InvocationContext],
   ): IO[ResolveError, String] =
-    val mode = lock match
-      case Some(chosen) => chosen
-      case None         => LockMode.Offer
     val request = PrepareRequest(
       refreshContext(caller, selectors),
       ResolutionIntent.Inherit,
       PluginEvents.closedInvocation,
-      Some(mode),
+      lock,
       refresh = true,
     )
     val path = repo.resolve("dependencies.lock")
     for
       before  <- readLockText(path)
       outcome <- desk.prepare(request).mapError(refreshFailure)
-      text    <- refreshText(outcome, before, path)
+      text    <- refreshText(outcome, before, path, request.context.interaction)
     yield text
 
   private def resolveBody(
@@ -695,12 +704,21 @@ object Calls:
           OfflineSelection.Online,
         )
 
-  private def refreshText(outcome: PrepareOutcome, before: String, path: Path): IO[ResolveError, String] =
+  private def refreshText(
+      outcome: PrepareOutcome,
+      before: String,
+      path: Path,
+      interaction: Interaction,
+  ): IO[ResolveError, String] =
     outcome match
       case PrepareOutcome.Selected(_) =>
         ZIO.succeed("no locator changed\nNo lock write.")
       case PrepareOutcome.Offered(offer) =>
-        ZIO.succeed(s"snapshot refresh offered ${offer.proposal.value}\nNo lock write.")
+        interaction match
+          case Interaction.Unattended =>
+            ZIO.fail(ResolveError.Transaction(LockTransactionError.ConsentRequired(offer.proposal)))
+          case Interaction.Offers =>
+            ZIO.succeed(s"snapshot refresh offered ${offer.proposal.value}\nNo lock write.")
       case PrepareOutcome.Committed(_, _) =>
         readLockText(path).map: after =>
           val names = changedLocators(before, after)

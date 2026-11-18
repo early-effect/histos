@@ -2,7 +2,7 @@ package histos.client
 
 import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{PluginArgs, PluginTaskId}
-import histos.server.{Call, CleanExtent}
+import histos.server.{Call, CleanExtent, ResolveAction}
 import histos.task.TaskId
 import histos.testrun.TestMode
 import histos.{Platform, ProjectName}
@@ -33,7 +33,9 @@ object Batch:
       case "fmt" :: "--check" :: rest =>
         projects(rest).map(names => Parsed.Ready(Call.Format(targets(names), FormatMode.Check)))
       case "fmt" :: rest => projects(rest).map(names => Parsed.Ready(Call.Format(targets(names), FormatMode.Write)))
-      case _             => None
+      case "resolve" :: "--refresh" :: rest =>
+        projects(rest).map(names => Parsed.Ready(Call.Resolve(ResolveAction.Refresh(names))))
+      case _ => None
 
   private def splitDash(args: List[String]): (List[String], List[String]) =
     def loop(seen: List[String], rest: List[String]): (List[String], List[String]) =

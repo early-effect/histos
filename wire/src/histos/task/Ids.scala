@@ -16,6 +16,7 @@ object TaskId:
   val Inspect: TaskId  = "inspect"
   val Versions: TaskId = "versions"
   val Doc: TaskId      = "doc"
+  val Host: TaskId     = "host"
 
   given CanEqual[TaskId, TaskId] = CanEqual.derived
 
@@ -25,9 +26,9 @@ object TaskId:
   extension (id: TaskId)
     def value: String = id
 
-    /** `inspect`, `versions`, and `doc` are tasks. A platform after the name is a module main. */
+    /** `inspect`, `versions`, `doc`, and `host` are tasks. A platform after the name is a module main. */
     def builtIn: Boolean =
-      id == Inspect || id == Versions || id == Doc
+      id == Inspect || id == Versions || id == Doc || id == Host
   end extension
 end TaskId
 
@@ -71,6 +72,7 @@ enum TaskError:
   case Plugin(error: PluginRunError)
   case Fault(error: PluginFault)
   case Doc(lines: NonEmptyChunk[String])
+  case Host(proof: HostProof)
 
   def message: String = this match
     case EmptyId        => "a task id is not empty"
@@ -80,10 +82,13 @@ enum TaskError:
     case Plugin(error)  => error.message
     case Fault(error)   => error.message
     case Doc(lines)     => lines.mkString("\n")
+    case Host(proof)    => proof.message
 
   def diagnose: Diagnostic = this match
     case UnknownRun(id) =>
       Noted.carry("run.unknown", message, s"No live run is named ${id.value}.", "histos help cancel")
+    case Host(proof) =>
+      Noted.carry("task.host", proof.message, proof.message, "histos run host")
     case other =>
       Noted.carry("task.failed", other.message, other.message, "histos help run")
 end TaskError

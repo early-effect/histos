@@ -11,12 +11,14 @@ enum TaskResult:
   case Versions(decision: Decision)
   case Plugin(output: PluginOutput)
   case Doc
+  case Host
 
   def render: String = this match
     case Inspect(projects)  => projects.map(_.value).mkString(",")
     case Versions(decision) => Decision.text(decision)
     case Plugin(output)     => output.text
     case Doc                => "scaladoc"
+    case Host               => "host"
 end TaskResult
 
 /** A started run. `await` is interrupted when the run is cancelled. */

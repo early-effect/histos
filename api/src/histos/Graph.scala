@@ -153,6 +153,8 @@ final case class ProjectGraph private (
     ciSetup: CiSetup = CiSetup.Remote,
     theme: Theme = Theme.standard,
     intent: ResolutionIntent = ResolutionIntent.Inherit,
+    verify: List[VerifyTask] = Nil,
+    suiteHost: SuiteHost = SuiteHost.Pin,
 ):
   /** Width of the longest project name. Compile and test lines pad the name to it. */
   val moduleColumn: Int =
@@ -226,6 +228,8 @@ object ProjectGraph:
       ciSetup: CiSetup = CiSetup.Remote,
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
+      verify: List[VerifyTask] = Nil,
+      suiteHost: SuiteHost = SuiteHost.Pin,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -250,6 +254,8 @@ object ProjectGraph:
       ciSetup,
       theme,
       intent,
+      verify,
+      suiteHost,
     )
 end ProjectGraph
 
@@ -285,6 +291,12 @@ object Projects:
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
   def docCheck: Organized = Organized.empty.docCheck
+
+  /** Appends one task the verify section runs. A second call appends. */
+  def verify(task: VerifyTask): Organized = Organized.empty.verify(task)
+
+  /** Test, scaladoc, format, and verify install Histos from `./histos publish local`. */
+  def publishLocalSuite: Organized = Organized.empty.publishLocalSuite
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
@@ -429,6 +441,8 @@ object Projects:
             settings.ciSetup,
             settings.theme,
             settings.intent,
+            settings.verify,
+            settings.suiteHost,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -991,6 +1005,14 @@ final class Organized private (settings: Organized.Settings):
     */
   def docCheck: Organized = Organized(settings.copy(docCheck = DocCheck.On))
 
+  /** Appends one task the verify section runs. A second call appends. It does not replace the list. */
+  def verify(task: VerifyTask): Organized =
+    Organized(settings.copy(verify = settings.verify :+ task))
+
+  /** Test, scaladoc, format, and verify install Histos from `./histos publish local`. A second call stays local. */
+  def publishLocalSuite: Organized =
+    Organized(settings.copy(suiteHost = SuiteHost.Local))
+
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
@@ -1124,6 +1146,8 @@ object Organized:
       ciSetup: CiSetup = CiSetup.Remote,
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
+      verify: List[VerifyTask] = Nil,
+      suiteHost: SuiteHost = SuiteHost.Pin,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())
