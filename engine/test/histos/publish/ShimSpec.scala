@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.Workspace
 
 import java.nio.charset.StandardCharsets
@@ -8,7 +8,7 @@ import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 
-import zio.ZIO
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
 object ShimSpec extends ZIOSpecDefault:
@@ -62,6 +62,25 @@ object ShimSpec extends ZIOSpecDefault:
           )
       }
     },
+    test("a runner links only when install asks for the client") {
+      ZIO.scoped {
+        for
+          asked <- runnerInstall(client = true)
+          plain <- runnerInstall(client = false)
+        yield assertTrue(
+          asked.log.contains("toolchain client"),
+          asked.kit,
+          !plain.log.contains("toolchain client"),
+          !plain.kit,
+        )
+      }
+    },
+    test("a local asset manifest copies the staged ivy jar") {
+      ZIO.scoped {
+        for copied <- ivyAssetInstall
+        yield assertTrue(copied.installed == copied.staged, !copied.log.contains("coursier"))
+      }
+    },
   )
 
   private def kind(root: Path, text: String): ZIO[Any, java.io.IOException, String] =
@@ -98,6 +117,159 @@ object ShimSpec extends ZIOSpecDefault:
         case None         => None
 
   private val installVersion = "0.5.0-test-SNAPSHOT"
+
+  private final case class RunnerInstall(log: String, kit: Boolean)
+
+  private final case class IvyCopy(installed: Chunk[Byte], staged: Chunk[Byte], log: String)
+
+  /** Seeds a dist toolchain and a kit under `HISTOS_ASSETS`. `CI` is set. `HISTOS_CLIENT=on` must not link. */
+  private def runnerInstall(client: Boolean): ZIO[Scope, java.io.IOException, RunnerInstall] =
+    val jarBytes = "jar".getBytes(StandardCharsets.UTF_8)
+    val kitBytes = "kit".getBytes(StandardCharsets.UTF_8)
+    val manifest = distInstallManifest(digest(jarBytes), digest(kitBytes))
+    script match
+      case Left(message) => ZIO.fail(new java.io.IOException(message))
+      case Right(file)   =>
+        for
+          root <- Workspace.work("histos-shim-client").orDieWith(error => new java.io.IOException(error.message))
+          bin    = root.resolve("bin")
+          home   = root.resolve("home")
+          assets = root.resolve("assets")
+          tool   = home.resolve("toolchains").resolve(installVersion)
+          log    = root.resolve("java.log")
+          _ <- write(bin.resolve("java"), javaStub)
+          _ <- write(tool.resolve("histos.jar"), jarBytes)
+          _ <- write(tool.resolve("manifest.json"), manifest.getBytes(StandardCharsets.UTF_8))
+          _ <- write(assets.resolve("client-kit.zip"), kitBytes)
+          _ <- write(assets.resolve("manifest.json"), manifest.getBytes(StandardCharsets.UTF_8))
+          _ <- executable(bin.resolve("java"))
+          args =
+            if client then List("toolchain", "install", "--client", installVersion)
+            else List("toolchain", "install", installVersion)
+          _    <- runShim(file, bin, home, assets, log, args, None)
+          text <- ZIO.attemptBlocking {
+            val recorded = if Files.isRegularFile(log) then Files.readString(log) else ""
+            val placed   = Files.isRegularFile(tool.resolve("client-kit.zip"))
+            RunnerInstall(recorded, placed)
+          }.orDie
+        yield text
+
+  /** Seeds the packed jar only on the ivy path. The asset manifest names that coordinate. */
+  private def ivyAssetInstall: ZIO[Scope, java.io.IOException, IvyCopy] =
+    val jarBytes = "staged-ivy-jar".getBytes(StandardCharsets.UTF_8)
+    val org      = "rocks.earlyeffect"
+    val module   = "histos"
+    script match
+      case Left(message) => ZIO.fail(new java.io.IOException(message))
+      case Right(file)   =>
+        for
+          root <- Workspace.work("histos-shim-ivy").orDieWith(error => new java.io.IOException(error.message))
+          bin    = root.resolve("bin")
+          home   = root.resolve("home")
+          assets = root.resolve("assets")
+          ivy    = root.resolve("ivy")
+          staged = ivy.resolve(org).resolve(module).resolve(installVersion).resolve("jars").resolve(s"$module.jar")
+          tool   = home.resolve("toolchains").resolve(installVersion).resolve("histos.jar")
+          log    = root.resolve("java.log")
+          _      <- write(staged, jarBytes)
+          _      <- write(assets.resolve("manifest.json"), ivyAssetManifest(org, module, installVersion))
+          _      <- write(bin.resolve("java"), javaStub)
+          _      <- executable(bin.resolve("java"))
+          _      <- runShim(file, bin, home, assets, log, List("toolchain", "install", installVersion), Some(ivy))
+          copied <- ZIO.attemptBlocking {
+            val recorded = if Files.isRegularFile(log) then Files.readString(log) else ""
+            val got      = if Files.isRegularFile(tool) then Chunk.fromArray(Files.readAllBytes(tool)) else Chunk.empty
+            IvyCopy(got, Chunk.fromArray(jarBytes), recorded)
+          }.orDie
+        yield copied
+
+  private def ivyAssetManifest(org: String, module: String, revision: String): String =
+    s"""{
+       |  "version": "$revision",
+       |  "group": "$org",
+       |  "artifact": "$module",
+       |  "revision": "$revision",
+       |  "ivyOrganisation": "$org",
+       |  "ivyModule": "$module",
+       |  "ivyRevision": "$revision"
+       |}
+       |""".stripMargin
+
+  private def distInstallManifest(jarSha: String, kitSha: String): String =
+    s"""{
+       |  "version": "$installVersion",
+       |  "jar": "histos.jar",
+       |  "jarSha256": "$jarSha",
+       |  "clientKit": "client-kit.zip",
+       |  "clientKitSha256": "$kitSha"
+       |}
+       |""".stripMargin
+
+  private def digest(bytes: Array[Byte]): String =
+    Sha256Digest.of(Chunk.fromArray(bytes)).value
+
+  private def write(path: Path, bytes: Array[Byte]): ZIO[Any, Nothing, Unit] =
+    ZIO.attemptBlocking {
+      Files.createDirectories(path.getParent)
+      Files.write(path, bytes)
+      ()
+    }.orDie
+
+  private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
+    write(path, text.getBytes(StandardCharsets.UTF_8))
+
+  private def executable(path: Path): ZIO[Any, Nothing, Unit] =
+    ZIO.attemptBlocking {
+      Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwxr-xr-x"))
+      ()
+    }.orDie
+
+  private def runShim(
+      shim: Path,
+      bin: Path,
+      home: Path,
+      assets: Path,
+      log: Path,
+      args: List[String],
+      ivy: Option[Path],
+  ): ZIO[Any, java.io.IOException, Unit] =
+    ZIO
+      .attemptBlocking {
+        val builder = new ProcessBuilder((shim.toString :: args)*)
+        builder.redirectErrorStream(true)
+        val env = builder.environment()
+        env.put("CI", "true")
+        env.put("HISTOS_CLIENT", "on")
+        env.put("HISTOS_HOME", home.toString)
+        env.put("HISTOS_ASSETS", assets.toString)
+        env.put("JAVA_LOG", log.toString)
+        ivy.foreach(path => env.put("HISTOS_IVY", path.toString))
+        val inherited = Option(env.get("PATH")).getOrElse("")
+        env.put("PATH", bin.toString + java.io.File.pathSeparator + inherited)
+        val process  = builder.start()
+        val finished = process.waitFor(30, TimeUnit.SECONDS)
+        val out      = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+        if !finished then
+          process.destroyForcibly()
+          throw new java.io.IOException(s"shim timed out: $out")
+        val code = process.exitValue()
+        if code != 0 then throw new java.io.IOException(s"shim exited $code: $out")
+      }
+      .mapError {
+        case error: java.io.IOException => error
+        case error                      => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString))
+      }
+      .unit
+
+  private val javaStub =
+    """|#!/bin/sh
+       |if [ "$1" = "-version" ]; then
+       |  echo 'openjdk version "25.0.1"' >&2
+       |  exit 0
+       |fi
+       |printf '%s\n' "$*" >> "$JAVA_LOG"
+       |exit 0
+       |""".stripMargin
 
   private def coursierSha(text: String): Option[String] =
     text.linesIterator.collectFirst {

@@ -557,6 +557,8 @@ private[histos] object BootstrapLoad:
       graph.ciSetup,
       graph.theme,
       graph.intent,
+      graph.verify,
+      graph.suiteHost,
     )
 
   /** A module `val` is a field on some Scala encodings and only an accessor on others. The accessor and the field are

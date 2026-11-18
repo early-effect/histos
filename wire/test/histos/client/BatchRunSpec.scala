@@ -3,7 +3,7 @@ package histos.client
 import histos.Platform
 import histos.lock.ExecutionKind
 import histos.plugin.Interaction
-import histos.server.Call
+import histos.server.{Call, ResolveAction}
 import histos.ProjectName
 import histos.report.WireJson.given
 
@@ -36,6 +36,16 @@ object BatchRunSpec extends ZIOSpecDefault:
       assertTrue(
         Batch.parse(List("compile", "--lock=frozen")).isEmpty,
         Batch.parse(List("compile", "app")) == Some(Batch.Parsed.Ready(Call.Compile(List(ProjectName("app"))))),
+      )
+    },
+    test("resolve --refresh is a native call and a lock flag is not") {
+      assertTrue(
+        Batch.parse(List("resolve", "--refresh")) ==
+          Some(Batch.Parsed.Ready(Call.Resolve(ResolveAction.Refresh(Nil)))),
+        Batch.parse(List("resolve", "--refresh", "shots")) ==
+          Some(Batch.Parsed.Ready(Call.Resolve(ResolveAction.Refresh(List(ProjectName("shots")))))),
+        Batch.parse(List("resolve", "--refresh", "--lock=frozen")).isEmpty,
+        Batch.parse(List("resolve")).isEmpty,
       )
     },
     test("the native caller reads ci and interaction from the process it starts in") {

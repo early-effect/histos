@@ -630,28 +630,37 @@ ensure_toolchain() {
       rm -f "$dir/histos.jar"
     fi
   fi
-  kind=$(manifest_kind "$manifest")
-  case $kind in
-    dist) install_dist_jar "$manifest" "$dir" ;;
-    coordinate) install_coordinate "$manifest" "$dir" ;;
-    *) fail "manifest has no jar and no coordinate" ;;
-  esac
-  if ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
+  # publish local staged the packed jar. Copy it. Do not fetch, pack, or check jarSha256.
+  org=$(json_string "$manifest" ivyOrganisation)
+  module=$(json_string "$manifest" ivyModule)
+  rev=$(json_string "$manifest" ivyRevision)
+  if [ -n "${HISTOS_ASSETS:-}" ] && [ -n "$org" ] && [ -n "$module" ] && [ -n "$rev" ]; then
+    place_jar "$manifest" "$dir/histos.jar"
+  else
+    kind=$(manifest_kind "$manifest")
+    case $kind in
+      dist) install_dist_jar "$manifest" "$dir" ;;
+      coordinate) install_coordinate "$manifest" "$dir" ;;
+      *) fail "manifest has no jar and no coordinate" ;;
+    esac
+  fi
+  # A runner skips the kit unless this install was asked to link. An explicit yes still places it.
+  if [ "$2" = yes ] || ! ci_set; then place_kit "$manifest" "$dir/client-kit.zip"; fi
 }
 client_mode() {
   mode=$1
-  if [ "$mode" = ask ]; then
+  # HISTOS_CLIENT does not override a runner. The --client flag arrives as yes and does.
+  if [ "$mode" = ask ] && ! ci_set; then
     case ${HISTOS_CLIENT:-} in
       off|0|false|no) mode=no ;;
       on|1|true|yes) mode=yes ;;
     esac
   fi
-  if ci_set; then mode=no; fi
+  if [ "$mode" != yes ] && ci_set; then mode=no; fi
   printf '%s' "$mode"
 }
 # Reap the linker before joining the dot loop. kill -0 stays true until it is reaped.
 link_client() {
-  if ci_set; then return 1; fi
   if [ -t 2 ]; then
     link_client_dots "$1"
   else
@@ -864,7 +873,7 @@ histos help self"
         [ -n "$selected" ] || fail "usage: histos toolchain install [--client|--no-client] <version>"
         channel_refresh=every-call
         selected=$(resolve_channel "$selected")
-        ensure_toolchain "$selected"
+        ensure_toolchain "$selected" "$(client_mode "$client_flag")"
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
         offer_client "$home/toolchains/$selected" "$client_flag"
         exit 0
@@ -955,7 +964,7 @@ histos help toolchain" ;;
       next_pin "$current"
       write_default "$next"
       selected=$(resolve_channel "$next")
-      ensure_toolchain "$selected"
+      ensure_toolchain "$selected" "$(client_mode "$client_flag")"
       offer_client "$home/toolchains/$selected" "$client_flag"
       exit 0
     fi
@@ -963,7 +972,7 @@ histos help toolchain" ;;
     local_id=
     if id=$(read_toolchain "$repo"); then local_id=$id; fi
     version=$(driver_id update "$selected" "$local_id")
-    ensure_toolchain "$version"
+    ensure_toolchain "$version" "$(client_mode "$client_flag")"
     jar=$home/toolchains/$version/histos.jar
     offer_client "$(dirname "$jar")" "$client_flag"
     # The previous record is gone before version runs, so the new driver does not talk to that server.

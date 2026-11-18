@@ -419,6 +419,61 @@ object LockInvocationSpec extends ZIOSpecDefault:
         replies  <- consent.takeAll
       yield assertTrue(programs.toList == List(stdin), replies.toList == List(reply))
     },
+    test("an unattended refresh consents locally and stays frozen in ci") {
+      val shots    = LocatorName("shots")
+      val recorded = hash("snap-1")
+      val pin      = VersionedPin(
+        PluginCoordinate.Module(ProjectName("app")),
+        LockSubject.Artifact,
+        hash("app-1"),
+        None,
+      )
+      val document          = LockDocument(List(pin), List(SnapshotLocator(shots, recorded)))
+      val rendered          = LockDocument.render(document)
+      def scene(root: Path) =
+        writeText(root.resolve("dependencies.lock"), rendered) *>
+          writeBytes(root.resolve(shots.value), "snap-2")
+      def open(root: Path, kind: ExecutionKind) =
+        ConsentDesk.open(
+          root,
+          ConsentDesk.strategy(kind, None),
+          ConsentDesk.command,
+          ConsentDesk.preparer(root),
+          _ => ZIO.unit,
+        )
+      ZIO.scoped {
+        for
+          localRoot <- temp("histos-refresh-consent")
+          ciRoot    <- temp("histos-refresh-frozen")
+          _         <- scene(localRoot)
+          _         <- scene(ciRoot)
+          localDesk <- open(localRoot, ExecutionKind.Local)
+          ciDesk    <- open(ciRoot, ExecutionKind.Ci)
+          local     <- Calls
+            .refresh(localDesk, localRoot, Nil, None, Some(context(ExecutionKind.Local, CommandIdentity.Refresh(Nil))))
+            .exit
+          frozen <- Calls
+            .refresh(ciDesk, ciRoot, Nil, None, Some(context(ExecutionKind.Ci, CommandIdentity.Refresh(Nil))))
+            .exit
+          localLock <- readText(localRoot.resolve("dependencies.lock"))
+          ciLock    <- readText(ciRoot.resolve("dependencies.lock"))
+        yield
+          val consent = local match
+            case zio.Exit.Success(_)     => false
+            case zio.Exit.Failure(cause) =>
+              cause.failureOption match
+                case Some(ResolveError.Transaction(LockTransactionError.ConsentRequired(_))) => true
+                case Some(_)                                                                 => false
+                case None                                                                    => false
+          val blocked = frozen match
+            case zio.Exit.Success(_)     => false
+            case zio.Exit.Failure(cause) =>
+              cause.failureOption.contains(
+                ResolveError.Transaction(LockTransactionError.Unapplied(LockMode.Frozen))
+              )
+          assertTrue(consent, blocked, localLock == rendered, ciLock == rendered)
+      }
+    },
   )
 
   private def namedOffer(events: List[LockEvent], text: String): Boolean =

@@ -11,6 +11,7 @@ import histos.{
   PluginGraphFault,
   ProjectGraph,
   ProjectName,
+  SuiteHost,
 }
 
 /** One rendered job, the plugin that contributed it, and the workflow file it belongs in. */
@@ -37,7 +38,8 @@ object JobCheck:
   def arrange(graph: ProjectGraph): Either[BuildError, List[Placed]] =
     val items = renders(graph)
     for
-      _      <- reserved(items)
+      _      <- reserved(graph, items)
+      _      <- verifyTasks(graph)
       _      <- sites(items)
       _      <- needs(graph, items)
       _      <- fold(items)(item => viewChecks(graph, view(item.render)))
@@ -57,6 +59,10 @@ object JobCheck:
     CiHeader(tags, extras, mergeInputs(events))
 
   def generated(graph: ProjectGraph): Set[JobName] =
+    stock(graph) ++ graph.verify.map(_.name)
+
+  /** Jobs this graph renders before any verify task. A verify name in this set is [[CiFault.VerifyJobTaken]]. */
+  private def stock(graph: ProjectGraph): Set[JobName] =
     val modules = graph.projects.collect { case module: Module => module }
     val base    = List(JobName.trusted("workflow"), JobName.trusted("affected"))
     val suite   =
@@ -69,7 +75,18 @@ object JobCheck:
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(JobName.trusted("format"))
     val versions = if graph.catalog != Catalog.Empty then List(JobName.trusted("versions")) else Nil
-    (base ++ suite ++ doc ++ coverage ++ format ++ versions).toSet
+    val publish  =
+      if graph.suiteHost == SuiteHost.Local then List(JobName.trusted("publish")) else Nil
+    (base ++ suite ++ doc ++ coverage ++ format ++ versions ++ publish).toSet
+
+  private def verifyTasks(graph: ProjectGraph): Either[BuildError, Unit] =
+    val names = graph.verify.map(_.name)
+    duplicate(names) match
+      case Some(name) => Left(BuildError.Ci(CiFault.DuplicateVerify(name)))
+      case None       =>
+        names.find(stock(graph).contains) match
+          case Some(name) => Left(BuildError.Ci(CiFault.VerifyJobTaken(name)))
+          case None       => Right(())
 
   private final case class Item(plugin: PluginId, job: CiJob, render: JobRender)
 
@@ -78,10 +95,18 @@ object JobCheck:
       plugin.contribution.jobs.flatMap: job =>
         job.render.map(render => Item(plugin.id, job, render))
 
-  private def reserved(items: List[Item]): Either[BuildError, Unit] =
-    items.map(item => nameOf(item.render)).find(_.isReserved) match
+  /** A static reserved name stays reserved. A name this graph renders, including `publish` when the suite host is local
+    * and any verify task, is taken too.
+    */
+  private def reserved(graph: ProjectGraph, items: List[Item]): Either[BuildError, Unit] =
+    val taken = generated(graph)
+    val names = items.map(item => nameOf(item.render))
+    names.find(_.isReserved) match
       case Some(name) => Left(BuildError.PluginGraph(PluginGraphFault.ReservedJob(name)))
-      case None       => Right(())
+      case None       =>
+        names.find(taken.contains) match
+          case Some(name) => Left(BuildError.Ci(CiFault.RenderedJob(name)))
+          case None       => Right(())
 
   private def sites(items: List[Item]): Either[BuildError, Unit] =
     val names = items

@@ -116,7 +116,7 @@ import histos.schedule.{
   ScheduleError,
 }
 import histos.select.SelectError
-import histos.task.{RunId, TaskError, TaskId}
+import histos.task.{HostIo, HostProof, RunId, TaskError, TaskId}
 import histos.build.BuildEvent
 import histos.testrun.{
   ModuleTestError,
@@ -628,6 +628,10 @@ private object WireSchemaCall extends WireSchemaSupport:
   given Schema[Refusal] = Schema.derived
 
   given Schema[VersionError] = Schema.derived
+
+  given Schema[HostIo] = Schema.derived
+
+  given Schema[HostProof] = Schema.derived
 
   given Schema[TaskError] = Schema.derived
 

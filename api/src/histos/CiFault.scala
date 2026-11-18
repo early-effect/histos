@@ -2,7 +2,9 @@ package histos
 
 import histos.plugin.{ActionName, JobName, RunnerName, SecretName, TargetName}
 
-/** Faults of an open [[histos.plugin.CiJob]]. Nested so the workflow schema stays inside the JVM method limit. */
+/** Faults of an open [[histos.plugin.CiJob]]. Nested so the workflow schema stays inside the JVM method limit. A verify
+  * task and a plugin job cannot share a rendered name.
+  */
 enum CiFault:
   case IllegalSite(name: JobName)
   case UnknownNeed(job: JobName, need: JobName)
@@ -17,6 +19,9 @@ enum CiFault:
   case DispatchInputConflict(name: String)
   case ConcurrencyConflict(file: String)
   case UnpinnedWorkflowRun(name: String)
+  case DuplicateVerify(name: JobName)
+  case VerifyJobTaken(name: JobName)
+  case RenderedJob(name: JobName)
 
   def message: String = this match
     case IllegalSite(name)      => s"job ${name.value} does not render one site"
@@ -37,4 +42,7 @@ enum CiFault:
       s"workflow_dispatch input $name is declared twice with different types"
     case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
     case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
+    case DuplicateVerify(name)     => s"verify task ${name.value} is declared twice"
+    case VerifyJobTaken(name)      => s"verify task ${name.value} uses a job this graph already renders"
+    case RenderedJob(name)         => s"job ${name.value} is already rendered by this graph"
 end CiFault

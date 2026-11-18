@@ -115,7 +115,7 @@ import histos.schedule.{
   ScheduleError,
 }
 import histos.select.SelectError
-import histos.task.{RunId, TaskError, TaskId}
+import histos.task.{HostIo, HostProof, RunId, TaskError, TaskId}
 import histos.build.BuildEvent
 import histos.testrun.{
   ModuleTestError,
@@ -618,6 +618,8 @@ private object WireCall extends WireSupport:
   given JsonCodec[RegistryError]              = JsonCodec.derived
   given JsonCodec[Refusal]                    = JsonCodec.derived
   given JsonCodec[VersionError]               = JsonCodec.derived
+  given JsonCodec[HostIo]                     = JsonCodec.derived
+  given JsonCodec[HostProof]                  = JsonCodec.derived
   given JsonCodec[TaskError]                  = JsonCodec.derived
   given JsonCodec[PluginTaskError]            = JsonCodec.derived
   given JsonCodec[PluginRunError]             = JsonCodec.derived
