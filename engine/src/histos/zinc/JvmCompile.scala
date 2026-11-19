@@ -447,8 +447,9 @@ object JvmCompile:
         yield compiled
 
   /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores when the sources
-    * still match the key. A remote hit is installed first. A timeout is a miss. A download that does not match its
-    * digest fails.
+    * still match the key. A source change that writes no class file is compiled again with no previous analysis, and
+    * that result is what gets stored. A remote hit is installed first. A timeout is a miss. A download that does not
+    * match its digest fails.
     */
   private def cached(
       request: CompileRequest,
@@ -460,6 +461,11 @@ object JvmCompile:
       admitted: UIO[Unit],
       onPulse: CompilePulse => Unit,
   ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
+    val compileOnce =
+      CompilerStarts.tick *>
+        ZIO.serviceWithZIO[Compilers](
+          _.compile(request, artifacts, extra, hear, onPulse, key, admitted)
+        )
     for
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
@@ -477,26 +483,60 @@ object JvmCompile:
           CompileInputs.remember(store, request.analysis, rows).as(found)
         case None =>
           for
-            change  <- CompileInputs.explain(store, request.analysis, rows)
-            written <- CompilerStarts.tick *>
-              ZIO.serviceWithZIO[Compilers](
-                _.compile(request, artifacts, extra, hear, onPulse, key, admitted)
-              )
-            keep <- stable(request, rows)
-            _    <- ZIO.when(keep)(
+            change   <- CompileInputs.explain(store, request.analysis, rows)
+            written  <- compileOnce
+            keep     <- stable(request, rows)
+            produced <-
+              if keep && staleProduct(change, written) then forgetPrevious(request) *> compileOnce
+              else ZIO.succeed(written)
+            keepNow <- stable(request, rows)
+            _       <- ZIO.when(keepNow && !staleProduct(change, produced))(
               CompileReplay.save(
                 store,
-                written.key,
+                produced.key,
                 request,
-                written.runtime,
-                written.compiler,
-                written.bridge,
+                produced.runtime,
+                produced.compiler,
+                produced.bridge,
               ) *>
-                ProductCache.publish(remote, store, written.key).mapError(carried) *>
+                ProductCache.publish(remote, store, produced.key).mapError(carried) *>
                 CompileInputs.remember(store, request.analysis, rows)
             )
-          yield written.copy(miss = Some(change))
+          yield produced.copy(miss = Some(change))
     yield output
+
+  /** Zinc can finish a changed source without writing a class file. Those bytes belong to the previous compile. */
+  private def staleProduct(change: KeyMiss, written: CompileOutput): Boolean =
+    change match
+      case KeyMiss.Changed(names) =>
+        names.contains(CompileInput.Sources) && written.classesWritten.contains(0)
+      case KeyMiss.NoPrior => false
+
+  /** Drop the analysis and the class files so the next compile has no previous result and must write its products. */
+  private def forgetPrevious(request: CompileRequest): IO[CompileError, Unit] =
+    ZIO
+      .attemptBlocking {
+        deleteFiles(request.analysis)
+        deleteProduced(request.classes)
+      }
+      .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Delete)))
+      .unit
+
+  private def deleteFiles(root: Path): Unit =
+    if Files.isDirectory(root) then
+      val walk  = Files.walk(root)
+      val files =
+        try walk.iterator.asScala.filter(path => Files.isRegularFile(path)).toList
+        finally walk.close()
+      files.foreach(path => Files.deleteIfExists(path))
+
+  private def deleteProduced(root: Path): Unit =
+    if Files.isDirectory(root) then
+      val walk  = Files.walk(root)
+      val files =
+        try walk.iterator.asScala.filter(produced).toList
+        finally walk.close()
+      files.foreach(path => Files.deleteIfExists(path))
 
   /** The sources row, hashed again after the compiler returns. A missing row or a different digest is not stored. */
   private def stable(request: CompileRequest, rows: List[CompileRow]): IO[CompileError, Boolean] =
