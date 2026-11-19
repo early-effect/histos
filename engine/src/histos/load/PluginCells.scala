@@ -10,15 +10,7 @@ import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
 import histos.testrun.{ModuleTestError, TestCompile}
-import histos.zinc.{
-  CompileFeed,
-  CompiledCell,
-  GraphCompile,
-  GraphCompileError,
-  JvmCompile,
-  ScalacClasspath,
-  UpstreamCells,
-}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, JvmCompile, ScalacClasspath, UpstreamCells}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -276,6 +268,7 @@ private[load] object PluginCells:
           lock,
           BuildResolvers(graph.resolvers),
           _ => (),
+          plugins = ApiDep.modules(graph),
         )
         .provideSome[
           Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache
@@ -290,10 +283,7 @@ private[load] object PluginCells:
       cell: Cell,
       lock: DependencyLock,
   ): ZIO[Resolve, PluginFault, CellClasspath] =
-    val pin = ApiDep.plugin(cell.module, graph)
-    if pin && ApiDep.direct(cell.module).isDefined then
-      ZIO.fail(PluginFault.Compiled(GraphCompileError.ApiDependency(cell.module.name)))
-    else pathsOf(repo, graph, cell, lock, pin)
+    pathsOf(repo, graph, cell, lock, ApiDep.plugin(cell.module, graph))
 
   private def pathsOf(
       repo: Path,

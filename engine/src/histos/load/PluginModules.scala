@@ -73,7 +73,7 @@ private[load] object PluginModules:
           if skip.contains(module.name) then ZIO.succeed(classpath)
           else
             val need = if roots.contains(module.name) then Need.Required else Need.Optional
-            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session, repositories, roots)
+            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session, repositories)
               .map: added =>
                 classpath ++ added
 
@@ -121,7 +121,6 @@ private[load] object PluginModules:
       resolve: Option[Resolve],
       session: Option[HostCompilerSession],
       repositories: Repositories,
-      roots: Set[ProjectName],
   ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     versionOf(module) match
       case None if module.versions.all.length > 1 =>
@@ -143,7 +142,6 @@ private[load] object PluginModules:
                   if found.isEmpty then missing(module, need)
                   else
                     for
-                      _     <- refused(module, roots)
                       extra <- externals(module, version, resolve, repositories)
                       out   <- BuildFile.tempDir("histos-plugin")
                       _     <- emit(repo, module, base, found, classpath ++ extra, out, session)
@@ -214,15 +212,10 @@ private[load] object PluginModules:
         .unit
     yield ()
 
-  /** A plugin tracks the pin. The declaration fails before this resolve. */
-  private def refused(module: Module, roots: Set[ProjectName]): IO[LoadError, Unit] =
-    if ApiDep.plugin(module, roots) && ApiDep.direct(module).isDefined then
-      ZIO.fail(LoadError.Plugin(PluginLoadError.ApiDependency(module.name)))
-    else ZIO.unit
-
   /** A catalog module's libraries use that graph's repositories. Main is compiled after this, so its resolvers are not
-    * this classpath. An empty declaration stays Central. A resolved `scala-library`, `scala3-library`, or `histos-api`
-    * is dropped: the boundary already supplies that jar, and a second copy disagrees.
+    * this classpath. An empty declaration stays Central. The boundary jar is this process's API, and its bytes are this
+    * compile's cache key, so a moved host pin recompiles the plugin. A resolved `scala-library`, `scala3-library`, or
+    * `histos-api` is not placed beside that jar.
     */
   private def externals(
       module: Module,

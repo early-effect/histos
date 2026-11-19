@@ -36,6 +36,7 @@ object DocClasspath:
             lock,
             tools.repositories,
             ClasspathScope.Compile,
+            histos.load.ApiDep.modules(graph),
           )
         .provideSomeLayer[Resolve](ZLayer.succeed(tools))
     yield (cell.classes :: found.paths).filterNot(scalaLibrary)

@@ -5,7 +5,7 @@ import histos.schedule.{CacheConfig, RemoteCache}
 import histos.jdk.JdkRuntime
 import zio.stream.ZStream
 
-import histos.load.{BuildNotes, LoadError}
+import histos.load.{ApiDep, BuildNotes, LoadError}
 import histos.resolve.LockedTools
 import histos.toolchain.BuildCompiler
 import histos.resolve.{
@@ -939,6 +939,7 @@ object Bsp:
                     BuildResolvers(graph.resolvers),
                     scope,
                     stamped.stamp,
+                    ApiDep.modules(graph),
                   )
                 }
             .mapError(compiled)
@@ -1303,6 +1304,7 @@ object Bsp:
                   cell,
                   lock,
                   BuildResolvers(seen.resolvers),
+                  plugins = ApiDep.modules(seen),
                 )
                 .mapError(BspError.Tests(_))
             )
@@ -1365,6 +1367,7 @@ object Bsp:
                           cell,
                           lock,
                           BuildResolvers(seen.resolvers),
+                          plugins = ApiDep.modules(seen),
                         )
                         .mapError(BspError.Tests(_))
                     ).either

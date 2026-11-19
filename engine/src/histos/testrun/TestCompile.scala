@@ -183,6 +183,7 @@ private[histos] object TestCompile:
       lock: DependencyLock,
       repositories: Repositories,
       coverage: Option[histos.coverage.CoverageCompile] = None,
+      plugins: Set[ProjectName] = Set.empty,
   ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     for
       fetched <- classpath(
@@ -191,6 +192,7 @@ private[histos] object TestCompile:
         cell.platform,
         lock,
         repositories,
+        plugins,
       )
       cells <- UpstreamCells
         .read(
@@ -216,8 +218,8 @@ private[histos] object TestCompile:
         else fetched.paths.zip(fetched.hashes)
       libraryPaths = libraries.map(_.path)
       tail         =
-        if drop then libraryPaths.filterNot(JvmCompile.isStandardLibrary)
-        else libraryPaths
+        val raw = if drop then libraryPaths.filterNot(JvmCompile.isStandardLibrary) else libraryPaths
+        if fetched.needsHost then raw.filterNot(histos.load.ApiDep.resolvedJar) else raw
       jars           = (kept.map(_._1) ++ tail ++ api.toList).distinct
       own            = kept.map(_._2).toSet
       upstreamHashes =
@@ -272,6 +274,7 @@ private[histos] object TestCompile:
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
       onPulse: CompilePulse => Unit = _ => (),
+      plugins: Set[ProjectName] = Set.empty,
   ): ZIO[
     Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
     ModuleTestError,
@@ -288,6 +291,7 @@ private[histos] object TestCompile:
         lock,
         repositories,
         coverage,
+        plugins,
       )
       apis  <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
       bytes <- CompileInputs
@@ -466,33 +470,30 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
+      plugins: Set[ProjectName] = Set.empty,
   ): ZIO[Resolve & LockedTools, ModuleTestError, Fetched] =
-    histos.load.ApiDep.direct(module) match
-      case Some(_) if module.pluginLibrary.isDefined =>
-        ZIO.fail(ModuleTestError.Compile(GraphCompileError.ApiDependency(module.name)))
-      case _ =>
-        val pin                   = module.pluginLibrary.isDefined
-        val (dependencies, scope) =
-          val compileDeps = Dep.select(module.dependencies, platform)
-          val testDeps    = Dep.select(module.testDependencies, platform)
-          if testDeps.isEmpty then (compileDeps, ClasspathScope.Compile)
-          else (compileDeps ++ testDeps, ClasspathScope.Test)
-        val cell = ResolveCell(
-          module.name,
-          dependencies,
-          version,
-          platform,
-          repositories,
-          scope,
-        )
-        held(lock, cell).mapBoth(
-          ModuleTestError.Lock(_),
-          classpath =>
-            val artifacts =
-              if pin then classpath.artifacts.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name))
-              else classpath.artifacts
-            Fetched(artifacts.map(_.path), artifacts.map(_.sha256), pin),
-        )
+    val pin                   = histos.load.ApiDep.plugin(module, plugins)
+    val (dependencies, scope) =
+      val compileDeps = Dep.select(module.dependencies, platform)
+      val testDeps    = Dep.select(module.testDependencies, platform)
+      if testDeps.isEmpty then (compileDeps, ClasspathScope.Compile)
+      else (compileDeps ++ testDeps, ClasspathScope.Test)
+    val cell = ResolveCell(
+      module.name,
+      dependencies,
+      version,
+      platform,
+      repositories,
+      scope,
+    )
+    held(lock, cell).mapBoth(
+      ModuleTestError.Lock(_),
+      classpath =>
+        val artifacts =
+          if pin then classpath.artifacts.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name))
+          else classpath.artifacts
+        Fetched(artifacts.map(_.path), artifacts.map(_.sha256), pin),
+    )
 
   /** The service solves a miss. A tools value without one fetches the snapshot.
     */

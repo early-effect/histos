@@ -422,6 +422,7 @@ object GraphCompile:
                 stamped.stamp,
                 inside,
                 coverage,
+                plugins = histos.load.ApiDep.modules(graph),
               )
               val goal = ScheduleCells.goal(
                 plan,
@@ -581,7 +582,16 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     ZIO.serviceWithZIO[CompileMemo]: memo =>
       memo
-        .hashes(plan.lock, module, upstream, version, platform, ClasspathScope.Compile, plan.stamp)
+        .hashes(
+          plan.lock,
+          module,
+          upstream,
+          version,
+          platform,
+          ClasspathScope.Compile,
+          plan.stamp,
+          plan.plugins,
+        )
         .flatMap:
           case None         => ZIO.none
           case Some(hashes) =>
@@ -614,7 +624,7 @@ object GraphCompile:
                     case other => other
                 for
                   jars <- ScalacClasspath
-                    .substituted(plan.repo, module)
+                    .substituted(plan.repo, module, plan.plugins)
                     .mapError(carried)
                   bytes <- CompileInputs.jarBytes(jars).mapError(failed)
                   base = CompileRequest(
@@ -779,6 +789,7 @@ object GraphCompile:
           plan.repositories,
           ClasspathScope.Compile,
           plan.stamp,
+          plan.plugins,
         )
       )
       .provideSomeLayer(ZLayer.succeed(plan.tools))

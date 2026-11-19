@@ -56,7 +56,7 @@ enum PluginLoadError:
     case BindingDrift(path, found, launcher) =>
       s"plugin binding at $path is ${found.value} and this process loads ${launcher.value}"
     case ApiDependency(module) =>
-      s"plugin ${module.value} depends on histos-api. A plugin tracks the toolchain pin and does not declare that dependency."
+      s"plugin ${module.value} compiled without the toolchain API"
     case ClasspathConflict(binary, left, right, leftDigest, rightDigest) =>
       conflict(binary, left, right, leftDigest, rightDigest)
     case Policy(error)          => error.message

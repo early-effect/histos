@@ -41,6 +41,7 @@ trait CompileMemo:
       platform: Platform,
       scope: ClasspathScope,
       stamp: LockStamp,
+      plugins: Set[histos.ProjectName] = Set.empty,
   ): UIO[Option[List[Sha256]]]
   def classpath(
       repo: Path,
@@ -52,6 +53,7 @@ trait CompileMemo:
       repositories: Repositories,
       scope: ClasspathScope,
       stamp: LockStamp,
+      plugins: Set[histos.ProjectName] = Set.empty,
   ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, ScalacClasspath]
   def forget: UIO[Unit]
 
@@ -81,6 +83,7 @@ object CompileMemo:
       platform: String,
       scope: String,
       stamp: String,
+      pin: Boolean,
   )
   private final case class ClassKey(
       repo: String,
@@ -90,6 +93,7 @@ object CompileMemo:
       platform: String,
       scope: String,
       stamp: String,
+      pin: Boolean,
   )
 
   /** Each upstream cell the key's classpath reads, so a different pick is a different entry. */
@@ -130,13 +134,23 @@ object CompileMemo:
         platform: Platform,
         scope: ClasspathScope,
         stamp: LockStamp,
+        plugins: Set[histos.ProjectName],
     ): UIO[Option[List[Sha256]]] =
-      val key = HashKey(module.name.value, cells(upstream), version.value, platform.token, scope.header, stamp.token)
+      val pin = histos.load.ApiDep.plugin(module, plugins)
+      val key = HashKey(
+        module.name.value,
+        cells(upstream),
+        version.value,
+        platform.token,
+        scope.header,
+        stamp.token,
+        pin,
+      )
       hashes.get.flatMap: cached =>
         cached.get(key) match
           case Some(found) => ZIO.succeed(found)
           case None        =>
-            val found = ScalacClasspath.lockHashes(lock, module, upstream, version, platform, scope)
+            val found = ScalacClasspath.lockHashes(lock, module, upstream, version, platform, scope, plugins)
             hashes.update(_.updated(key, found)).as(found)
 
     def classpath(
@@ -149,7 +163,9 @@ object CompileMemo:
         repositories: Repositories,
         scope: ClasspathScope,
         stamp: LockStamp,
+        plugins: Set[histos.ProjectName],
     ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, ScalacClasspath] =
+      val pin = histos.load.ApiDep.plugin(module, plugins)
       val key = ClassKey(
         repo.toAbsolutePath.normalize.toString,
         module.name.value,
@@ -158,13 +174,14 @@ object CompileMemo:
         platform.token,
         scope.header,
         stamp.token,
+        pin,
       )
       classpaths.get.flatMap: cached =>
         cached.get(key) match
           case Some(found) => ZIO.succeed(found)
           case None        =>
             ScalacClasspath
-              .of(repo, module, upstream, version, platform, lock, repositories, scope)
+              .of(repo, module, upstream, version, platform, lock, repositories, scope, plugins)
               .tap(found => classpaths.update(_.updated(key, found)))
 
     def forget: UIO[Unit] =

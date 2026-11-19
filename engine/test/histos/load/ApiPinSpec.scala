@@ -2,7 +2,7 @@ package histos.load
 
 import histos.*
 import histos.jdk.{Machine, Sha256Digest}
-import histos.plugin.{PluginCoordinate, PluginLoadError}
+import histos.plugin.PluginCoordinate
 import histos.resolve.{
   BuildResolvers,
   Classpath,
@@ -21,7 +21,7 @@ import histos.resolve.{
 import histos.schedule.RemoteCache
 import histos.cache.ContentStore
 import histos.workspace.Workspace
-import histos.zinc.{GraphCompile, GraphCompileError, ScalacClasspath}
+import histos.zinc.{GraphCompile, ScalacClasspath}
 
 import java.nio.file.{Files, Path}
 
@@ -29,12 +29,10 @@ import zio.{Chunk, Ref, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ApiPinSpec extends ZIOSpecDefault:
-  private val version  = scala"3.10.1"
-  private val sentence =
-    "plugin plug depends on histos-api. A plugin tracks the toolchain pin and does not declare that dependency."
-  private val apiDep = dep"rocks.earlyeffect::histos-api:0.5.0-SNAPSHOT".compileOnly
+  private val version = scala"3.10.1"
+  private val apiDep  = dep"rocks.earlyeffect::histos-api:0.5.0-SNAPSHOT".compileOnly
 
-  def spec = suite("a plugin tracks the toolchain pin")(
+  def spec = suite("a plugin compiles against this process's API")(
     test("a plugin library with no histos-api dependency compiles against the pin") {
       ZIO
         .scoped {
@@ -77,71 +75,146 @@ object ApiPinSpec extends ZIOSpecDefault:
                   )
                   .provideSomeLayer(ZLayer.succeed(tools))
                   .catchAll(error => ZIO.dieMessage(error.message))
+                pinned <- ScalacClasspath.substituted(repo, item).catchAll(error => ZIO.dieMessage(error.message))
               yield assertTrue(
                 compiled.isRight,
                 classpath.permitted == List(host),
                 classpath.paths.contains(host),
+                pinned == List(host),
               )
         }
         .provide(Resolve.coursier, store, RemoteCache.off)
     },
-    test("a plugin library that declares histos-api fails before resolve") {
-      val defined = module("plug", Jvm)(version).libraryDependencies(apiDep).pluginLibrary
-      for
-        graph <- built(defined)
-        item  <- only(graph)
-        asked <- Ref.make(false)
-        resolve = Refusing(asked)
-        tools   = LockedTools(DependencyLock(Nil), graph.tools, BuildResolvers(graph.resolvers), resolve)
-        exit <- ScalacClasspath
-          .of(
-            Path.of("repo"),
-            item,
-            Nil,
-            version,
-            Platform.Jvm,
-            DependencyLock(Nil),
-            BuildResolvers(graph.resolvers),
-            ClasspathScope.Compile,
-          )
-          .provide(ZLayer.succeed(tools), ZLayer.succeed(resolve))
-          .either
-        called <- asked.get
-      yield assertTrue(
-        exit == Left(GraphCompileError.ApiDependency(ProjectName("plug"))),
-        exit.fold(_.message == sentence, _ => false),
-        !called,
-      )
-    },
-    test("plugin load refuses a direct histos-api dependency before resolve") {
-      ZIO.scoped {
-        Workspace
-          .work("api-pin-load")
-          .flatMap: repo =>
-            val host    = ScalaVersion.trusted(_root_.scala.util.Properties.versionNumberString)
-            val defined = module("plug", Jvm)(host).libraryDependencies(apiDep).pluginLibrary
-            val source  =
-              repo.resolve("plug").resolve("src").resolve("main").resolve("scala").resolve("demo").resolve("Mark.scala")
-            for
-              graph <- built(defined)
-              named = ProjectGraph.trusted(
-                graph.projects,
-                graph.splits,
-                graph.catalog,
-                graph.organization,
-                graph.resolvers,
-                coordinates = List(PluginCoordinate.Module(ProjectName("plug"))),
+    test("a declared histos-api coordinate is the host jar") {
+      ZIO
+        .scoped {
+          Workspace
+            .work("api-pin-declared")
+            .flatMap: repo =>
+              val jar     = repo.resolve("histos-api_3.jar")
+              val defined = module("plug", Jvm)(version).libraryDependencies(apiDep).pluginLibrary
+              for
+                _     <- hostFacts
+                _     <- writeBytes(jar, Array[Byte](1, 2, 3))
+                graph <- built(defined)
+                item  <- only(graph)
+                asked <- Ref.make(0)
+                inner <- ZIO.service[Resolve]
+                wrapped = Keeping(inner, jar, apiDep, asked)
+                opened <- ResolutionService
+                  .open(repo, Resolution.Solve)
+                  .provide(ZLayer.succeed(wrapped))
+                  .catchAll(error => ZIO.dieMessage(error.message))
+                lock <- opened.current
+                tools = LockedTools(lock, graph.tools, BuildResolvers(graph.resolvers), wrapped, Some(opened))
+                host      <- ScalacClasspath.hostApi(repo).catchAll(error => ZIO.dieMessage(error.message))
+                classpath <- ScalacClasspath
+                  .of(
+                    repo,
+                    item,
+                    Nil,
+                    version,
+                    Platform.Jvm,
+                    lock,
+                    BuildResolvers(graph.resolvers),
+                    ClasspathScope.Compile,
+                  )
+                  .provideSomeLayer(ZLayer.succeed(tools))
+                pinned <- ScalacClasspath.substituted(repo, item).catchAll(error => ZIO.dieMessage(error.message))
+              yield assertTrue(
+                classpath.permitted == List(host),
+                classpath.paths.contains(host),
+                !classpath.paths.contains(jar),
+                pinned == List(host),
               )
-              _      <- write(source, "package demo\n\nobject Mark\n")
-              asked  <- Ref.make(false)
-              exit   <- PluginModules.compile(repo, named, Nil, Refusing(asked)).either
-              called <- asked.get
-            yield assertTrue(
-              exit == Left(LoadError.Plugin(PluginLoadError.ApiDependency(ProjectName("plug")))),
-              exit.fold(_.message == sentence, _ => false),
-              !called,
-            )
-      }
+        }
+        .provide(Resolve.coursier)
+    },
+    test("a module named as a plugin compiles against the host jar") {
+      ZIO
+        .scoped {
+          Workspace
+            .work("api-pin-named")
+            .flatMap: repo =>
+              val defined = module("plug", Jvm)(version)
+              val named   = Set(ProjectName("plug"))
+              for
+                _         <- hostFacts
+                graph     <- built(defined)
+                item      <- only(graph)
+                opened    <- ResolutionService.open(repo, graph).catchAll(error => ZIO.dieMessage(error.message))
+                lock      <- opened.current
+                tools     <- LockedTools.make(lock, graph, opened)
+                host      <- ScalacClasspath.hostApi(repo).catchAll(error => ZIO.dieMessage(error.message))
+                classpath <- ScalacClasspath
+                  .of(
+                    repo,
+                    item,
+                    Nil,
+                    version,
+                    Platform.Jvm,
+                    lock,
+                    BuildResolvers(graph.resolvers),
+                    ClasspathScope.Compile,
+                    named,
+                  )
+                  .provideSomeLayer(ZLayer.succeed(tools))
+                  .catchAll(error => ZIO.dieMessage(error.message))
+                pinned <- ScalacClasspath
+                  .substituted(repo, item, named)
+                  .catchAll(error => ZIO.dieMessage(error.message))
+              yield assertTrue(
+                item.pluginLibrary.isEmpty,
+                classpath.permitted == List(host),
+                classpath.paths.contains(host),
+                pinned == List(host),
+              )
+        }
+        .provide(Resolve.coursier)
+    },
+    test("plugin load keeps the boundary jar when histos-api is declared") {
+      ZIO
+        .scoped {
+          Workspace
+            .work("api-pin-load")
+            .flatMap: repo =>
+              val host    = ScalaVersion.trusted(_root_.scala.util.Properties.versionNumberString)
+              val defined = module("plug", Jvm)(host).libraryDependencies(apiDep).pluginLibrary
+              val source  =
+                repo
+                  .resolve("plug")
+                  .resolve("src")
+                  .resolve("main")
+                  .resolve("scala")
+                  .resolve("demo")
+                  .resolve("Mark.scala")
+              val jar = repo.resolve("histos-api_3.jar")
+              for
+                graph <- built(defined)
+                named = ProjectGraph.trusted(
+                  graph.projects,
+                  graph.splits,
+                  graph.catalog,
+                  graph.organization,
+                  graph.resolvers,
+                  coordinates = List(PluginCoordinate.Module(ProjectName("plug"))),
+                )
+                _        <- hostFacts
+                _        <- write(source, pinSource)
+                _        <- writeBytes(jar, Array[Byte](1, 2, 3))
+                asked    <- Ref.make(0)
+                inner    <- ZIO.service[Resolve]
+                api      <- ScalacClasspath.hostApi(repo).catchAll(error => ZIO.dieMessage(error.message))
+                boundary <- Boundary.jars(api).catchAll(error => ZIO.dieMessage(error.message))
+                exit     <- PluginModules
+                  .compile(repo, named, boundary, Keeping(inner, jar, apiDep, asked))
+                  .either
+              yield assertTrue(
+                exit.isRight,
+                exit.exists(paths => !paths.contains(jar)),
+              )
+        }
+        .provide(Resolve.coursier)
     },
     test("a module that declares histos-api keeps the resolved jar") {
       ZIO
@@ -228,22 +301,6 @@ object ApiPinSpec extends ZIOSpecDefault:
       Files.write(path, bytes)
       ()
     }.orDie
-
-  private final class Refusing(asked: Ref[Boolean]) extends Resolve:
-    def resolveTool(request: ToolRequest): zio.IO[ResolveError, Classpath]                          = refuse
-    def resolve(cell: ResolveCell): zio.IO[ResolveError, Classpath]                                 = refuse
-    def fetch(artifact: histos.resolve.LockedArtifact): zio.IO[ResolveError, ResolvedArtifact]      = refuse
-    def resolvePlugin(dependency: Dep, repositories: Repositories): zio.IO[ResolveError, Classpath] = refuse
-    def sources(
-        organization: String,
-        name: String,
-        revision: String,
-        repository: Repository,
-    ): zio.IO[ResolveError, ResolvedArtifact] = refuse
-
-    private def refuse: UIO[Nothing] =
-      asked.set(true) *> ZIO.dieMessage("resolve")
-  end Refusing
 
   private final class Keeping(inner: Resolve, jar: Path, dependency: Dep, asked: Ref[Int]) extends Resolve:
     def resolveTool(request: ToolRequest): zio.IO[ResolveError, Classpath] =

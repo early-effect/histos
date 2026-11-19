@@ -23,6 +23,8 @@ final case class CompilePlan(
     stamp: LockStamp,
     admitted: ProjectName => UIO[Unit],
     coverage: Option[histos.coverage.CoverageCompile] = None,
+    /** Modules named by a plugin coordinate. A `.pluginLibrary` module is a plugin without being in this set. */
+    plugins: Set[ProjectName] = Set.empty,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */

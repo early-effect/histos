@@ -34,7 +34,7 @@ Frozen CI stays frozen. A locked build keeps its snapshot bytes until someone as
 
 ## How a producer uses it
 
-The plugin is a normal JVM module. It does not depend on `histos-api`. `.pluginLibrary` compiles and publishes it against the toolchain pin, and the published bundle is bound to that pin. Its public capability is a trait. The implementation is a ZLayer. A helper is an ordinary module the plugin `dependsOn`. Compile-only dependencies stay off the consumer POM. A compile-only snapshot does not refuse that publication. A snapshot the POM would fetch still does. The proof is `a compile-only snapshot does not refuse the ship` and `a pom snapshot dependency refuses the ship` in `PublishSelectSpec`.
+The plugin is a normal JVM module, and it is a plugin for this toolchain's API. `.pluginLibrary` puts that jar on the compile classpath. The author does not write a `histos-api` coordinate, and the lock does not carry one. The compile key includes the jar's bytes, so a moved host pin recompiles the plugin without a lockstep version change. The published bundle records the pin it was built against. Its public capability is a trait. The implementation is a ZLayer. A helper is an ordinary module the plugin `dependsOn`. Compile-only dependencies stay off the consumer POM. A compile-only snapshot does not refuse that publication. A snapshot the POM would fetch still does. The proof is `a compile-only snapshot does not refuse the ship` and `a pom snapshot dependency refuses the ship` in `PublishSelectSpec`.
 
 The producer build's catalog names that module. Its `services` registers the layer by the trait. There is no `histos.wiring.scala`. Publishing is `./histos publish snapshots` of that module. The consumer does not need the producer's repository.
 

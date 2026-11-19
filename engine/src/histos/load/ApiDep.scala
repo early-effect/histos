@@ -6,12 +6,16 @@ import histos.{Dep, Module, ProjectGraph, ProjectName}
 
 import java.nio.file.Path
 
-/** A direct `histos-api` coordinate. A plugin tracks the toolchain pin and does not declare one. */
+/** A direct `histos-api` coordinate. A plugin's artifact for that name is this process's API jar. */
 private[histos] object ApiDep:
   val Artifact: String = "histos-api"
 
   def direct(module: Module): Option[Dep] =
     (module.dependencies ++ module.testDependencies).find(isApi(module, _))
+
+  /** Modules the graph names as plugins. A `.pluginLibrary` module is a plugin even when this set is empty. */
+  def modules(graph: ProjectGraph): Set[ProjectName] =
+    coordinates(graph)
 
   def plugin(module: Module, names: Set[ProjectName]): Boolean =
     module.pluginLibrary.isDefined || names.contains(module.name)
