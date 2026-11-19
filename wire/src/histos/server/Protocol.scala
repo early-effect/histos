@@ -29,6 +29,10 @@ enum ServerError:
   case Resolve(error: histos.resolve.ResolveError)
   case Unreachable(path: Path)
 
+  /** The spawned server exited before it listened. `detail` is the log text, or the exit code when that text is empty.
+    */
+  case Exited(detail: String)
+
   /** Another server already answers on this checkout's socket, so this one does not take it. */
   case Listening(socket: Path)
   case DifferentVersion
@@ -43,6 +47,7 @@ enum ServerError:
     case Compiled(error)   => error.message
     case Resolve(error)    => error.message
     case Unreachable(path) => s"histos server at $path is not listening"
+    case Exited(detail)    => detail
     case Listening(socket) => s"another histos server is listening at $socket"
     case DifferentVersion  =>
       "histos server is a different version and the restart did not finish"

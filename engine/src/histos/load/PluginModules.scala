@@ -73,8 +73,9 @@ private[load] object PluginModules:
           if skip.contains(module.name) then ZIO.succeed(classpath)
           else
             val need = if roots.contains(module.name) then Need.Required else Need.Optional
-            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session, repositories).map: added =>
-              classpath ++ added
+            compileOne(repo, all, module, boundary ++ classpath, need, resolve, session, repositories, roots)
+              .map: added =>
+                classpath ++ added
 
   private def coordinates(graph: ProjectGraph): Set[ProjectName] =
     graph.coordinates.collect { case PluginCoordinate.Module(name) => name }.toSet
@@ -120,6 +121,7 @@ private[load] object PluginModules:
       resolve: Option[Resolve],
       session: Option[HostCompilerSession],
       repositories: Repositories,
+      roots: Set[ProjectName],
   ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     versionOf(module) match
       case None if module.versions.all.length > 1 =>
@@ -141,6 +143,7 @@ private[load] object PluginModules:
                   if found.isEmpty then missing(module, need)
                   else
                     for
+                      _     <- refused(module, roots)
                       extra <- externals(module, version, resolve, repositories)
                       out   <- BuildFile.tempDir("histos-plugin")
                       _     <- emit(repo, module, base, found, classpath ++ extra, out, session)
@@ -211,9 +214,15 @@ private[load] object PluginModules:
         .unit
     yield ()
 
+  /** A plugin tracks the pin. The declaration fails before this resolve. */
+  private def refused(module: Module, roots: Set[ProjectName]): IO[LoadError, Unit] =
+    if ApiDep.plugin(module, roots) && ApiDep.direct(module).isDefined then
+      ZIO.fail(LoadError.Plugin(PluginLoadError.ApiDependency(module.name)))
+    else ZIO.unit
+
   /** A catalog module's libraries use that graph's repositories. Main is compiled after this, so its resolvers are not
-    * this classpath. An empty declaration stays Central. A resolved `scala-library` or `scala3-library` is dropped: the
-    * compiler already supplies that runtime, and a second copy disagrees with the assembly.
+    * this classpath. An empty declaration stays Central. A resolved `scala-library`, `scala3-library`, or `histos-api`
+    * is dropped: the boundary already supplies that jar, and a second copy disagrees.
     */
   private def externals(
       module: Module,
@@ -237,7 +246,11 @@ private[load] object PluginModules:
           .resolve(cell)
           .mapBoth(
             LoadError.Resolve(_),
-            found => found.artifacts.map(_.path).filterNot(histos.zinc.JvmCompile.isStandardLibrary),
+            found =>
+              found.artifacts
+                .filterNot(artifact => ApiDep.resolvedName(artifact.name))
+                .map(_.path)
+                .filterNot(histos.zinc.JvmCompile.isStandardLibrary),
           )
 
   private def copyResources(base: Path, out: Path): IO[LoadError, Unit] =

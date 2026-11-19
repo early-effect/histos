@@ -94,6 +94,7 @@ enum GraphCompileError:
   )
   case Cells(errors: NonEmptyChunk[GraphCompileError])
   case Recipe(error: RecipeError)
+  case ApiDependency(module: ProjectName)
 
   def message: String = this match
     case Runtime(error)               => error.message
@@ -117,8 +118,9 @@ enum GraphCompileError:
       s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
     case Assets(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} could not copy resources\n${error.message}"
-    case Cells(errors) => errors.map(_.message).mkString("\n")
-    case Recipe(error) => error.message
+    case Cells(errors)         => errors.map(_.message).mkString("\n")
+    case Recipe(error)         => error.message
+    case ApiDependency(module) => histos.plugin.PluginLoadError.ApiDependency(module).message
 
   def diagnose: Diagnostic = this match
     case Target(error) => error.diagnose

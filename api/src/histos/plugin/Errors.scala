@@ -21,7 +21,14 @@ enum PluginLoadError:
   case Construction(detail: String)
   case Recipe(error: RecipeError)
   case BindingDrift(path: Path, found: ApiDigest, launcher: ApiDigest)
-  case ClasspathConflict(binary: String, left: Path, right: Path)
+  case ApiDependency(module: ProjectName)
+  case ClasspathConflict(
+      binary: String,
+      left: Path,
+      right: Path,
+      leftDigest: String,
+      rightDigest: String,
+  )
   case Policy(error: LockStrategyError)
   case Loading(error: PluginStrategyError)
   case Activation(error: ServiceActivationError)
@@ -48,13 +55,43 @@ enum PluginLoadError:
     case Recipe(error)                       => error.message
     case BindingDrift(path, found, launcher) =>
       s"plugin binding at $path is ${found.value} and this process loads ${launcher.value}"
-    case ClasspathConflict(binary, left, right) =>
-      s"class $binary is defined by $left and $right"
+    case ApiDependency(module) =>
+      s"plugin ${module.value} depends on histos-api. A plugin tracks the toolchain pin and does not declare that dependency."
+    case ClasspathConflict(binary, left, right, leftDigest, rightDigest) =>
+      conflict(binary, left, right, leftDigest, rightDigest)
     case Policy(error)          => error.message
     case Loading(error)         => error.message
     case Activation(error)      => error.message
     case Refused(path, refusal) => s"plugin at $path was refused: ${refusal.message}"
     case Publication(path)      => s"plugin publication at $path did not decode"
+
+  private def conflict(
+      binary: String,
+      left: Path,
+      right: Path,
+      leftDigest: String,
+      rightDigest: String,
+  ): String =
+    if toolchainApi(left) && resolvedApi(right) then
+      s"class $binary is defined by the toolchain API $left ($leftDigest) and the resolved coordinate $right ($rightDigest)"
+    else if toolchainApi(right) && resolvedApi(left) then
+      s"class $binary is defined by the toolchain API $right ($rightDigest) and the resolved coordinate $left ($leftDigest)"
+    else s"class $binary is defined by $left ($leftDigest) and $right ($rightDigest)"
+
+  /** `cache/api/<sha>/histos-api.jar`, the jar this process extracted. */
+  private def toolchainApi(path: Path): Boolean =
+    fileName(path) == "histos-api.jar" &&
+      Option(path.getParent)
+        .flatMap(parent => Option(parent.getParent))
+        .exists(grand => fileName(grand) == "api")
+
+  private def resolvedApi(path: Path): Boolean =
+    fileName(path).startsWith("histos-api") && !toolchainApi(path)
+
+  private def fileName(path: Path): String =
+    Option(path.getFileName) match
+      case Some(name) => name.toString
+      case None       => ""
 end PluginLoadError
 
 enum PluginIo:

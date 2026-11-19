@@ -20,9 +20,14 @@ private[load] object ClasspathIndex:
             case Some(prior) if prior.digest == entry.digest =>
               ZIO.succeed(current)
             case Some(prior) =>
-              ZIO.fail(
-                LoadError.Plugin(PluginLoadError.ClasspathConflict(entry.name, prior.path, path))
-              )
+              fileDigest(prior.path, prior.digest)
+                .zip(fileDigest(path, entry.digest))
+                .flatMap: (left, right) =>
+                  ZIO.fail(
+                    LoadError.Plugin(
+                      PluginLoadError.ClasspathConflict(entry.name, prior.path, path, left, right)
+                    )
+                  )
             case None =>
               ZIO.succeed(current.updated(entry.name, Origin(path, entry.digest)))
 
@@ -32,6 +37,14 @@ private[load] object ClasspathIndex:
   final case class Origin(path: Path, digest: String)
 
   private final case class Entry(name: String, digest: String)
+
+  /** A jar is hashed whole. A class directory contributes the class entry that disagreed. */
+  private def fileDigest(path: Path, entry: String): IO[LoadError, String] =
+    ZIO
+      .attemptBlocking(
+        if Files.isRegularFile(path) then Digests.sha256(Files.readAllBytes(path)) else entry
+      )
+      .mapError(BuildFile.failed(path, IoFault.Read))
 
   private def entries(path: Path): IO[LoadError, List[Entry]] =
     ZIO

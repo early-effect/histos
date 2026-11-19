@@ -191,7 +191,7 @@ private[histos] object TestCompile:
         cell.platform,
         lock,
         repositories,
-      ).mapError(ModuleTestError.Lock(_))
+      )
       cells <- UpstreamCells
         .read(
           module,
@@ -466,24 +466,33 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve & LockedTools, ResolveError, Fetched] =
-    val (dependencies, scope) =
-      val compileDeps = Dep.select(module.dependencies, platform)
-      val testDeps    = Dep.select(module.testDependencies, platform)
-      if testDeps.isEmpty then (compileDeps, ClasspathScope.Compile)
-      else (compileDeps ++ testDeps, ClasspathScope.Test)
-    val cell = ResolveCell(
-      module.name,
-      dependencies,
-      version,
-      platform,
-      repositories,
-      scope,
-    )
-    held(lock, cell).map: classpath =>
-      val host      = histos.zinc.ScalacClasspath.asks(dependencies, version, platform)
-      val artifacts = classpath.artifacts.filterNot(artifact => artifact.name.startsWith("histos-api"))
-      Fetched(artifacts.map(_.path), artifacts.map(_.sha256), host)
+  ): ZIO[Resolve & LockedTools, ModuleTestError, Fetched] =
+    histos.load.ApiDep.direct(module) match
+      case Some(_) if module.pluginLibrary.isDefined =>
+        ZIO.fail(ModuleTestError.Compile(GraphCompileError.ApiDependency(module.name)))
+      case _ =>
+        val pin                   = module.pluginLibrary.isDefined
+        val (dependencies, scope) =
+          val compileDeps = Dep.select(module.dependencies, platform)
+          val testDeps    = Dep.select(module.testDependencies, platform)
+          if testDeps.isEmpty then (compileDeps, ClasspathScope.Compile)
+          else (compileDeps ++ testDeps, ClasspathScope.Test)
+        val cell = ResolveCell(
+          module.name,
+          dependencies,
+          version,
+          platform,
+          repositories,
+          scope,
+        )
+        held(lock, cell).mapBoth(
+          ModuleTestError.Lock(_),
+          classpath =>
+            val artifacts =
+              if pin then classpath.artifacts.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name))
+              else classpath.artifacts
+            Fetched(artifacts.map(_.path), artifacts.map(_.sha256), pin),
+        )
 
   /** The service solves a miss. A tools value without one fetches the snapshot.
     */

@@ -614,13 +614,7 @@ object GraphCompile:
                     case other => other
                 for
                   jars <- ScalacClasspath
-                    .substituted(
-                      plan.repo,
-                      module,
-                      version,
-                      platform,
-                      ClasspathScope.Compile,
-                    )
+                    .substituted(plan.repo, module)
                     .mapError(carried)
                   bytes <- CompileInputs.jarBytes(jars).mapError(failed)
                   base = CompileRequest(

@@ -4,7 +4,18 @@ import histos.ApiClock
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
-import histos.server.{Attendance, Call, Message, RunBytes, RunLaunch, ServerError, ServerFile, ServerStamp, Successor}
+import histos.server.{
+  Attendance,
+  Call,
+  Message,
+  RunBytes,
+  RunLaunch,
+  ServerError,
+  ServerFile,
+  ServerStamp,
+  ServerWait,
+  Successor,
+}
 import histos.report.CallResult
 import histos.report.WireJson.given zio.json.JsonCodec[histos.lock.InvocationEnvelope]
 
@@ -18,7 +29,7 @@ import scala.scalanative.unsafe.{CInt, Ptr}
 import scala.scalanative.unsigned.*
 
 import zio.json.*
-import zio.{ExitCode, IO, Runtime, Scope, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer, durationInt}
+import zio.{ExitCode, IO, Runtime, Scope, UIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer, durationInt}
 
 /** Batch commands. `server`, `bsp`, and `mcp` never reach this process. Zinc stays in the JVM server.
   *
@@ -311,9 +322,21 @@ object Main extends ZIOAppDefault:
             .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
             .flatMap:
               case None    => untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)
-              case Some(_) => spawn(repo, log) *> untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)
+              case Some(_) =>
+                for
+                  mark    <- logMark(log)
+                  process <- spawn(repo, log)
+                  _       <- ServerWait.awaitListening(
+                    connect(socket),
+                    ZIO.attempt(process.isAlive).orDie,
+                    exitedDetail(log, mark, process),
+                    socket,
+                    1200,
+                  )
+                  _ <- awaitWritten(repo, socket, before)
+                yield socket
 
-  private def spawn(repo: Path, log: Path): IO[ServerError, Unit] =
+  private def spawn(repo: Path, log: Path): IO[ServerError, Process] =
     val missing = ServerError.Io(histos.server.ServerIo.Bind(log))
     ZIO
       .attempt(Option(System.getenv("HISTOS_JAR")).filter(_.nonEmpty))
@@ -334,9 +357,30 @@ object Main extends ZIOAppDefault:
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
                 .start()
-              ()
             }
             .mapError(_ => missing)
+
+  private def logMark(log: Path): UIO[Long] =
+    ZIO.attemptBlocking(if Files.isRegularFile(log) then Files.size(log) else 0L).orDie
+
+  /** Text appended to the log after `mark`. The exit code when that text is empty. */
+  private def exitedDetail(log: Path, mark: Long, process: Process): UIO[String] =
+    ZIO.attemptBlocking {
+      val text =
+        if Files.isRegularFile(log) then
+          val bytes = Files.readAllBytes(log)
+          val from  =
+            if mark <= 0 then 0
+            else if mark >= bytes.length then bytes.length
+            else mark.toInt
+          new String(bytes, from, bytes.length - from, java.nio.charset.StandardCharsets.UTF_8).trim
+        else ""
+      if text.nonEmpty then text
+      else scala.util.Try(process.exitValue()).toOption.fold("")(_.toString)
+    }.orDie
+
+  private def connect(socket: Path): IO[ServerError, Unit] =
+    UnixPipe.connect(socket).flatMap(session => ZIO.succeed(session.close()))
 
   /** The socket can accept before the new server rewrites `server.json`. A record from before `before` is the previous
     * server.
@@ -356,18 +400,9 @@ object Main extends ZIOAppDefault:
     poll(1200)
 
   private def untilUp(socket: Path): IO[ServerError, Path] =
-    def poll(left: Int): IO[ServerError, Path] =
-      UnixPipe
-        .connect(socket)
-        .foldZIO(
-          {
-            case ServerError.Unreachable(_) if left > 0 =>
-              ZIO.sleep(50.millis) *> poll(left - 1)
-            case other => ZIO.fail(other)
-          },
-          session => ZIO.succeed(session.close()).as(socket),
-        )
-    poll(1200)
+    ServerWait
+      .awaitListening(connect(socket), ZIO.succeed(true), ZIO.succeed(""), socket, 1200)
+      .as(socket)
 
   private def jvm(args: List[String]): ZIO[Any, Nothing, Int] =
     ZIO

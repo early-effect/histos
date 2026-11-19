@@ -960,7 +960,7 @@ object Bsp:
               _,
             ) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) | GraphCompileError.Cycle(_) |
             GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Assets(_, _, _, _) |
-            GraphCompileError.Cells(_) | GraphCompileError.Recipe(_)) =>
+            GraphCompileError.Cells(_) | GraphCompileError.Recipe(_) | GraphCompileError.ApiDependency(_)) =>
           BspError.Sources(found)
 
     private def withTools[A](

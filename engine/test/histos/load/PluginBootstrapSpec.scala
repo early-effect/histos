@@ -259,7 +259,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         val (exit, jar) = ran.value
         assertTrue(
           exit.rejects {
-            case LoadError.Plugin(PluginLoadError.ClasspathConflict(binary, left, right)) =>
+            case LoadError.Plugin(PluginLoadError.ClasspathConflict(binary, left, right, _, _)) =>
               binary == "demo/Use.class" && (left == jar || right == jar) && left != right
             case _ => false
           }
@@ -283,7 +283,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         val (exit, name, api, jar) = ran.value
         assertTrue(
           exit.rejects {
-            case LoadError.Plugin(PluginLoadError.ClasspathConflict(binary, left, right)) =>
+            case LoadError.Plugin(PluginLoadError.ClasspathConflict(binary, left, right, _, _)) =>
               binary == name && ((left == api && right == jar) || (left == jar && right == api))
             case _ => false
           }

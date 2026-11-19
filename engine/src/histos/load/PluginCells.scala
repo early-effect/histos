@@ -10,7 +10,15 @@ import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
 import histos.testrun.{ModuleTestError, TestCompile}
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, JvmCompile, UpstreamCells}
+import histos.zinc.{
+  CompileFeed,
+  CompiledCell,
+  GraphCompile,
+  GraphCompileError,
+  JvmCompile,
+  ScalacClasspath,
+  UpstreamCells,
+}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -282,10 +290,22 @@ private[load] object PluginCells:
       cell: Cell,
       lock: DependencyLock,
   ): ZIO[Resolve, PluginFault, CellClasspath] =
+    val pin = ApiDep.plugin(cell.module, graph)
+    if pin && ApiDep.direct(cell.module).isDefined then
+      ZIO.fail(PluginFault.Compiled(GraphCompileError.ApiDependency(cell.module.name)))
+    else pathsOf(repo, graph, cell, lock, pin)
+
+  private def pathsOf(
+      repo: Path,
+      graph: ProjectGraph,
+      cell: Cell,
+      lock: DependencyLock,
+      pin: Boolean,
+  ): ZIO[Resolve, PluginFault, CellClasspath] =
     val modules      = modulesOf(graph)
     val repositories = BuildResolvers(graph.resolvers)
     for
-      compile <- compileClasspath(repo, cell, modules, lock, repositories)
+      compile <- compileClasspath(repo, cell, modules, lock, repositories, pin)
         .provideSome[Resolve](
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
@@ -294,7 +314,9 @@ private[load] object PluginCells:
         if sources.isEmpty then ZIO.succeed(compile)
         else
           testJars(cell, lock, repositories)
-            .map(extra => testClasses(repo, cell) :: (compile ++ extra))
+            .map: extra =>
+              val kept = if pin then extra.filterNot(ApiDep.resolvedJar) else extra
+              testClasses(repo, cell) :: (compile ++ kept)
     yield CellClasspath(
       cell.module.name,
       cell.version,
@@ -309,6 +331,7 @@ private[load] object PluginCells:
       modules: List[Module],
       lock: DependencyLock,
       repositories: Repositories,
+      pin: Boolean,
   ): ZIO[Resolve & LockedTools, PluginFault, List[Path]] =
     for
       read <- UpstreamCells
@@ -340,7 +363,11 @@ private[load] object PluginCells:
       jars =
         (fetched ++ transitive.flatten.distinct.filterNot(fetched.toSet.contains))
           .filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))
-    yield classes(repo, cell) :: (upstream ++ library ++ jars)
+      kept = if pin then jars.filterNot(ApiDep.resolvedJar) else jars
+      host <-
+        if pin then ScalacClasspath.hostApi(repo).mapBoth(PluginFault.Compiled(_), path => List(path))
+        else ZIO.succeed(Nil)
+    yield classes(repo, cell) :: (upstream ++ library ++ kept ++ host)
 
   private def testJars(
       cell: Cell,

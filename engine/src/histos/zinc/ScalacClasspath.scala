@@ -2,16 +2,7 @@ package histos.zinc
 
 import histos.jdk.Sha256
 import histos.pack.JarError
-import histos.resolve.{
-  ArtifactName,
-  Classpath,
-  ClasspathScope,
-  DependencyLock,
-  LockedArtifact,
-  Repositories,
-  Resolve,
-  ResolveCell,
-}
+import histos.resolve.{Classpath, ClasspathScope, DependencyLock, LockedArtifact, Repositories, Resolve, ResolveCell}
 import histos.{Dep, Module, Platform, ScalaVersion}
 
 import java.nio.file.Path
@@ -86,20 +77,36 @@ object ScalacClasspath:
       repositories: Repositories,
       scope: ClasspathScope,
   ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, ScalacClasspath] =
+    histos.load.ApiDep.direct(module) match
+      case Some(_) if module.pluginLibrary.isDefined =>
+        ZIO.fail(GraphCompileError.ApiDependency(module.name))
+      case _ =>
+        assemble(repo, module, upstream, version, platform, lock, repositories, scope)
+
+  private def assemble(
+      repo: Path,
+      module: Module,
+      upstream: List[UpstreamCell],
+      version: ScalaVersion,
+      platform: Platform,
+      lock: DependencyLock,
+      repositories: Repositories,
+      scope: ClasspathScope,
+  ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, ScalacClasspath] =
+    val pin = module.pluginLibrary.isDefined
     for
       fetched <- ZIO
         .foreach(asked(module, upstream, version, scope)):
           case (item, itemVersion, itemScope) => load(item, itemVersion, platform, lock, repositories, itemScope)
         .map(merge)
       kept = if dropJvmLibrary(platform) then withoutStdlib(fetched) else fetched
+      mine = if pin then withoutApi(kept) else kept
       runtime <- runtimeOf(module, version, platform)
-      api     <-
-        if asks(dependenciesOf(module, platform, scope), version, platform) then hostApi(repo).map(Some(_))
-        else ZIO.none
+      api     <- if pin then hostApi(repo).map(Some(_)) else ZIO.none
     yield
       val dirs = directories(repo, module, upstream, version, platform, scope)
-      val jars = kept.paths ++ api.toList
-      ScalacClasspath(runtime ++ jars ++ dirs, jars, kept.hashes, api.toList)
+      val jars = mine.paths ++ api.toList
+      ScalacClasspath(runtime ++ jars ++ dirs, jars, mine.hashes, api.toList)
 
   private def runtimeOf(
       module: Module,
@@ -180,37 +187,23 @@ object ScalacClasspath:
 
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])
 
-  /** A compile-only `histos-api` is the api this process already loaded. The resolved jar is a second copy.
-    */
   private def fetched(classpath: Classpath): Fetched =
-    val artifacts = classpath.artifacts.filterNot(artifact => artifact.name.startsWith("histos-api"))
-    Fetched(artifacts.map(_.path), artifacts.map(_.sha256))
+    Fetched(classpath.artifacts.map(_.path), classpath.artifacts.map(_.sha256))
 
-  private def dependenciesOf(module: Module, platform: Platform, scope: ClasspathScope): List[Dep] =
-    val compileDeps = Dep.select(module.dependencies, platform)
-    scope match
-      case ClasspathScope.Compile => compileDeps
-      case ClasspathScope.Test    =>
-        val testDeps = Dep.select(module.testDependencies, platform)
-        if testDeps.isEmpty then compileDeps else compileDeps ++ testDeps
+  /** A plugin library's classpath already carries the pin. A resolved copy of that jar is a second definition. */
+  private def withoutApi(fetched: Fetched): Fetched =
+    val kept = fetched.paths.zip(fetched.hashes).filterNot((path, _) => histos.load.ApiDep.resolvedJar(path))
+    Fetched(kept.map(_._1), kept.map(_._2))
 
-  /** A direct `histos-api` dependency compiles against the api this process loaded. [[histos.load.Boundary]] already
-    * supplies that jar.
-    */
-  private[histos] def asks(dependencies: List[Dep], version: ScalaVersion, platform: Platform): Boolean =
-    dependencies.exists: dep =>
-      dep.name == "histos-api" || ArtifactName.of(dep, version, platform).startsWith("histos-api")
-
-  /** The host api jar when this module compiles against it. Empty when it does not. */
-  private[histos] def substituted(
-      repo: Path,
-      module: Module,
-      version: ScalaVersion,
-      platform: Platform,
-      scope: ClasspathScope,
-  ): IO[GraphCompileError, List[Path]] =
-    if asks(dependenciesOf(module, platform, scope), version, platform) then hostApi(repo).map(path => List(path))
-    else ZIO.succeed(Nil)
+  /** The toolchain pin a plugin library compiles against. A declared `histos-api` fails before the jar is read. */
+  private[histos] def substituted(repo: Path, module: Module): IO[GraphCompileError, List[Path]] =
+    histos.load.ApiDep.direct(module) match
+      case Some(_) if module.pluginLibrary.isDefined =>
+        ZIO.fail(GraphCompileError.ApiDependency(module.name))
+      case _ if module.pluginLibrary.isDefined =>
+        hostApi(repo).map(path => List(path))
+      case _ =>
+        ZIO.succeed(Nil)
 
   /** The pure api jar inside this process. An assembly carries it at `bootstrap/histos-api.jar`. Class files are packed
     * into the repo cache.

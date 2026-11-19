@@ -100,6 +100,7 @@ private[histos] object CacheVerify:
       case GraphCompileError.IncompatibleUpstream(module, _, _, _, _) => List(module)
       case GraphCompileError.Cycle(module)                            => List(module)
       case GraphCompileError.Assets(module, _, _, _)                  => List(module)
+      case GraphCompileError.ApiDependency(module)                    => List(module)
       case GraphCompileError.Cells(errors)                            => errors.toList.flatMap(modulesOf)
       case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.Lock(_) |
           GraphCompileError.LockRead(_) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
