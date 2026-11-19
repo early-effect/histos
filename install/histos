@@ -540,8 +540,12 @@ fetch_classpath() {
   artifact=$3
   revision=$4
   repos=$(coursier_repositories "$manifest" "$revision")
+  # Default coursier also searches ~/.ivy2/local, so a local publish of this snapshot hides the channel.
+  # A snapshot TTL would keep a sibling module from an earlier publish.
+  ttl=
+  if ! release_revision "$revision"; then ttl="--ttl 0"; fi
   # shellcheck disable=SC2086
-  "$java_bin" -jar "$home/coursier.jar" fetch -q -p $repos "$group:$artifact:$revision"
+  "$java_bin" -jar "$home/coursier.jar" fetch --no-default -q -p $ttl $repos "$group:$artifact:$revision"
 }
 install_dist_jar() {
   manifest=$1
