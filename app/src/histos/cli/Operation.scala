@@ -87,6 +87,8 @@ object Operation:
         Right(Call.Assembly(modules))
       case Command.PublishLocal(tokens) =>
         Right(Call.PublishLocal(tokens))
+      case Command.PublishWithdraw =>
+        Right(Call.PublishWithdraw)
       case Command.PublishSnapshots(tokens) =>
         Right(Call.PublishSnapshots(tokens))
       case Command.PublishRelease(automatic, tokens) =>

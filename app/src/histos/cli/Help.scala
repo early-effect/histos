@@ -100,6 +100,12 @@ object Help:
       "Publish to the local Ivy repository. The three publish commands link the client.",
     ),
     Entry(
+      "publish withdraw",
+      "publish",
+      "histos publish withdraw",
+      "Remove the local ivy revisions and toolchain directory for HEAD. The pin in build.properties stays.",
+    ),
+    Entry(
       "publish",
       "publish",
       "histos publish snapshots [token ...]",
@@ -158,7 +164,7 @@ object Help:
       "update",
       "toolchain",
       "histos update",
-      "Move the selected Histos version. The installed shim runs this. Inside a project it runs version on the new toolchain. A server recorded for another toolchain is stopped, and the server that starts records this one. That rewrites the BSP connection.",
+      "Move the selected Histos version. The installed shim runs this. Inside a project it runs version on the pin it just wrote. HISTOS_PIN is ignored. A server recorded for another toolchain is stopped, and the server that starts records this one. That rewrites the BSP connection.",
     ),
     Entry("self", "toolchain", "histos self update", "Replace the shim when the published hash differs."),
     Entry("bsp", "server", "histos bsp", "Speak the build server protocol."),

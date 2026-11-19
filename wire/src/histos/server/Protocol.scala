@@ -193,6 +193,9 @@ enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
   case PublishLocal(tokens: List[PublishToken])
+
+  /** Remove the local ivy revisions and toolchain directory for HEAD. The pin stays. */
+  case PublishWithdraw
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(tokens: List[String], automatic: Boolean)
   case PublishPromote(id: DeploymentId)

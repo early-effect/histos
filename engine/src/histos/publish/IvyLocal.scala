@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 
+import scala.jdk.CollectionConverters.*
+
 import zio.{IO, ULayer, ZIO, ZLayer}
 
 /** The ivy repository `publish local` installs into, in the layout Coursier's `ivy2Local` reads. */
@@ -28,6 +30,55 @@ end IvyRoot
 object IvyLocal:
   def install(root: IvyRoot, module: StagedModule): IO[PublishFault, Unit] =
     placements(root.repository, module).flatMap(files => ZIO.foreachDiscard(files)(write))
+
+  /** Directories whose name is `revision`. Other revisions under the same modules stay. */
+  def removeRevision(root: IvyRoot, revision: String): IO[PublishFault, List[Path]] =
+    base(root.repository) match
+      case None       => ZIO.fail(PublishFault.Write("ivy repository has no local root"))
+      case Some(path) =>
+        ZIO
+          .attemptBlocking {
+            if !Files.isDirectory(path) || path.getNameCount < 2 then Nil
+            else
+              val found = directories(path, revision, 0)
+              found.foreach(deleteTree)
+              found
+          }
+          .mapError(_ => PublishFault.Write(revision))
+
+  /** The constant prefix of the ivy pattern, which is the repository directory. */
+  private def base(repository: coursier.ivy.IvyRepository): Option[Path] =
+    val text = prefix(repository.pattern.chunks.toList, "")
+    if text.isEmpty then None
+    else
+      val uri    = URI.create(text)
+      val parsed = if uri.getScheme == null then Path.of(text) else Path.of(uri)
+      Option(parsed).filter(path => path.isAbsolute && path.getNameCount >= 2)
+
+  private def prefix(chunks: List[coursier.ivy.Pattern.Chunk], acc: String): String =
+    chunks match
+      case (const: coursier.ivy.Pattern.Chunk.Const) :: tail => prefix(tail, acc + const.value)
+      case _                                                 => acc
+
+  private def directories(dir: Path, revision: String, depth: Int): List[Path] =
+    if depth > 8 || !Files.isDirectory(dir) then Nil
+    else
+      val stream = Files.list(dir)
+      try
+        stream.iterator.asScala.foldLeft(List.empty[Path]): (acc, child) =>
+          if !Files.isDirectory(child) then acc
+          else
+            val name = Option(child.getFileName).map(_.toString).getOrElse("")
+            if name == revision then child :: acc
+            else acc ++ directories(child, revision, depth + 1)
+      finally stream.close()
+
+  private def deleteTree(path: Path): Unit =
+    if Files.isDirectory(path) then
+      val stream = Files.list(path)
+      try stream.iterator.asScala.foreach(deleteTree)
+      finally stream.close()
+    Files.deleteIfExists(path)
 
   private final case class Placement(path: Path, bytes: Array[Byte])
 

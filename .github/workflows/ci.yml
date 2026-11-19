@@ -151,8 +151,8 @@ jobs:
           assets="$GITHUB_WORKSPACE/host/assets"
           ivy="$GITHUB_WORKSPACE/host/ivy"
           HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
-          mkdir -p .histos
-          printf '%s\n' "$version" > .histos/toolchain
+          printf 'HISTOS_PIN=%s\n' "$version" >> "$GITHUB_ENV"
+          export HISTOS_PIN="$version"
       - run: ./histos doctor --preflight test
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -303,8 +303,8 @@ jobs:
           assets="$GITHUB_WORKSPACE/host/assets"
           ivy="$GITHUB_WORKSPACE/host/ivy"
           HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
-          mkdir -p .histos
-          printf '%s\n' "$version" > .histos/toolchain
+          printf 'HISTOS_PIN=%s\n' "$version" >> "$GITHUB_ENV"
+          export HISTOS_PIN="$version"
       - run: ./histos doctor --preflight scaladoc
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
@@ -374,8 +374,8 @@ jobs:
           assets="$GITHUB_WORKSPACE/host/assets"
           ivy="$GITHUB_WORKSPACE/host/ivy"
           HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --no-client "$version"
-          mkdir -p .histos
-          printf '%s\n' "$version" > .histos/toolchain
+          printf 'HISTOS_PIN=%s\n' "$version" >> "$GITHUB_ENV"
+          export HISTOS_PIN="$version"
       - run: ./histos doctor --preflight format
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -440,8 +440,8 @@ jobs:
           assets="$GITHUB_WORKSPACE/host/assets"
           ivy="$GITHUB_WORKSPACE/host/ivy"
           HISTOS_ASSETS="$assets" HISTOS_IVY="$ivy" install/histos toolchain install --client "$version"
-          mkdir -p .histos
-          printf '%s\n' "$version" > .histos/toolchain
+          printf 'HISTOS_PIN=%s\n' "$version" >> "$GITHUB_ENV"
+          export HISTOS_PIN="$version"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"

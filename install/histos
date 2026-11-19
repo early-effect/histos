@@ -6,28 +6,18 @@
 set -eu
 version=shim
 fail() { echo "histos: $*" >&2; exit 1; }
-# selected is the pin this command resolved. local_id is the id in .histos/toolchain, or empty.
-# update runs selected. Any other command runs local_id when it is set.
-driver_id() {
-  command_name=$1
-  selected=$2
-  local_id=$3
-  case $command_name in
-    update) printf '%s' "$selected" ;;
-    *)
-      if [ -n "$local_id" ]; then printf '%s' "$local_id"
-      else printf '%s' "$selected"
-      fi
-      ;;
+# HISTOS_PIN is the toolchain id for this process. It does not change histos.version.
+# Empty means this command resolves the pin. A bad id fails. update does not call this.
+use_pin() {
+  case ${HISTOS_PIN:-} in
+    "") return 1 ;;
+    .*|*/*|*\\*|*[[:space:]]*) fail "HISTOS_PIN is not one path segment" ;;
   esac
+  jar=$home/toolchains/$HISTOS_PIN/histos.jar
+  [ -f "$jar" ] || fail "HISTOS_PIN $HISTOS_PIN is not installed"
+  version=$HISTOS_PIN
+  return 0
 }
-# Dry run of driver_id. No JDK, no fetch, no install.
-if [ "${1:-}" = --driver-id ]; then
-  [ "$#" -eq 4 ] || fail "usage: histos --driver-id <command> <selected> <local>"
-  driver_id "$2" "$3" "$4"
-  printf '\n'
-  exit 0
-fi
 hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -373,7 +363,7 @@ no_default() {
 find_repo() {
   dir=$PWD
   while :; do
-    if [ -f "$dir/build.properties" ] || [ -f "$dir/.histos/toolchain" ]; then
+    if [ -f "$dir/build.properties" ]; then
       printf '%s' "$dir"
       return 0
     fi
@@ -381,12 +371,6 @@ find_repo() {
     [ "$parent" = "$dir" ] && return 1
     dir=$parent
   done
-}
-# The id, or nothing when the file is absent. A bad id is rejected by the caller so `exit` is not trapped in `$()`.
-read_toolchain() {
-  file=$1/.histos/toolchain
-  [ -f "$file" ] || return 1
-  tr -d '[:space:]' < "$file"
 }
 read_pin() {
   props=$1/build.properties
@@ -865,15 +849,8 @@ histos help self"
         [ "$#" -eq 0 ] || fail "usage: histos toolchain client"
         ci_set && fail "CI uses the jar and does not build a native client"
         repo=$(find_repo || true)
-        local_id=
-        if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then local_id=$id; fi
-        picked=$(driver_id client "" "$local_id")
-        if [ -n "$picked" ]; then
-          case $picked in
-            .*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
-          esac
-          dir=$home/toolchains/$picked
-          [ -f "$dir/histos.jar" ] || fail "local toolchain $picked is not installed"
+        if use_pin; then
+          dir=$home/toolchains/$HISTOS_PIN
         else
           if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
             selected=$(resolve_channel "$pin")
@@ -951,9 +928,7 @@ histos help toolchain" ;;
       exit 0
     fi
     selected=$(resolve_channel "$next")
-    local_id=
-    if id=$(read_toolchain "$repo"); then local_id=$id; fi
-    version=$(driver_id update "$selected" "$local_id")
+    version=$selected
     ensure_toolchain "$version" "$(client_mode "$client_flag")"
     jar=$home/toolchains/$version/histos.jar
     offer_client "$(dirname "$jar")" "$client_flag" || exit 1
@@ -962,17 +937,8 @@ histos help toolchain" ;;
     ;;
 esac
 repo=$(find_repo || true)
-local_id=
-if [ -n "$repo" ] && id=$(read_toolchain "$repo"); then local_id=$id; fi
-# An empty result means this command does not keep a local toolchain, so the pin is resolved below.
-picked=$(driver_id "${1:-}" "" "$local_id")
-if [ -n "$picked" ]; then
-  case $picked in
-    .*|*/*|*\\*) fail "local toolchain id is not one path segment" ;;
-  esac
-  jar=$home/toolchains/$picked/histos.jar
-  [ -f "$jar" ] || fail "local toolchain $picked is not installed"
-  version=$picked
+# update already exited. Every other command runs HISTOS_PIN when it is set.
+if use_pin; then
   exec_jar "$jar" "$repo" "$@"
 fi
 if [ -n "$repo" ] && pin=$(read_pin "$repo"); then

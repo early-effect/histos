@@ -79,6 +79,7 @@ enum Command:
   case Clean(projects: List[ProjectName], extent: histos.server.CleanExtent)
   case Assembly(modules: List[String])
   case PublishLocal(tokens: List[histos.publish.PublishToken])
+  case PublishWithdraw
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(automatic: Boolean, tokens: List[String])
   case PublishPromote(id: histos.central.DeploymentId)
@@ -735,6 +736,8 @@ object Cli:
       case Command.Assembly(modules)    => assembly(repo, apiJar, modules)
       case Command.PublishLocal(tokens) =>
         publishLocal(repo, apiJar, tokens)
+      case Command.PublishWithdraw =>
+        publishWithdraw(repo, apiJar)
       case Command.PublishSnapshots(tokens) =>
         publishSnapshots(repo, apiJar, tokens)
       case Command.PublishRelease(automatic, tokens) =>
@@ -1543,6 +1546,10 @@ object Cli:
       tokens: List[histos.publish.PublishToken],
   )(using Appearance, LockChoice): URIO[Local, Completed] =
     val call = Call.PublishLocal(tokens)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishWithdraw(repo: Path, apiJar: Path)(using Appearance, LockChoice): URIO[Local, Completed] =
+    val call = Call.PublishWithdraw
     attach(repo, call, locally(repo, apiJar, call))
 
   private def publishSnapshots(
@@ -2559,6 +2566,8 @@ object Cli:
         served(repo, Call.Assembly(modules))
       case Command.PublishLocal(tokens) =>
         served(repo, Call.PublishLocal(tokens))
+      case Command.PublishWithdraw =>
+        served(repo, Call.PublishWithdraw)
       case Command.PublishSnapshots(tokens) =>
         served(repo, Call.PublishSnapshots(tokens))
       case Command.PublishRelease(automatic, tokens) =>

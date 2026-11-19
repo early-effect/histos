@@ -132,6 +132,41 @@ object ShimSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("HISTOS_PIN selects its jar and a bad id fails") {
+      val pin = "0.5.0-abcdefabcdef-SNAPSHOT"
+      ZIO.scoped {
+        script match
+          case Left(message) => ZIO.fail(new java.io.IOException(message))
+          case Right(file)   =>
+            for
+              root <- Workspace.work("histos-shim-pin").orDieWith(error => new java.io.IOException(error.message))
+              bin  = root.resolve("bin")
+              home = root.resolve("home")
+              log  = root.resolve("java.log")
+              jar  = home.resolve("toolchains").resolve(pin).resolve("histos.jar")
+              _        <- write(jar, "pin-jar")
+              _        <- write(bin.resolve("java"), javaStub)
+              _        <- executable(bin.resolve("java"))
+              _        <- write(root.resolve("build.properties"), "histos.version=0.5.0-other-SNAPSHOT\n")
+              selected <- pinned(file, root, bin, home, log, pin, List("version"))
+              slash    <- pinned(file, root, bin, home, log, "a/b", List("version"))
+              dot      <- pinned(file, root, bin, home, log, "..", List("version"))
+              space    <- pinned(file, root, bin, home, log, "a b", List("version"))
+              back     <- pinned(file, root, bin, home, log, "a\\b", List("version"))
+              missing  <- pinned(file, root, bin, home, log, "0.5.0-missing-SNAPSHOT", List("version"))
+              recorded <- ZIO.attemptBlocking(Files.readString(log)).orDie
+            yield assertTrue(
+              selected.code == 0,
+              recorded.contains(jar.toString),
+              !recorded.contains("0.5.0-other-SNAPSHOT"),
+              slash.code != 0 && slash.out.contains("not one path segment"),
+              dot.code != 0 && dot.out.contains("not one path segment"),
+              space.code != 0 && space.out.contains("not one path segment"),
+              back.code != 0 && back.out.contains("not one path segment"),
+              missing.code != 0 && missing.out.contains("is not installed"),
+            )
+      }
+    },
   )
 
   private final case class ShimOut(code: Int, out: String)
@@ -380,6 +415,40 @@ object ShimSpec extends ZIOSpecDefault:
       Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwxr-xr-x"))
       ()
     }.orDie
+
+  /** One shim run. A non-zero exit is a result, so a rejected pin stays an assertion. */
+  private def pinned(
+      shim: Path,
+      root: Path,
+      bin: Path,
+      home: Path,
+      log: Path,
+      pin: String,
+      args: List[String],
+  ): ZIO[Any, java.io.IOException, ShimOut] =
+    ZIO
+      .attemptBlocking {
+        val builder = new ProcessBuilder((shim.toString :: args)*)
+        builder.directory(root.toFile)
+        builder.redirectErrorStream(true)
+        val env = builder.environment()
+        env.put("HISTOS_HOME", home.toString)
+        env.put("HISTOS_PIN", pin)
+        env.put("JAVA_LOG", log.toString)
+        env.remove("HISTOS_ASSETS")
+        env.remove("HISTOS_IVY")
+        env.remove("CI")
+        val inherited = Option(env.get("PATH")).getOrElse("")
+        env.put("PATH", bin.toString + java.io.File.pathSeparator + inherited)
+        val process  = builder.start()
+        val finished = process.waitFor(30, TimeUnit.SECONDS)
+        val out      = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+        if !finished then
+          process.destroyForcibly()
+          ShimOut(1, s"timed out: $out")
+        else ShimOut(process.exitValue(), out)
+      }
+      .mapError(error => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString)))
 
   private def runShim(
       shim: Path,

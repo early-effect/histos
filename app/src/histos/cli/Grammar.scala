@@ -51,6 +51,7 @@ object Grammar:
     case Clean(tokens: List[String])
     case Assembly(modules: List[String])
     case PublishLocal(tokens: List[String])
+    case PublishWithdraw
     case PublishSnapshots(projects: List[String])
     case PublishRelease(automatic: Boolean, tokens: List[String])
     case PublishPromote(id: String)
@@ -127,6 +128,8 @@ object Grammar:
     CliCommand("assembly", Args.text("module").*).map(names => Wire.Assembly(names.toList))
   private val publishLocal =
     CliCommand("local", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
+  private val publishWithdraw =
+    CliCommand("withdraw").map(_ => Wire.PublishWithdraw)
   private val publishSnapshots =
     CliCommand("snapshots", Args.text("project").*).map(names => Wire.PublishSnapshots(names.toList))
   private val publishRelease =
@@ -143,7 +146,7 @@ object Grammar:
     CliCommand("assets", Args.text("token").*).map(tokens => Wire.PublishAssets(tokens.toList))
   private val publish =
     CliCommand("publish").subcommands(
-      publishLocal | publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
+      publishLocal | publishWithdraw | publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
     )
   private val mcp    = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp    = CliCommand("bsp").map(_ => Wire.Bsp)
@@ -502,6 +505,8 @@ object Grammar:
         ZIO.succeed(Command.Assembly(modules))
       case Wire.PublishLocal(tokens) =>
         publishTokens(tokens).map(Command.PublishLocal(_))
+      case Wire.PublishWithdraw =>
+        ZIO.succeed(Command.PublishWithdraw)
       case Wire.PublishSnapshots(tokens) =>
         ZIO.succeed(Command.PublishSnapshots(tokens))
       case Wire.PublishRelease(automatic, tokens) =>

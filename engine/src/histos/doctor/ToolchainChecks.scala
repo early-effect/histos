@@ -42,12 +42,12 @@ object ToolchainChecks:
       check(localId)(local(machine.repo)),
     )
 
-  /** The warning `doctor` reports for a stale local toolchain. The same sentence `ApiClock` prints. */
-  def reported(pointed: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Outcome =
-    ApiClock.decide(pointed, identity, head) match
+  /** The warning `doctor` reports when the running jar was packed from another commit of this checkout. */
+  def reported(owned: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Outcome =
+    ApiClock.decide(owned, identity, head) match
       case ApiClock.Admit.Warn(line) => Outcome.Found(ToolchainDiagnostic.Local(line))
       case ApiClock.Admit.Go         =>
-        Outcome.Ok(localId, "the local toolchain matches this checkout, or this command runs the pin")
+        Outcome.Ok(localId, "the packed commit is not in this checkout, or it matches HEAD")
 
   def local(repo: Path): UIO[List[Outcome]] =
     ApiClock

@@ -1360,8 +1360,8 @@ object Workflow:
        |assets="$$GITHUB_WORKSPACE/host/assets"
        |ivy="$$GITHUB_WORKSPACE/host/ivy"
        |HISTOS_ASSETS="$$assets" HISTOS_IVY="$$ivy" install/histos toolchain install $flag "$$version"
-       |mkdir -p .histos
-       |printf '%s\\n' "$$version" > .histos/toolchain""".stripMargin
+       |printf 'HISTOS_PIN=%s\\n' "$$version" >> "$$GITHUB_ENV"
+       |export HISTOS_PIN="$$version"""".stripMargin
 
   private def stageBody: String =
     "set -eu\n" + jsonStringShell + "\n" +

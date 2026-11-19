@@ -37,7 +37,7 @@ object PublishRun:
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
         placed <- toolchain(repo, graph, staged, jdk, note)
         lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
-        _      <- packLocal(repo, graph, staged, placed)
+        _      <- packLocal(repo, graph, staged, placed, note)
         _      <- localAssets(repo, graph, staged, placed)
       yield Report(show(staged, lines))
 
@@ -175,6 +175,7 @@ object PublishRun:
       graph: ProjectGraph,
       staged: StagedTree,
       placed: List[DistStock.Placed],
+      note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & Scope, LocalPublishError, Unit] =
     placed match
       case Nil => ZIO.unit
@@ -193,8 +194,9 @@ object PublishRun:
                 .attemptBlocking(localManifest(item.id, module, item.kit))
                 .mapError(_ => LocalPublishError.Io(item.kit.toString))
               _ <- DistStock
-                .install(Path.of(machine.userHome), repo, item.id, jar, item.kit, text)
+                .install(Path.of(machine.userHome), item.id, jar, item.kit, text)
                 .mapError(error => LocalPublishError.Stock(error.message))
+              _ <- note(s"HISTOS_PIN=${item.id}")
             yield ()
         yield ()
 

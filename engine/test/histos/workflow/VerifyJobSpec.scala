@@ -85,10 +85,17 @@ object VerifyJobSpec extends ZIOSpecDefault:
       job.contains("id: llvm")
 
   private def suiteInstall(job: String): Boolean =
-    job.contains(NoClient) && !job.contains(Setup)
+    job.contains(NoClient) && !job.contains(Setup) && pinsEnv(job)
+
+  /** The job selects the jar it just installed. Later steps see `GITHUB_ENV`. The pin file stays. */
+  private def pinsEnv(job: String): Boolean =
+    job.contains("printf 'HISTOS_PIN=%s\\n' \"$version\" >> \"$GITHUB_ENV\"") &&
+      job.contains("export HISTOS_PIN=\"$version\"") &&
+      !job.contains("mkdir -p .histos") &&
+      !job.contains("> .histos/toolchain")
 
   private def clientJob(job: String): Boolean =
-    job.contains(WithClient) && job.contains("./histos run host") && job.contains("id: llvm") &&
+    job.contains(WithClient) && pinsEnv(job) && job.contains("./histos run host") && job.contains("id: llvm") &&
       job.contains("path: \"~/.cache/coursier/v1\"") && !job.contains(Setup) && !job.contains("setup-node") &&
       !job.contains("playwright")
 

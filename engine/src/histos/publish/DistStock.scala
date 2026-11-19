@@ -34,12 +34,11 @@ object DistStock:
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, ToolchainPublishError, List[Placed]] =
     ZIO.foreach(ships)(ship => one(repo, graph, ship, jdk, note))
 
-  /** `~/.histos/toolchains/<id>` and `.histos/toolchain`. `home` is the user home, not a hardcoded path. `jar` is the
-    * distribution this machine just packed.
+  /** `~/.histos/toolchains/<id>`. `home` is the user home, not a hardcoded path. `jar` is the distribution this machine
+    * just packed. The pin stays in `build.properties`. `HISTOS_PIN` is how a process selects this id.
     */
   def install(
       home: Path,
-      repo: Path,
       id: String,
       jar: Path,
       kit: Path,
@@ -49,7 +48,7 @@ object DistStock:
       .fromEither(segment(id))
       .flatMap: checked =>
         val dir = home.resolve(".histos").resolve("toolchains").resolve(checked)
-        write(dir, repo, checked, jar, kit, manifest)
+        write(dir, jar, kit, manifest)
 
   /** Resolve the launcher from ivy, then Central, and write the distribution jar. */
   def pack(
@@ -137,13 +136,10 @@ object DistStock:
 
   private def write(
       dir: Path,
-      repo: Path,
-      id: String,
       jar: Path,
       kit: Path,
       manifest: String,
   ): IO[ToolchainPublishError, Unit] =
-    val pointer = repo.resolve(".histos").resolve("toolchain")
     ZIO
       .attemptBlocking {
         Files.createDirectories(dir)
@@ -152,8 +148,6 @@ object DistStock:
         List("histos-client", "client.stamp", "client.origin", "client.choice").foreach: name =>
           Files.deleteIfExists(dir.resolve(name))
         Files.writeString(dir.resolve("manifest.json"), manifest)
-        Option(pointer.getParent).foreach(Files.createDirectories(_))
-        Files.writeString(pointer, id + "\n")
         ()
       }
       .mapError(_ => ToolchainPublishError.Install(IoFailure(dir, IoFault.Write)))

@@ -33,11 +33,11 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _) |
-          Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_) |
-          Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewRun(_, _) | Call.CacheVerify(_) =>
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
+          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
+          Call.Graph | Call.Run(_, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
+          Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) |
+          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) =>
         true
       case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
         false
@@ -123,6 +123,8 @@ object Perform:
                     withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
                   )
                 )
+              case Call.PublishWithdraw =>
+                held(build => follow(Calls.withdraw(repo, build.graph, machine, say)))
               case Call.PublishLocal(tokens) =>
                 held(build =>
                   follow(

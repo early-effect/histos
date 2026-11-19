@@ -2,26 +2,21 @@ package histos
 
 import histos.server.ServerError
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import zio.{UIO, ZIO}
 
-/** The local toolchain against this checkout. A pointer at `.histos/toolchain` that was built from another commit, or
-  * from a dirty tree, warns. The command runs. There is no stop and no hatch.
+/** The running jar against this checkout. A jar packed from a commit this checkout contains warns when that commit is
+  * not HEAD, or the tree was dirty. The command runs. There is no stop and no hatch.
   */
 object ApiClock:
-  val pointerName: String = "toolchain"
-
   enum Admit:
     case Go
     case Warn(line: String)
 
-  def pointer(repo: Path): Path =
-    repo.resolve(".histos").resolve(pointerName)
-
-  /** `pointed` is `.histos/toolchain`. The warning names the packed commit and this checkout. */
-  def decide(pointed: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Admit =
-    if !pointed then Admit.Go
+  /** `owned` means `identity.commit` is a commit in this checkout. The warning names that commit and HEAD. */
+  def decide(owned: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Admit =
+    if !owned then Admit.Go
     else
       (identity, head) match
         case (Some(found), Some(commit)) =>
@@ -31,10 +26,11 @@ object ApiClock:
         case _ => Admit.Go
 
   def admit(repo: Path): UIO[Admit] =
-    pointed(repo)
-      .zip(checkout(repo))
-      .map: (marked, head) =>
-        decide(marked, ToolchainIdentity.loaded, head)
+    val identity = ToolchainIdentity.loaded
+    checkout(repo)
+      .zip(owns(repo, identity.map(_.commit)))
+      .map: (head, owned) =>
+        decide(owned, identity, head)
 
   def versionLines(versionLine: String): String =
     val number = versionLine.stripPrefix("histos ").trim
@@ -57,8 +53,19 @@ object ApiClock:
       case Some(here) => s"mcp $here"
       case None       => "mcp has no toolchain id"
 
-  private def pointed(repo: Path): UIO[Boolean] =
-    ZIO.attemptBlocking(Files.isRegularFile(pointer(repo))).orElseSucceed(false)
+  /** True when `commit` is a commit object in `repo`. Another repository does not own a Histos pack. */
+  private def owns(repo: Path, commit: Option[String]): UIO[Boolean] =
+    commit match
+      case None      => ZIO.succeed(false)
+      case Some(sha) =>
+        ZIO
+          .attemptBlocking:
+            val process = new ProcessBuilder("git", "-C", repo.toString, "cat-file", "-e", s"$sha^{commit}")
+              .redirectError(ProcessBuilder.Redirect.DISCARD)
+              .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+              .start()
+            process.waitFor() == 0
+          .orElseSucceed(false)
 
   private def checkout(repo: Path): UIO[Option[String]] =
     ZIO

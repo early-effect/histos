@@ -198,6 +198,19 @@ object Calls:
   ): IO[ServerError, Unit] =
     told(say, GraphText.render(graph, plugins.links)) *> ok(say)
 
+  def withdraw(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      say: Say,
+  ): ZIO[IvyRoot, ServerError, Unit] =
+    histos.publish.LocalWithdraw
+      .run(repo, graph, machine)
+      .foldZIO(
+        failure => finish(say, CallResult.Fault(BuildFault.Publish(failure))),
+        report => told(say, report.lines.mkString("\n")) *> ok(say),
+      )
+
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
