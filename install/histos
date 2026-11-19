@@ -279,14 +279,28 @@ newest() {
     END { if (pick == "") exit 1; print pick }
   '
 }
-# X.Y.Z of a pointer or a timestamp pin. A release is not a snapshot line.
+# The X.Y.Z a snapshot pin belongs to. A commit pin and a timestamp pin keep that number.
+# A release is not a snapshot line.
 snapshot_line() {
-  case $1 in
-    *-SNAPSHOT) printf '%s' "${1%-SNAPSHOT}" ;;
-    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]-[1-9]*) printf '%s' "${1%-*-*}" ;;
-    *) return 1 ;;
-  esac
+  printf '%s\n' "$1" | awk '
+    {
+      if (match($0, /^[0-9]+\.[0-9]+\.[0-9]+-/))
+        print substr($0, RSTART, RLENGTH - 1)
+      else exit 1
+    }
+  '
 }
+# Dry run of the update line. No JDK, no fetch.
+if [ "${1:-}" = --snapshot-line ]; then
+  [ "$#" -eq 2 ] || fail "usage: histos --snapshot-line <pin>"
+  snapshot_line "$2"
+  exit 0
+fi
+if [ "${1:-}" = --newest ]; then
+  [ "$#" -eq 3 ] || fail "usage: histos --newest <release|snapshot> <floor>"
+  newest "$2" "$3"
+  exit 0
+fi
 asset_names() {
   awk '
     {
@@ -347,7 +361,7 @@ take_stable() {
   pin=$2
   [ "$stable" = yes ] && return 0
   if [ -t 0 ] && [ -t 2 ] && { [ -z "${CI:-}" ] || [ "${CI:-}" = false ]; }; then
-    printf 'histos %s is a stable release newer than %s. Switch to %s? [y/N] ' "$release" "$pin" "$release" >&2
+    printf 'histos %s is a stable release. Switch from %s to %s? [y/N] ' "$release" "$pin" "$release" >&2
     answer=
     read -r answer < /dev/tty || answer=
     case $answer in

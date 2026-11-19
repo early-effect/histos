@@ -89,6 +89,36 @@ object ShimSpec extends ZIOSpecDefault:
         yield assertTrue(copied.installed == copied.staged, !copied.log.contains("coursier"))
       }
     },
+    test("a commit pin does not offer an older release") {
+      val pin   = "0.5.0-dc7382bc347b-SNAPSHOT"
+      val names =
+        """0.4.4-manifest.json
+          |0.5.0-manifest.json
+          |channel-0.4.4-SNAPSHOT
+          |channel-0.5.0-SNAPSHOT
+          |channel-0.6.0-SNAPSHOT
+          |""".stripMargin
+      script match
+        case Left(message) => ZIO.fail(new java.io.IOException(message))
+        case Right(file)   =>
+          for
+            line     <- invoke(file, Chunk("--snapshot-line", pin), "")
+            stamp    <- invoke(file, Chunk("--snapshot-line", "0.5.0-20261119.025603-1"), "")
+            pointer  <- invoke(file, Chunk("--snapshot-line", "0.5.0-SNAPSHOT"), "")
+            release  <- invoke(file, Chunk("--snapshot-line", "0.4.4"), "")
+            older    <- invoke(file, Chunk("--newest", "release", line.out), "0.4.4-manifest.json\n")
+            ahead    <- invoke(file, Chunk("--newest", "release", line.out), names)
+            followed <- invoke(file, Chunk("--newest", "snapshot", line.out), names)
+          yield assertTrue(
+            line.code == 0 && line.out == "0.5.0",
+            stamp.code == 0 && stamp.out == "0.5.0",
+            pointer.code == 0 && pointer.out == "0.5.0",
+            release.code != 0,
+            older.code != 0,
+            ahead.code == 0 && ahead.out == "0.5.0",
+            followed.code == 0 && followed.out == "0.6.0-SNAPSHOT",
+          )
+    },
     test("a one-argument install does not read an unset client flag") {
       ZIO.scoped {
         for
@@ -103,6 +133,23 @@ object ShimSpec extends ZIOSpecDefault:
       }
     },
   )
+
+  private final case class ShimOut(code: Int, out: String)
+
+  private def invoke(file: Path, args: Chunk[String], input: String): ZIO[Any, java.io.IOException, ShimOut] =
+    ZIO
+      .attemptBlocking {
+        val command = file.toString :: args.toList
+        val process = new ProcessBuilder(command*)
+          .redirectErrorStream(true)
+          .start()
+        val stdin = process.getOutputStream
+        stdin.write(input.getBytes(StandardCharsets.UTF_8))
+        stdin.close()
+        val out = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+        ShimOut(process.waitFor(), out)
+      }
+      .mapError(error => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString)))
 
   private def kind(root: Path, text: String): ZIO[Any, java.io.IOException, String] =
     script match
