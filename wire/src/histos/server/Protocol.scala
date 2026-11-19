@@ -37,6 +37,9 @@ enum ServerError:
   case Listening(socket: Path)
   case DifferentVersion
   case Restart(socket: Path, wanted: String, got: String)
+
+  /** A stop was not honored, and the process is still listening. The record stays with that process. */
+  case DidNotStop(socket: Path)
   case NoServer
   case Protocol
   case Address(path: Path)
@@ -53,8 +56,9 @@ enum ServerError:
       "histos server is a different version and the restart did not finish"
     case Restart(socket, wanted, got) =>
       s"histos server at $socket did not record version $wanted; it has $got"
-    case NoServer => "no histos server is running"
-    case Protocol =>
+    case DidNotStop(socket) => s"histos server at $socket did not stop"
+    case NoServer           => "no histos server is running"
+    case Protocol           =>
       "histos server sent a frame this client does not understand"
     case Address(path) => s"histos server socket path is too long: $path"
     case Io(op)        => s"histos server failed while ${op.label}"
@@ -207,6 +211,9 @@ enum Call derives JsonCodec:
 
   /** Replace the server. The successor starts as `successor` names, never as the server it replaces. */
   case Reboot(successor: Successor)
+
+  /** Exit. The server removes its record and does not start another process. */
+  case Stop
   case Version
   case CachePath
   case CacheList
@@ -226,7 +233,7 @@ enum Call derives JsonCodec:
   /** A nested watch is quiet. Only the program under one watch reads stdin. */
   def attendance: Attendance =
     this match
-      case Bsp | Reboot(_)                             => Attendance.Held
+      case Bsp | Reboot(_) | Stop                      => Attendance.Held
       case Run(_, _, _, _) | Watch(Run(_, _, _, _), _) => Attendance.Program
       case _                                           => Attendance.Quiet
 end Call

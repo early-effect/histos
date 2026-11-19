@@ -146,6 +146,15 @@ object Record:
       }
       .mapError(_ => ServerError.Io(ServerIo.Save(dest)))
 
+  /** A record left by a server that is not listening. A live server removes its own record as it stops. */
+  def clear(repo: Path): UIO[Unit] =
+    val path = file(repo)
+    ZIO.attemptBlocking {
+      Files.deleteIfExists(path)
+      Files.deleteIfExists(path.resolveSibling("server.json.tmp"))
+      ()
+    }.ignore
+
   def read(repo: Path): UIO[Option[Written]] =
     ZIO
       .attemptBlocking {
@@ -167,16 +176,69 @@ object Record:
 end Record
 
 object Attach:
-  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. The command then runs in-process. A different version is
+  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. A record whose socket is not listening is stale: it is
+    * removed and the command sees [[Decision.Absent]]. A live server at another version is
     * [[Decision.DifferentVersion]].
     */
   def decide(repo: Path, version: String): UIO[Decision] =
-    Record
-      .read(repo)
-      .map:
-        case None                                      => Decision.Absent
-        case Some(record) if record.version != version => Decision.DifferentVersion(record.socket)
-        case Some(record)                              => Decision.Open(record.socket)
+    Record.read(repo).flatMap {
+      case None         => ZIO.succeed(Decision.Absent)
+      case Some(record) =>
+        listening(record.socket).flatMap { live =>
+          ServerHandoff.step(recorded = true, listening = live, same = record.version == version) match
+            case ServerHandoff.Step.Start => Record.clear(repo).as(Decision.Absent)
+            case ServerHandoff.Step.Stop  => ZIO.succeed(Decision.DifferentVersion(record.socket))
+            case ServerHandoff.Step.Use   => ZIO.succeed(Decision.Open(record.socket))
+        }
+    }
+
+  /** Ask `socket` to exit. The record is gone when this returns. A process that stays up keeps its record. */
+  def stop(repo: Path, socket: Path): IO[ServerError, Unit] =
+    listening(socket).flatMap { live =>
+      ServerHandoff.step(recorded = true, listening = live, same = false) match
+        case ServerHandoff.Step.Use   => ZIO.unit
+        case ServerHandoff.Step.Start => Record.clear(repo)
+        case ServerHandoff.Step.Stop  =>
+          Client
+            .talk(socket, Call.Stop)
+            .runCollect
+            .foldZIO(
+              _ => gone(repo, socket),
+              feeds =>
+                val heard = feeds.exists {
+                  case Feed.Done(CallResult.Reported(_)) => true
+                  case _                                 => false
+                }
+                if heard then awaitGone(repo, socket) else gone(repo, socket),
+            )
+    }
+
+  private def gone(repo: Path, socket: Path): IO[ServerError, Unit] =
+    Record.read(repo).flatMap {
+      case None    => ZIO.unit
+      case Some(_) =>
+        listening(socket).flatMap { still =>
+          if still then ZIO.fail(ServerError.DidNotStop(socket)) else Record.clear(repo)
+        }
+    }
+
+  private def awaitGone(repo: Path, socket: Path): IO[ServerError, Unit] =
+    def poll(left: Int): IO[ServerError, Unit] =
+      Record.read(repo).flatMap {
+        case None                => ZIO.unit
+        case Some(_) if left > 0 => ZIO.sleep(50.millis) *> poll(left - 1)
+        case Some(_)             => ZIO.fail(ServerError.DidNotStop(socket))
+      }
+    poll(1200)
+
+  private def listening(socket: Path): UIO[Boolean] =
+    ZIO
+      .attemptBlocking {
+        val channel = SocketChannel.open(UnixDomainSocketAddress.of(socket))
+        channel.close()
+        true
+      }
+      .fold(_ => false, identity)
 
   /** Poll until the recorded driver matches. The wait is the same as a cold start. */
   def await(repo: Path, version: String): IO[ServerError, Path] =
@@ -188,22 +250,6 @@ object Attach:
       }
     poll(1200)
 
-  /** Ask `socket` to reboot onto this process's identity. The replacement's socket when that process records this
-    * driver.
-    */
-  def replace(repo: Path, version: String, socket: Path): UIO[Option[Path]] =
-    Successor.here
-      .flatMap(onto => Client.talk(socket, Call.Reboot(onto)).runCollect)
-      .foldZIO(
-        _ => ZIO.succeed(None),
-        feeds =>
-          val rebooted = feeds.exists {
-            case Feed.Done(CallResult.Reported(_)) => true
-            case _                                 => false
-          }
-          if rebooted then await(repo, version).map(Some(_)).orElseSucceed(None)
-          else ZIO.succeed(None),
-      )
 end Attach
 
 object Client:
@@ -682,6 +728,7 @@ object Daemon:
                           watch = (inner, policy, edge) => watched(inner, policy, edge, relay),
                           reload = Calls.finish(out, CallResult.Reported(Report.empty)),
                           reboot = onto => reboot(repo, bound, server, life, output, onto),
+                          stop = halt(repo, bound, server, life, output),
                           bsp = bsp(
                             repo,
                             apiJar,
@@ -1098,8 +1145,8 @@ object Daemon:
           Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
-          Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) | Call.Stop |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) |
           Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewClean(_, _) | Call.PreviewRun(_, _) =>
@@ -1146,6 +1193,22 @@ object Daemon:
       _ <- life.armed.set(false)
       _ <- remove(repo, bound)
       _ <- life.relaunch(onto)
+      _ <- life.stopping.succeed(())
+      _ <- ZIO.attemptBlocking(server.close()).ignore
+    yield ()
+
+  /** Exit. The record goes with this process. Nothing is started in its place. */
+  private def halt(
+      repo: Path,
+      bound: Path,
+      server: ServerSocketChannel,
+      life: Lifecycle,
+      output: OutputStream,
+  ): ZIO[Any, ServerError, Unit] =
+    for
+      _ <- write(output, wire(Message.Done(CallResult.Reported(Report.empty))), bound)
+      _ <- life.armed.set(false)
+      _ <- remove(repo, bound)
       _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
     yield ()

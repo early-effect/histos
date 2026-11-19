@@ -63,9 +63,9 @@ object Operation:
       case Command.Run(_, _, _) =>
         Left(CliParseError.Rejected)
       case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.Reboot |
-          Command.New(_, _, _) | Command.Init(_, _, _) | Command.Doctor(_, _, _, _, _, _) | Command.Explain(_) |
-          Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) | Command.Coverage(_, _, _) |
-          Command.ToolchainClient =>
+          Command.Stop | Command.New(_, _, _) | Command.Init(_, _, _) | Command.Doctor(_, _, _, _, _, _) |
+          Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) |
+          Command.Coverage(_, _, _) | Command.ToolchainClient =>
         Left(CliParseError.Rejected)
       case Command.Version                                  => Right(Call.Version)
       case Command.Graph                                    => Right(Call.Graph)

@@ -100,16 +100,14 @@ object Session:
                   drop(desk) *>
                     Record.read(repo).flatMap { stored =>
                       val was  = stored.map(_.version).getOrElse(text)
-                      val line = ApiClock.rebootText(text, was, socket.toString)
+                      val line = ApiClock.stopText(was, socket.toString)
                       Console.printLineError(line).ignore *>
-                        Attach.replace(repo, text, socket).flatMap {
-                          case Some(_) if rebooting(call) =>
-                            withProcess(repo, call, CallResult.reported())
-                          case Some(fresh) =>
-                            ask(repo, apiJar, machine, desk, call, text, fresh, paint)
-                              .flatMap(withProcess(repo, call, _))
-                          case None =>
-                            ZIO.fail(TransportError.Remote(ApiClock.restart(socket, text, was)))
+                        Attach.stop(repo, socket).mapError(TransportError.Remote(_)).flatMap { _ =>
+                          call match
+                            case Call.Reboot(_) | Call.Stop => ZIO.succeed(CallResult.reported())
+                            case _                          =>
+                              locally(repo, apiJar, machine, desk, call, text, paint)
+                                .flatMap(withProcess(repo, call, _))
                         }
                     }
                 case Decision.Open(socket) =>
@@ -120,11 +118,6 @@ object Session:
               }
           },
       )
-
-  private def rebooting(call: Call): Boolean =
-    call match
-      case Call.Reboot(_) => true
-      case _              => false
 
   /** Version names this MCP process. Reboot returns the line and the socket instead of an empty tool result. */
   private def withProcess(repo: Path, call: Call, result: CallResult): UIO[CallResult] =
@@ -378,6 +371,7 @@ object Session:
           Cli.bootCall(repo, histos.server.Daemon.spawn).flatMap { socket =>
             say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
           },
+        stop = Calls.finish(say, CallResult.reported()),
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
         compiled = ZIO.unit,
       )

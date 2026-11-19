@@ -113,41 +113,6 @@ if [ "${1:-}" = --manifest-kind ]; then
   printf '\n'
   exit 0
 fi
-# A string field anywhere in a JSON object. A missing key prints nothing. Manifest lines stay on json_string.
-json_field() {
-  awk -v key="$2" '
-    BEGIN { needle = "\"" key "\"" }
-    {
-      i = index($0, needle)
-      if (i == 0) next
-      rest = substr($0, i + length(needle))
-      sub(/^[[:space:]]*:[[:space:]]*/, "", rest)
-      if (substr(rest, 1, 1) != "\"") next
-      rest = substr(rest, 2)
-      out = ""
-      esc = 0
-      while (length(rest) > 0) {
-        ch = substr(rest, 1, 1)
-        rest = substr(rest, 2)
-        if (esc) { out = out ch; esc = 0; continue }
-        if (ch == "\\") { esc = 1; continue }
-        if (ch == "\"") { print out; exit }
-        out = out ch
-      }
-    }
-  ' "$1"
-}
-# The previous server's record is not part of update. Remove it, and a socket it names under this checkout or this home.
-retire_server() {
-  repo=$1
-  record=$repo/.histos/server.json
-  [ -f "$record" ] || return 0
-  socket=$(json_field "$record" socket || true)
-  case $socket in
-    "$repo/.histos/"*|"$home/run/"*) rm -f -- "$socket" ;;
-  esac
-  rm -f -- "$record" "$repo/.histos/server.json.tmp" "$repo/.histos/server.sock"
-}
 check_java() {
   java_bin=$(command -v java) || fail "java is not on PATH
 $java_guide"
@@ -992,8 +957,7 @@ histos help toolchain" ;;
     ensure_toolchain "$version" "$(client_mode "$client_flag")"
     jar=$home/toolchains/$version/histos.jar
     offer_client "$(dirname "$jar")" "$client_flag" || exit 1
-    # The previous record is gone before version runs, so the new driver does not talk to that server.
-    retire_server "$repo"
+    # version stops a server recorded for another toolchain and starts one for this jar. The record moves with that process.
     exec_jar "$jar" "$repo" version
     ;;
 esac

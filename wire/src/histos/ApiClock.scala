@@ -43,6 +43,9 @@ object ApiClock:
   def rebootText(onto: String, was: String, socket: String): String =
     s"rebooting server onto $onto (was $was) at $socket"
 
+  def stopText(was: String, socket: String): String =
+    s"stopping server $was at $socket"
+
   def restart(socket: Path, wanted: String, got: String): ServerError =
     ServerError.Restart(socket, wanted, got)
 

@@ -24,7 +24,7 @@ object LockGrammar:
           Command.PublishDrop(_) | Command.PublishAssets(_) | Command.Mcp | Command.Bsp | Command.Server |
           Command.Portal | Command.CachePath | Command.CacheList | Command.CacheClean(_) | Command.CachePromote(_, _) |
           Command.CacheForget(_) | Command.CacheVerify(_) | Command.Workflow(_) | Command.Fmt(_, _) | Command.Reload |
-          Command.Reboot | Command.Cancel(_) | Command.PreviewClean(_, _) | Command.Observe | Command.New(_, _, _) |
-          Command.Init(_, _, _) | Command.Doctor(_, _, _, _, _, _) | Command.Explain(_) | Command.Deps(_) |
-          Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) | Command.Affected(_) =>
+          Command.Reboot | Command.Stop | Command.Cancel(_) | Command.PreviewClean(_, _) | Command.Observe |
+          Command.New(_, _, _) | Command.Init(_, _, _) | Command.Doctor(_, _, _, _, _, _) | Command.Explain(_) |
+          Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) | Command.Affected(_) =>
         DispositionSubject.Plain

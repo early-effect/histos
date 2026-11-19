@@ -69,6 +69,7 @@ object CommandName:
     trusted("launcher"),
     trusted("reload"),
     trusted("reboot"),
+    trusted("stop"),
     trusted("cancel"),
     trusted("preview"),
     trusted("observe"),

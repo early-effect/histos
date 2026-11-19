@@ -12,9 +12,9 @@ import histos.server.{
   RunLaunch,
   ServerError,
   ServerFile,
+  ServerHandoff,
   ServerStamp,
   ServerWait,
-  Successor,
 }
 import histos.report.CallResult
 import histos.report.WireJson.given zio.json.JsonCodec[histos.lock.InvocationEnvelope]
@@ -147,7 +147,10 @@ object Main extends ZIOAppDefault:
           if ok then
             exchange(repo, socket, call, appearance).catchSome:
               case ServerError.Unreachable(_) =>
-                boot(repo).flatMap(fresh => exchange(repo, fresh, call, appearance))
+                listening(socket).flatMap { live =>
+                  if live then ZIO.fail(ServerError.Unreachable(socket))
+                  else clear(repo) *> boot(repo).flatMap(fresh => exchange(repo, fresh, call, appearance))
+                }
           else replace(repo, socket, record.version, call, appearance)
 
   private def exchange(repo: Path, socket: Path, call: Call, appearance: Appearance): ZIO[Scope, ServerError, Int] =
@@ -237,8 +240,8 @@ object Main extends ZIOAppDefault:
         exit.code
       case _ => exit.code
 
-  /** The server that heard the reboot starts its successor, so this client waits for it and starts none. A server that
-    * did not answer is gone, so this client starts one, as on a cold start.
+  /** Stop the recorded server and start this command's, under one lock. The record is removed by the server as it
+    * exits, and the next server writes the next record.
     */
   private def replace(
       repo: Path,
@@ -247,38 +250,102 @@ object Main extends ZIOAppDefault:
       call: Call,
       appearance: Appearance,
   ): ZIO[Scope, ServerError, Int] =
-    Successor.here.flatMap { onto =>
-      val next = onto.version.getOrElse(was)
-      val line = ApiClock.rebootText(next, was, socket.toString)
-      ZIO.succeed(java.lang.System.err.println(line)) *>
-        exchange(repo, socket, Call.Reboot(onto), appearance).either.flatMap {
-          case Right(_) => successor(repo, socket, next, was).flatMap(fresh => exchange(repo, fresh, call, appearance))
-          case Left(_)  =>
-            boot(repo).flatMap { fresh =>
-              readRecord(repo).flatMap {
-                case Some(record) =>
-                  agrees(record).flatMap: ok =>
-                    if ok then exchange(repo, fresh, call, appearance)
-                    else ZIO.fail(ApiClock.restart(socket, next, record.version))
-                case None =>
-                  ZIO.fail(ApiClock.restart(socket, next, was))
-              }
+    val line = ApiClock.stopText(was, socket.toString)
+    ZIO.succeed(java.lang.System.err.println(line)) *>
+      handoff(repo, socket, appearance).flatMap(fresh => exchange(repo, fresh, call, appearance))
+
+  private def handoff(
+      repo: Path,
+      socket: Path,
+      appearance: Appearance,
+  ): ZIO[Scope, ServerError, Path] =
+    val home = repo.resolve(".histos")
+    val gate = home.resolve("server.starting")
+    val log  = home.resolve("server.log")
+    ServerStamp.note(repo).flatMap { before =>
+      held(home, gate)(
+        won = readRecord(repo).flatMap {
+          case Some(record) =>
+            agrees(record).flatMap { ok =>
+              val current = Path.of(record.socket)
+              if ok then ZIO.succeed(current)
+              else stopThenStart(repo, current, log, before, appearance)
             }
-        }
+          case None => startChild(repo, socket, log, before)
+        },
+        lost = untilUp(socket) *> awaitWritten(repo, socket, before) *> agreed(repo, socket),
+      )
     }
 
-  /** The socket a record that agrees with this client names, once the successor writes it. */
-  private def successor(repo: Path, socket: Path, wanted: String, was: String): IO[ServerError, Path] =
-    def poll(left: Int): IO[ServerError, Path] =
-      readRecord(repo)
-        .flatMap:
-          case Some(record) => agrees(record).map(ok => Option.when(ok)(Path.of(record.socket)))
-          case None         => ZIO.none
-        .flatMap:
-          case Some(fresh)      => ZIO.succeed(fresh)
-          case None if left > 0 => ZIO.sleep(50.millis) *> poll(left - 1)
-          case None             => ZIO.fail(ApiClock.restart(socket, wanted, was))
+  /** The server at `socket` exits, then this command's server starts. A record with nobody listening is removed here.
+    */
+  private def stopThenStart(
+      repo: Path,
+      socket: Path,
+      log: Path,
+      before: Option[java.nio.file.attribute.FileTime],
+      appearance: Appearance,
+  ): ZIO[Scope, ServerError, Path] =
+    listening(socket).flatMap { live =>
+      ServerHandoff.step(recorded = true, listening = live, same = false) match
+        case ServerHandoff.Step.Use   => ZIO.succeed(socket)
+        case ServerHandoff.Step.Start =>
+          clear(repo) *> startChild(repo, socket, log, before)
+        case ServerHandoff.Step.Stop =>
+          exchange(repo, socket, Call.Stop, appearance).either.flatMap { result =>
+            readRecord(repo).flatMap {
+              case None    => startChild(repo, socket, log, before)
+              case Some(_) =>
+                result match
+                  case Right(_) => awaitGone(repo, socket) *> startChild(repo, socket, log, before)
+                  case Left(_)  =>
+                    listening(socket).flatMap { still =>
+                      if still then ZIO.fail(ServerError.DidNotStop(socket))
+                      else clear(repo) *> startChild(repo, socket, log, before)
+                    }
+            }
+          }
+    }
+
+  private def agreed(repo: Path, socket: Path): IO[ServerError, Path] =
+    readRecord(repo).flatMap {
+      case Some(record) =>
+        agrees(record).flatMap { ok =>
+          if ok then ZIO.succeed(Path.of(record.socket))
+          else
+            ZIO
+              .attempt(Option(System.getenv("HISTOS_VERSION")).filter(_.nonEmpty))
+              .mapError(_ => ServerError.Protocol)
+              .flatMap { found =>
+                val wanted = found match
+                  case Some(version) => version
+                  case None          => record.version
+                ZIO.fail(ApiClock.restart(socket, wanted, record.version))
+              }
+        }
+      case None => ZIO.fail(ServerError.Unreachable(socket))
+    }
+
+  private def awaitGone(repo: Path, socket: Path): IO[ServerError, Unit] =
+    def poll(left: Int): IO[ServerError, Unit] =
+      readRecord(repo).flatMap {
+        case None                => ZIO.unit
+        case Some(_) if left > 0 => ZIO.sleep(50.millis) *> poll(left - 1)
+        case Some(_)             => ZIO.fail(ServerError.DidNotStop(socket))
+      }
     poll(1200)
+
+  private def listening(socket: Path): UIO[Boolean] =
+    UnixPipe
+      .connect(socket)
+      .fold(
+        _ => false,
+        session =>
+          session.close(); true,
+      )
+
+  private def clear(repo: Path): UIO[Unit] =
+    ZIO.attemptBlocking(Files.deleteIfExists(ServerStamp.file(repo))).ignore
 
   private def readRecord(repo: Path): IO[ServerError, Option[ServerFile]] =
     val file = repo.resolve(".histos").resolve("server.json")
@@ -309,32 +376,48 @@ object Main extends ZIOAppDefault:
     ServerStamp
       .note(repo)
       .flatMap: before =>
-        ZIO.acquireReleaseWith(
-          ZIO
-            .attemptBlocking {
-              Files.createDirectories(home)
-              java.nio.channels.FileChannel.open(gate, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-            }
-            .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
-        )(channel => ZIO.attemptBlocking(channel.close()).ignore): channel =>
-          ZIO
-            .attemptBlocking(Option(channel.tryLock()))
-            .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
-            .flatMap:
-              case None    => untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)
-              case Some(_) =>
-                for
-                  mark    <- logMark(log)
-                  process <- spawn(repo, log)
-                  _       <- ServerWait.awaitListening(
-                    connect(socket),
-                    ZIO.attempt(process.isAlive).orDie,
-                    exitedDetail(log, mark, process),
-                    socket,
-                    1200,
-                  )
-                  _ <- awaitWritten(repo, socket, before)
-                yield socket
+        held(home, gate)(
+          won = startChild(repo, socket, log, before),
+          lost = untilUp(socket) *> awaitWritten(repo, socket, before).as(socket),
+        )
+
+  private def held[R](home: Path, gate: Path)(
+      won: ZIO[R, ServerError, Path],
+      lost: ZIO[R, ServerError, Path],
+  ): ZIO[R, ServerError, Path] =
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking {
+          Files.createDirectories(home)
+          java.nio.channels.FileChannel.open(gate, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+        }
+        .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
+    )(channel => ZIO.attemptBlocking(channel.close()).ignore): channel =>
+      ZIO
+        .attemptBlocking(Option(channel.tryLock()))
+        .mapError(_ => ServerError.Io(histos.server.ServerIo.Bind(gate)))
+        .flatMap:
+          case None    => lost
+          case Some(_) => won
+
+  private def startChild(
+      repo: Path,
+      socket: Path,
+      log: Path,
+      before: Option[java.nio.file.attribute.FileTime],
+  ): IO[ServerError, Path] =
+    for
+      mark    <- logMark(log)
+      process <- spawn(repo, log)
+      _       <- ServerWait.awaitListening(
+        connect(socket),
+        ZIO.attempt(process.isAlive).orDie,
+        exitedDetail(log, mark, process),
+        socket,
+        1200,
+      )
+      _ <- awaitWritten(repo, socket, before)
+    yield socket
 
   private def spawn(repo: Path, log: Path): IO[ServerError, Process] =
     val missing = ServerError.Io(histos.server.ServerIo.Bind(log))

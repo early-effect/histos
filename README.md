@@ -65,7 +65,7 @@ The shim answers these commands itself:
 - `histos toolchain client` links `histos-client` beside the installed jar. CI refuses.
 - `histos toolchain list` prints the installed versions.
 - `histos self update` replaces the shim when the published one differs.
-- `histos update` moves the pin. Inside a project it rewrites `build.properties`, removes the previous server's record, then runs `version` on the driver the next command would use. That rewrites `.bsp/histos.json`. Outside a project it rewrites `~/.histos/default` and stops. `--make-default` writes both.
+- `histos update` moves the pin. Inside a project it rewrites `build.properties`, then runs `version` on the driver the next command would use. A server recorded for another toolchain is stopped, and the server that starts records this toolchain. That rewrites `.bsp/histos.json`. Outside a project it rewrites `~/.histos/default` and stops. `--make-default` writes both.
 
 `update` moves a release pin to the newest release and a snapshot pin to the newest snapshot line at or above its own. It keeps the pin's form: `--freeze` writes a timestamp and `--follow` writes a pointer. When a release has passed a snapshot pin, `update` asks on a terminal whether to switch, and `--stable` answers yes. Outside CI, a command on the JVM prints a notice when a published release has passed the project's pin. It asks Central at most once a day.
 
@@ -239,7 +239,7 @@ The default layer is `Sona.layer(ReleaseMode.Automatic)`, which publishes and wa
 
 ## Editors
 
-Metals speaks BSP 2.2 to Histos. Open the project and import the build. Metals reads `.bsp/histos.json` and starts its `argv` (`./histos bsp` when the project has the script, `histos bsp` otherwise). `histos update` removes the previous server's record and rewrites that file from the pin. A running `bsp` rewrites it when the build files change, which Metals treats as a build change.
+Metals speaks BSP 2.2 to Histos. Open the project and import the build. Metals reads `.bsp/histos.json` and starts its `argv` (`./histos bsp` when the project has the script, `histos bsp` otherwise). `histos update` rewrites that file from the pin. A server recorded for another toolchain is stopped first, and the new server writes the record. A running `bsp` rewrites the file when the build files change, which Metals treats as a build change.
 
 One target is one cell: a module, a Scala version, a platform, and `main`, or `test` when the cell has test sources. `histos.scala` is its own target. Scala 3 targets compile with `-Xsemanticdb` and `-sourceroot`, and Scala 2 targets with the semanticdb plugin. Diagnostics arrive as `build/publishDiagnostics`, or `build/logMessage` when a problem has no position.
 
@@ -264,9 +264,9 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publish`, `version`,
 
 ## The server
 
-`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. One server serves a checkout: a server that finds another listening on its socket stops with `another histos server is listening at <socket>`. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command reboots the server and runs on the replacement, which starts as the command's toolchain and not as the server it replaced.
+`histos server` keeps a warm process in the foreground. Batch commands start one when none is listening. One server serves a checkout: a server that finds another listening on its socket stops with `another histos server is listening at <socket>`. The record is `.histos/server.json`. The socket is `~/.histos/run/<name>.sock` (or under `HISTOS_HOME`), named for the checkout's path, so a checkout at any depth fits the length a Unix socket path allows. The record names the toolchain the server runs. When it differs from the command's, the command stops that server and starts one on this command's toolchain. The server removes the record as it exits, and the next server writes the next record. A record whose socket is not listening is removed when a command notices it.
 
-`histos reload` asks the running server to load the build again. `histos reboot` replaces the server, or starts one. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
+`histos reload` asks the running server to load the build again. `histos reboot` stops the server and starts one on this command's toolchain, or starts one. `histos stop` asks the server to exit and does not start another. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
 When a native client was built for this jar, it sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` to the server itself, without starting a JVM to enter the tool. In CI, `./histos` still uses the jar. `toolchain install --client` is the opt-in that places the kit and links when `CI` is set. Bare `toolchain client` still fails in CI. A verify task with a native link is the job that passes `--client`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. `clean --full` is only that form with no project. Every other command, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
 

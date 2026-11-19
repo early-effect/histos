@@ -39,7 +39,7 @@ import zio.cli.{
   */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Reload, Reboot, ToolchainClient
+    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Reload, Reboot, Stop, ToolchainClient
     case Cancel(id: String)
     case New(name: String, bare: Boolean, yes: Boolean, branch: Option[String])
     case Init(bare: Boolean, yes: Boolean, from: Option[String], branch: Option[String])
@@ -151,6 +151,7 @@ object Grammar:
   private val portal = CliCommand("portal").map(_ => Wire.Portal)
   private val reload = CliCommand("reload").map(_ => Wire.Reload)
   private val reboot = CliCommand("reboot").map(_ => Wire.Reboot)
+  private val stop   = CliCommand("stop").map(_ => Wire.Stop)
   private val cancel =
     CliCommand("cancel", Args.text("id")).map(Wire.Cancel(_))
   private val path    = CliCommand("path").map(_ => Wire.CachePath)
@@ -260,7 +261,7 @@ object Grammar:
     previewCompile | previewTest | previewPublish | previewClean | previewRun
   )
   private val commands =
-    version | graph | run | test | coverage | affected | compile | fresh | init | cleanBuild | assembly | publish | mcp | bsp | server | portal | cache | resolve | workflow | fmt | reload | reboot | cancel | observe | doctor | deps | setup | bump | preview | toolchainClient | helpCmd
+    version | graph | run | test | coverage | affected | compile | fresh | init | cleanBuild | assembly | publish | mcp | bsp | server | portal | cache | resolve | workflow | fmt | reload | reboot | stop | cancel | observe | doctor | deps | setup | bump | preview | toolchainClient | helpCmd
   private val root = CliCommand("histos").subcommands(commands)
 
   /** The root commands. Each one's word is in `CommandName.reserved`, so no plugin command can take it. */
@@ -442,6 +443,7 @@ object Grammar:
       case Wire.CacheList       => ZIO.succeed(Command.CacheList)
       case Wire.Reload          => ZIO.succeed(Command.Reload)
       case Wire.Reboot          => ZIO.succeed(Command.Reboot)
+      case Wire.Stop            => ZIO.succeed(Command.Stop)
       case Wire.Cancel(id)      =>
         ZIO.fromEither(
           RunId.from(id).left.map(CliParseError.RunId(_)).map(Command.Cancel(_))

@@ -26,7 +26,6 @@ import histos.server.{
   Say,
   ServerError,
   ServerIo,
-  Successor,
   WatchPolicy,
   Watching,
 }
@@ -100,6 +99,7 @@ enum Command:
   case Fmt(targets: histos.format.FormatTargets, mode: histos.format.FormatMode)
   case Reload
   case Reboot
+  case Stop
   case Cancel(id: RunId)
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(
@@ -768,6 +768,7 @@ object Cli:
         attach(repo, call, locally(repo, apiJar, call))
       case Command.Reload                   => reload(repo)
       case Command.Reboot                   => reboot(repo)
+      case Command.Stop                     => stop(repo)
       case Command.Cancel(id)               => cancel(repo, id)
       case Command.PreviewCompile(projects) =>
         preview(repo, apiJar, projects)
@@ -1054,6 +1055,7 @@ object Cli:
         bootCall(repo, Daemon.spawn).flatMap { socket =>
           say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
         },
+      stop = Calls.finish(say, CallResult.reported()),
       bsp = Calls.finish(
         say,
         CallResult.Fault(BuildFault.Rejected(Rejection.Watch(CliParseError.Rejected.message))),
@@ -1184,31 +1186,62 @@ object Cli:
         else ZIO.succeed(Right(None))
 
   private def startServer(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
-    val home = repo.resolve(".histos")
-    val gate = home.resolve("server.starting")
     histos.server.ServerStamp
       .note(repo)
       .flatMap: before =>
-        ZIO.acquireReleaseWith(
-          ZIO
-            .attemptBlocking {
-              Files.createDirectories(home)
-              java.nio.channels.FileChannel.open(
-                gate,
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.WRITE,
-              )
-            }
-            .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
-        )(channel => ZIO.attemptBlocking(channel.close()).ignore) { channel =>
-          ZIO
-            .attemptBlocking(Option(channel.tryLock()))
-            .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
-            .flatMap {
-              case None    => awaitServer(repo, before)
-              case Some(_) => spawn(repo) *> awaitServer(repo, before)
-            }
+        gated(repo)(
+          won = spawn(repo) *> awaitServer(repo, before),
+          lost = awaitServer(repo, before),
+        )
+
+  /** One command holds the gate across a stop and the start that follows it. */
+  private def gated[R](repo: Path)(
+      won: ZIO[R, ServerError, Path],
+      lost: ZIO[R, ServerError, Path],
+  ): ZIO[R, ServerError, Path] =
+    val home = repo.resolve(".histos")
+    val gate = home.resolve("server.starting")
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking {
+          Files.createDirectories(home)
+          java.nio.channels.FileChannel.open(
+            gate,
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.WRITE,
+          )
         }
+        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+    )(channel => ZIO.attemptBlocking(channel.close()).ignore) { channel =>
+      ZIO
+        .attemptBlocking(Option(channel.tryLock()))
+        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+        .flatMap {
+          case None    => lost
+          case Some(_) => won
+        }
+    }
+
+  /** Stop the server at `socket`, then start this command's. The lock covers both, so the record is never the previous
+    * process's.
+    */
+  private def bringUp(repo: Path, socket: Path): IO[ServerError, Path] =
+    histos.server.ServerStamp.note(repo).flatMap { before =>
+      gated(repo)(
+        won = histos.server.Attach.stop(repo, socket) *> Daemon.spawn(repo) *> awaitServer(repo, before),
+        lost = awaitServer(repo, before).flatMap { fresh =>
+          versionOf(repo).orElseSucceed(None).flatMap {
+            case None       => ZIO.succeed(fresh)
+            case Some(text) =>
+              histos.server.Record.read(repo).flatMap {
+                case Some(written) if written.version == text => ZIO.succeed(written.socket)
+                case Some(written) => ZIO.fail(ApiClock.restart(socket, text, written.version))
+                case None          => ZIO.fail(ServerError.Unreachable(socket))
+              }
+          }
+        },
+      )
+    }
 
   /** A record written at or before `before` is the previous server. The socket can accept before the new file lands. */
   private def awaitServer(
@@ -1251,7 +1284,9 @@ object Cli:
         )
     }
 
-  /** Reboot the recorded server, then run `use` on the replacement. `fallback` runs when it does not come back. */
+  /** Stop the recorded server, then run `use` on the one this command starts. `fallback` runs when the version is
+    * unknown.
+    */
   private def supplant[R](
       repo: Path,
       socket: Path,
@@ -1262,36 +1297,39 @@ object Cli:
       case Some(text) =>
         histos.server.Record.read(repo).flatMap { stored =>
           val was  = stored.map(_.version).getOrElse(text)
-          val line = ApiClock.rebootText(text, was, socket.toString)
+          val line = ApiClock.stopText(was, socket.toString)
           sayError(line) *>
-            Attach.replace(repo, text, socket).flatMap {
-              case Some(next) => use(next)
-              case None       =>
-                ZIO.succeed {
-                  val error = ApiClock.restart(socket, text, was)
-                  Completed(CliExit.Failed, "", error.message, Playback.Held)
-                }
-            }
+            bringUp(repo, socket).foldZIO(
+              error => ZIO.succeed(stopped(error)),
+              next => use(next),
+            )
         }
     }
 
-  private def asked[R](
-      repo: Path,
-      socket: Path,
-      miss: => URIO[R, Completed],
-  )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    Successor.here.zip(histos.server.Record.read(repo)).flatMap { (onto, stored) =>
-      val next = onto.version.getOrElse("none")
-      val was  = stored.map(_.version).getOrElse(next)
-      val line = ApiClock.rebootText(next, was, socket.toString)
+  /** Stop a running server, then start this command's. No server is the cold start. */
+  private def stop(repo: Path)(using Appearance): URIO[Stdio, Completed] =
+    val quiet = ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
+    pinned(repo, quiet)(text =>
+      Attach.decide(repo, text).flatMap {
+        case Decision.Absent       => quiet
+        case Decision.Open(socket) =>
+          halt(repo, socket, text)
+        case Decision.DifferentVersion(socket) =>
+          halt(repo, socket, text)
+      }
+    )
+
+  private def halt(repo: Path, socket: Path, text: String)(using Appearance): URIO[Stdio, Completed] =
+    histos.server.Record.read(repo).flatMap { stored =>
+      val was  = stored.map(_.version).getOrElse(text)
+      val line = ApiClock.stopText(was, socket.toString)
       sayError(line) *>
-        remote(repo, socket, Call.Reboot(onto)).foldZIO(
-          {
-            case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
-            case error                                                     => ZIO.succeed(stopped(error))
-          },
-          done => ZIO.succeed(done.copy(out = if done.out.isEmpty then line else s"$line\n${done.out}")),
-        )
+        histos.server.Attach
+          .stop(repo, socket)
+          .foldZIO(
+            error => ZIO.succeed(stopped(error)),
+            _ => ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held)),
+          )
     }
 
   /** Only the local path loads. A matching server already holds the graph. */
@@ -2009,7 +2047,8 @@ object Cli:
       case None =>
         Completed(CliExit.Failed, out, "the call did not finish", Playback.Heard)
 
-  /** A running server replaces itself. No server starts one. The command returns when a server is listening. */
+  /** Stop the running server and start this command's. No server starts one. The command returns when it is listening.
+    */
   private[histos] def reboot(repo: Path)(using Appearance, LockChoice): URIO[Stdio, Completed] =
     rebootAt(repo, cold(repo))
 
@@ -2029,9 +2068,13 @@ object Cli:
         .flatMap:
           case Decision.Absent       => miss
           case Decision.Open(socket) =>
-            asked(repo, socket, miss)
+            supplant(repo, socket, miss)(fresh =>
+              ZIO.succeed(Completed(CliExit.Success, fresh.toString, "", Playback.Held))
+            )
           case Decision.DifferentVersion(socket) =>
-            asked(repo, socket, miss)
+            supplant(repo, socket, miss)(fresh =>
+              ZIO.succeed(Completed(CliExit.Success, fresh.toString, "", Playback.Held))
+            )
     )
 
   private enum Boot:
@@ -2562,6 +2605,8 @@ object Cli:
         reload(repo)
       case Command.Reboot =>
         reboot(repo)
+      case Command.Stop =>
+        stop(repo)
       case Command.Cancel(id) =>
         cancel(repo, id)
       case Command.PreviewCompile(projects) =>

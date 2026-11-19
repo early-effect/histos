@@ -25,6 +25,7 @@ object Perform:
       watch: (Call, WatchPolicy, Say) => ZIO[R, ServerError, Unit],
       reload: ZIO[R, ServerError, Unit],
       reboot: Successor => ZIO[R, ServerError, Unit],
+      stop: ZIO[R, ServerError, Unit],
       bsp: ZIO[R, ServerError, Unit],
       compiled: UIO[Unit],
   )
@@ -44,9 +45,9 @@ object Perform:
         false
       case Call.Clean(_, _) | Call.PreviewClean(_, _) =>
         true
-      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.Reload | Call.Reboot(_) | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.CacheForget(_) |
-          Call.Watch(_, _) | Call.Bsp =>
+      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.Reload | Call.Reboot(_) | Call.Stop |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.CacheForget(_) | Call.Watch(_, _) | Call.Bsp =>
         false
 
   /** Publish keeps the compile fault. Every other call reports a cell that ran, and a compile that never started is its
@@ -262,6 +263,8 @@ object Perform:
                 edges.reload
               case Call.Reboot(onto) =>
                 edges.reboot(onto)
+              case Call.Stop =>
+                edges.stop
               case Call.Bsp =>
                 edges.bsp
 end Perform
