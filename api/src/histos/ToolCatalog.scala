@@ -39,6 +39,6 @@ object ToolCatalog:
       ToolRevision("1.1.1"),
       ToolRevision("0.1.3"),
     ),
-    NativeTools(NativeVersion("0.5.13-20261111-9be93b7-SNAPSHOT"), ScalaVersion("3.9.0")),
+    NativeTools(NativeVersion("0.5.13-20261118-78ae329-SNAPSHOT"), ScalaVersion("3.9.0")),
     FormatTools(ToolRevision("3.11.5"), ScalaVersion("2.13.18")),
   )

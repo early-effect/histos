@@ -4,15 +4,17 @@ import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
   def graph =
-    val scala3      = scala"3.10.1"
-    val nativeScala = scala"3.10.0"
-    val zio         = dep"dev.zio::zio:2.1.27"
-    val zioTest     = zio.module("zio-test")
-    val zioTestSbt  = zio.module("zio-test-sbt")
-    val zioStreams  = zio.module("zio-streams")
-    val zioJson     = dep"dev.zio::zio-json:1.1.1"
-    val api         = module("api", Jvm, Native)(nativeScala)
+    val scala3        = scala"3.10.1"
+    val nativeScala   = scala"3.10.0"
+    val nativeNightly = NativeVersion("0.5.13-20261118-78ae329-SNAPSHOT")
+    val zio           = dep"dev.zio::zio:2.1.27"
+    val zioTest       = zio.module("zio-test")
+    val zioTestSbt    = zio.module("zio-test-sbt")
+    val zioStreams    = zio.module("zio-streams")
+    val zioJson       = dep"dev.zio::zio-json:1.1.1"
+    val api           = module("api", Jvm, Native)(nativeScala)
       .clang(ClangMajor(21))
+      .nativeVersion(nativeNightly)
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
@@ -22,6 +24,7 @@ object build extends HistosBuild:
       .testDependencies(zioTest, zioTestSbt)
     val wire = module("wire", Jvm, Native)(nativeScala)
       .clang(ClangMajor(21))
+      .nativeVersion(nativeNightly)
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
       .testDependencies(zioTest, zioTestSbt)
@@ -78,6 +81,7 @@ object build extends HistosBuild:
       )
     val client = module("client", Native)(nativeScala)
       .clang(ClangMajor(21))
+      .nativeVersion(nativeNightly)
       .dependsOn(wire)
       .libraryDependencies(zio, zioJson)
       .main(MainClass("histos.client.Main"))
