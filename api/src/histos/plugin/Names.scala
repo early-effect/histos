@@ -81,6 +81,8 @@ object CommandName:
     trusted("deps"),
     trusted("setup"),
     trusted("help"),
+    trusted("completion"),
+    trusted("complete"),
     trusted("update"),
     trusted("self"),
   )

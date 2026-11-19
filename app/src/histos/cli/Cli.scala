@@ -13,6 +13,7 @@ import histos.server.{
   Attach,
   Call,
   Calls,
+  CatalogQuery,
   ConsentDesk,
   ForgetTarget,
   Client,
@@ -138,6 +139,8 @@ enum Command:
   )
   case Bump(part: histos.version.BumpPart, ships: List[histos.version.ShipName])
   case Help(words: List[String])
+  case Completion(request: CompletionRequest)
+  case Complete(query: CatalogQuery)
 
 /** Why `histos fmt` arguments are not a format request. */
 enum FmtUsage:
@@ -276,7 +279,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly <module> ... | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly <module> ... | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native] | completion [install] [zsh|bash])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -804,11 +807,61 @@ object Cli:
         setup(repo, from, write, confirm)
       case Command.Help(words) =>
         ZIO.succeed(answered(words))
+      case Command.Completion(request) =>
+        shellScript(request)
+      case Command.Complete(query) =>
+        namesFromServer(repo, query)
 
   private def answered(words: List[String]): Completed =
     Help.render(words) match
       case Right(text) => Completed(CliExit.Success, s"$text\n", "", Playback.Held)
       case Left(error) => Completed(CliExit.Usage, "", error.message, Playback.Held)
+
+  private def shellScript(request: CompletionRequest): URIO[Any, Completed] =
+    ShellChoice
+      .live(request.shell)
+      .foldZIO(
+        fault => ZIO.succeed(Completed(CliExit.Usage, "", fault.message, Playback.Held)),
+        kind =>
+          request match
+            case CompletionRequest.Show(_) =>
+              ZIO.succeed(Completed(CliExit.Success, CompletionSurface.script(kind) + "\n", "", Playback.Held))
+            case CompletionRequest.Install(_) =>
+              System.property("user.home").orElseSucceed(None).flatMap {
+                case Some(dir) if dir.nonEmpty =>
+                  CompletionSurface
+                    .write(Path.of(dir), kind)
+                    .foldZIO(
+                      failure => ZIO.succeed(Completed(CliExit.Failed, "", failure.message, Playback.Held)),
+                      text => ZIO.succeed(Completed(CliExit.Success, text + "\n", "", Playback.Held)),
+                    )
+                case _ =>
+                  ZIO.succeed(
+                    Completed(CliExit.Failed, "", IoFailure(Path.of("user.home"), IoFault.Read).message, Playback.Held)
+                  )
+              },
+      )
+
+  /** Names from a server that is already listening. A missing record, another version, or any failure prints nothing
+    * and does not start a server. Lines are already on stdout when the exchange succeeds.
+    */
+  private def namesFromServer(repo: Path, query: CatalogQuery): URIO[Stdio, Completed] =
+    val quiet = ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
+    versionOf(repo).foldZIO(
+      _ => quiet,
+      {
+        case None       => quiet
+        case Some(text) =>
+          Attach.decide(repo, text).flatMap {
+            case Decision.Open(socket) =>
+              remote(repo, socket, Call.Catalog(query))(using Appearance.plain, LockChoice(None)).foldZIO(
+                _ => quiet,
+                _ => quiet,
+              )
+            case Decision.Absent | Decision.DifferentVersion(_) => quiet
+          }
+      },
+    )
 
   /** Loopback rehearsal of the Central portal. Does not load the graph. */
   private def portal(repo: Path): URIO[Machine & Scope & Stdio, Completed] =
@@ -2693,6 +2746,10 @@ object Cli:
         setup(repo, from, write, confirm)
       case Command.Help(words) =>
         ZIO.succeed(answered(words))
+      case Command.Completion(request) =>
+        shellScript(request)
+      case Command.Complete(query) =>
+        namesFromServer(repo, query)
 
   /** A call the server can answer. The local build runs only when the socket does not. */
   private def served(repo: Path, call: Call)(using Appearance, LockChoice): URIO[Launched, Completed] =

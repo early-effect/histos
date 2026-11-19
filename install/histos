@@ -718,6 +718,27 @@ exec_jar() {
   jar=$1
   repo=$2
   shift 2
+  if [ -z "${HISTOS_SHELL:-}" ]; then
+    parent=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
+    parent=${parent#-}
+    parent=${parent##*/}
+    case "$parent" in
+      zsh|bash)
+        HISTOS_SHELL=$parent
+        export HISTOS_SHELL
+        ;;
+      *)
+        base=${SHELL:-}
+        base=${base##*/}
+        case "$base" in
+          zsh|bash)
+            HISTOS_SHELL=$base
+            export HISTOS_SHELL
+            ;;
+        esac
+        ;;
+    esac
+  fi
   check_java
   tool=$(dirname "$jar")
   use_jar=1

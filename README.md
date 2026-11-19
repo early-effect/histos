@@ -8,7 +8,7 @@ flowchart TD
   metals[Metals] --> bsp["histos bsp"]
   agent[MCP client] --> mcp["histos mcp"]
   shim --> pick{client for this jar?}
-  pick -->|compile, test, run, clean, fmt| native[histos-client]
+  pick -->|compile, test, run, clean, fmt, complete| native[histos-client]
   pick -->|every other command, and ./histos in CI| jar["java -jar"]
   native --> record[".histos/server.json"]
   jar --> record
@@ -20,7 +20,7 @@ flowchart TD
   jvm --> store[content store]
 ```
 
-The shim sends `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` through `histos-client` when that binary was linked for this jar. Every other command runs `java -jar`. In CI, `./histos` runs `java -jar` too, even when a client is already on disk. `toolchain install --client` is the opt-in that places the kit and links when `CI` is set. Bare `toolchain client` still fails in CI. A verify task with a native link is the job that passes `--client`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. Both paths talk to one warm JVM server for the project, and start one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
+The shim sends `compile`, `test`, `run`, `clean`, `clean --full`, `fmt`, and `complete` through `histos-client` when that binary was linked for this jar. Every other command, including `completion`, runs `java -jar`. In CI, `./histos` runs `java -jar` too, even when a client is already on disk. `toolchain install --client` is the opt-in that places the kit and links when `CI` is set. Bare `toolchain client` still fails in CI. A verify task with a native link is the job that passes `--client`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. `complete` prints names when a server is already listening and prints nothing otherwise. It does not start Java and does not start a server. The other client commands, and the jar, talk to one warm JVM server for the project and start one when none is listening. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault with a diagnosis.
 
 This is a 0.x release. The API breaks when that makes it more honest.
 
@@ -38,6 +38,14 @@ export PATH="$HOME/.histos/bin:$PATH"
 ```
 
 The script installs itself as `~/.histos/bin/histos` and does not edit a shell rc. A first install writes `~/.histos/default` to the latest stable release on `dist`. A snapshot is the default only when `dist` has no release. An explicit `channel` asset on `dist` wins over both.
+
+### Completions
+
+`histos completion` prints a script for the shell that invoked it. `histos completion zsh` or `histos completion bash` names the shell. Detection uses an explicit argument, then `HISTOS_SHELL` when the shim set it to `zsh` or `bash`, then the parent process, then `$SHELL`. Anything else fails and names the two explicit forms.
+
+`histos completion install` writes that script under `~/.histos/completions/` and prints the line to add to the shell rc. It does not edit the rc. zsh needs `fpath=(~/.histos/completions $fpath)` and then `autoload -Uz compinit && compinit`. bash needs `source ~/.histos/completions/histos.bash`.
+
+Tab offers commands and flags without starting a process. `histos fmt --file` completes files in the shell. Project names, module names, and plugin command names are offered only while a server is already listening. No server leaves those slots empty.
 
 ### Toolchains and pins
 
@@ -126,7 +134,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 | Group | Commands |
 | --- | --- |
-| Information | `version`, `graph`, `observe`, `help` |
+| Information | `version`, `graph`, `observe`, `help`, `completion` |
 | Build | `compile`, `run`, `clean`, `fmt` |
 | Test | `test`, `coverage`, `affected`, `~` |
 | Project | `new`, `init` |
@@ -268,7 +276,7 @@ The tools are `graph`, `run`, `cancel`, `compile`, `test`, `publish`, `version`,
 
 `histos reload` asks the running server to load the build again. `histos reboot` stops the server and starts one on this command's toolchain, or starts one. `histos stop` asks the server to exit and does not start another. `histos cancel <id>` cancels the run id a command printed. A command whose client exits, by Ctrl-C or a kill, ends its run on the server, so the next command does not wait behind it.
 
-When a native client was built for this jar, it sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, and `fmt` to the server itself, without starting a JVM to enter the tool. In CI, `./histos` still uses the jar. `toolchain install --client` is the opt-in that places the kit and links when `CI` is set. Bare `toolchain client` still fails in CI. A verify task with a native link is the job that passes `--client`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. `clean --full` is only that form with no project. Every other command, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
+When a native client was built for this jar, it sends the plain forms of `compile`, `test`, `run`, `clean`, `clean --full`, `fmt`, and `complete` to the server itself, without starting a JVM to enter the tool. `complete` prints names when a server is already listening and prints nothing otherwise. It does not start a server. In CI, `./histos` still uses the jar. `toolchain install --client` is the opt-in that places the kit and links when `CI` is set. Bare `toolchain client` still fails in CI. A verify task with a native link is the job that passes `--client`. `server`, `bsp`, `mcp`, and `toolchain` stay on the jar. `clean --full` is only that form with no project. Every other command, including `completion`, and any of those with a flag the client does not read (`test --quick`, `test --only`, a project on `clean --full`), runs `java -jar` on the toolchain jar.
 
 ## Cache
 

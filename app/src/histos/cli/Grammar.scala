@@ -7,7 +7,7 @@ import histos.plugin.{CommandName, PluginTaskId}
 import histos.publish.PublishToken
 import histos.schedule.CacheNamespace
 import histos.lock.{DispositionSubject, LockMode, LockPrecedence, PrecedenceFault}
-import histos.server.{CleanExtent, ForgetFault, ForgetTarget, ResolveAction}
+import histos.server.{CatalogQuery, CleanExtent, ForgetFault, ForgetTarget, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
@@ -319,6 +319,10 @@ object Grammar:
         ZIO.succeed(InvocationLine(Command.Explain(id), None))
       case "--explain" :: _ =>
         ZIO.fail(CliParseError.Pattern("--explain takes one check id"))
+      case "completion" :: rest =>
+        ZIO.fromEither(CompletionRequest.parse(rest)).map(request => InvocationLine(Command.Completion(request), None))
+      case "complete" :: rest =>
+        ZIO.fromEither(completeQuery(rest)).map(query => InvocationLine(Command.Complete(query), None))
       case _ =>
         val (kept, argv) = peelRun(args)
         peelDisposition(kept) match
@@ -888,6 +892,9 @@ object Grammar:
       case "preview" :: "publish" :: ("local" | "snapshots") :: _ => reject(error, args)
       case "preview" :: "publish" :: _                            => CliParseError.PublishForm
       case _                                                      => reject(error, args)
+
+  private def completeQuery(args: List[String]): Either[CliParseError, CatalogQuery] =
+    CatalogQuery.parse(args).toRight(CliParseError.Pattern("histos complete projects|modules|plugins|flags <command>"))
 
   private def shim(args: List[String]): Option[CliParseError] =
     args match

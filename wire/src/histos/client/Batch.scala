@@ -2,7 +2,7 @@ package histos.client
 
 import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{PluginArgs, PluginTaskId}
-import histos.server.{Call, CleanExtent, ResolveAction}
+import histos.server.{Call, CatalogQuery, CleanExtent, ResolveAction}
 import histos.task.TaskId
 import histos.testrun.TestMode
 import histos.{Platform, ProjectName}
@@ -16,6 +16,10 @@ object Batch:
   enum Parsed:
     case Ready(call: Call)
     case Program(id: String, platform: Option[Platform], args: List[String])
+
+    /** `None` is a kind this client does not ask. It still stays off the JVM path. */
+    case Names(query: Option[CatalogQuery])
+  end Parsed
 
   def parse(args: List[String]): Option[Parsed] =
     args match
@@ -35,7 +39,8 @@ object Batch:
       case "fmt" :: rest => projects(rest).map(names => Parsed.Ready(Call.Format(targets(names), FormatMode.Write)))
       case "resolve" :: "--refresh" :: rest =>
         projects(rest).map(names => Parsed.Ready(Call.Resolve(ResolveAction.Refresh(names))))
-      case _ => None
+      case "complete" :: rest => Some(Parsed.Names(CatalogQuery.parse(rest)))
+      case _                  => None
 
   private def splitDash(args: List[String]): (List[String], List[String]) =
     def loop(seen: List[String], rest: List[String]): (List[String], List[String]) =

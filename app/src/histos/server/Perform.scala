@@ -37,7 +37,7 @@ object Perform:
           Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
           Call.Graph | Call.Run(_, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
           Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) =>
+          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
         true
       case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
         false
@@ -269,4 +269,6 @@ object Perform:
                 edges.stop
               case Call.Bsp =>
                 edges.bsp
+              case Call.Catalog(query) =>
+                held(build => Calls.catalog(build.graph, query, say))
 end Perform

@@ -1149,7 +1149,7 @@ object Daemon:
           Call.Stop | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) |
           Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewClean(_, _) | Call.PreviewRun(_, _) =>
+          Call.PreviewClean(_, _) | Call.PreviewRun(_, _) | Call.Catalog(_) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

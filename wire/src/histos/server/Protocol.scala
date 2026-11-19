@@ -233,6 +233,9 @@ enum Call derives JsonCodec:
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
   case PreviewRun(id: String, platform: Option[Platform])
 
+  /** Project names, module names, plugin commands, or one plugin command's flags. Nothing here compiles. */
+  case Catalog(query: CatalogQuery)
+
   /** A nested watch is quiet. Only the program under one watch reads stdin. */
   def attendance: Attendance =
     this match
