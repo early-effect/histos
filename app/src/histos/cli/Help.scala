@@ -22,6 +22,12 @@ object Help:
       "Print the toolchain this command runs and, with a server up, that server's version.",
     ),
     Entry("help", "info", "histos help [command]", "List commands, or show one command."),
+    Entry(
+      "completion",
+      "info",
+      "histos completion [install] [zsh|bash]",
+      "Print the completion script for this shell. zsh or bash names the shell. install writes it under ~/.histos/completions and prints the rc line. Project, module, and plugin names are offered only while a server is already listening.",
+    ),
     Entry("--explain", "info", "histos --explain <check-id>", "Print one check."),
     Entry(
       "--color",
@@ -190,6 +196,7 @@ object Help:
   val names: List[String] = List(
     "version",
     "help",
+    "completion",
     "--explain",
     "graph",
     "observe",

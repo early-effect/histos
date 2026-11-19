@@ -27,5 +27,5 @@ object LockGrammar:
           Command.Fmt(_, _) | Command.Reload | Command.Reboot | Command.Stop | Command.Cancel(_) |
           Command.PreviewClean(_, _) | Command.Observe | Command.New(_, _, _) | Command.Init(_, _, _) |
           Command.Doctor(_, _, _, _, _, _) | Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) |
-          Command.Bump(_, _) | Command.Help(_) | Command.Affected(_) =>
+          Command.Bump(_, _) | Command.Help(_) | Command.Affected(_) | Command.Completion(_) | Command.Complete(_) =>
         DispositionSubject.Plain

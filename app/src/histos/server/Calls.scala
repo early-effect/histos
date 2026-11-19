@@ -26,6 +26,7 @@ import histos.load.PluginFault
 import histos.plugin.{
   ApiDigest,
   ClientId,
+  CliParam,
   CommandIdentity,
   Interaction,
   InvocationContext,
@@ -197,6 +198,20 @@ object Calls:
       say: Say,
   ): IO[ServerError, Unit] =
     told(say, GraphText.render(graph, plugins.links)) *> ok(say)
+
+  /** One name per line. An empty answer is only the terminal frame. */
+  def catalog(graph: ProjectGraph, kind: CatalogQuery, say: Say): IO[ServerError, Unit] =
+    val lines = kind match
+      case CatalogQuery.Projects => graph.projects.map(_.name.value)
+      case CatalogQuery.Modules  =>
+        graph.projects.collect { case module: Module => module.name.value }
+      case CatalogQuery.Plugins =>
+        graph.plugins.flatMap(_.contribution.commands.map(_.name.value))
+      case CatalogQuery.Flags(command) =>
+        graph.plugins.flatMap(_.contribution.commands).filter(_.name.value == command).flatMap { spec =>
+          spec.params.collect { case CliParam.Flag(name) => s"--${name.value}" }
+        }
+    ZIO.foreachDiscard(lines)(line => told(say, line)) *> ok(say)
 
   def withdraw(
       repo: Path,

@@ -12,7 +12,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@003ce4864e3dae86a7d6125524d4bcea27e0bd6a # 003ce4864e3dae86a7d6125524d4bcea27e0bd6a
+      - uses: early-effect/histos/.github/actions/setup@69e066d5b9cfcd9427a4dabea7ddfd379d8cda8a # 69e066d5b9cfcd9427a4dabea7ddfd379d8cda8a
       - run: ./histos doctor --preflight release-histos
       - run: "./histos publish release histos"
         env:
@@ -41,7 +41,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@003ce4864e3dae86a7d6125524d4bcea27e0bd6a # 003ce4864e3dae86a7d6125524d4bcea27e0bd6a
+      - uses: early-effect/histos/.github/actions/setup@69e066d5b9cfcd9427a4dabea7ddfd379d8cda8a # 69e066d5b9cfcd9427a4dabea7ddfd379d8cda8a
       - run: ./histos doctor --preflight install
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

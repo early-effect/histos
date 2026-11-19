@@ -1,7 +1,7 @@
 package histos.lock
 
 import histos.plugin.{CommandIdentity, CommandToken, PluginCoordinate, PluginTaskId, ResolveVerb}
-import histos.server.{Call, ResolveAction}
+import histos.server.{Call, CatalogQuery, ResolveAction}
 
 /** The command identity and the rerun words for one [[histos.server.Call]]. The daemon does not invent either. */
 object CallIdentity:
@@ -44,6 +44,7 @@ object CallIdentity:
       case Call.CacheForget(_)       => CommandIdentity.Other(CommandToken("cache-forget"))
       case Call.CacheVerify(_)       => CommandIdentity.Other(CommandToken("cache-verify"))
       case Call.Bsp                  => CommandIdentity.Other(CommandToken("bsp"))
+      case Call.Catalog(_)           => CommandIdentity.Other(CommandToken("complete"))
 
   def words(call: Call): List[String] =
     call match
@@ -89,6 +90,12 @@ object CallIdentity:
       case Call.PreviewClean(_, _)          => List("preview", "clean")
       case Call.PreviewRun(id, platform)    =>
         "preview" :: "run" :: id :: platform.toList.map(_.token)
+      case Call.Catalog(query) =>
+        query match
+          case CatalogQuery.Projects       => List("complete", "projects")
+          case CatalogQuery.Modules        => List("complete", "modules")
+          case CatalogQuery.Plugins        => List("complete", "plugins")
+          case CatalogQuery.Flags(command) => List("complete", "flags", command)
 
   def rerun(call: Call, mode: LockMode): String =
     ("histos" :: words(call) ::: List(s"--lock=${LockPrecedence.token(mode)}")).mkString(" ")

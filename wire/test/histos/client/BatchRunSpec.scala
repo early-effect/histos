@@ -3,7 +3,7 @@ package histos.client
 import histos.Platform
 import histos.lock.ExecutionKind
 import histos.plugin.Interaction
-import histos.server.{Call, ResolveAction}
+import histos.server.{Call, CatalogQuery, ResolveAction}
 import histos.ProjectName
 import histos.report.WireJson.given
 
@@ -46,6 +46,17 @@ object BatchRunSpec extends ZIOSpecDefault:
           Some(Batch.Parsed.Ready(Call.Resolve(ResolveAction.Refresh(List(ProjectName("shots")))))),
         Batch.parse(List("resolve", "--refresh", "--lock=frozen")).isEmpty,
         Batch.parse(List("resolve")).isEmpty,
+      )
+    },
+    test("complete stays on the client even when the kind is unknown") {
+      assertTrue(
+        Batch.parse(List("complete", "projects")) == Some(Batch.Parsed.Names(Some(CatalogQuery.Projects))),
+        Batch.parse(List("complete", "modules")) == Some(Batch.Parsed.Names(Some(CatalogQuery.Modules))),
+        Batch.parse(List("complete", "plugins")) == Some(Batch.Parsed.Names(Some(CatalogQuery.Plugins))),
+        Batch.parse(List("complete", "flags", "ship")) == Some(Batch.Parsed.Names(Some(CatalogQuery.Flags("ship")))),
+        Batch.parse(List("complete")) == Some(Batch.Parsed.Names(None)),
+        Batch.parse(List("complete", "nope")) == Some(Batch.Parsed.Names(None)),
+        Batch.parse(List("complete", "flags")) == Some(Batch.Parsed.Names(None)),
       )
     },
     test("the native caller reads ci and interaction from the process it starts in") {

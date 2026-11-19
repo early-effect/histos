@@ -7,6 +7,7 @@ import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled
 import histos.server.{
   Attendance,
   Call,
+  CatalogQuery,
   Message,
   RunBytes,
   RunLaunch,
@@ -93,7 +94,36 @@ object Main extends ZIOAppDefault:
         case Some(Batch.Parsed.Ready(call))                 => batch(call, seen(peeled))
         case Some(Batch.Parsed.Program(id, platform, argv)) =>
           batch(Call.Run(id, platform, shell, argv), seen(peeled))
+        case Some(Batch.Parsed.Names(query)) =>
+          query match
+            case None        => ZIO.succeed(halt(0))
+            case Some(asked) => catalog(asked)
     yield ExitCode(code)
+
+  /** Names from a server that is already listening. No record, a different version, or any failure prints nothing and
+    * does not start a server or a JVM.
+    */
+  private def catalog(query: CatalogQuery): ZIO[Scope, Nothing, Int] =
+    val repo  = Path.of("").toAbsolutePath.normalize
+    val quiet = ZIO.succeed(halt(0))
+    readRecord(repo).foldZIO(
+      _ => quiet,
+      {
+        case None         => quiet
+        case Some(record) =>
+          agrees(record).foldZIO(
+            _ => quiet,
+            ok =>
+              if !ok then quiet
+              else
+                val socket = Path.of(record.socket)
+                listening(socket).flatMap { live =>
+                  if !live then quiet
+                  else exchange(repo, socket, Call.Catalog(query), Appearance.plain).foldZIO(_ => quiet, _ => quiet)
+                },
+          )
+      },
+    )
 
   /** A terminal and an unset `NO_COLOR` take color. `--truecolor` does not turn color on. */
   private def seen(peeled: Peeled): Appearance =
