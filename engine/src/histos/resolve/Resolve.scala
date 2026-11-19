@@ -59,6 +59,15 @@ object Resolve:
       CacheMode.Retain,
     )
 
+  /** Same cache as [[coursier]]. A changing snapshot is resolved again, so a toolchain pack does not mix a new module
+    * with a sibling snapshot cached from an earlier publish.
+    */
+  def recheck: ULayer[Resolve] =
+    CoursierResolve.layer(
+      _root_.coursier.cache.CacheDefaults.location.toPath,
+      CacheMode.Recheck,
+    )
+
   def lockPath(repo: Path): Path =
     repo.resolve("dependencies.lock")
 

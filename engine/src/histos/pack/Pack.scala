@@ -23,7 +23,7 @@ object Pack extends ZIOAppDefault:
       _       <- Distribution
         .install(request.coordinate, request.repositories, request.out)
         .mapError(PackError.Failed(_))
-        .provideSomeLayer[Scope](Resolve.coursier)
+        .provideSomeLayer[Scope](Resolve.recheck)
     yield ()).foldZIO(
       error => Console.printLineError(error.message).ignore.as(ExitCode.failure),
       _ => ZIO.succeed(ExitCode.success),

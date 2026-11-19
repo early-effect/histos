@@ -16,6 +16,10 @@ private[resolve] enum CacheMode:
   case Retain
   case Offline
 
+  /** A snapshot already in the cache is checked again. A release file stays. */
+  case Recheck
+end CacheMode
+
 private[resolve] final case class FetchKey(
     organization: String,
     name: String,
@@ -114,7 +118,8 @@ private[resolve] final class CoursierResolve(
 
   private def fetchNew(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
     val policy =
-      if mode == CacheMode.Offline then CacheUse.Offline else CacheUse.Locked
+      if mode == CacheMode.Offline then CoursierResolve.CacheUse.Offline
+      else CoursierResolve.CacheUse.Locked
     for
       base <- session(policy)
       single = dependency(
@@ -219,39 +224,22 @@ private[resolve] final class CoursierResolve(
       hashed <- ZIO.foreach(rows)(row => place(repositories, row))
     yield Classpath(hashed, evictions(result.resolution))
 
-  private enum CacheUse:
-    case Solve, Locked, Offline
-
   /** Retain uses a file already in the cache and fetches only a missing one. Offline never fetches. Revalidate is
-    * Coursier's default, which also rechecks changing artifacts.
+    * Coursier's default, which also rechecks changing artifacts once their TTL has passed. Recheck does not wait.
     */
-  private val opened: CacheUse = mode match
-    case CacheMode.Revalidate => CacheUse.Solve
-    case CacheMode.Retain     => CacheUse.Locked
-    case CacheMode.Offline    => CacheUse.Offline
+  private val opened: CoursierResolve.CacheUse = mode match
+    case CacheMode.Revalidate => CoursierResolve.CacheUse.Solve
+    case CacheMode.Retain     => CoursierResolve.CacheUse.Locked
+    case CacheMode.Offline    => CoursierResolve.CacheUse.Offline
+    case CacheMode.Recheck    => CoursierResolve.CacheUse.Recheck
 
   private def session(
-      use: CacheUse = opened
+      use: CoursierResolve.CacheUse = opened
   ): IO[ResolveError, coursier.Fetch[coursier.util.Task]] =
     ZIO
       .attemptBlocking {
-        val configured = coursier.cache.FileCache
-          .apply()
-          .withLocation(cache.toString)
-          .copy(allowCacheSubstitution = false)
-        val files = use match
-          case CacheUse.Solve  => configured
-          case CacheUse.Locked =>
-            configured.copy(cachePolicies =
-              Seq(
-                coursier.cache.CachePolicy.LocalOnly,
-                coursier.cache.CachePolicy.FetchMissing,
-              )
-            )
-          case CacheUse.Offline =>
-            configured.copy(cachePolicies = Seq(coursier.cache.CachePolicy.LocalOnly))
         coursier
-          .Fetch(files)(using coursier.util.Task.sync)
+          .Fetch(CoursierResolve.files(cache.toString, use))(using coursier.util.Task.sync)
           .noMirrors
           .withGradleModuleSupport(false)
       }
@@ -482,7 +470,37 @@ private[resolve] final class CoursierResolve(
 end CoursierResolve
 
 private[resolve] object CoursierResolve:
+  enum CacheUse:
+    case Solve, Locked, Offline, Recheck
+
+  /** `Recheck` sets no TTL, so a changing snapshot is resolved again. `Locked` keeps a cached snapshot. */
+  private[resolve] def files(
+      location: String,
+      use: CacheUse,
+  ): coursier.cache.FileCache[coursier.util.Task] =
+    val configured = coursier.cache.FileCache
+      .apply()
+      .withLocation(location)
+      .copy(allowCacheSubstitution = false)
+    use match
+      case CacheUse.Solve  => configured
+      case CacheUse.Locked =>
+        configured.copy(cachePolicies =
+          Seq(
+            coursier.cache.CachePolicy.LocalOnly,
+            coursier.cache.CachePolicy.FetchMissing,
+          )
+        )
+      case CacheUse.Offline =>
+        configured.copy(cachePolicies = Seq(coursier.cache.CachePolicy.LocalOnly))
+      case CacheUse.Recheck =>
+        configured.copy(
+          ttl = None,
+          cachePolicies = Seq(coursier.cache.CachePolicy.UpdateChanging),
+        )
+
   def layer(cache: Path, mode: CacheMode): ULayer[Resolve] =
     ZLayer.fromZIO(
       Ref.make(Map.empty[FetchKey, ResolvedArtifact]).map(ref => new CoursierResolve(cache, mode, ref))
     )
+end CoursierResolve
