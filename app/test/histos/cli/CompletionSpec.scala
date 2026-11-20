@@ -117,6 +117,11 @@ object CompletionSpec extends ZIOSpecDefault:
         CompletionSurface.bash.contains("complete -F _histos histos"),
         CompletionSurface.bash.contains("complete -F _histos ./histos"),
         CompletionSurface.zsh.contains("#compdef histos ./histos"),
+        CompletionSurface.zsh.contains("_n0 2 0"),
+        CompletionSurface.zsh.contains("_n0()"),
+        CompletionSurface.bash.contains("_n0 1 0"),
+        !CompletionSurface.zsh.contains("_histos_n0"),
+        !CompletionSurface.bash.contains("_histos_n0"),
         CompletionSurface.bash.contains("[ -n \"$cur\" ]"),
       )
     },
