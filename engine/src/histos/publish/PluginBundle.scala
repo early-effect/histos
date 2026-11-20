@@ -41,7 +41,17 @@ import histos.plugin.{
 }
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompilationCapture, CompilationSnapshot, CompileError, Sources}
-import histos.{Dep, DepLink, MavenScope, Organization, Platform, PluginPublication, ScalaVersion}
+import histos.{
+  Dep,
+  DepLink,
+  MavenScope,
+  Organization,
+  Platform,
+  PluginPublication,
+  ScalaVersion,
+  ScalacFlag,
+  ScalacFlags,
+}
 import histos.load.KnownStageRegistry
 import histos.plugin.StageAssurance
 import histos.resolve.ArtifactName
@@ -310,18 +320,16 @@ object PluginBundle:
           Left(PluginPublishFault.Recipe(RecipeError.Unsupported(RecipeFeature("path"), node)))
         else Right(())
 
-  private val Allowed: Set[String] = Set(
-    "encoding-utf8",
-    "max-inlines",
-    "deprecation",
-    "feature",
-    "unused-all",
-    "implicit-conversions",
-    "encoding",
-    "release",
-    "target",
-    "order",
-  )
+  /** Flag tokens come from [[ScalacFlag]]. A new case needs no edit here. `encoding`, `release`, `target`, and `order`
+    * are recipe settings, not compiler flags.
+    */
+  private val Allowed: Set[String] =
+    ScalacFlag.values.iterator.map(flag => ScalacFlags.of(flag).canonical).toSet ++ Set(
+      "encoding",
+      "release",
+      "target",
+      "order",
+    )
 
   private def allowed(key: String): Boolean =
     Allowed.contains(key)

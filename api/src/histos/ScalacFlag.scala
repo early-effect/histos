@@ -9,6 +9,7 @@ enum ScalacFlag:
   case Deprecation
   case Feature
   case UnusedAll
+  case FatalWarnings
   case ImplicitConversions
 end ScalacFlag
 
@@ -29,6 +30,7 @@ object ScalacFlags:
           case ScalacFlag.Deprecation         => "deprecation"
           case ScalacFlag.Feature             => "feature"
           case ScalacFlag.UnusedAll           => "unused-all"
+          case ScalacFlag.FatalWarnings       => "fatal-warnings"
           case ScalacFlag.ImplicitConversions => "implicit-conversions"
         .mkString(",")
 
@@ -39,6 +41,7 @@ object ScalacFlags:
         case ScalacFlag.Deprecation         => List("-deprecation")
         case ScalacFlag.Feature             => List("-feature")
         case ScalacFlag.UnusedAll           => List("-Wunused:all")
+        case ScalacFlag.FatalWarnings       => List("-Werror")
         case ScalacFlag.ImplicitConversions => List("-language:implicitConversions")
   end extension
 end ScalacFlags
