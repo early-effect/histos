@@ -143,8 +143,11 @@ object Workflow:
           case first :: rest => Right(TestTarget.Named(first, rest))
           case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph)(using CiBranch, RenderingShip): Either[CiError | BuildError, String] =
-    prepared(graph).map(_._1)
+  def render(graph: ProjectGraph, lock: NpmLock)(using
+      CiBranch,
+      RenderingShip,
+  ): Either[CiError | BuildError, String] =
+    prepared(graph, lock).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
     * is Deployment, `histos-snapshots.yml` when a ship names an asset, then one file per dispatch, cron, or trigger
@@ -153,9 +156,10 @@ object Workflow:
   def renderAll(
       graph: ProjectGraph,
       sona: Publishing,
+      lock: NpmLock,
   )(using CiBranch, RenderingShip): Either[CiError | BuildError, List[RenderedWorkflow]] =
     for
-      (body, files) <- prepared(graph)
+      (body, files) <- prepared(graph, lock)
       release       <- releaseWorkflow(graph, sona)
       snapshots     <- snapshotWorkflow(graph)
     yield
@@ -167,14 +171,15 @@ object Workflow:
         files
 
   private def prepared(
-      graph: ProjectGraph
+      graph: ProjectGraph,
+      lock: NpmLock,
   )(using branch: CiBranch)(using RenderingShip): Either[CiError | BuildError, (String, List[RenderedWorkflow])] =
     for
       _       <- limits(graph)
       _       <- llvmPinned(graph)
       planned <- JobYaml.render(graph, branch.name)
       jobs    <- plan(graph, CiEvent.Other)
-    yield (document(graph, jobs, planned, branch.name), planned.files)
+    yield (document(graph, jobs, planned, branch.name, lock), planned.files)
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
     graph.ci.timeout match
@@ -220,7 +225,8 @@ object Workflow:
       RenderingShip,
   ): IO[CiError | BuildError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph, sona))
+      lock     <- npmLock(repo)
+      rendered <- ZIO.fromEither(renderAll(graph, sona, lock))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra.headOption): orphan =>
@@ -233,7 +239,8 @@ object Workflow:
       RenderingShip,
   ): IO[CiError | BuildError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph, sona))
+      lock     <- npmLock(repo)
+      rendered <- ZIO.fromEither(renderAll(graph, sona, lock))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra): orphan =>
@@ -324,11 +331,12 @@ object Workflow:
       jobs: List[TestJob],
       planned: JobYaml.Rendered,
       branch: String,
+      lock: NpmLock,
   )(using RenderingShip): String =
     val modules = graph.projects.collect { case module: Module => module }
     val test    = jobs match
       case Nil => Nil
-      case _   => testJob(jobs, graph)
+      case _   => testJob(jobs, graph, lock)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob(graph))
@@ -627,6 +635,11 @@ object Workflow:
     case Whole
     case Cell
 
+  /** `npm ci` at the repository root. Not a tool install. */
+  private enum NpmInstall:
+    case Off
+    case On(scope: MatrixScope)
+
   /** Matrix rows are a name and a command, or those plus the tool flags. */
   private enum ToolColumns:
     case Off
@@ -726,29 +739,39 @@ object Workflow:
     * compiles, and it does not save: the suite is the writer. It does not wait for the suite. Versions, plugin docs,
     * deploy, workflow, and release do not restore these. This workflow does not fetch a JDK, so it emits no JDK key.
     * Node is installed for a JavaScript module, or when Playwright is installed. `setup-node` does not set
-    * `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is installed for a native module. The
-    * runner is `ubuntu-26.04`, so a miss downloads `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and
-    * unpacks it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads
-    * Playwright from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this
-    * runner. A Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch
-    * it. `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the
-    * package, and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. The runner's Azure
-    * Ubuntu mirror hangs that apt with no output, so the step rewrites `azure.archive.ubuntu.com` to
-    * `archive.ubuntu.com` first and gives the command three minutes. A step `if` that skips the download leaves a job
-    * that did not run. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles`
-    * names the build file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every
-    * job that runs `./histos` installs Histos the way the build chose and does not install a JDK or the `cs` binary.
+    * `cache: npm`: that key is a package lock, and Chekhov does not read it. The test job runs `npm ci` when it runs a
+    * JavaScript module and the repo root has `package-lock.json`. LLVM is installed for a native module. The runner is
+    * `ubuntu-26.04`, so a miss downloads `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks
+    * it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads Playwright
+    * from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A
+    * Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch it.
+    * `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the package,
+    * and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. The runner's Azure Ubuntu
+    * mirror hangs that apt with no output, so the step rewrites `azure.archive.ubuntu.com` to `archive.ubuntu.com`
+    * first and gives the command three minutes. A step `if` that skips the download leaves a job that did not run.
+    * Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build
+    * file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs
+    * `./histos` installs Histos the way the build chose and does not install a JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
       resolution: Resolution,
       need: ToolNeed,
       scope: MatrixScope,
+      install: NpmInstall,
   ): List[String] =
     nodeStep(if need.node then tools.node else None, scope) ++
+      npmCi(install) ++
       llvmStep(if need.llvm then tools.llvm else None, scope) ++
       playwrightStep(if need.playwright then tools.playwright else None, scope) ++
       coursierStep(resolution)
+
+  private def npmCi(install: NpmInstall): List[String] =
+    install match
+      case NpmInstall.Off       => Nil
+      case NpmInstall.On(scope) =>
+        val guard = cellFlag(scope, "npm").toList.map(text => s"        if: $text")
+        List(s"      - run: ${quote("npm ci")}") ++ guard
 
   private def cellFlag(scope: MatrixScope, flag: String): Option[String] =
     scope match
@@ -905,7 +928,7 @@ object Workflow:
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
     val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
-    val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole)
+    val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  cache-seed:"
     ) ++ List(
@@ -922,7 +945,7 @@ object Workflow:
       seedCommand(graph.promote),
     ) ++ storeSave).mkString("\n")
 
-  private def testJob(jobs: List[TestJob], graph: ProjectGraph)(using RenderingShip): List[String] =
+  private def testJob(jobs: List[TestJob], graph: ProjectGraph, lock: NpmLock)(using RenderingShip): List[String] =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
     val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
@@ -931,7 +954,8 @@ object Workflow:
       case _                      => false
     }
     val scope   = if matrix then MatrixScope.Cell else MatrixScope.Whole
-    val prepare = steps(graph.runnerTools, graph.resolution, any, scope)
+    val install = npmInstall(jobs, modules, graph, lock, scope)
+    val prepare = steps(graph.runnerTools, graph.resolution, any, scope, install)
     val columns = if matrix && any.any then ToolColumns.On else ToolColumns.Off
     val depends = graph.suiteHost match
       case SuiteHost.Pin   => "    needs: affected"
@@ -969,25 +993,54 @@ object Workflow:
           "      fail-fast: false",
           "      matrix:",
           "        include:",
-        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns)) ++ List(
+        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns, install)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ installed ++ prepare ++ proved ++ testRun("${{ matrix.command }}")
 
-  private def include(job: TestJob, modules: List[Module], tools: RunnerTools, columns: ToolColumns): List[String] =
+  private def include(
+      job: TestJob,
+      modules: List[Module],
+      tools: RunnerTools,
+      columns: ToolColumns,
+      install: NpmInstall,
+  ): List[String] =
     val rows = List(
       s"          - name: ${quote(slug(job))}",
       s"            command: ${quote(argv(job).mkString(" "))}",
     )
-    columns match
-      case ToolColumns.Off => rows
+    val flags = columns match
+      case ToolColumns.Off => Nil
       case ToolColumns.On  =>
         val need = toolNeed(modulesOf(job, modules), tools)
-        rows ++ List(
+        List(
           s"            node: ${quote(need.node.toString)}",
           s"            llvm: ${quote(need.llvm.toString)}",
           s"            playwright: ${quote(need.playwright.toString)}",
         )
+    rows ++ flags ++ npmColumn(job, modules, install)
+
+  /** True only for a cell whose modules contain JavaScript. The column exists only when the job installs from the
+    * lockfile, so the node floor and the lock are already decided.
+    */
+  private def npmColumn(job: TestJob, modules: List[Module], install: NpmInstall): List[String] =
+    install match
+      case NpmInstall.On(MatrixScope.Cell) =>
+        val runsJs = modulesOf(job, modules).exists(_.platforms.all.contains(Platform.Js))
+        List(s"            npm: ${quote(runsJs.toString)}")
+      case NpmInstall.On(MatrixScope.Whole) => Nil
+      case NpmInstall.Off                   => Nil
+
+  private def npmInstall(
+      jobs: List[TestJob],
+      modules: List[Module],
+      graph: ProjectGraph,
+      lock: NpmLock,
+      scope: MatrixScope,
+  ): NpmInstall =
+    val runsJs = jobs.exists(job => modulesOf(job, modules).exists(_.platforms.all.contains(Platform.Js)))
+    if lock == NpmLock.Present && graph.runnerTools.node.isDefined && runsJs then NpmInstall.On(scope)
+    else NpmInstall.Off
 
   private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean):
     def ||(other: ToolNeed): ToolNeed =
@@ -1153,8 +1206,14 @@ object Workflow:
     val modules   = graph.projects.collect { case module: Module => module }
     val published = graph.catalog.ships.flatMap(_.members.toList)
     val chosen    = modules.filter(module => published.contains(module.name))
-    val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), MatrixScope.Whole)
-    val lines     = List(
+    val prepare   = steps(
+      graph.runnerTools,
+      graph.resolution,
+      docNeed(chosen, graph.runnerTools),
+      MatrixScope.Whole,
+      NpmInstall.Off,
+    )
+    val lines = List(
       "  scaladoc:"
     ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
       s"    runs-on: $Runner"
@@ -1171,8 +1230,9 @@ object Workflow:
     */
   private def coverageJob(graph: ProjectGraph, floors: CoverageFloors)(using RenderingShip): String =
     val command = ("./histos coverage" :: (floors.argv ++ graph.coverageExcludes.argv)).mkString(" ")
-    val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
-    val lines   = List(
+    val prepare =
+      steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole, NpmInstall.Off)
+    val lines = List(
       "  coverage:"
     ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
@@ -1189,7 +1249,8 @@ object Workflow:
 
   /** Beside the suite. It does not wait for the suite, and it compiles nothing, so it restores no store. */
   private def formatJob(graph: ProjectGraph)(using RenderingShip): String =
-    val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
+    val prepare =
+      steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  format:"
     ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
@@ -1410,6 +1471,14 @@ object Workflow:
 
   private def quote(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+  /** A regular file is present. A missing path or a directory of that name is absent. A failed stat is an io error. */
+  private def npmLock(repo: Path): IO[CiError, NpmLock] =
+    val path = repo.resolve("package-lock.json")
+    ZIO
+      .attemptBlocking(Files.isRegularFile(path))
+      .mapError(_ => CiError.Io(IoFailure(path, IoFault.Stat)))
+      .map(found => if found then NpmLock.Present else NpmLock.Absent)
 
   private def compare(repo: Path, rendered: RenderedWorkflow): IO[CiError, Unit] =
     read(file(repo, rendered.name)).foldZIO(
