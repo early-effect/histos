@@ -2,17 +2,24 @@ package histos.workflow
 
 import histos.plugin.{JobName, TaskName}
 import histos.{
+  Axis,
   BuildError,
   ClientLink,
+  Js,
+  JsEnv,
   Jvm,
+  NodeFloor,
   ProjectGraph,
   Projects,
   RunnerTools,
   ScalaVersion,
+  Ship,
+  Splits,
   ToolRevision,
   VerifyRun,
   VerifyTask,
   module,
+  ships,
 }
 
 import zio.test.*
@@ -26,10 +33,14 @@ object VerifyJobSpec extends ZIOSpecDefault:
   private val host       = VerifyRun.BuiltIn(TaskName("host"))
 
   private val llvm: RunnerTools = RunnerTools(None, Some(ToolRevision("21.1.8")), None)
+  private val node: RunnerTools = RunnerTools(Some(NodeFloor(25)), None, None)
+
+  private val browser: RunnerTools =
+    RunnerTools(Some(NodeFloor(25)), None, Some(ToolRevision("1.62.1")))
 
   def spec = suite("verify jobs")(
     test("a pin with no verify task keeps today's test job") {
-      val text = render(Projects(api))
+      val text = render(Projects(api), NpmLock.Absent)
       assertTrue(
         text.map(_.contains("    needs: affected")) == Right(true),
         text.map(_.contains(Setup)) == Right(true),
@@ -40,7 +51,8 @@ object VerifyJobSpec extends ZIOSpecDefault:
     test("a local suite publishes, and the suite installs that jar") {
       val task = VerifyTask(JobName("client"), host, ClientLink.Native)
       val text = render(
-        Projects.runnerTools(llvm).docCheck.scalafmt.publishLocalSuite.verify(task)(api)
+        Projects.runnerTools(llvm).docCheck.scalafmt.publishLocalSuite.verify(task)(api),
+        NpmLock.Absent,
       )
       assertTrue(
         text.map(body => !body.contains("HISTOS_SESSION") && !body.contains("HISTOS_BRANCH")) == Right(true),
@@ -68,7 +80,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
     },
     test("a pin verify task runs on the setup action and does not publish") {
       val task = VerifyTask(JobName("client"), host, ClientLink.Skip)
-      val text = render(Projects.verify(task)(api))
+      val text = render(Projects.verify(task)(api), NpmLock.Absent)
       assertTrue(
         text.map { body =>
           val job = slice(body, "client")
@@ -78,7 +90,85 @@ object VerifyJobSpec extends ZIOSpecDefault:
         text.map(_.contains("publish:")) == Right(false),
       )
     },
+    test("jsdom with a lockfile runs npm ci after node and before the suite") {
+      val web  = module("web", Js)(ScalaVersion("3.10.1")).jsEnv(JsEnv.Jsdom)
+      val text = render(Projects.runnerTools(node)(web), NpmLock.Present)
+      assertTrue(text.map(body => lockedJs(slice(body, "test"))) == Right(true))
+    },
+    test("node with a lockfile runs npm ci after node and before the suite") {
+      val web  = module("web", Js)(ScalaVersion("3.10.1"))
+      val text = render(Projects.runnerTools(node)(web), NpmLock.Present)
+      assertTrue(text.map(body => lockedJs(slice(body, "test"))) == Right(true))
+    },
+    test("a jvm module installs neither node nor npm ci") {
+      val absent  = render(Projects.runnerTools(node)(api), NpmLock.Absent)
+      val present = render(Projects.runnerTools(node)(api), NpmLock.Present)
+      assertTrue(
+        absent.map(body => bare(slice(body, "test"))) == Right(true),
+        present.map(body => bare(slice(body, "test"))) == Right(true),
+      )
+    },
+    test("javascript without a lockfile installs node and does not run npm ci") {
+      val web  = module("web", Js)(ScalaVersion("3.10.1"))
+      val text = render(Projects.runnerTools(node)(web), NpmLock.Absent)
+      assertTrue(
+        text.map { body =>
+          val job = slice(body, "test")
+          job.contains("setup-node") && !job.contains("npm ci")
+        } == Right(true)
+      )
+    },
+    test("playwright on a jvm module does not run npm ci") {
+      val text = render(Projects.runnerTools(browser)(api), NpmLock.Present)
+      assertTrue(
+        text.map { body =>
+          val job = slice(body, "test")
+          job.contains("setup-node") && job.contains("npm install --prefix") && job.contains("chekhov") &&
+          !job.contains("npm ci")
+        } == Right(true)
+      )
+    },
+    test("a module split guards npm ci and marks only the javascript cell") {
+      val web  = module("web", Js)(ScalaVersion("3.10.1"))
+      val text = render(Projects.runnerTools(node)(Splits.of(Axis.Module), web, api), NpmLock.Present)
+      assertTrue(
+        text.map { body =>
+          val job = slice(body, "test")
+          job.contains("matrix.npm == 'true'") && job.contains("run: \"npm ci\"") &&
+          matrixRow(job, "web").contains("npm: \"true\"") && matrixRow(job, "api").contains("npm: \"false\"")
+        } == Right(true)
+      )
+    },
+    test("scaladoc and cache-seed install node and do not run npm ci") {
+      val web  = module("web", Js)(ScalaVersion("3.10.1"))
+      val text = render(
+        Projects.runnerTools(node).docCheck(ships(Ship("docs").next(0, 1, 0)(web)), web),
+        NpmLock.Present,
+      )
+      assertTrue(
+        text.map { body =>
+          val suite = slice(body, "test")
+          val seed  = slice(body, "cache-seed")
+          val doc   = slice(body, "scaladoc")
+          suite.contains("npm ci") && !seed.contains("npm ci") && !doc.contains("npm ci") &&
+          seed.contains("setup-node") && doc.contains("setup-node")
+        } == Right(true)
+      )
+    },
   )
+
+  /** `npm ci` follows `setup-node`, precedes the suite, and is not the Chekhov prefix install. */
+  private def lockedJs(job: String): Boolean =
+    val nodeAt = job.indexOf("setup-node")
+    val ciAt   = job.indexOf("run: \"npm ci\"")
+    val testAt = job.indexOf("./histos test")
+    nodeAt >= 0 && ciAt > nodeAt && testAt > ciAt && !job.contains("npm install --prefix") && !job.contains(
+      "chekhov"
+    ) &&
+    !job.contains("matrix.npm")
+
+  private def bare(job: String): Boolean =
+    !job.contains("setup-node") && !job.contains("npm ci")
 
   private def publishHost(job: String): Boolean =
     job.contains("./histos publish local") && job.contains("name: host") && job.contains(Setup) &&
@@ -102,7 +192,10 @@ object VerifyJobSpec extends ZIOSpecDefault:
   private def seedStays(job: String): Boolean =
     job.contains(Setup) && job.contains("github.event_name == 'push'") && !job.contains("needs:")
 
-  private def render(built: Either[BuildError, ProjectGraph]): Either[CiError | BuildError, String] =
+  private def render(
+      built: Either[BuildError, ProjectGraph],
+      lock: NpmLock,
+  ): Either[CiError | BuildError, String] =
     built match
       case Left(error)  => Left(error)
       case Right(graph) =>
@@ -111,7 +204,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
           case Right(ship) =>
             given RenderingShip = ship
             given CiBranch      = CiBranch("main")
-            Workflow.render(graph)
+            Workflow.render(graph, lock)
 
   private def slice(text: String, name: String): String =
     val lines = text.split("\n", -1).toVector
@@ -120,6 +213,15 @@ object VerifyJobSpec extends ZIOSpecDefault:
       case None       => ""
       case Some(head) =>
         val rest = lines.drop(start + 1).takeWhile(line => !jobHead(line))
+        (head +: rest).mkString("\n")
+
+  private def matrixRow(job: String, name: String): String =
+    val lines = job.split("\n", -1).toVector
+    val start = lines.indexWhere(_.contains(s"- name: \"$name\""))
+    lines.lift(start) match
+      case None       => ""
+      case Some(head) =>
+        val rest = lines.drop(start + 1).takeWhile(line => !line.contains("- name:"))
         (head +: rest).mkString("\n")
 
   private def jobHead(line: String): Boolean =
