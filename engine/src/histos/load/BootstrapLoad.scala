@@ -373,26 +373,26 @@ private[histos] object BootstrapLoad:
           case None =>
             ZIO.succeed(stamped.paths)
           case Some(drift) =>
-            extract(drift.path).flatMap: sources =>
-              if sources.isEmpty then ZIO.fail(LoadError.Plugin(drift))
+            extract(drift.path).flatMap: extracted =>
+              if extracted.sources.isEmpty then ZIO.fail(LoadError.Plugin(drift))
               else
                 for
-                  out <- BuildFile.tempDir("histos-rebuild")
-                  _   <- session match
+                  classes <- BuildFile.tempDir("histos-rebuild")
+                  _       <- session match
                     case None =>
-                      BuildCache.compile(sources, classpath, out, drift.path.toString)
+                      BuildCache.compile(extracted.sources, classpath, classes, drift.path.toString)
                     case Some(hosted) =>
                       PluginCompiler
                         .compile(
                           PluginCompileJob(
                             ProjectName.trusted("rebuilt"),
                             hosted,
-                            out,
-                            out,
-                            sources,
+                            extracted.root,
+                            extracted.root,
+                            extracted.sources,
                             classpath,
-                            classes = out,
-                            analysis = out.resolve("analysis"),
+                            classes = classes,
+                            analysis = classes.resolve("analysis"),
                           )
                         )
                         .mapError:
@@ -400,7 +400,7 @@ private[histos] object BootstrapLoad:
                           case other                          =>
                             LoadError.CompileFailed(List(CompilerMessage.fromCompiler(other.message)))
                   kept = stamped.paths.filterNot(_ == drift.path)
-                yield kept :+ out
+                yield kept :+ classes
 
   private def publicationOf(path: Path): ZIO[Any, LoadError, histos.plugin.PublicationFact] =
     entry(path, "META-INF/histos/plugin.json").flatMap:
@@ -442,14 +442,17 @@ private[histos] object BootstrapLoad:
   private def sourceFile(name: String): Boolean =
     name.endsWith(".scala") || name.endsWith(".java")
 
-  private def extract(path: Path): ZIO[Scope, LoadError, List[Path]] =
+  /** Sources stay under `root`. The classes directory is a different temp dir, and it is not the checkout. */
+  private final case class Extracted(root: Path, sources: List[Path])
+
+  private def extract(path: Path): ZIO[Scope, LoadError, Extracted] =
     val prefix = "META-INF/histos/rebuild/"
     for
       root  <- BuildFile.tempDir("histos-recipe")
       names <- ZIO
         .attemptBlocking(recipeEntries(path, prefix, root))
         .mapError(BuildFile.failed(path, IoFault.Read))
-    yield names
+    yield Extracted(root, names)
 
   private def recipeEntries(path: Path, prefix: String, root: Path): List[Path] =
     val zip = new ZipFile(path.toFile)

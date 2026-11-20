@@ -217,6 +217,36 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         assertTrue(text == "rebuilt", !helperKept)
       }
     },
+    test("a host compiler rebuilds a drifted publication from its recipe") {
+      hosted { (root, _) =>
+        for
+          api    <- apiJar(root.resolve("api.jar"))
+          digest <- digestOf(api)
+          other  <- digestOf(root.resolve("api.jar")).map(value =>
+            if value.endsWith("00") then value.dropRight(2) + "ff" else value.dropRight(2) + "00"
+          )
+          direct <- pluginJar(root.resolve("direct.jar"), digest, Nil)
+          helper <- pluginJar(
+            root.resolve("helper.jar"),
+            other,
+            List(
+              "META-INF/histos/plugin.json" -> """{"mode":"rebuildable"}""".getBytes(StandardCharsets.UTF_8),
+              "META-INF/histos/rebuild/demo/Rebuilt.scala" -> rebuiltSource.getBytes(StandardCharsets.UTF_8),
+            ),
+          )
+          payload <- PluginCompileSupport
+            .payload(root.resolve("payload"), "3.10.1", PluginCompileSupport.Scala3101)
+            .mapError(LoadError.HostCompiler(_))
+          _      <- write(root.resolve("histos.plugins.scala"), oneShip("drifted"))
+          _      <- write(root.resolve("histos.scala"), plainMain)
+          loaded <- prepare(root, api, shipJars("drifted", direct, helper), payload = Some(payload))
+          text   <- token(loaded.build, "demo.Rebuilt$")
+        yield (text, urls(loaded.build).exists(_ == helper))
+      }.map { ran =>
+        val (text, helperKept) = ran.value
+        assertTrue(text == "rebuilt", !helperKept)
+      }
+    },
     test("binary-only helper drift is refused") {
       hosted { (root, _) =>
         for
