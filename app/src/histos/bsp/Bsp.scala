@@ -55,6 +55,9 @@ object Bsp:
   val BspVersion: String = "2.2.0"
   val ServerName: String = "histos"
 
+  /** Compiles `histos.scala` against the classpath this session reports to the editor. */
+  type BuildFileNotes = List[Path] => IO[LoadError, BuildNotes]
+
   enum Answer:
     case Reply(line: String)
     case Quiet
@@ -252,7 +255,7 @@ object Bsp:
       runtimes: Runtimes,
       buildClasspath: List[Path],
       notify: String => UIO[Unit],
-      build: IO[LoadError, BuildNotes],
+      build: BuildFileNotes,
       gate: ZIO[
         Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
         Nothing,
@@ -295,7 +298,7 @@ object Bsp:
         runtimes: Runtimes,
         buildClasspath: List[Path],
         notify: String => UIO[Unit],
-        build: IO[LoadError, BuildNotes],
+        build: BuildFileNotes,
         phase: Ref[Phase],
         gate: ZIO[
           Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
@@ -332,7 +335,7 @@ object Bsp:
       runtimes: Runtimes,
       buildClasspath: List[Path],
       notify: String => UIO[Unit],
-      build: IO[LoadError, BuildNotes],
+      build: BuildFileNotes,
       phase: Ref[Phase],
       gate: ZIO[
         Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
@@ -361,10 +364,12 @@ object Bsp:
       Nothing,
       Answer,
     ] =
-      current.get.flatMap(graph => answer(graph, payload))
+      current.get.flatMap(graph => answer(graph, buildClasspath, payload))
 
+    /** `classpath` is the build file classpath of the generation this request adopted. */
     def answer(
         seen: ProjectGraph,
+        classpath: List[Path],
         payload: String,
     ): ZIO[
       Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
@@ -379,7 +384,7 @@ object Bsp:
           repo,
           jdk,
           runtimes,
-          buildClasspath,
+          classpath,
           notify,
           build,
           phase,
@@ -764,7 +769,7 @@ object Bsp:
       Int,
     ] =
       val uri = buildUri
-      (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap {
+      (clear(uri) *> build(buildClasspath).mapError(BspError.Build(_))).either.flatMap {
         case Left(error)  => log(CompileSeverity.Error, error.message).as(2)
         case Right(notes) =>
           ZIO

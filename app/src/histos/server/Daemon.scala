@@ -411,8 +411,7 @@ object Daemon:
       jdk: JdkRuntime,
       version: String,
       apiJar: Path,
-      buildClasspath: List[Path],
-      build: IO[histos.load.LoadError, histos.load.BuildNotes],
+      build: Bsp.BuildFileNotes,
       machine: histos.jdk.Machine,
       relaunch: (Path, Successor) => IO[ServerError, Unit],
   ): ZIO[Scope & Needs, ServerError, Running] =
@@ -422,10 +421,10 @@ object Daemon:
         repo,
         loaded.graph,
         loaded.build,
+        loaded.buildFileClasspath,
         jdk,
         version,
         apiJar,
-        buildClasspath,
         build,
         loaded.plugins,
         machine,
@@ -487,11 +486,11 @@ object Daemon:
       repo: Path,
       graph: ProjectGraph,
       histosBuild: histos.HistosBuild,
+      buildFileClasspath: List[Path],
       jdk: JdkRuntime,
       version: String,
       apiJar: Path,
-      buildClasspath: List[Path],
-      build: IO[histos.load.LoadError, histos.load.BuildNotes],
+      build: Bsp.BuildFileNotes,
       plugins: histos.load.PluginRuntime,
       machine: histos.jdk.Machine,
       relaunch: Successor => IO[ServerError, Unit],
@@ -515,7 +514,7 @@ object Daemon:
           _           <- held.addFinalizer(desk.close)
           graphs      <- Ref.make(graph)
           live        <- Ref.make(
-            Generation(graph, plugins, histosBuild, fingerprint, held, uses, desk)
+            Generation(graph, plugins, histosBuild, buildFileClasspath, fingerprint, held, uses, desk)
           )
           reloading <- Semaphore.make(1)
           spliced   <- Ref.make(Set.empty[Bsp.Session])
@@ -550,7 +549,6 @@ object Daemon:
                 permit,
                 runs,
                 machine,
-                buildClasspath,
                 build,
               ).provideSomeLayer(ZLayer.succeed(report))
             )
@@ -603,6 +601,7 @@ object Daemon:
       graph: ProjectGraph,
       plugins: histos.load.PluginRuntime,
       build: histos.HistosBuild,
+      buildFileClasspath: List[Path],
       fingerprint: Fingerprint,
       scope: Scope.Closeable,
       uses: Ref[Uses],
@@ -633,8 +632,7 @@ object Daemon:
       permit: Semaphore,
       runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
-      buildClasspath: List[Path],
-      build: IO[histos.load.LoadError, histos.load.BuildNotes],
+      build: Bsp.BuildFileNotes,
   ): ZIO[Scope & Served, ServerError, Unit] =
     def loop: ZIO[Scope & Served, ServerError, Unit] =
       ZIO
@@ -659,7 +657,6 @@ object Daemon:
               permit,
               runs,
               machine,
-              buildClasspath,
               build,
             ).ignore
               .ensuring(ZIO.attempt(socket.close()).ignore)
@@ -680,8 +677,7 @@ object Daemon:
       permit: Semaphore,
       runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
-      buildClasspath: List[Path],
-      build: IO[histos.load.LoadError, histos.load.BuildNotes],
+      build: Bsp.BuildFileNotes,
   ): ZIO[
     Served,
     ServerError,
@@ -738,7 +734,6 @@ object Daemon:
                             machine,
                             warm,
                             permit,
-                            buildClasspath,
                             build,
                             input,
                             output,
@@ -899,7 +894,16 @@ object Daemon:
                           case Left(error) =>
                             Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
                           case Right(held) =>
-                            val have = Right(Some(LoadedBuild(held.graph, held.plugins, held.build)))
+                            val have = Right(
+                              Some(
+                                LoadedBuild(
+                                  held.graph,
+                                  held.plugins,
+                                  held.build,
+                                  buildFileClasspath = held.buildFileClasspath,
+                                )
+                              )
+                            )
                             def ran(compiled: UIO[Unit]) =
                               target match
                                 case Call.Bsp | Call.Reload =>
@@ -1094,7 +1098,16 @@ object Daemon:
             uses  <- Ref.make[Uses](Uses.Live(1))
             desk  <- InvocationDesk.make
             _     <- scope.addFinalizer(desk.close)
-            next = Generation(found.graph, found.plugins, found.build, fresh, scope, uses, desk)
+            next = Generation(
+              found.graph,
+              found.plugins,
+              found.build,
+              found.buildFileClasspath,
+              fresh,
+              scope,
+              uses,
+              desk,
+            )
             previous <- warm.live.getAndSet(next)
             _        <- warm.graphs.set(found.graph)
             _        <- Calls.release
@@ -1222,8 +1235,7 @@ object Daemon:
       machine: histos.jdk.Machine,
       warm: Warm,
       permit: Semaphore,
-      buildClasspath: List[Path],
-      build: IO[histos.load.LoadError, histos.load.BuildNotes],
+      build: Bsp.BuildFileNotes,
       input: InputStream,
       output: OutputStream,
   ): ZIO[
@@ -1246,7 +1258,7 @@ object Daemon:
                 generation.graph,
                 jdk,
                 runtimes,
-                buildClasspath,
+                generation.buildFileClasspath,
                 box.offer,
                 build,
                 effect => permit.withPermit(effect),
@@ -1264,7 +1276,7 @@ object Daemon:
                         )
                     }
                     .flatMap { gen =>
-                      session.answer(gen.graph, payload).ensuring(release(gen))
+                      session.answer(gen.graph, gen.buildFileClasspath, payload).ensuring(release(gen))
                     }
                 warm.spliced.update(_ + session) *>
                   session.follow *>

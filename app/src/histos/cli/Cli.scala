@@ -2162,42 +2162,35 @@ object Cli:
                 .foldZIO(
                   error => ZIO.succeed(Boot.Jdk(error)),
                   jdk =>
-                    loader
-                      .buildClasspath(apiJar)
-                      .foldZIO(
-                        error => ZIO.succeed(Boot.Load(error)),
-                        classpath =>
-                          versionOf(repo).foldZIO(
-                            error => ZIO.succeed(Boot.Pin(error)),
-                            {
-                              case None =>
-                                ZIO.succeed(Boot.Pin(LauncherError.Absent(repo.resolve(LauncherPin.file))))
-                              case Some(text) =>
-                                Daemon
-                                  .open(
-                                    repo,
-                                    loaded,
-                                    jdk,
-                                    text,
-                                    apiJar,
-                                    classpath,
-                                    loader.reportBuild(repo, apiJar).provideEnvironment(env),
-                                    machine,
-                                    Daemon.relaunch,
-                                  )
-                                  .flatMap { running =>
-                                    say(running.record.socket.toString) *> running.done
-                                  }
-                                  .foldCauseZIO(
-                                    cause =>
-                                      cause.failureOrCause match
-                                        case Left(error) => ZIO.succeed(Boot.Transport(error))
-                                        case Right(rest) => ZIO.failCause(rest),
-                                    _ => ZIO.succeed(Boot.Up),
-                                  )
-                            },
-                          ),
-                      ),
+                    versionOf(repo).foldZIO(
+                      error => ZIO.succeed(Boot.Pin(error)),
+                      {
+                        case None =>
+                          ZIO.succeed(Boot.Pin(LauncherError.Absent(repo.resolve(LauncherPin.file))))
+                        case Some(text) =>
+                          Daemon
+                            .open(
+                              repo,
+                              loaded,
+                              jdk,
+                              text,
+                              apiJar,
+                              classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
+                              machine,
+                              Daemon.relaunch,
+                            )
+                            .flatMap { running =>
+                              say(running.record.socket.toString) *> running.done
+                            }
+                            .foldCauseZIO(
+                              cause =>
+                                cause.failureOrCause match
+                                  case Left(error) => ZIO.succeed(Boot.Transport(error))
+                                  case Right(rest) => ZIO.failCause(rest),
+                              _ => ZIO.succeed(Boot.Up),
+                            )
+                      },
+                    ),
                 ),
           )
       }
@@ -2339,41 +2332,49 @@ object Cli:
                       )
                     ),
                 jdk =>
-                  loader
-                    .buildClasspath(apiJar)
-                    .foldZIO(
-                      error =>
-                        ZIO.succeed(
-                          Completed(
-                            CliExit.Failed,
-                            "",
-                            error.message,
-                            Playback.Held,
-                          )
-                        ),
-                      classpath =>
-                        val output = java.lang.System.out
-                        val notify = (line: String) => histos.bsp.Frame.write(output, line).ignore
-                        Runtimes
-                          .read(env.get[Machine], loaded.graph.runnerTools.nodePath)
-                          .flatMap: runtimes =>
-                            Bsp
-                              .open(
-                                repo,
-                                loaded.graph,
-                                jdk,
-                                runtimes,
-                                classpath,
-                                notify,
-                                loader
-                                  .reportBuild(repo, apiJar)
-                                  .provideEnvironment(env),
-                                compile => compile,
-                                None,
+                  val output = java.lang.System.out
+                  val notify = (line: String) => histos.bsp.Frame.write(output, line).ignore
+                  Runtimes
+                    .read(env.get[Machine], loaded.graph.runnerTools.nodePath)
+                    .flatMap: runtimes =>
+                      Bsp
+                        .open(
+                          repo,
+                          loaded.graph,
+                          jdk,
+                          runtimes,
+                          loaded.buildFileClasspath,
+                          notify,
+                          classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
+                          compile => compile,
+                          None,
+                        )
+                        .either
+                        .flatMap:
+                          case Left(error) =>
+                            ZIO.succeed(
+                              Completed(
+                                CliExit.Failed,
+                                "",
+                                error.message,
+                                Playback.Held,
                               )
-                              .either
-                              .flatMap:
-                                case Left(error) =>
+                            )
+                          case Right(session) =>
+                            histos.resolve.ResolutionService
+                              .open(repo, loaded.graph)
+                              .mapError(ServerError.Resolve(_))
+                              .flatMap { report =>
+                                histos.zinc.CompileMemo
+                                  .provide(
+                                    histos.zinc.Compilers
+                                      .provide(histos.schedule.Parallelism.default.cpu)(
+                                        speak(session).provideSomeLayer(zio.ZLayer.succeed(report))
+                                      )
+                                  )
+                              }
+                              .foldZIO(
+                                error =>
                                   ZIO.succeed(
                                     Completed(
                                       CliExit.Failed,
@@ -2381,42 +2382,18 @@ object Cli:
                                       error.message,
                                       Playback.Held,
                                     )
-                                  )
-                                case Right(session) =>
-                                  histos.resolve.ResolutionService
-                                    .open(repo, loaded.graph)
-                                    .mapError(ServerError.Resolve(_))
-                                    .flatMap { report =>
-                                      histos.zinc.CompileMemo
-                                        .provide(
-                                          histos.zinc.Compilers
-                                            .provide(histos.schedule.Parallelism.default.cpu)(
-                                              speak(session).provideSomeLayer(zio.ZLayer.succeed(report))
-                                            )
-                                        )
-                                    }
-                                    .foldZIO(
-                                      error =>
-                                        ZIO.succeed(
-                                          Completed(
-                                            CliExit.Failed,
-                                            "",
-                                            error.message,
-                                            Playback.Held,
-                                          )
-                                        ),
-                                      code =>
-                                        ZIO.succeed(
-                                          Completed(
-                                            if code == 0 then CliExit.Success
-                                            else CliExit.Failed,
-                                            "",
-                                            "",
-                                            Playback.Held,
-                                          )
-                                        ),
-                                    ),
-                    ),
+                                  ),
+                                code =>
+                                  ZIO.succeed(
+                                    Completed(
+                                      if code == 0 then CliExit.Success
+                                      else CliExit.Failed,
+                                      "",
+                                      "",
+                                      Playback.Held,
+                                    )
+                                  ),
+                              ),
               ),
         )
 

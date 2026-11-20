@@ -192,7 +192,8 @@ private[histos] object BootstrapLoad:
         leases,
         proven,
       )
-    yield LoadedBuild(linked, runtime, build, Some(catalog), proven)
+      classpath = (boundary ++ seedPaths ++ rest).distinct
+    yield LoadedBuild(linked, runtime, build, Some(catalog), proven, classpath)
 
   private def plan(plugins: HistosPlugins): Either[BootstrapError, BootstrapSteps.CoreFirst] =
     BootstrapSequencer.coreFirst.plan(BootstrapCatalog.from(plugins)) match

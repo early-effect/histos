@@ -23,8 +23,11 @@ trait Loader:
       lock: DependencyLock,
   ): ZIO[Scope, LoadError, LoadedBuild]
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild]
-  def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
-  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
+
+  /** Compile `histos.scala` against `classpath` and return the notes. `classpath` is the list the load compiled with.
+    */
+  def reportBuild(repo: Path, classpath: List[Path]): IO[LoadError, BuildNotes]
+end Loader
 
 object Loader:
   val live: zio.ZLayer[Resolve, Nothing, Loader] =
@@ -36,17 +39,13 @@ object Loader:
   * `resolve update` writes the cells afterwards.
   */
 private final class LoaderLive(resolve: Resolve) extends Loader:
-  def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
-    Boundary.jars(apiJar)
-
-  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes] =
+  def reportBuild(repo: Path, classpath: List[Path]): IO[LoadError, BuildNotes] =
     ZIO.scoped:
       for
         text     <- readBuild(repo)
-        boundary <- Boundary.jars(apiJar)
         out      <- BuildFile.tempDir("histos-classes")
         source   <- BuildFile.writeTemp(text)
-        reporter <- BuildFile.drive(List(source), boundary, out)
+        reporter <- BuildFile.drive(List(source), classpath, out)
       yield BuildFile.notesOf(reporter, repo.resolve("histos.scala"), source)
 
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
@@ -91,6 +90,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
     yield loaded
 
   /** Wiring loader and the class directories it reads. A short loader that only reads the graph stays in its own scope.
+    * The script compiles before plugin outputs exist, so its classpath is the boundary.
     */
   private def inGeneration(
       repo: Path,
@@ -123,7 +123,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
           leases,
           Nil,
         )
-      yield LoadedBuild(graph, runtime, build)
+      yield LoadedBuild(graph, runtime, build, buildFileClasspath = boundary)
 
   /** No published pin reads no lock and calls no resolver. */
   private def shipsOf(

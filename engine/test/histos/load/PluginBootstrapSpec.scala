@@ -96,17 +96,19 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
     test("a repository without a catalog compiles histos.scala and inherits Solve") {
       ZIO.scoped {
         for
-          root   <- work("histos-p6-inherit")
-          api    <- apiJar(root.resolve("api.jar"))
-          _      <- write(root.resolve("histos.scala"), plainMain)
-          _      <- write(root.resolve("dependencies.lock"), "present\n")
-          loaded <- ZIO
+          root     <- work("histos-p6-inherit")
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          _        <- write(root.resolve("histos.scala"), plainMain)
+          _        <- write(root.resolve("dependencies.lock"), "present\n")
+          loaded   <- ZIO
             .serviceWithZIO[Loader](_.load(root, api))
             .provideSome[Scope](ZLayer.succeed(silent) >>> Loader.live)
         yield assertTrue(
           loaded.catalog.isEmpty,
           loaded.graph.resolution == Resolution.Solve,
           loaded.graph.intent == ResolutionIntent.Inherit,
+          loaded.buildFileClasspath == boundary,
         )
       }
     },
@@ -172,6 +174,38 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
           text     <- token(loaded.build, "demo.Use$")
         yield text
       }.map(ran => assertTrue(ran.value == "ext"))
+    },
+    test("the build file classpath keeps the plugin jars it compiled against") {
+      hosted { (root, _) =>
+        for
+          api      <- apiJar(root.resolve("api.jar"))
+          boundary <- Boundary.jars(api)
+          jar      <- externalJar(root.resolve("ext.jar"), boundary.filterNot(_ == api))
+          digest   <- digestOf(api)
+          _        <- ZIO.attemptBlocking {
+            addEntry(jar, ApiDigest.resource, digest.getBytes(StandardCharsets.UTF_8))
+          }.orDie
+          _      <- write(root.resolve("histos.plugins.scala"), oneShip("ext"))
+          _      <- write(root.resolve("histos.scala"), extMain)
+          loaded <- prepare(root, api, jarsOf(root.resolve("plugins.txt"), Map("ext" -> jar)))
+          notes  <- ZIO
+            .serviceWithZIO[Loader](loader =>
+              loader.reportBuild(root, loaded.buildFileClasspath).zip(loader.reportBuild(root, boundary))
+            )
+            .provideSomeLayer[Scope](ZLayer.succeed(silent) >>> Loader.live)
+        yield (loaded.buildFileClasspath, boundary, jar, notes)
+      }.map { ran =>
+        val (classpath, boundary, jar, (seen, missed)) = ran.value
+        val seenText                                   = seen.problems.map(_.message)
+        val missedText                                 = missed.problems.map(_.message)
+        assertTrue(
+          classpath.startsWith(boundary),
+          classpath.contains(jar),
+          seenText == Nil,
+          missed.failed,
+          missedText.exists(_.contains("Not found: demo")),
+        )
+      }
     },
     test("ordinary binary bytes stay pinned") {
       hosted { (root, starts) =>
@@ -520,6 +554,17 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
        |
        |object plugins extends HistosPlugins:
        |  def sources = PluginCatalog.empty
+       |""".stripMargin
+
+  private val extMain: String =
+    """|import histos.*
+       |import demo.Ext
+       |
+       |object build extends HistosBuild:
+       |  def graph =
+       |    val app = module("app", Jvm)(scala"3.10.1")
+       |    Ext.n match
+       |      case _ => Projects(app)
        |""".stripMargin
 
   private val plainMain: String =

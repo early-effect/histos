@@ -197,6 +197,22 @@ object BspMetalsSpec extends ZIOSpecDefault:
         }
       }
     },
+    test("the build target reports the build file classpath") {
+      ZIO.scoped {
+        Workspace.work("bsp-metals").flatMap { repo =>
+          val plugin = repo.resolve("plugins").resolve("specular.jar")
+          val app    = module("app", Jvm)(scala"3.10.1")
+          open(repo, Projects(app), DependencyLock(Nil), List(plugin)) { (bsp, _, _) =>
+            for
+              _    <- call(bsp, "build/initialize", Json.Obj(), 1)
+              line <- call(bsp, "buildTarget/scalacOptions", targets(List(Bsp.buildUri(repo))), 2)
+            yield
+              val classpath = parsed[Rpc.ScalacOptionsResult](line).map(_.items.flatMap(_.classpath))
+              assertTrue(classpath == Right(List(Bsp.fileUri(plugin))))
+          }
+        }
+      }
+    },
     test("one drifted scalacOptions target does not drop the other") {
       ZIO.scoped {
         Workspace.work("bsp-metals").flatMap { repo =>
@@ -406,7 +422,7 @@ object BspMetalsSpec extends ZIOSpecDefault:
           runtimes,
           classpath,
           line => notes.update(_ :+ line),
-          ZIO.succeed(BuildNotes(false, Nil)),
+          _ => ZIO.succeed(BuildNotes(false, Nil)),
           gate => gate,
           None,
         )
