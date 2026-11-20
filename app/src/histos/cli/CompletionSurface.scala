@@ -624,7 +624,7 @@ object CompletionSurface:
   private val bashHeader: String =
     """_histos() {
       |  _histos_bin=${COMP_WORDS[0]}
-      |  _histos_n0 1 0
+      |  _n0 1 0
       |}
       |complete -F _histos histos
       |complete -F _histos ./histos
@@ -637,7 +637,7 @@ object CompletionSurface:
       |  typeset -a COMP_WORDS
       |  COMP_WORDS=("${words[@]}")
       |  COMP_CWORD=$CURRENT
-      |  _histos_n0 2 0
+      |  _n0 2 0
       |}
       |""".stripMargin
 
