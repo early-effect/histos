@@ -173,6 +173,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
+      filter: TestFilter,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
@@ -214,7 +215,7 @@ private[testrun] object SuiteLaunch:
                     classes :: linked.paths,
                     linkDir,
                     jdk,
-                    TestCompile.suiteEnv(repo, runtimes.env),
+                    TestCompile.suiteEnv(repo, runtimes.env) ++ TestFilter.environment(filter),
                     chosen,
                     selected,
                     revision = module.jsVersion,
@@ -391,6 +392,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
+      filter: TestFilter,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       hear: CompileProblem => Unit,
@@ -465,7 +467,7 @@ private[testrun] object SuiteLaunch:
                     classpath,
                     linkDir,
                     jdk,
-                    TestCompile.suiteEnv(repo, runtimes.env),
+                    TestCompile.suiteEnv(repo, runtimes.env) ++ TestFilter.environment(filter),
                     module.threadStack,
                     selected,
                   )
@@ -854,6 +856,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
+      filter: TestFilter,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
@@ -891,7 +894,7 @@ private[testrun] object SuiteLaunch:
               )
               .map: work =>
                 val note =
-                  ProviderNote(provider.framework.value, classes, selected)
+                  ProviderNote(provider.framework.value, classes, selected, filter)
                 session(
                   module.name,
                   cell.version,

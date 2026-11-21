@@ -9,7 +9,7 @@ import histos.schedule.CacheNamespace
 import histos.lock.{DispositionSubject, LockMode, LockPrecedence, PrecedenceFault}
 import histos.server.{CatalogQuery, CleanExtent, ForgetFault, ForgetTarget, ResolveAction}
 import histos.task.{RunId, TaskId}
-import histos.testrun.{SuitePattern, TestMode}
+import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
 import histos.format.{FormatMode, FormatTargets}
 import histos.supply.{PolicyWrite, SetupSource, ZipxConfirm}
@@ -618,14 +618,14 @@ object Grammar:
   private def tested(
       command: String,
       tokens: List[String],
-      build: (List[ProjectName], AffectedChoice, TestMode, List[SuitePattern]) => Command,
+      build: (List[ProjectName], AffectedChoice, TestMode, List[SuitePattern], TestFilter) => Command,
   ): IO[CliParseError, Command] =
     ZIO.fromEither(splitTest(command, tokens)).flatMap { parts =>
       for
         names    <- projectList(command, parts.projects)
         patterns <- ZIO.fromEither(suitePatterns(parts.patterns))
         picked   <- choice(parts.affected)
-      yield build(names, picked, parts.mode, patterns)
+      yield build(names, picked, parts.mode, patterns, parts.filter)
     }
 
   private def cleaned(
@@ -644,9 +644,10 @@ object Grammar:
       affected: Option[String],
       mode: TestMode,
       patterns: List[String],
+      filter: TestFilter,
   )
 
-  /** Projects are the words before `--only`. Patterns are the words after it. Flags may sit anywhere. */
+  /** Projects are the words before `--only`. Patterns are the words after it. A test term is never a pattern. */
   private def splitTest(command: String, args: List[String]): Either[CliParseError, TestParts] =
     def loop(
         rest: List[String],
@@ -655,20 +656,24 @@ object Grammar:
         quick: Boolean,
         only: Boolean,
         patterns: List[String],
+        tests: List[TestTerm],
+        tags: List[TagName],
+        ignored: List[TagName],
     ): Either[CliParseError, TestParts] =
       rest match
         case Nil =>
           if only && patterns.isEmpty then Left(CliParseError.Pattern(s"$command --only needs a pattern"))
           else
-            val mode = if quick then TestMode.Quick else TestMode.Run
-            Right(TestParts(projects.reverse, affected, mode, patterns.reverse))
+            val mode   = if quick then TestMode.Quick else TestMode.Run
+            val filter = TestFilter(tests.reverse, tags.reverse, ignored.reverse)
+            Right(TestParts(projects.reverse, affected, mode, patterns.reverse, filter))
         case "--quick" :: tail =>
           if quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
-          else loop(tail, projects, affected, true, only, patterns)
+          else loop(tail, projects, affected, true, only, patterns, tests, tags, ignored)
         case "--only" :: Nil =>
           Left(CliParseError.Pattern(s"$command --only needs a pattern"))
         case "--only" :: tail =>
-          loop(tail, projects, affected, quick, true, patterns)
+          loop(tail, projects, affected, quick, true, patterns, tests, tags, ignored)
         case "--affected" :: Nil =>
           Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
         case "--affected" :: value :: tail if value.startsWith("-") =>
@@ -676,14 +681,35 @@ object Grammar:
         case "--affected" :: value :: tail =>
           affected match
             case Some(_) => Left(CliParseError.Pattern(s"$command --affected is already set"))
-            case None    => loop(tail, projects, Some(value), quick, only, patterns)
+            case None    => loop(tail, projects, Some(value), quick, only, patterns, tests, tags, ignored)
+        case "--test" :: Nil =>
+          Left(CliParseError.Pattern(s"$command --test needs a term"))
+        case "--test" :: value :: tail =>
+          TestTerm.from(value) match
+            case Left(error) => Left(CliParseError.TestTerm(error))
+            case Right(term) =>
+              loop(tail, projects, affected, quick, only, patterns, term :: tests, tags, ignored)
+        case "--tag" :: Nil =>
+          Left(CliParseError.Pattern(s"$command --tag needs a name"))
+        case "--tag" :: value :: tail =>
+          TagName.from(value) match
+            case Left(error) => Left(CliParseError.TagName(error))
+            case Right(name) =>
+              loop(tail, projects, affected, quick, only, patterns, tests, name :: tags, ignored)
+        case "--ignore-tag" :: Nil =>
+          Left(CliParseError.Pattern(s"$command --ignore-tag needs a name"))
+        case "--ignore-tag" :: value :: tail =>
+          TagName.from(value) match
+            case Left(error) => Left(CliParseError.TagName(error))
+            case Right(name) =>
+              loop(tail, projects, affected, quick, only, patterns, tests, tags, name :: ignored)
         case flag :: _ if flag.startsWith("-") =>
           Left(CliParseError.Pattern(Help.flag(command, flag)))
         case token :: tail if only =>
-          loop(tail, projects, affected, quick, true, token :: patterns)
+          loop(tail, projects, affected, quick, true, token :: patterns, tests, tags, ignored)
         case token :: tail =>
-          loop(tail, token :: projects, affected, quick, only, patterns)
-    loop(args, Nil, None, false, false, Nil)
+          loop(tail, token :: projects, affected, quick, only, patterns, tests, tags, ignored)
+    loop(args, Nil, None, false, false, Nil, Nil, Nil, Nil)
 
   private def splitClean(
       command: String,

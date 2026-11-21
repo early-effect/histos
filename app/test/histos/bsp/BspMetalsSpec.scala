@@ -31,8 +31,15 @@ object BspMetalsSpec extends ZIOSpecDefault:
       val (_, keptRepo)    = Bsp.editorEnv(repo, Map("HISTOS_REPO" -> "/other"))
       val dropped          = TestCompile.suiteEnv(
         repo,
-        Map("TERRET_POLICY" -> "strict", "PATH" -> "/usr/bin", "HISTOS_JAR" -> "/tool/histos.jar"),
+        Map(
+          "TERRET_POLICY"  -> "strict",
+          "PATH"           -> "/usr/bin",
+          "HISTOS_JAR"     -> "/tool/histos.jar",
+          "CI"             -> "true",
+          "GITHUB_ACTIONS" -> "true",
+        ),
       )
+      val emptyCi = TestCompile.suiteEnv(repo, Map("CI" -> ""))
       assertTrue(
         directory == root,
         env.get("TERRET_POLICY").contains("strict"),
@@ -42,6 +49,9 @@ object BspMetalsSpec extends ZIOSpecDefault:
         !dropped.contains("TERRET_POLICY"),
         dropped.get("HISTOS_JAR").contains("/tool/histos.jar"),
         dropped.get("PATH").contains("/usr/bin"),
+        dropped.get("CI").contains("true"),
+        dropped.get("GITHUB_ACTIONS").contains("true"),
+        !emptyCi.contains("CI"),
       )
     },
     test("a library cannot run and a module that names a main can") {

@@ -33,10 +33,10 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
+      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
           Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
           Call.Graph | Call.Run(_, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
-          Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) |
+          Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
           Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
         true
       case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
@@ -117,10 +117,10 @@ object Perform:
             call match
               case Call.Compile(projects) =>
                 held(build => follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say))))
-              case Call.Test(projects, patterns, mode) =>
+              case Call.Test(projects, patterns, mode, filter) =>
                 held(build =>
                   follow(
-                    withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
+                    withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, filter, jdk, machine, say))
                   )
                 )
               case Call.PublishWithdraw =>
@@ -229,7 +229,7 @@ object Perform:
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
               case Call.PreviewCompile(projects) =>
                 held(build => Calls.previewCompile(repo, build.graph, projects, say))
-              case Call.PreviewTest(projects, patterns, _) =>
+              case Call.PreviewTest(projects, patterns, _, _) =>
                 held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
               case Call.PreviewPublishLocal(tokens) =>
                 held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))

@@ -1153,7 +1153,7 @@ object Daemon:
     */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
+      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.Run(_, _, _, _) | Call.Assembly(_) | Call.Clean(_, _) | Call.Format(_, _) |
           Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
@@ -1161,7 +1161,7 @@ object Daemon:
           Call.Task(_, _) | Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
           Call.Stop | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) |
-          Call.PreviewTest(_, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
+          Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewClean(_, _) | Call.PreviewRun(_, _) | Call.Catalog(_) =>
         false
 

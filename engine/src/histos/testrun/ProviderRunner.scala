@@ -5,7 +5,12 @@ import histos.pack.MainClass
 import java.nio.file.Path
 
 /** What one child runs. It stays a value until spawn copies it into that process. */
-final case class ProviderNote(framework: String, classes: Path, patterns: List[SuitePattern]):
+final case class ProviderNote(
+    framework: String,
+    classes: Path,
+    patterns: List[SuitePattern],
+    filter: TestFilter = TestFilter.empty,
+):
   def environment: Map[String, String] =
     val indexed = patterns.zipWithIndex.map: (pattern, index) =>
       s"${ProviderRunner.PatternPrefix}$index" -> pattern.value
@@ -13,7 +18,7 @@ final case class ProviderNote(framework: String, classes: Path, patterns: List[S
       ProviderRunner.Framework    -> framework,
       ProviderRunner.Classes      -> classes.toAbsolutePath.toString,
       ProviderRunner.PatternCount -> patterns.length.toString,
-    ) ++ indexed
+    ) ++ indexed ++ TestFilter.environment(filter)
 
 /** The child that loads an sbt `Framework`. The engine does not. */
 object ProviderRunner:
@@ -46,7 +51,7 @@ object ProviderRunner:
        |    val framework = classOf[Framework].cast(raw)
        |    val discovered = discover(classes, framework.fingerprints, loader).filter(task => suiteAllowed(task.fullyQualifiedName()))
        |    if (discovered.isEmpty) System.exit(if (suitePatterns.length == 0) $NoneFound else $NoneMatched)
-       |    val runner = framework.runner(Array.empty[String], Array.empty[String], loader)
+       |    val runner = framework.runner(runnerArgs, Array.empty[String], loader)
        |    val failed = new AtomicBoolean(false)
        |    run(runner.tasks(discovered.toArray), failed)
        |    val summary = runner.done()
@@ -83,6 +88,18 @@ object ProviderRunner:
        |  private def getenv(name: String): String = {
        |    val value = System.getenv(name)
        |    if (value == null) "" else value
+       |  }
+       |
+       |  private val runnerArgs: Array[String] = {
+       |    val countText = getenv("${TestFilter.ArgCount}")
+       |    val count = if (countText.isEmpty) 0 else Integer.parseInt(countText)
+       |    val found = new Array[String](count)
+       |    var i = 0
+       |    while (i < count) {
+       |      found(i) = getenv("${TestFilter.ArgPrefix}" + i)
+       |      i += 1
+       |    }
+       |    found
        |  }
        |
        |  private val suitePatterns: Array[String] = {

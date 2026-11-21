@@ -18,7 +18,7 @@ import histos.resolve.Resolve
 import histos.server.{Call, CleanExtent, ForgetFault, ForgetTarget, ResolveAction, Successor}
 import histos.supply.DoctorSurface
 import histos.task.RunId
-import histos.testrun.{SuitePattern, TestMode}
+import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
 import histos.doctor.{DoctorLaunch, FaultText}
 import histos.select.SelectError
@@ -129,6 +129,9 @@ object HistosMcp:
   final case class TestArgs(
       projects: List[String] = Nil,
       patterns: List[String] = Nil,
+      tests: List[String] = Nil,
+      tags: List[String] = Nil,
+      ignoreTags: List[String] = Nil,
       mode: TestMode = TestMode.Run,
       color: Boolean = false,
       truecolor: Option[Boolean] = None,
@@ -324,12 +327,15 @@ object HistosMcp:
       )
       testing <- compiling.tool[TestArgs](
         Names.test,
-        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
+        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs. tests are label substrings, tags and ignoreTags are exact tag names. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
       )(args =>
         depthOf(args.color, args.truecolor).flatMap { depth =>
-          ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap { call =>
-            Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
-          }
+          ZIO
+            .fromEither(testCall(args.projects, args.patterns, args.mode, args.tests, args.tags, args.ignoreTags))
+            .mapError(refused)
+            .flatMap { call =>
+              Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
+            }
         }
       )
       publishing <- testing.tool[PublishArgs](
@@ -475,11 +481,17 @@ object HistosMcp:
       projects: List[String],
       patterns: List[String],
       mode: TestMode,
+      tests: List[String] = Nil,
+      tags: List[String] = Nil,
+      ignoreTags: List[String] = Nil,
   ): Either[Rejection, Call] =
     for
-      found <- names(projects)
-      globs <- suitePatterns(patterns)
-    yield Call.Test(found, globs, mode)
+      found   <- names(projects)
+      globs   <- suitePatterns(patterns)
+      terms   <- terms(tests)
+      kept    <- tagNames(tags)
+      ignored <- tagNames(ignoreTags)
+    yield Call.Test(found, globs, mode, TestFilter(terms, kept, ignored))
 
   /** Projects and files are two scopes, so asking for both is refused. No scope is the build. */
   def fmtCall(args: FmtArgs): Either[Rejection, Call] =
@@ -545,7 +557,7 @@ object HistosMcp:
         for
           found <- names(args.projects)
           globs <- suitePatterns(args.patterns)
-        yield Call.PreviewTest(found, globs, args.mode)
+        yield Call.PreviewTest(found, globs, args.mode, TestFilter.empty)
       case PreviewOp.Local =>
         publishTokens(args.projects).map(Call.PreviewPublishLocal(_))
       case PreviewOp.Snapshots =>
@@ -598,6 +610,20 @@ object HistosMcp:
         have    <- acc
         pattern <- SuitePattern.from(token).left.map(Rejection.SuitePattern(_))
       yield have :+ pattern
+
+  private def terms(raw: List[String]): Either[Rejection, List[TestTerm]] =
+    raw.foldLeft[Either[Rejection, List[TestTerm]]](Right(Nil)): (acc, token) =>
+      for
+        have <- acc
+        term <- TestTerm.from(token).left.map(Rejection.TestTerm(_))
+      yield have :+ term
+
+  private def tagNames(raw: List[String]): Either[Rejection, List[TagName]] =
+    raw.foldLeft[Either[Rejection, List[TagName]]](Right(Nil)): (acc, token) =>
+      for
+        have <- acc
+        name <- TagName.from(token).left.map(Rejection.TagName(_))
+      yield have :+ name
 
   private def overlay(named: List[NamedArg]): Map[String, String] =
     named.foldLeft(Map.empty[String, String])((acc, item) => acc.updated(item.name, item.value))

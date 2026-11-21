@@ -4,7 +4,7 @@ import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.server.{Call, CatalogQuery, CleanExtent, ResolveAction}
 import histos.task.TaskId
-import histos.testrun.TestMode
+import histos.testrun.{TestFilter, TestMode}
 import histos.{Platform, ProjectName}
 
 import zio.NonEmptyChunk
@@ -23,8 +23,9 @@ object Batch:
 
   def parse(args: List[String]): Option[Parsed] =
     args match
-      case "compile" :: rest     => projects(rest).map(names => Parsed.Ready(Call.Compile(names)))
-      case "test" :: rest        => projects(rest).map(names => Parsed.Ready(Call.Test(names, Nil, TestMode.Run)))
+      case "compile" :: rest => projects(rest).map(names => Parsed.Ready(Call.Compile(names)))
+      case "test" :: rest    =>
+        projects(rest).map(names => Parsed.Ready(Call.Test(names, Nil, TestMode.Run, TestFilter.empty)))
       case "run" :: name :: rest =>
         val (tokens, argv) = splitDash(rest)
         tokens match

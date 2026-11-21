@@ -161,7 +161,7 @@ Each module names its own Scala versions in the second argument list: `module("l
 
 `histos test [project ...]` runs the selected suites. `histos test --affected '["api"]'` runs only those modules, and `["all"]` runs everything. `histos affected --base <sha>` prints the modules that differ from that commit as that JSON list.
 
-`histos test api --only '*Grammar*'` runs suites that match a pattern. `histos test --quick` skips a suite whose stored stamp still matches, and takes the same projects and patterns. The stamp includes the upstream API digest, so a signature change runs the suite.
+`histos test api --only '*Grammar*'` runs suites that match a pattern. `--test <term>` is a substring of a test label, and any term keeps the test. `--tag <name>` is exact, and any listed tag keeps a test that has it. `--ignore-tag <name>` is exact, and a test that has one is dropped. `histos test --quick` skips a suite whose stored stamp still matches, and takes the same projects and patterns. A filter does not change that skip. The stamp includes the upstream API digest, so a signature change runs the suite.
 
 A module's `TestStore` is `Off` (the default), `Local`, or `Remote`. `Local` lets `test` skip a suite whose stored digest still matches. `Remote` does not skip and does not upload.
 

@@ -3,7 +3,7 @@ package histos.native
 import histos.jdk.JdkRuntime
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
-import histos.testrun.{SuiteMatch, SuitePattern}
+import histos.testrun.{SuiteMatch, SuitePattern, TestFilter}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -164,7 +164,7 @@ object NativeSuite:
       |        if tasks.isEmpty then
       |          if suitePatterns.length == 0 then 2 else 3
       |        else
-      |          val runner = found.runner(Array.empty[String], Array.empty[String], getClass.getClassLoader)
+      |          val runner = found.runner(runnerArgs, Array.empty[String], getClass.getClassLoader)
       |          val failed = new AtomicBoolean(false)
       |          walk(runner.tasks(tasks.toArray), failed)
       |          val summary = runner.done()
@@ -173,6 +173,16 @@ object NativeSuite:
       |      case _ =>
       |        System.err.println("the framework was not linked")
       |        2
+      |
+      |  private def runnerArgs: Array[String] =
+      |    val countText = sys.env.getOrElse("__ARG_COUNT__", "")
+      |    val count = if countText.isEmpty then 0 else Integer.parseInt(countText)
+      |    val found = new Array[String](count)
+      |    var i = 0
+      |    while i < count do
+      |      found(i) = sys.env.getOrElse("__ARG_PREFIX__" + i, "")
+      |      i += 1
+      |    found
       |
       |__SUITES__
       |  private def discover(shapes: Array[Shape], fingerprints: Array[Fingerprint]): List[TaskDef] =
@@ -232,7 +242,10 @@ object NativeSuite:
       |    def trace(thrown: Throwable): Unit = thrown.printStackTrace(System.err)
       |
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
-      |""".stripMargin.replace("__SUITES__", SuiteMatch.embed(patterns))
+      |""".stripMargin
+      .replace("__SUITES__", SuiteMatch.embed(patterns))
+      .replace("__ARG_COUNT__", TestFilter.ArgCount)
+      .replace("__ARG_PREFIX__", TestFilter.ArgPrefix)
 
   private def write(path: Path, text: String): IO[NativeSuiteError, Unit] =
     Workspace

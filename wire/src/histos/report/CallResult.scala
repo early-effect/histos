@@ -14,7 +14,7 @@ import histos.resolve.ResolveError
 import histos.schedule.{CacheError, NamespaceError, RemoteError}
 import histos.select.SelectError
 import histos.task.TaskError
-import histos.testrun.{ModuleTestError, SuitePatternError, TestModeError, TestedCell}
+import histos.testrun.{ModuleTestError, SuitePatternError, TagNameError, TestModeError, TestTermError, TestedCell}
 import histos.toolchain.SurveyError
 import histos.version.VersionError
 import histos.watch.WatchError
@@ -155,6 +155,8 @@ enum Rejection:
   case Parameter(error: ParamNameError)
   case ProjectName(error: ProjectNameError)
   case SuitePattern(error: SuitePatternError)
+  case TestTerm(error: TestTermError)
+  case TagName(error: TagNameError)
   case RunId(error: TaskError)
   case TestMode(error: TestModeError)
   case CacheClean(error: CacheCleanModeError)
@@ -188,6 +190,8 @@ enum Rejection:
     case Parameter(error)      => error.message
     case ProjectName(error)    => error.message
     case SuitePattern(error)   => error.message
+    case TestTerm(error)       => error.message
+    case TagName(error)        => error.message
     case RunId(error)          => error.message
     case TestMode(error)       => error.message
     case CacheClean(error)     => error.message

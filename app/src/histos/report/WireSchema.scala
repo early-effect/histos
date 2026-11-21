@@ -126,6 +126,10 @@ import histos.testrun.{
   SuiteNameError,
   SuitePattern,
   SuitePatternError,
+  TagName,
+  TagNameError,
+  TestTerm,
+  TestTermError,
   TestFeed,
   TestStatus,
   TestedCell,
@@ -256,6 +260,10 @@ private object WireSchemaLeaves extends WireSchemaSupport:
 
   given Schema[SuitePattern] = text("SuitePattern")
 
+  given Schema[TestTerm] = text("TestTerm")
+
+  given Schema[TagName] = text("TagName")
+
   given Schema[Digest] = text("Digest")
 
   given Schema[ActionId] = text("ActionId")
@@ -307,6 +315,10 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[SelectError] = Schema.derived
 
   given Schema[SuitePatternError] = Schema.derived
+
+  given Schema[TestTermError] = Schema.derived
+
+  given Schema[TagNameError] = Schema.derived
 
   given Schema[ParamNameError] = Schema.derived
 

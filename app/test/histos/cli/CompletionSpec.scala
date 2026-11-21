@@ -52,6 +52,9 @@ object CompletionSpec extends ZIOSpecDefault:
         words.contains("--quick"),
         words.contains("--only"),
         words.contains("--affected"),
+        words.contains("--test"),
+        words.contains("--tag"),
+        words.contains("--ignore-tag"),
         CompletionSurface.bash.contains("complete projects"),
         CompletionSurface.zsh.contains("complete modules"),
       )
