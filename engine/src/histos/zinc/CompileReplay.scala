@@ -42,7 +42,10 @@ end CompilerStarts
   * classes directory. The prefix keeps one from being read as the other.
   */
 object CompileReplay:
-  private val Magic                 = "HC1\n".getBytes(StandardCharsets.US_ASCII)
+  private val Magic = "HC2\n".getBytes(StandardCharsets.US_ASCII)
+
+  /** An archive from before the stamp check. A miss, not a corrupt store: its classes are not tied to its key. */
+  private val Former                = "HC1\n".getBytes(StandardCharsets.US_ASCII)
   private val AnalysisName          = "inc.zip"
   private[histos] val Marker        = "replay.key"
   private[histos] val ToolchainFile = "replay.toolchain"
@@ -90,25 +93,38 @@ object CompileReplay:
         )
       yield out
 
-  /** Products already written for `key`. Does not read the store and does not walk the class files. */
+  /** Products already written for `key`, when the analysis still stamps these sources. Does not read the store and does
+    * not walk the class files. A stamp mismatch drops the marker so the caller compiles.
+    */
   def recall(request: CompileRequest, key: Sha256): IO[CompileError, Option[CompileOutput]] =
     ZIO
       .attemptBlocking(installed(request, key))
       .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Stat)))
       .flatMap:
-        case None                                                                 => ZIO.none
-        case Some(output) if request.toolchain.platform != histos.Platform.Native =>
-          ZIO.some(output)
+        case None         => ZIO.none
         case Some(output) =>
-          Digest.from(key.value) match
-            case None     => ZIO.some(output)
-            case Some(id) =>
-              readAnalysis(request.analysis, id) match
-                case Left(_)         => ZIO.some(output)
-                case Right(analysis) =>
-                  NirGuard.missing(request, analysis) match
-                    case None    => ZIO.some(output)
-                    case Some(_) => dropMarker(request).as(None)
+          SourceStale
+            .current(request.checkout, request.analysis, request.sources)
+            .flatMap:
+              case false => dropMarker(request).as(None)
+              case true  => recalled(request, key, output)
+
+  private def recalled(
+      request: CompileRequest,
+      key: Sha256,
+      output: CompileOutput,
+  ): IO[CompileError, Option[CompileOutput]] =
+    if request.toolchain.platform != histos.Platform.Native then ZIO.some(output)
+    else
+      Digest.from(key.value) match
+        case None     => ZIO.some(output)
+        case Some(id) =>
+          readAnalysis(request.analysis, id) match
+            case Left(_)         => ZIO.some(output)
+            case Right(analysis) =>
+              NirGuard.missing(request, analysis) match
+                case None    => ZIO.some(output)
+                case Some(_) => dropMarker(request).as(None)
 
   def load(
       store: ContentStore,
@@ -125,10 +141,13 @@ object CompileReplay:
         .flatMap:
           case None        => ZIO.none
           case Some(bytes) =>
-            restore(id, bytes, key, request, runtime, compiler, bridge).flatMap: output =>
-              withoutNir(store, id, request).flatMap:
-                case true  => ZIO.none
-                case false => stamp(request, key, runtime, compiler, bridge).as(Some(output))
+            decode(bytes) match
+              case Left(ArchiveFault.Former) =>
+                store.remove(id).mapError(CompileError.Stored(_)).as(None)
+              case Left(_) =>
+                ZIO.fail(CompileError.Stored(CacheError.Corrupt(id)))
+              case Right(decoded) =>
+                accept(store, id, decoded, key, request, runtime, compiler, bridge)
 
   def save(
       store: ContentStore,
@@ -271,7 +290,7 @@ object CompileReplay:
     catch case NonFatal(_) => ()
 
   private enum ArchiveFault:
-    case Magic, Truncated, Path, Prefix, Duplicate, Missing
+    case Magic, Former, Truncated, Path, Prefix, Duplicate, Missing
 
   private enum StoredKind:
     case Analysis(bytes: Array[Byte])
@@ -279,21 +298,30 @@ object CompileReplay:
 
   private final case class Decoded(analysis: Array[Byte], classes: List[(String, Array[Byte])])
 
-  private def restore(
+  /** Installs a decoded archive, then keeps it only when the analysis stamps the request's sources. A mismatch drops
+    * the blob and the marker. The caller compiles.
+    */
+  private def accept(
+      store: ContentStore,
       id: Digest,
-      bytes: Chunk[Byte],
+      decoded: Decoded,
       key: Sha256,
       request: CompileRequest,
       runtime: List[Path],
       compiler: List[Path],
       bridge: Path,
-  ): IO[CompileError, CompileOutput] =
-    ZIO
-      .fromEither(decode(bytes))
-      .mapError(_ => CompileError.Stored(CacheError.Corrupt(id)))
-      .flatMap: decoded =>
-        ZIO.fromEither(install(request, decoded)) *>
-          ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
+  ): IO[CompileError, Option[CompileOutput]] =
+    for
+      _      <- ZIO.fromEither(install(request, decoded))
+      output <- ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
+      fresh  <- SourceStale.current(request.checkout, request.analysis, request.sources)
+      kept   <-
+        if !fresh then store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(None)
+        else
+          withoutNir(store, id, request).flatMap:
+            case true  => ZIO.none
+            case false => stamp(request, key, runtime, compiler, bridge).as(Some(output))
+    yield kept
 
   private def archive(request: CompileRequest): Either[CompileError, Chunk[Byte]] =
     val zip = request.analysis.resolve(AnalysisName)
@@ -345,6 +373,7 @@ object CompileReplay:
       val found = new Array[Byte](Magic.length)
       in.readFully(found)
       if java.util.Arrays.equals(found, Magic) then Right(())
+      else if java.util.Arrays.equals(found, Former) then Left(ArchiveFault.Former)
       else Left(ArchiveFault.Magic)
     catch case _: IOException => Left(ArchiveFault.Truncated)
 

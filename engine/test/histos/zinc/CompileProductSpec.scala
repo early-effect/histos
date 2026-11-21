@@ -47,7 +47,47 @@ object CompileProductSpec extends ZIOSpecDefault:
             !recompiled,
           )
         }
-    }
+    },
+    test("older classes stored under the edited source's key are compiled again") {
+      PluginCompileSupport
+        .run { (root, _) =>
+          val base     = root.resolve("stale")
+          val classes  = base.resolve("classes")
+          val analysis = base.resolve("analysis")
+          for
+            store   <- ZIO.service[ContentStore]
+            payload <- PluginCompileSupport
+              .payload(root.resolve("payload"), "3.10.1", PluginCompileSupport.Scala3101)
+              .mapError(PluginCompileError.Host(_))
+            session <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
+            tools   <- ZIO.fromEither(split(session))
+            mark    <- PluginCompileSupport.write(base.resolve("src/Mark.scala"), markSource("one"))
+            other   <- PluginCompileSupport.write(base.resolve("src/Other.scala"), otherSource)
+            sources = List(mark, other)
+            _ <- compile(base, classes, analysis, sources, session, tools)
+            _ <- PluginCompileSupport.write(mark, markSource("two"))
+            request = requestOf(base, classes, analysis, sources, session)
+            digest <- JvmCompile.sourceDigest(base, sources).mapError(PluginCompileError.Compile(_))
+            _      <- CompileReplay
+              .save(
+                store,
+                CompileKey.of(request, digest),
+                request,
+                tools.runtime,
+                tools.compiler,
+                tools.bridge,
+              )
+              .mapError(PluginCompileError.Compile(_))
+            again <- compile(base, classes, analysis, sources, session, tools)
+            text  <- PluginCompileSupport.invoke(classes, tools.runtime, "Mark$", "text")
+            third <- compile(base, classes, analysis, sources, session, tools)
+          yield (text, again.miss.isDefined, third.changed)
+        }
+        .map { ran =>
+          val (text, missed, hit) = ran.value
+          assertTrue(text == "two", missed, !hit)
+        }
+    },
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private def markSource(text: String): String =
@@ -60,15 +100,14 @@ object CompileProductSpec extends ZIOSpecDefault:
        |  def name: String = "other"
        |""".stripMargin
 
-  private def compile(
+  private def requestOf(
       base: Path,
       classes: Path,
       analysis: Path,
       sources: List[Path],
       session: HostCompilerSession,
-      tools: Tools,
-  ): ZIO[PluginCompileSupport.Env, PluginCompileError, CompileOutput] =
-    val request = CompileRequest(
+  ): CompileRequest =
+    CompileRequest(
       CompileToolchain(session.manifest.scalaVersion, Platform.Jvm, jdk(session), ScalacFlags.empty),
       sources,
       Nil,
@@ -78,6 +117,16 @@ object CompileProductSpec extends ZIOSpecDefault:
       Nil,
       checkout = base,
     )
+
+  private def compile(
+      base: Path,
+      classes: Path,
+      analysis: Path,
+      sources: List[Path],
+      session: HostCompilerSession,
+      tools: Tools,
+  ): ZIO[PluginCompileSupport.Env, PluginCompileError, CompileOutput] =
+    val request = requestOf(base, classes, analysis, sources, session)
     for
       digest <- JvmCompile.sourceDigest(base, sources).mapError(PluginCompileError.Compile(_))
       output <- JvmCompile
