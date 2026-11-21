@@ -9,7 +9,7 @@ import histos.publish.PublishToken
 import histos.report.{BuildFault, CallResult}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
-import histos.testrun.{SuitePattern, TestMode}
+import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectName}
 
@@ -106,7 +106,18 @@ private object CallJson:
       raw => SuitePattern.from(raw).left.map(_.message),
       _.value,
     )
-  given JsonCodec[RunId] =
+  given JsonCodec[TestTerm] =
+    JsonCodec.string.transformOrFail(
+      raw => TestTerm.from(raw).left.map(_.message),
+      _.value,
+    )
+  given JsonCodec[TagName] =
+    JsonCodec.string.transformOrFail(
+      raw => TagName.from(raw).left.map(_.message),
+      _.value,
+    )
+  given JsonCodec[TestFilter] = JsonCodec.derived
+  given JsonCodec[RunId]      =
     JsonCodec.string.transformOrFail(
       raw => RunId.from(raw).left.map(_.message),
       _.value,
@@ -191,7 +202,12 @@ end Attendance
 
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
-  case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
+  case Test(
+      projects: List[ProjectName],
+      patterns: List[SuitePattern],
+      mode: TestMode,
+      filter: TestFilter,
+  )
   case PublishLocal(tokens: List[PublishToken])
 
   /** Remove the local ivy revisions and toolchain directory for HEAD. The pin stays. */
@@ -227,7 +243,12 @@ enum Call derives JsonCodec:
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
   case PreviewCompile(projects: List[ProjectName])
-  case PreviewTest(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
+  case PreviewTest(
+      projects: List[ProjectName],
+      patterns: List[SuitePattern],
+      mode: TestMode,
+      filter: TestFilter,
+  )
   case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)

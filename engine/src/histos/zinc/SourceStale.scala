@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import sbt.internal.inc.{FileAnalysisStore, MappedFileConverter, Stamp, Stamper}
+import sbt.internal.inc.{FileAnalysisStore, Stamp, Stamper}
 import xsbti.VirtualFileRef
 
 import zio.{UIO, ZIO}
@@ -49,17 +49,27 @@ object SourceStale:
       .resolve(version.value)
       .resolve(platform.token)
 
-  /** `sources` are this cell's current inputs, in the order a compile would see them. */
-  def read(dir: Path, sources: List[Path]): UIO[FileStaleness] =
-    ZIO.attemptBlocking(answer(dir, sources)).orDie
+  /** `sources` are this cell's current inputs, in the order a compile would see them. The stamp id is
+    * [[SourceRef.file]], the same id the compiler wrote.
+    */
+  def read(checkout: Path, dir: Path, sources: List[Path]): UIO[FileStaleness] =
+    ZIO.attemptBlocking(answer(checkout, dir, sources)).orDie
 
-  private def answer(dir: Path, sources: List[Path]): FileStaleness =
+  /** Every current source is stamped with its present bytes. A missing or unreadable analysis is not current. */
+  def current(checkout: Path, dir: Path, sources: List[Path]): UIO[Boolean] =
+    read(checkout, dir, sources).map:
+      case FileStaleness.Known(Nil) => true
+      case FileStaleness.Initial(_) => false
+      case FileStaleness.Known(_)   => false
+      case FileStaleness.Unknown    => false
+
+  private def answer(checkout: Path, dir: Path, sources: List[Path]): FileStaleness =
     val zip = dir.resolve("inc.zip")
     if !Files.exists(zip) then FileStaleness.Initial(sources)
     else
       load(zip) match
         case None           => FileStaleness.Unknown
-        case Some(analysis) => FileStaleness.Known(stale(analysis, sources))
+        case Some(analysis) => FileStaleness.Known(stale(checkout, analysis, sources))
 
   /** `None` is a file that exists and could not be read, or an analysis that is not Zinc's. */
   private def load(zip: Path): Option[sbt.internal.inc.Analysis] =
@@ -72,14 +82,13 @@ object SourceStale:
           case analysis: sbt.internal.inc.Analysis => Some(analysis)
           case _                                   => None
 
-  private def stale(analysis: sbt.internal.inc.Analysis, sources: List[Path]): List[Path] =
-    val converter = MappedFileConverter.empty
-    val byId      = analysis.stamps.sources.iterator.map { (ref, stamp) =>
+  private def stale(checkout: Path, analysis: sbt.internal.inc.Analysis, sources: List[Path]): List[Path] =
+    val byId = analysis.stamps.sources.iterator.map { (ref, stamp) =>
       ref.id -> (ref, stamp)
     }.toMap
     val rows = sources.map: path =>
       val file    = path.toAbsolutePath.normalize
-      val virtual = converter.toVirtualFile(file)
+      val virtual = SourceRef.file(checkout, file)
       byId.get(virtual.id) match
         case None =>
           Row(file, None, changed = true)

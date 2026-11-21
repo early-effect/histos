@@ -173,7 +173,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, patterns, _, _) = asked
+    val TestRun(_, graph, names, _, _, _, patterns, _, _, _) = asked
     ZStream.unwrap:
       for
         wanted <- ZIO.fromEither(
@@ -206,7 +206,7 @@ object ModuleTest:
     ModuleTestError,
     SessionFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, _, _, _) = asked
+    val TestRun(_, graph, names, _, _, _, _, _, _, _) = asked
     ZStream.unwrapScoped:
       for
         install <- ProviderInstall.make
@@ -365,7 +365,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile, coverage) = asked
+    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, filter, onTestCompile, coverage) = asked
     ZStream.unwrap(
       prepare(
         repo,
@@ -376,6 +376,7 @@ object ModuleTest:
         lock,
         BuildResolvers(graph.resolvers),
         patterns,
+        filter,
         matched,
         mode,
         onTestCompile,
@@ -424,6 +425,7 @@ object ModuleTest:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
+      filter: TestFilter,
       matched: Ref[Boolean],
       mode: TestMode,
       onTestCompile: (
@@ -543,6 +545,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
+                      filter,
                       mode,
                       note,
                       coverage,
@@ -562,6 +565,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
+                      filter,
                       mode,
                       note,
                       hear,
@@ -580,6 +584,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
+                      filter,
                       mode,
                       note,
                       hear,

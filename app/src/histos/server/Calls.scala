@@ -13,6 +13,7 @@ import histos.testrun.{
   SessionFeed,
   SuitePattern,
   TestFeed,
+  TestFilter,
   TestMode,
   TestRun,
   TestStatus,
@@ -1314,6 +1315,7 @@ object Calls:
       projects: List[ProjectName],
       patterns: List[SuitePattern],
       mode: TestMode,
+      filter: TestFilter,
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
@@ -1353,6 +1355,7 @@ object Calls:
                             runtimes,
                             mode,
                             patterns,
+                            filter,
                             (module, version, platform, facts) =>
                               notes(module, version, platform, facts).flatMap { line =>
                                 val spoken =

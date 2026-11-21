@@ -254,10 +254,10 @@ object Watching:
         case Right(name) => WatchNames.Only(List(name))
         case Left(_)     => WatchNames.Only(Nil)
     call match
-      case Call.Test(names, _, _)               => listed(names)
+      case Call.Test(names, _, _, _)            => listed(names)
       case Call.Compile(names)                  => listed(names)
       case Call.PreviewCompile(names)           => listed(names)
-      case Call.PreviewTest(names, _, _)        => listed(names)
+      case Call.PreviewTest(names, _, _, _)     => listed(names)
       case Call.PublishLocal(tokens)            => publish(graph, tokens.map(_.value))
       case Call.PublishSnapshots(tokens)        => publish(graph, tokens)
       case Call.PreviewPublishLocal(tokens)     => publish(graph, tokens.map(_.value))

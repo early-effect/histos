@@ -76,8 +76,8 @@ object Help:
     Entry(
       "test",
       "test",
-      "histos test [project ...] [--affected <json>] [--quick] [--only <pattern> ...]",
-      "Run the selected suites. --quick skips a suite whose stamp still matches. --only runs suites that match. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] [--test <term> ...] [--tag <name> ...] [--ignore-tag <name> ...]",
+      "Run the selected suites. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "coverage",
@@ -245,6 +245,7 @@ object Help:
     "from",
     "explain",
     "full",
+    "ignore-tag",
     "json",
     "major",
     "make-default",
@@ -259,6 +260,8 @@ object Help:
     "quick",
     "security",
     "submit",
+    "tag",
+    "test",
     "to",
     "truecolor",
     "update",

@@ -67,15 +67,15 @@ object Operation:
           Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) |
           Command.Coverage(_, _, _) | Command.ToolchainClient | Command.Completion(_) | Command.Complete(_) =>
         Left(CliParseError.Rejected)
-      case Command.Version                                  => Right(Call.Version)
-      case Command.Graph                                    => Right(Call.Graph)
-      case Command.Plugin(id, args)                         => Right(Call.Task(id.render, args))
-      case Command.Test(projects, affected, mode, patterns) =>
+      case Command.Version                                          => Right(Call.Version)
+      case Command.Graph                                            => Right(Call.Graph)
+      case Command.Plugin(id, args)                                 => Right(Call.Task(id.render, args))
+      case Command.Test(projects, affected, mode, patterns, filter) =>
         AffectedChoice.select(projects, affected) match
           case None =>
             Left(CliParseError.Pattern("nothing is affected"))
           case Some(names) =>
-            Right(Call.Test(names, patterns, mode))
+            Right(Call.Test(names, patterns, mode, filter))
       case Command.Affected(_) =>
         Left(CliParseError.Rejected)
       case Command.Compile(projects)       => Right(Call.Compile(projects))
@@ -112,10 +112,10 @@ object Operation:
       case Command.Cancel(id)               => Right(Call.Cancel(id))
       case Command.PreviewCompile(projects) =>
         Right(Call.PreviewCompile(projects))
-      case Command.PreviewTest(projects, affected, mode, patterns) =>
+      case Command.PreviewTest(projects, affected, mode, patterns, filter) =>
         AffectedChoice.select(projects, affected) match
           case None        => Left(CliParseError.Pattern("nothing is affected"))
-          case Some(names) => Right(Call.PreviewTest(names, patterns, mode))
+          case Some(names) => Right(Call.PreviewTest(names, patterns, mode, filter))
       case Command.PreviewPublishLocal(tokens) =>
         Right(Call.PreviewPublishLocal(tokens))
       case Command.PreviewPublishSnapshots(tokens) =>

@@ -75,14 +75,15 @@ private[histos] object TestCompile:
         else Left(ModuleTestError.ProviderDependency(module.name, provider))
 
   /** The work directory stays empty. `HISTOS_REPO` finds project files. `HISTOS_JAR` is the toolchain jar that launched
-    * the suite. `PATH` finds clang. `HOME` finds the Playwright cache. `env` is the machine's.
+    * the suite. `PATH` finds clang. `HOME` finds the Playwright cache. `CI` and `GITHUB_ACTIONS` are copied when they
+    * are set. `env` is the machine's.
     */
   private[histos] def suiteEnv(
       repo: Path,
       env: Map[String, String],
   ): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
-    val kept = List("PATH", "HOME", "XDG_CACHE_HOME", "HISTOS_JAR").flatMap: key =>
+    val kept = List("PATH", "HOME", "XDG_CACHE_HOME", "HISTOS_JAR", "CI", "GITHUB_ACTIONS").flatMap: key =>
       env.get(key).filter(_.nonEmpty).map(key -> _)
     root ++ kept
 

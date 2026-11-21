@@ -19,7 +19,7 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import sbt.internal.inc.{FileAnalysisStore, HashUtil, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
+import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
 import sbt.util.Logger
 import xsbti.compile.{
   AnalysisContents,
@@ -486,11 +486,13 @@ object JvmCompile:
             change   <- CompileInputs.explain(store, request.analysis, rows)
             written  <- compileOnce
             keep     <- stable(request, rows)
+            stamped  <- stamps(request, keep)
             produced <-
-              if keep && staleProduct(change, written) then forgetPrevious(request) *> compileOnce
+              if keep && reject(change, written, stamped) then forgetPrevious(request) *> compileOnce
               else ZIO.succeed(written)
-            keepNow <- stable(request, rows)
-            _       <- ZIO.when(keepNow && !staleProduct(change, produced))(
+            keepNow    <- stable(request, rows)
+            stampedNow <- stamps(request, keepNow)
+            _          <- ZIO.when(keepNow && !reject(change, produced, stampedNow))(
               CompileReplay.save(
                 store,
                 produced.key,
@@ -505,12 +507,24 @@ object JvmCompile:
           yield produced.copy(miss = Some(change))
     yield output
 
-  /** Zinc can finish a changed source without writing a class file. Those bytes belong to the previous compile. */
-  private def staleProduct(change: KeyMiss, written: CompileOutput): Boolean =
+  private def stamps(request: CompileRequest, keep: Boolean): IO[CompileError, Boolean] =
+    if keep then SourceStale.current(request.checkout, request.analysis, request.sources)
+    else ZIO.succeed(false)
+
+  /** A source change, or a compile with no remembered inputs, is stored only when this run wrote class files it can
+    * name and the analysis stamps those sources. Otherwise the bytes belong to the previous compile.
+    */
+  private def reject(change: KeyMiss, written: CompileOutput, stamped: Boolean): Boolean =
+    !stamped || (sourceMoved(change) && !proved(written))
+
+  private def sourceMoved(change: KeyMiss): Boolean =
     change match
-      case KeyMiss.Changed(names) =>
-        names.contains(CompileInput.Sources) && written.classesWritten.contains(0)
-      case KeyMiss.NoPrior => false
+      case KeyMiss.NoPrior        => true
+      case KeyMiss.Changed(names) => names.contains(CompileInput.Sources)
+
+  /** `None` is an unknown write or an unattributed compilation. Neither is proof. */
+  private def proved(written: CompileOutput): Boolean =
+    written.classesWritten.exists(_ > 0) && written.sources.isDefined
 
   /** Drop the analysis and the class files so the next compile has no previous result and must write its products. */
   private def forgetPrevious(request: CompileRequest): IO[CompileError, Unit] =
@@ -578,17 +592,7 @@ object JvmCompile:
     * hands every source to the Scala compiler, and javac reads a real path.
     */
   private def checkoutSources(request: CompileRequest): Array[xsbti.VirtualFile] =
-    val root = request.checkout.toAbsolutePath.normalize
-    request.sources.map { path =>
-      val absolute = path.toAbsolutePath.normalize
-      if scalaSource(absolute) && absolute.startsWith(root) then
-        val rel = root.relativize(absolute).toString.replace('\\', '/')
-        new RelativeSource(rel, absolute)
-      else MappedFileConverter.empty.toVirtualFile(absolute)
-    }.toArray
-
-  private def scalaSource(path: Path): Boolean =
-    Option(path.getFileName).exists(_.toString.endsWith(".scala"))
+    request.sources.map(path => SourceRef.file(request.checkout, path)).toArray
 
   private final class CheckoutFiles(checkout: Path) extends xsbti.FileConverter:
     private val root  = checkout.toAbsolutePath.normalize
@@ -604,23 +608,6 @@ object JvmCompile:
     def toVirtualFile(path: Path): xsbti.VirtualFile =
       other.toVirtualFile(path)
   end CheckoutFiles
-
-  /** Named by its checkout-relative id. Not path-based, so the bridge reads that id as the source path. */
-  private final class RelativeSource(rel: String, absolute: Path)
-      extends xsbti.BasicVirtualFileRef(rel)
-      with xsbti.VirtualFile:
-    override lazy val contentHash: Long =
-      HashUtil.farmHash(absolute)
-
-    override def sizeBytes(): Long =
-      Files.size(absolute)
-
-    override lazy val contentHashStr: String =
-      HashUtil.sha256HashStr(input())
-
-    def input(): java.io.InputStream =
-      Files.newInputStream(absolute)
-  end RelativeSource
 
   private def carried(error: RemoteError | CacheError): CompileError =
     error match

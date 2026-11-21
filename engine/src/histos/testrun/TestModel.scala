@@ -60,6 +60,7 @@ final case class TestRun(
     runtimes: Runtimes,
     mode: TestMode,
     patterns: List[SuitePattern] = Nil,
+    filter: TestFilter = TestFilter.empty,
     onTestCompile: (
         ProjectName,
         ScalaVersion,

@@ -125,7 +125,12 @@ import histos.testrun.{
   SuiteNameError,
   SuitePattern,
   SuitePatternError,
+  TagName,
+  TagNameError,
   TestFeed,
+  TestFilter,
+  TestTerm,
+  TestTermError,
   TestStatus,
   TestedCell,
 }
@@ -285,6 +290,9 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[CompileDiagnostic] =
     JsonCodec.string.transform(CompileDiagnostic.fromCompiler, _.text)
   given JsonCodec[SuitePattern] = parsed(SuitePattern.from, _.message, _.value)
+  given JsonCodec[TestTerm]     = parsed(TestTerm.from, _.message, _.value)
+  given JsonCodec[TagName]      = parsed(TagName.from, _.message, _.value)
+  given JsonCodec[TestFilter]   = JsonCodec.derived
   given JsonCodec[Digest]       =
     JsonCodec.string.transformOrFail(
       raw => Digest.from(raw).toRight(s"'$raw' is not a digest"),
@@ -317,6 +325,8 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[PlatformError]     = JsonCodec.derived
   given JsonCodec[SelectError]       = JsonCodec.derived
   given JsonCodec[SuitePatternError] = JsonCodec.derived
+  given JsonCodec[TestTermError]     = JsonCodec.derived
+  given JsonCodec[TagNameError]      = JsonCodec.derived
   given JsonCodec[ParamNameError]    = JsonCodec.derived
   given JsonCodec[FlagNameError]     = JsonCodec.derived
   given JsonCodec[Sha256Error]       = JsonCodec.derived

@@ -114,6 +114,9 @@ object CompletionSurface:
     Flag("--quick", "Skip a suite whose stamp still matches"),
     Flag("--only", "Run suites that match", Some(Slot.Free)),
     Flag("--affected", "Modules from histos affected", Some(Slot.Free)),
+    Flag("--test", "Keep a test whose label contains the term", Some(Slot.Free), many = true),
+    Flag("--tag", "Keep a test that has the tag", Some(Slot.Free), many = true),
+    Flag("--ignore-tag", "Drop a test that has the tag", Some(Slot.Free), many = true),
   )
 
   private val scaffold = List(

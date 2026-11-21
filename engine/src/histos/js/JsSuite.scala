@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
-import histos.testrun.{SuiteMatch, SuitePattern}
+import histos.testrun.{SuiteMatch, SuitePattern, TestFilter}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -204,7 +204,7 @@ object JsSuite:
       |        val tasks = discover(shapes, found.fingerprints).filter(task => suiteAllowed(task.fullyQualifiedName()))
       |        if (tasks.isEmpty) { if (suitePatterns.length == 0) 2 else 3 }
       |        else {
-      |          val runner = found.runner(Array.empty[String], Array.empty[String], getClass.getClassLoader)
+      |          val runner = found.runner(runnerArgs, Array.empty[String], getClass.getClassLoader)
       |          val failed = new AtomicBoolean(false)
       |          walk(runner.tasks(tasks.toArray), failed)
       |          val summary = runner.done()
@@ -230,6 +230,18 @@ object JsSuite:
       |    case "esmodule" => org.scalajs.jsenv.Input.ESModule(script)
       |    case "commonjs" => org.scalajs.jsenv.Input.CommonJSModule(script)
       |    case _          => org.scalajs.jsenv.Input.Script(script)
+      |  }
+      |
+      |  private val runnerArgs: Array[String] = {
+      |    val countText = sys.env.getOrElse("__ARG_COUNT__", "")
+      |    val count = if (countText.isEmpty) 0 else Integer.parseInt(countText)
+      |    val found = new Array[String](count)
+      |    var i = 0
+      |    while (i < count) {
+      |      found(i) = sys.env.getOrElse("__ARG_PREFIX__" + i, "")
+      |      i += 1
+      |    }
+      |    found
       |  }
       |
       |__SUITES__
@@ -307,6 +319,8 @@ object JsSuite:
       .replace("__ENV__", JsRun.envExpr(env))
       .replace("__USE_ENV__", if useRunEnv(env) then "true" else "false")
       .replace("__SUITES__", SuiteMatch.embed(patterns))
+      .replace("__ARG_COUNT__", TestFilter.ArgCount)
+      .replace("__ARG_PREFIX__", TestFilter.ArgPrefix)
 
   private def write(path: Path, text: String): IO[JsSuiteError, Unit] =
     Workspace

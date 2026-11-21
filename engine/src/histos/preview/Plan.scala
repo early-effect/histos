@@ -322,7 +322,7 @@ object Plan:
                 case Tree.Test => AnalysisKind.Test
               val dir = SourceStale.directory(repo, module.name, version, platform, kind)
               SourceStale
-                .read(dir, found)
+                .read(repo, dir, found)
                 .flatMap: stale =>
                   quickOf(repo, module, modules, version, platform, tree, graph).map: quick =>
                     PlanUnit.Chosen(
