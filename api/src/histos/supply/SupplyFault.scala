@@ -18,6 +18,7 @@ enum SupplyFault:
   case IdentityMissing
   case HumanCommitsOnBranch(branch: BranchName, shas: List[CommitSha])
   case HeadMoved(branch: BranchName, expected: CommitSha)
+  case Refused(call: String, status: Int)
 
   def message: String = this match
     case UnpinnedUses(file, line, ref) =>
@@ -46,6 +47,8 @@ enum SupplyFault:
       s"${branch.value} has human commits ${shas.map(_.abbreviate.value).mkString(", ")}"
     case HeadMoved(branch, expected) =>
       s"${branch.value} moved from ${expected.value}"
+    case Refused(call, status) =>
+      s"$call was refused with $status"
 
   private def abbrev(sha: CommitSha): String =
     sha.value.take(8) + "..."
