@@ -425,13 +425,13 @@ object DepsSurface:
                   for
                     git  <- ZIO.service[GitRead]
                     main <- git.head(repo).map(_.getOrElse(zero))
-                    head <- git.tip(repo, branch).map(_.getOrElse(zero))
+                    head <- git.tip(repo, branch)
                     sent <- PrFlow.plan(
                       PrRequest(
                         policy.updates,
                         branch,
                         main,
-                        if head == main then None else Some(head),
+                        head.filter(_ != main),
                         group(present),
                         Nil,
                         open,

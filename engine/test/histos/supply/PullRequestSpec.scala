@@ -43,6 +43,23 @@ object PullRequestSpec extends ZIOSpecDefault:
           text.contains("opened"),
         )
     },
+    test("a missing tip asks to create the branch") {
+      val request = PrRequest(
+        UpdatePolicy(author = PrAuthor.Actions),
+        weekly,
+        main,
+        None,
+        List(KindChange(BumpKind.Libraries, List("dependencies.lock" -> "lock"))),
+        Nil,
+        false,
+        None,
+      )
+      assertTrue:
+        PrFlow.plan(request) match
+          case Right(GhCall.UpdateRef(branch, sha, create) :: _) =>
+            branch == weekly && sha == main && create
+          case _ => false
+    },
     test("a path or a longer remote name is not the branch tip") {
       ZIO.scoped:
         for
