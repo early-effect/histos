@@ -64,6 +64,9 @@ enum PluginCompileError:
   case Child(error: histos.process.ChildError)
   case Seal(error: histos.plugin.ArtifactManifestError)
   case Io(failure: histos.workspace.IoFailure)
+
+  /** The compiled class loaded and its linkage failed. `kind` is the linkage error's class name. */
+  case Linked(kind: String)
   case InputChanged(path: histos.plugin.RepoPath)
   case Path(error: histos.plugin.RepoPathError)
   case Worker(exit: Int, detail: String)
@@ -76,6 +79,7 @@ enum PluginCompileError:
     case Child(error)         => error.message
     case Seal(error)          => error.message
     case Io(failure)          => failure.message
+    case Linked(kind)         => s"compiled class failed to link: $kind"
     case InputChanged(path)   => s"${path.value} changed after it was recorded"
     case Path(error)          => error.message
     case Worker(exit, detail) => s"compiler worker exited $exit: $detail"

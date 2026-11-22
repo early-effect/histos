@@ -56,15 +56,53 @@ case $os in
   MINGW*|MSYS*|CYGWIN*|Windows*) fail "$wsl_guide" ;;
 esac
 # Names here are globals. Callers keep dest across this return, so these cannot be url or dest.
+# One attempt. 0 is a body. 1 is a failure that is not retried. 2 is 429 or 503, and $wait_for is the pause.
+attempt_fetch() {
+  attempt_url=$1
+  attempt_dest=$2
+  headers=$(mktemp)
+  code=$(curl -sS -L -D "$headers" -o "$attempt_dest" -w '%{http_code}' "$attempt_url" || printf '000')
+  case $code in
+    2??) rm -f "$headers"; return 0 ;;
+    429|503)
+      wait_for=$(awk 'tolower($1)=="retry-after:" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$headers")
+      rm -f "$headers"
+      return 2
+      ;;
+    *)
+      rm -f "$headers"
+      return 1
+      ;;
+  esac
+}
+# 429 and 503 are retried. Retry-After in seconds is the wait, capped at 60. Five attempts, then the failure.
+retry_fetch() {
+  retry_url=$1
+  retry_dest=$2
+  command -v curl >/dev/null 2>&1 || return 1
+  attempt=1
+  while [ "$attempt" -le 5 ]; do
+    attempt_fetch "$retry_url" "$retry_dest"
+    status=$?
+    case $status in
+      0) return 0 ;;
+      2)
+        [ "$attempt" -eq 5 ] && break
+        if [ -z "$wait_for" ]; then wait_for=$((2 ** (attempt - 1))); fi
+        [ "$wait_for" -gt 60 ] && wait_for=60
+        sleep "$wait_for"
+        ;;
+      *) return 1 ;;
+    esac
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
 fetch() {
   fetch_url=$1
   fetch_dest=$2
   mkdir -p "$(dirname "$fetch_dest")"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$fetch_url" -o "$fetch_dest" || fail "could not fetch $fetch_url"
-  else
-    fail "curl is not on PATH"
-  fi
+  retry_fetch "$fetch_url" "$fetch_dest" || fail "could not fetch $fetch_url"
 }
 json_string() {
   awk -v key="$2" '
@@ -198,7 +236,8 @@ resolve_channel() {
   esac
 }
 fetch_ok() {
-  curl -fsSL "$1" -o "$2" 2>/dev/null
+  command -v curl >/dev/null 2>&1 || return 1
+  retry_fetch "$1" "$2"
 }
 read_default() {
   if [ -s "$home/default" ]; then
@@ -245,6 +284,12 @@ snapshot_line() {
     }
   '
 }
+# One fetch, with the retry. No JDK.
+if [ "${1:-}" = --fetch ]; then
+  [ "$#" -eq 3 ] || fail "usage: histos --fetch <url> <dest>"
+  fetch "$2" "$3"
+  exit 0
+fi
 # Dry run of the update line. No JDK, no fetch.
 if [ "${1:-}" = --snapshot-line ]; then
   [ "$#" -eq 2 ] || fail "usage: histos --snapshot-line <pin>"
@@ -545,7 +590,9 @@ fetch_classpath() {
   ttl=
   if ! release_revision "$revision"; then ttl="--ttl 0"; fi
   # shellcheck disable=SC2086
-  "$java_bin" -jar "$home/coursier.jar" fetch --no-default -q -p $ttl $repos "$group:$artifact:$revision"
+  # A 429 is waited out inside this one JVM. The cap is the longest this fetch spends being told to come back.
+  COURSIER_MAX_THROTTLE_WAIT=10min \
+    "$java_bin" -jar "$home/coursier.jar" fetch --no-default -q -p $ttl $repos "$group:$artifact:$revision"
 }
 install_dist_jar() {
   manifest=$1

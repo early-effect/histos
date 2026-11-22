@@ -35,11 +35,22 @@ object CiInstall:
   val originHead: List[String] =
     List("      - run: git remote set-head origin --auto")
 
+  /** The first job installs the toolchain and saves both caches. */
+  def prepare(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
+    caches(graph, save = true)
+
+  /** A later job restores what [[prepare]] saved and installs only on a miss. */
+  def restore(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
+    caches(graph, save = false)
+
   def steps(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
+    restore(graph)
+
+  private def caches(graph: ProjectGraph, save: Boolean)(using ship: RenderingShip): List[String] =
     graph.ciSetup match
       case CiSetup.Remote  => List(s"      - uses: ${remote(ship)}")
       case CiSetup.Wrapper =>
-        cache(Toolchains, ToolchainKey) ++ cache(Coursier, CoursierKey)
+        cache(Toolchains, ToolchainKey, save) ++ cache(Coursier, CoursierKey, save)
 
   private val Toolchains: String = "~/.histos/toolchains"
   private val Coursier: String   = "~/.cache/coursier/v1"
@@ -50,9 +61,10 @@ object CiInstall:
   private val CoursierKey: String =
     "coursier-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
 
-  private def cache(path: String, key: String): List[String] =
+  private def cache(path: String, key: String, save: Boolean): List[String] =
+    val action = if save then ActionPins.cache.line else ActionPins.cacheRestore.line
     List(
-      s"      - uses: ${ActionPins.cache.line}",
+      s"      - uses: $action",
       "        with:",
       s"          path: ${quote(path)}",
       s"          key: ${quote(key)}",

@@ -255,6 +255,26 @@ private[histos] object TestCompile:
           .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       case Platform.Js | Platform.Native => ZIO.succeed(Nil)
 
+  /** Per-class signatures of one class directory's analysis. The test compile treats them as upstream, so a signature
+    * change in this module's main sources reaches the test cell. A missing analysis is the same failure as a missing
+    * API digest.
+    */
+  private def readSignatures(
+      module: ProjectName,
+      version: ScalaVersion,
+      classes: Path,
+  ): IO[ModuleTestError, List[histos.zinc.ClassSignature]] =
+    val refused = (error: CompileError) => ModuleTestError.Sources(module, version, error)
+    GraphCompile.analysisDirOf(classes) match
+      case None      => ZIO.fail(refused(CompileError.Io(IoFailure(classes, IoFault.Stat))))
+      case Some(dir) =>
+        ZIO
+          .attemptBlocking(histos.zinc.UpstreamApis.readAnalysis(dir))
+          .mapError(_ => refused(CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read))))
+          .flatMap:
+            case Some(found) => ZIO.succeed(found)
+            case None        => ZIO.fail(refused(CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read))))
+
   private def readApi(module: ProjectName, version: ScalaVersion, classes: Path): IO[ModuleTestError, Sha256] =
     val found = GraphCompile.analysisDirOf(classes) match
       case Some(dir) => ApiDigest.read(dir)
@@ -294,8 +314,9 @@ private[histos] object TestCompile:
         coverage,
         plugins,
       )
-      apis  <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
-      bytes <- CompileInputs
+      apis     <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
+      upstream <- ZIO.foreach(linked.classDirs)(readSignatures(module.name, cell.version, _))
+      bytes    <- CompileInputs
         .jarBytes(linked.permitted)
         .mapError(error => ModuleTestError.Sources(module.name, cell.version, error))
       request = CompileRequest(
@@ -309,6 +330,7 @@ private[histos] object TestCompile:
         permitted = linked.permitted,
         checkout = repo,
         apiBytes = bytes,
+        upstream = upstream.flatten,
       )
       held  <- holdMeasured(coverage, linked.classDirs, module.name, cell.version)
       facts <- compileSuite(

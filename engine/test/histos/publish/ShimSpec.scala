@@ -132,6 +132,14 @@ object ShimSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("a 429 is fetched again and a 404 is not") {
+      ZIO.scoped {
+        for
+          retried <- limitedFetch(once = true)
+          missing <- limitedFetch(once = false)
+        yield assertTrue(retried.attempts == 2, retried.code == 0, missing.attempts == 1, missing.code != 0)
+      }
+    },
     test("HISTOS_PIN selects its jar and a bad id fails") {
       val pin = "0.5.0-abcdefabcdef-SNAPSHOT"
       ZIO.scoped {
@@ -547,18 +555,86 @@ object ShimSpec extends ZIOSpecDefault:
       }
       .mapError(error => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString)))
 
+  private final case class Limited(attempts: Int, code: Int)
+
+  /** `once` answers 429 with `Retry-After: 0` the first time and 200 after that. The other answers 404. */
+  private def limitedFetch(once: Boolean): ZIO[Scope, java.io.IOException, Limited] =
+    script match
+      case Left(message) => ZIO.fail(new java.io.IOException(message))
+      case Right(file)   =>
+        for
+          root <- Workspace.work("histos-shim-retry").orDieWith(error => new java.io.IOException(error.message))
+          bin  = root.resolve("bin")
+          dest = root.resolve("fetched")
+          _   <- write(bin.resolve("attempts"), "")
+          _   <- executable(bin.resolve("curl"), if once then retryCurl else missingCurl)
+          ran <- ZIO
+            .attemptBlocking {
+              val builder =
+                new ProcessBuilder(file.toString, "--fetch", "https://example.test/manifest.json", dest.toString)
+              builder.directory(root.toFile)
+              val env = builder.environment()
+              env.put("HISTOS_ATTEMPTS", bin.resolve("attempts").toString)
+              env.put("PATH", bin.toString + java.io.File.pathSeparator + Option(env.get("PATH")).getOrElse(""))
+              val process = builder.redirectErrorStream(true).start()
+              val out     = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+              (process.waitFor(), out)
+            }
+            .mapError(error => new java.io.IOException(Option(error.getMessage).getOrElse(error.toString)))
+          count <- ZIO.attemptBlocking(Files.readAllLines(bin.resolve("attempts")).size).orDie
+        yield Limited(count, ran._1)
+
+  /** Curl's `-D` file, `-o` file, and `-w` status, from this stub. */
+  private val curlArgs =
+    """|headers=
+       |out=
+       |prev=
+       |for arg in "$@"; do
+       |  if [ "$prev" = "-D" ]; then headers=$arg; fi
+       |  if [ "$prev" = "-o" ]; then out=$arg; fi
+       |  prev=$arg
+       |done
+       |""".stripMargin
+
+  private val retryCurl =
+    s"""|#!/bin/sh
+        |printf 'x\\n' >> "$$HISTOS_ATTEMPTS"
+        |seen=$$(wc -l < "$$HISTOS_ATTEMPTS" | tr -d ' ')
+        |$curlArgs
+        |if [ "$$seen" -eq 1 ]; then
+        |  printf 'HTTP/1.1 429\\nRetry-After: 0\\n\\n' > "$$headers"
+        |  printf '429'
+        |else
+        |  printf 'HTTP/1.1 200\\n\\n' > "$$headers"
+        |  printf 'ok\\n' > "$$out"
+        |  printf '200'
+        |fi
+        |""".stripMargin
+
+  private val missingCurl =
+    s"""|#!/bin/sh
+        |printf 'x\\n' >> "$$HISTOS_ATTEMPTS"
+        |$curlArgs
+        |printf 'HTTP/1.1 404\\n\\n' > "$$headers"
+        |printf '404'
+        |""".stripMargin
+
   private val curlStub =
     """|#!/bin/sh
        |prev=
        |out=
+       |headers=
        |url=
        |for arg in "$@"; do
        |  if [ "$prev" = "-o" ]; then out=$arg; fi
+       |  if [ "$prev" = "-D" ]; then headers=$arg; fi
        |  case $arg in
        |    http:*|https:*) url=$arg ;;
        |  esac
        |  prev=$arg
        |done
+       |if [ -n "$headers" ]; then printf 'HTTP/1.1 200\n\n' > "$headers"; fi
+       |printf '200'
        |mkdir -p "$(dirname "$out")"
        |case $url in
        |  */channel-*)

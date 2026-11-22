@@ -39,6 +39,19 @@ object VerifyJobSpec extends ZIOSpecDefault:
     RunnerTools(Some(NodeFloor(25)), None, Some(ToolRevision("1.62.1")))
 
   def spec = suite("verify jobs")(
+    test("affected installs the toolchain and every later job restores it") {
+      val text = render(Projects(api), NpmLock.Absent)
+      assertTrue(
+        text.map { body =>
+          val first = slice(body, "affected")
+          !first.contains("needs:") && first.contains(".github/actions/setup@") &&
+          slice(body, "workflow").contains("needs: [affected]") &&
+          slice(body, "supply-chain").contains("needs: [affected]") &&
+          slice(body, "dependency-snapshot").contains("needs: [affected]") &&
+          slice(body, "cache-seed").contains("needs: [affected]")
+        } == Right(true)
+      )
+    },
     test("a pin with no verify task keeps today's test job") {
       val text = render(Projects(api), NpmLock.Absent)
       assertTrue(
@@ -68,12 +81,12 @@ object VerifyJobSpec extends ZIOSpecDefault:
         ) == Right(true),
         text.map(body =>
           suiteInstall(slice(body, "scaladoc")) && restoresStore(slice(body, "scaladoc")) &&
-            slice(body, "scaladoc").contains("    needs: [publish]") &&
+            slice(body, "scaladoc").contains("    needs: [affected, publish]") &&
             !slice(body, "scaladoc").contains("actions/cache/save@")
         ) == Right(true),
         text.map(body =>
           suiteInstall(slice(body, "format")) && slice(body, "format").contains(
-            "    needs: [publish]"
+            "    needs: [affected, publish]"
           ) && !slice(body, "format").contains("~/.cache/histos")
         ) == Right(true),
         text.map(body =>
@@ -209,7 +222,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
       !job.contains("playwright")
 
   private def seedStays(job: String): Boolean =
-    job.contains(Setup) && job.contains("github.event_name == 'push'") && !job.contains("needs:")
+    job.contains(Setup) && job.contains("github.event_name == 'push'") && job.contains("needs: [affected]")
 
   private def render(
       built: Either[BuildError, ProjectGraph],

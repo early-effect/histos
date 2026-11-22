@@ -131,7 +131,7 @@ object PluginCompileSupport:
       .flatMap: loader =>
         ZIO
           .attemptBlocking(called(loader, binary, method))
-          .mapError(_ => PluginCompileError.Io(IoFailure(classes, IoFault.Read)))
+          .mapError(failed)
           .flatMap(ZIO.fromEither)
 
   def runtimeJars(session: HostCompilerSession): List[Path] =
@@ -266,6 +266,16 @@ object PluginCompileSupport:
     val mac  = home.resolve("Library/Caches/Coursier/v1/https/repo1.maven.org/maven2")
     val nix  = home.resolve(".cache/coursier/v1/https/repo1.maven.org/maven2")
     if Files.isDirectory(mac) then mac else nix
+
+  /** A stale class file throws inside `invoke`, and reflection wraps that in `InvocationTargetException`. The linkage
+    * error is the failure. Anything else is a fixture that could not be read.
+    */
+  private def failed(thrown: Throwable): PluginCompileError =
+    def linkage(cause: Throwable): Option[PluginCompileError] =
+      cause match
+        case found: LinkageError => Some(PluginCompileError.Linked(found.getClass.getName))
+        case other               => Option(other.getCause).flatMap(linkage)
+    linkage(thrown).getOrElse(PluginCompileError.Io(IoFailure(Path.of("invoke"), IoFault.Read)))
 
   private def called(loader: URLClassLoader, binary: String, method: String): Either[PluginCompileError, String] =
     val cls    = loader.loadClass(binary)

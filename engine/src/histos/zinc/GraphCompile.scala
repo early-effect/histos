@@ -23,6 +23,7 @@ import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
 import zio.{Chunk, IO, NonEmptyChunk, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
@@ -668,8 +669,9 @@ object GraphCompile:
           val analysis = analysisRoot(plan, module.name, version, platform)
           for
             read <- upstreams(module, chain, version, platform, done, plan)
-            cells = read.map(_._1)
-            apis  = read.map(_._2)
+            cells    = read.map(_._1)
+            apis     = read.map(_._2)
+            upstream = read.flatMap(_._3)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
             known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
             produced <- known match
@@ -691,6 +693,7 @@ object GraphCompile:
                     coverageTools = planned.fold(List.empty[ToolInput])(_.tools),
                     checkout = plan.repo,
                     apiBytes = bytes,
+                    upstream = upstream,
                   )
                   compiled <- compile(
                     work,
@@ -899,7 +902,7 @@ object GraphCompile:
       platform: Platform,
       done: Map[CellKey, Path],
       plan: CompilePlan,
-  ): IO[GraphCompileError, List[(UpstreamCell, Sha256)]] =
+  ): IO[GraphCompileError, List[(UpstreamCell, Sha256, List[ClassSignature])]] =
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     UpstreamCells
       .read(module, chain, version, platform, done)
@@ -908,7 +911,25 @@ object GraphCompile:
         ZIO.foreach(cells): cell =>
           analysisDirOf(cell.classes) match
             case None           => ZIO.fail(failed(CompileError.Io(IoFailure(cell.classes, IoFault.Stat))))
-            case Some(recorded) => ZIO.fromEither(ApiDigest.read(recorded)).mapError(failed).map(cell -> _)
+            case Some(recorded) =>
+              ZIO
+                .fromEither(ApiDigest.read(recorded))
+                .mapError(failed)
+                .flatMap: digest =>
+                  signaturesOf(recorded)
+                    .mapError(failed)
+                    .map(signatures => (cell, digest, signatures))
+
+  /** The per-class signatures of one upstream analysis. A missing analysis contributed no classes. An analysis that
+    * cannot be read is a failed compile: a silent empty table would hide a signature change.
+    */
+  private def signaturesOf(dir: Path): IO[CompileError, List[ClassSignature]] =
+    ZIO
+      .attemptBlocking(UpstreamApis.readAnalysis(dir))
+      .mapError(_ => CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read)))
+      .flatMap:
+        case Some(found) => ZIO.succeed(found)
+        case None        => ZIO.fail(CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read)))
 
   /** Classpath root written for one JVM cell. Test compile and the test subprocess read this directory.
     */

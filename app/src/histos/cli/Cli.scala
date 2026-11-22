@@ -327,7 +327,7 @@ object Cli:
                 Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held)
               )
           },
-          line => perform(repo, apiJar, noted(peeled.log, line)),
+          line => perform(peeled.args, repo, apiJar, noted(peeled.log, line)),
         )
     }
 
@@ -681,7 +681,7 @@ object Cli:
                 case detail =>
                   ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held))
               },
-              line => route(repo, noted(peeled.log, line)),
+              line => route(peeled.args, repo, noted(peeled.log, line)),
             )
       }
     }
@@ -713,11 +713,33 @@ object Cli:
       case _ => command
 
   private def perform(
+      args: List[String],
       repo: Path,
       apiJar: Path,
       line: InvocationLine,
   )(using Appearance): URIO[Local, Completed] =
     given LockChoice = LockChoice(line.lock)
+    commanded(args, repo, apiJar, line)
+
+  private def commanded(
+      args: List[String],
+      repo: Path,
+      apiJar: Path,
+      line: InvocationLine,
+  )(using Appearance, LockChoice): URIO[Local, Completed] =
+    ApiClock
+      .admit(repo)
+      .flatMap:
+        case ApiClock.Admit.Rebuild(line, _, commit) => repack(args, repo, apiJar, line, commit)
+        case ApiClock.Admit.Warn(found)              => sayError(found) *> commandedBody(args, repo, apiJar, line)
+        case ApiClock.Admit.Go                       => commandedBody(args, repo, apiJar, line)
+
+  private def commandedBody(
+      args: List[String],
+      repo: Path,
+      apiJar: Path,
+      line: InvocationLine,
+  )(using Appearance, LockChoice): URIO[Local, Completed] =
     line.command match
       case Command.Version =>
         versionText(repo).foldZIO(
@@ -1675,6 +1697,53 @@ object Cli:
     val call = Call.Test(projects, patterns, mode, filter)
     attach(repo, call, locally(repo, apiJar, call))
 
+  /** Pack this checkout and run the command again on the jar that pack prints. The pack runs in this process. The
+    * command runs in the next one, with `HISTOS_PIN` set to the id the pack printed, so this jar does not run it.
+    */
+  private def repack(
+      args: List[String],
+      repo: Path,
+      apiJar: Path,
+      line: String,
+      commit: String,
+  )(using Appearance, LockChoice): URIO[Local, Completed] =
+    sayError(line) *>
+      (histos.publish.PublishToken.from("histos") match
+        case Left(_)      => ZIO.dieMessage("the histos publish token is one word")
+        case Right(found) =>
+          locally(repo, apiJar, Call.PublishLocal(List(found))).flatMap: packed =>
+            val pin = packed.out.linesIterator.map(histos.ToolchainSkew.pin).collectFirst { case Some(id) => id }
+            (packed.exit, pin) match
+              case (CliExit.Success, Some(id)) =>
+                sayError(s"packed $commit. running $id") *> relaunch(args, repo, id)
+              case _ => ZIO.succeed(packed))
+
+  /** Replace this process with `./histos` in `repo`, pinned to `id`. That shim execs the toolchain jar. The child's
+    * status is this command's status. A command that could not start keeps the failure here.
+    */
+  private def relaunch(args: List[String], repo: Path, id: String): URIO[Stdio, Completed] =
+    val failed = held("", CallResult.Fault(BuildFault.Io(IoFailure(repo, IoFault.Stat))))
+    ZIO.scoped:
+      ZIO
+        .acquireRelease(
+          ZIO
+            .attemptBlocking:
+              val command = java.util.ArrayList[String]()
+              command.add("./histos")
+              args.foreach(command.add)
+              val process = new ProcessBuilder(command).directory(repo.toFile).inheritIO()
+              process.environment().put("HISTOS_PIN", id)
+              process.start()
+            .mapError(_ => failed)
+        )(started => ZIO.attemptBlocking(started.destroyForcibly()).ignore)
+        .flatMap: started =>
+          ZIO
+            .attemptBlockingInterrupt(started.waitFor())
+            .mapError(_ => failed)
+            .map: status =>
+              Completed(if status == 0 then CliExit.Success else CliExit.Failed, "", "", Playback.Heard)
+        .merge
+
   private def say(text: String): URIO[Stdio, Unit] =
     Console.printLine(text).orElseSucceed(())
 
@@ -2243,34 +2312,53 @@ object Cli:
       call: Call,
       local: => URIO[R, Completed],
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
+    attach(Nil, Path.of(""), repo, call, local)
+
+  private def attach[R](
+      args: List[String],
+      apiJar: Path,
+      repo: Path,
+      call: Call,
+      local: => URIO[R, Completed],
+  )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
     LockDisposition.unapplied(call, summon[LockChoice].mode) match
       case Some(mode) =>
         ZIO.succeed(held("", CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode)))))
       case None =>
-        attachOpen(repo, call, local)
+        attachOpen(args, apiJar, repo, call, local)
 
   private def attachOpen[R](
+      args: List[String],
+      apiJar: Path,
       repo: Path,
       call: Call,
       local: => URIO[R, Completed],
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
     ApiClock.admit(repo).flatMap { admitted =>
-      val noted = admitted match
-        case ApiClock.Admit.Warn(line) => sayError(line)
-        case ApiClock.Admit.Go         => ZIO.unit
-      noted *>
-        pinned(repo, local)(text =>
-          Attach
-            .decide(repo, text)
-            .flatMap {
-              case Decision.Open(socket) =>
-                speak(repo, socket, call, local)
-              case Decision.DifferentVersion(socket) =>
-                supplant(repo, socket, local)(next => speak(repo, next, call, local))
-              case Decision.Absent => local
-            }
-        )
+      admitted match
+        case ApiClock.Admit.Rebuild(_, fact, _) =>
+          sayError(s"$fact. java -jar does not pack this checkout") *> attached(repo, call, local)
+        case ApiClock.Admit.Warn(line) => sayError(line) *> attached(repo, call, local)
+        case ApiClock.Admit.Go         => attached(repo, call, local)
     }
+
+  /** The command, once the running jar is the one this checkout packs. */
+  private def attached[R](
+      repo: Path,
+      call: Call,
+      local: => URIO[R, Completed],
+  )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
+    pinned(repo, local)(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap {
+          case Decision.Open(socket) =>
+            speak(repo, socket, call, local)
+          case Decision.DifferentVersion(socket) =>
+            supplant(repo, socket, local)(next => speak(repo, next, call, local))
+          case Decision.Absent => local
+        }
+    )
 
   private def speak[R](
       repo: Path,
@@ -2548,8 +2636,19 @@ object Cli:
       _ => ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held)),
     )
 
-  private def route(repo: Path, line: InvocationLine)(using Appearance): URIO[Launched, Completed] =
+  private def route(
+      args: List[String],
+      repo: Path,
+      line: InvocationLine,
+  )(using Appearance): URIO[Launched, Completed] =
     given LockChoice = LockChoice(line.lock)
+    routed(args, repo, line)
+
+  private def routed(
+      args: List[String],
+      repo: Path,
+      line: InvocationLine,
+  )(using Appearance, LockChoice): URIO[Launched, Completed] =
     line.command match
       case Command.Version =>
         versionText(repo).foldZIO(

@@ -912,7 +912,7 @@ object Workflow:
       "    outputs:",
       "      modules: ${{ steps.affected.outputs.modules }}",
       "    steps:",
-    ) ++ fullGitCheckout() ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
+    ) ++ fullGitCheckout() ++ CiInstall.prepare(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
@@ -931,7 +931,7 @@ object Workflow:
     val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  cache-seed:"
-    ) ++ List(
+    ) ++ afterAffected(Nil) ++ List(
       s"    if: ${quote(OnDefaultPush)}",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
@@ -1235,7 +1235,7 @@ object Workflow:
       steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole, NpmInstall.Off)
     val lines = List(
       "  coverage:"
-    ) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
@@ -1272,7 +1272,7 @@ object Workflow:
   private def workflowJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
       "  workflow:"
-    ) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
@@ -1291,7 +1291,7 @@ object Workflow:
   private def versionsJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
       "  versions:"
-    ) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
@@ -1319,10 +1319,15 @@ object Workflow:
           s"      - run: ${quote("./histos test app --only '*LockInvocationSpec*' '*InstalledCompilerPayloadSpec*'")}"
         )
 
+  /** `affected` installs the toolchain. Every later job in this workflow waits for that install. */
+  private def afterAffected(extra: List[String]): List[String] =
+    val names = "affected" :: extra
+    List(s"    needs: [${names.mkString(", ")}]")
+
   private def hostedNeeds(graph: ProjectGraph): List[String] =
     graph.suiteHost match
-      case SuiteHost.Pin   => Nil
-      case SuiteHost.Local => List("    needs: [publish]")
+      case SuiteHost.Pin   => afterAffected(Nil)
+      case SuiteHost.Local => afterAffected(List("publish"))
 
   /** A download needs `actions: read`. Pin keeps contents read alone, which is what those jobs emit today. */
   private def readPermissions(download: Boolean): List[String] =
@@ -1332,7 +1337,7 @@ object Workflow:
   private def publishJob(graph: ProjectGraph)(using RenderingShip): String =
     val lines = List(
       "  publish:"
-    ) ++ verifyIf ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
