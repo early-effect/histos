@@ -27,6 +27,7 @@ import histos.zinc.{
   UpstreamCell,
   UpstreamCells,
 }
+import histos.version.ShipNumber
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, Publication, ScalaVersion, ToolchainIdentity}
 
 import java.nio.charset.StandardCharsets
@@ -94,7 +95,7 @@ object Assemble:
           .provideSome[Resolve](tools)
         dirs <- ZIO.fromEither(directories(libs, cells))
         launcher = isLauncher(graph, target.name)
-        extra     <- embedded(repo, dirs, launcher)
+        extra     <- embedded(repo, dirs, launcherNumber(graph, target.name))
         compiler  <- hostCompiler(launcher, version, jdk, tools)
         assembled <- pack(
           classes,
@@ -229,15 +230,22 @@ object Assemble:
   private def embedded(
       repo: Path,
       dirs: List[Path],
-      launcher: Boolean,
+      launcher: Option[ShipNumber],
   ): ZIO[Scope, AssembleError, List[AssemblyFile]] =
     for
       nested  <- nested(dirs)
-      shipped <- if launcher then identityFiles(repo) else ZIO.succeed(Nil)
+      shipped <- launcher match
+        case Some(number) => identityFiles(repo, number)
+        case None         => ZIO.succeed(Nil)
     yield nested.toList ++ shipped
 
   private def isLauncher(graph: ProjectGraph, name: ProjectName): Boolean =
-    graph.catalog.ships.exists(_.toolchain.exists(_.launcher == name))
+    launcherNumber(graph, name).isDefined
+
+  /** The next release of the ship whose launcher is `name`. */
+  private def launcherNumber(graph: ProjectGraph, name: ProjectName): Option[ShipNumber] =
+    graph.catalog.ships.collectFirst:
+      case ship if ship.toolchain.exists(_.launcher == name) => ship.release
 
   private def nested(dirs: List[Path]): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
     dirs match
@@ -257,9 +265,9 @@ object Assemble:
           written <- ClassJar.write(merged, jar).mapError(AssembleError.Jar(_))
         yield Some(AssemblyFile(ApiEntry, written.path))
 
-  private def identityFiles(repo: Path): ZIO[Scope, AssembleError, List[AssemblyFile]] =
+  private def identityFiles(repo: Path, number: ShipNumber): ZIO[Scope, AssembleError, List[AssemblyFile]] =
     for
-      ident <- identityFile(repo)
+      ident <- identityFile(repo, number)
       shim  <- shimFile(repo)
     yield ident.toList ++ shim.toList
 
@@ -281,9 +289,9 @@ object Assemble:
         yield Some(AssemblyFile(PublishedShim.entry, path))
     }
 
-  private def identityFile(repo: Path): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
+  private def identityFile(repo: Path, number: ShipNumber): ZIO[Scope, AssembleError, Option[AssemblyFile]] =
     ToolchainIdentity
-      .discover(repo)
+      .discover(repo, number)
       .flatMap:
         case None           => ZIO.succeed(None)
         case Some(identity) =>

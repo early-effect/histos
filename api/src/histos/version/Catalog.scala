@@ -82,6 +82,10 @@ enum Ship:
 
   def toolchain: Option[ShipToolchain] = this match
     case line: Line => line.linked
+
+  /** The next release. Sessions derive the snapshot and the release from this number. */
+  def release: ShipNumber = this match
+    case line: Line => line.number
 end Ship
 
 /** How a build versions its ships. Empty is an application. SNAPSHOT never appears here. */

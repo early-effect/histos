@@ -1,6 +1,8 @@
+import dev.earlyeffect.specular.{Site, SiteCi, Specular}
 import histos.*
-import histos.plugin.{JobName, SecretName, TaskName}
+import histos.plugin.{BuildServices, JobName, NoteKey, NoteText, PluginId, SecretName, Site as _, SitePublish, TaskName}
 import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
+import zio.*
 
 object build extends HistosBuild:
   def graph =
@@ -104,6 +106,25 @@ object build extends HistosBuild:
         asm,
         asmTree,
       )
+    val library =
+      Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
+    val docs = module("docs", Jvm, Js)(scala3)
+      .dependsOn(Jvm)(api, app)
+      .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
+      .main(MainClass("histos.docs.ClientMain"))
+      .libraryDependencies(
+        dep"rocks.earlyeffect::specular-core:0.21.4",
+        dep"rocks.earlyeffect::specular-site:0.21.4".on(Jvm),
+        dep"rocks.earlyeffect::early-effect-docs-theme:0.21.4".on(Jvm),
+        dep"rocks.earlyeffect::mermoid-ascent:0.2.0".on(Jvm),
+        dep"org.scala-lang::scala3-tasty-inspector:3.10.1".on(Jvm),
+        zio,
+      )
+      .testDependencies(
+        dep"rocks.earlyeffect::specular-zio-test:0.21.4".on(Jvm),
+        zioTest.on(Jvm),
+        zioTestSbt.on(Jvm),
+      )
     Projects
       .organization(organization"rocks.earlyeffect")
       .license(License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt"))
@@ -132,10 +153,12 @@ object build extends HistosBuild:
       .scalafmt
       .docCheck
       .verify(VerifyTask(JobName("client"), VerifyRun.BuiltIn(TaskName("host")), ClientLink.Native))
+      .resolvers(
+        Resolver.Maven(RepositoryUrl("https://central.sonatype.com/repository/maven-snapshots/")),
+        Resolver.Central,
+      )
       .publishLocalSuite(
-        ships(
-          Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
-        ),
+        ships(library),
         api,
         wire,
         client,
@@ -143,4 +166,31 @@ object build extends HistosBuild:
         engine,
         app,
         pluginTestkit,
+        docs,
       )
+
+  override def services =
+    BuildServices.default
+      .add[Specular](ZLayer.succeed(site) >>> Specular.layer)
+      .tasks[Specular](ZLayer.succeed(site) >>> Specular.layer)
+
+  private val site =
+    Site
+      .forProject("docs", "histos.docs.BuildSite")
+      .docsUrl("https://early-effect.github.io/histos/")
+      .name("histos")
+      .organization("rocks.earlyeffect")
+      .libraryShip
+      .title("Histos")
+      .description("A Scala build tool. The build is a program. The work is an effect.")
+      .homepage("https://github.com/early-effect/histos")
+      .linkClient
+      .preview
+      .ci(SiteCi.Publish(SitePublish.Automatic))
+
+  /** A ship revision is one line. `not-a-ship` is the branch a revision cannot take. */
+  private def shipNote(revision: String): NoteText =
+    NoteText.from(revision) match
+      case Right(text) => text
+      case Left(_)     => NoteText("not-a-ship")
+end build
