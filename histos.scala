@@ -106,10 +106,11 @@ object build extends HistosBuild:
         asm,
         asmTree,
       )
-    val library = Ship("histos").next(0, 5, 0)
-    val docs    = module("docs", Jvm, Js)(scala3)
+    val library =
+      Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
+    val docs = module("docs", Jvm, Js)(scala3)
       .dependsOn(Jvm)(api, app)
-      .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.released.revision))
+      .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
       .main(MainClass("histos.docs.ClientMain"))
       .libraryDependencies(
         dep"rocks.earlyeffect::specular-core:0.21.4",
@@ -158,9 +159,7 @@ object build extends HistosBuild:
       )
       .locked
       .publishLocalSuite(
-        ships(
-          library(api, wire, central, engine, app).toolchain(launcher = app, client = client)
-        ),
+        ships(library),
         api,
         wire,
         client,
