@@ -11,7 +11,13 @@ import zio.*
 object BuildSite extends DocsSite:
 
   @navLabel("Start")
-  final case class Start(home: Home.type, install: Install.type, first: FirstProject.type, model: BuildModel.type)
+  final case class Start(
+      home: Home.type,
+      install: Install.type,
+      first: FirstProject.type,
+      model: BuildModel.type,
+      resolution: ResolutionPage.type,
+  )
 
   @navLabel("Reference")
   final case class Reference(
