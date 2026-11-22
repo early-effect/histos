@@ -5,10 +5,12 @@ import mermoid.Mermaid
 /** Diagrams the site draws. `Mermaid` parses each one at compile time. */
 object Figures:
 
-  /** A person, Metals, and an MCP client reach one server. */
+  /** A person, Metals, and an MCP client reach one server. The native client is optional. */
   val clients: Mermaid =
     Mermaid("""flowchart TB
       |    person[terminal] --> server[JVM server]
+      |    person -.-> native["histos-client (optional)"]
+      |    native --> server
       |    metals[Metals] --> bsp[histos bsp]
       |    agent[MCP client] --> mcp[histos mcp]
       |    bsp --> server

@@ -7,32 +7,44 @@ object Plugins extends DocSpec:
 
   def doc = page("Plugins")(
     md"""
-`histos.plugins.scala` names coordinates and does not import a plugin class. `histos.scala`
-turns a capability on by its interface. A coordinate on a classpath is not a service.
+A plugin adds a capability: a command, a task, or a CI job. Putting a jar on the
+classpath does not turn that capability on. Two files share the work.
+
+`histos.plugins.scala` only names coordinates. It is read before any plugin class exists,
+so it cannot import one. It says where to resolve the plugin from, and whether the lock
+must match.
+
+`histos.scala` turns a capability on by its Scala type. You provide a `ZLayer` for that
+service. If the build never registers the service, the plugin's commands are not there,
+even if the jar was downloaded.
 """,
     cite[histos.plugin.HistosPlugins](_.sources),
     cite[histos.plugin.BuildServices].signature,
-    section("Publication")(
+    section("What you publish for the next machine")(
       md"""
-`.pluginLibrary` publishes a rebuildable bundle: sources and the inputs a later host can
-recompile. `.pluginLibrary(PluginPublication.BinaryOnly)` keeps binding metadata and no
-recipe. Rebuildable is the default.
+A plugin library is published so a later Histos can load it. The default publication is
+rebuildable: it includes the sources and the inputs a later compiler needs, so a host on
+a newer Scala can recompile the plugin. `PluginPublication.BinaryOnly` keeps the binding
+metadata and skips that recipe. Use binary-only when you are shipping a closed binary and
+you do not want a later host to rebuild it.
 """,
       cite[histos.PluginPublication].signature,
     ),
-    section("Specular")(
+    section("Specular, as a worked example")(
       md"""
-Specular is a plugin. `Site.forProject` names the docs module and the `DocsSite` main.
-`Specular.layer` builds the plugin from that `Site`. This repository registers it with
-`.add[Specular]` and `.tasks[Specular]` on one layer.
+This documentation site is built by Specular, which is a Histos plugin. The build names
+the docs module and the `DocsSite` main, then registers the service twice: once so the
+plugin can contribute commands, and once so it can contribute tasks. One layer is shared,
+so both registrations see the same site.
 
-`linkClient` copies the linked docs script to `assets/client.js`. That script reloads the
-tab when the preview stamp changes.
+`linkClient` copies the linked browser script to `assets/client.js`. That script is what
+reloads the preview tab when the site is rebuilt.
 
-`./histos run dev.earlyeffect.specular/preview` leaves the preview server up. `preview` is
-already a Histos command, so the contributed command is `serve` and it runs that task.
-`./histos ~ run dev.earlyeffect.specular/site` rebuilds when the docs module changes. The
-server stays up and reloads the tab.
+You build the site with `./histos run dev.earlyeffect.specular/site`. You serve it with
+`./histos run dev.earlyeffect.specular/preview`, which leaves the server up. `preview` is
+already a Histos command, so the plugin's command is named `serve` and it runs that same
+task. `./histos serve` is the short form. `./histos ~ run dev.earlyeffect.specular/site`
+rebuilds when the docs sources change, and the preview reloads.
 """,
       cite[histos.plugin.Site](_.publish),
     ),

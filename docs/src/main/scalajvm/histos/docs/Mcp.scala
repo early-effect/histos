@@ -7,9 +7,13 @@ object Mcp extends DocSpec:
 
   def doc = page("MCP")(
     md"""
-An agent uses MCP. The client's stdio server is `histos` with the argument `mcp`. The tools
-are the same operations the terminal runs. A tool returns the report as data, with each line
-as it is printed.
+MCP is the Model Context Protocol. An agent (a coding assistant, a script that drives the
+build) uses it to call tools and read structured results. Histos speaks MCP so that agent
+asks for the same operations you type at the terminal, and reads the same report.
+
+You do not start a second build tool for the agent. The client's configuration names
+`histos` as the program and `mcp` as its argument. The process speaks JSON on standard
+input and standard output. There is no port to open.
 
 ```json
 {
@@ -22,29 +26,34 @@ as it is printed.
 }
 ```
 """,
-    section("The same call")(
+    section("The tools are the commands")(
       md"""
-`HistosMcp.Names` is the tool list: `graph`, `run`, `cancel`, `compile`, `test`, `publish`,
-`version`, `assembly`, `clean`, `resolve`, `workflow`, `fmt`, `reload`, `reboot`,
-`cachePath`, `cacheList`, `cacheClean`, `cacheForget`, `cacheVerify`, `watch`, `preview`,
-`observe`, and `doctor`. Each registration sits next to that name and describes the
-arguments the tool takes.
+Each tool is one operation you could have typed. The set is `graph`, `run`, `cancel`,
+`compile`, `test`, `publish`, `version`, `assembly`, `clean`, `resolve`, `workflow`,
+`fmt`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `cacheForget`,
+`cacheVerify`, `watch`, `preview`, `observe`, and `doctor`. A tool's description, next to
+its name in the source, says which arguments it takes. `tools/list` returns this set and
+nothing else, so an agent cannot invent a command Histos does not have.
 """,
       cite[histos.mcp.HistosMcp.type](_.toolNames),
       cite[histos.mcp.HistosMcp.type](_.tools).elided(24),
     ),
-    section("Consent")(
+    section("The agent is not sitting at a keyboard")(
       md"""
-The MCP pipe is not a terminal. A consent question the client has not negotiated comes back
-as a diagnosis, from `McpConsent`.
+Some Histos commands ask a question, for example whether to accept a default. A person at
+a terminal can answer. An MCP client has no keyboard unless it has negotiated a way to ask.
+When it has not, Histos returns the question as a diagnosis instead of waiting forever.
+The agent can then decide, or tell you.
 """,
       cite[histos.mcp.McpConsent.type](_.unnegotiated),
     ),
-    section("A report, or a fault")(
+    section("A failed compile is still a result")(
       md"""
-A compile or a test that ran returns a report, including one that failed. A request the
-grammar refused fails the tool. That split is `Session.CallProblem` on the tool
-registrations.
+If the compile or the test actually ran, the tool returns the report, including a report
+that says the build failed. That is a result the agent can read. If the request was
+refused before it started, because the arguments were not a real command, the tool call
+itself fails. The agent can tell those apart: one means "I ran it, and it failed", the
+other means "I did not run it".
 """,
       cite[histos.cli.Help.type](_.render),
     ),
