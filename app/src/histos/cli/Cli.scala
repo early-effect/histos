@@ -607,7 +607,7 @@ object Cli:
           val policy     = loaded.graph.supply
           val resolution = loaded.graph.resolution
           val net        = histos.supply.Net.live
-          val effect = action match
+          val effect     = action match
             case DepsAction.Check =>
               histos.supply.DepsSurface.check(repo, resolution, policy, net)
             case DepsAction.Update(yes, security) =>

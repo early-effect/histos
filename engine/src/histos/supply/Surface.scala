@@ -571,12 +571,15 @@ object DepsSurface:
   /** The jars this build uses. Lock mode reads `dependencies.lock`. Solve mode reads the resolution report. */
   private def pins(repo: Path, resolution: Resolution): IO[Stop, String] =
     val path = histos.resolve.ResolutionService.file(repo, resolution)
-    Workspace.readIfPresent(path).mapError(Stop.Unread(_)).flatMap:
-      case Some(text) => ZIO.succeed(text)
-      case None       =>
-        resolution match
-          case Resolution.Lock  => ZIO.fail(Stop.NoLock)
-          case Resolution.Solve => ZIO.fail(Stop.Unsolved)
+    Workspace
+      .readIfPresent(path)
+      .mapError(Stop.Unread(_))
+      .flatMap:
+        case Some(text) => ZIO.succeed(text)
+        case None       =>
+          resolution match
+            case Resolution.Lock  => ZIO.fail(Stop.NoLock)
+            case Resolution.Solve => ZIO.fail(Stop.Unsolved)
 
   /** `histos.scala`, or no text when the checkout has none. */
   private def buildFile(repo: Path): IO[Stop, String] =
