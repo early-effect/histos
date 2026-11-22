@@ -221,9 +221,9 @@ does not change `histos.version`.
 object CommandsDependencies extends DocSpec:
   def doc = page("Commands: dependencies")(
     md"""
-Dependencies are resolved into a lock file, `dependencies.lock`, so the next build uses
-the same versions. `resolve` is about that file. `deps` is about noticing when those
-versions should move.
+A locked build reads `dependencies.lock` and does not resolve. A build that solves
+resolves from `histos.scala` and remembers the result in `.histos/resolution`. `resolve`
+writes or checks the lock. `deps` looks at the jars the build is actually using.
 """,
     cite[histos.cli.Help.type](_.flags),
     section("resolve")(

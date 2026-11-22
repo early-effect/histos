@@ -1,6 +1,6 @@
 package histos.doc
 
-import histos.resolve.{ClasspathScope, LockedTools, Resolve}
+import histos.resolve.{ClasspathScope, LockedTools, ResolutionService, Resolve}
 import histos.zinc.{CompiledCell, GraphCompileError, JvmCompile, ScalacClasspath, UpstreamCells}
 import histos.{Module, ProjectGraph}
 
@@ -8,9 +8,9 @@ import java.nio.file.Path
 
 import zio.{ZIO, ZLayer}
 
-/** The classpath scaladoc reads: this cell's classes, then the lock and upstream class directories. Each upstream is
-  * the cell its compile read. The tool's own Scala library stays off this list, so `scala.caps` is not both an object
-  * and a package.
+/** The classpath scaladoc reads: this cell's classes, then the resolved jars and upstream class directories. The jars
+  * are the ones compile used: the lock when the build is locked, the resolution report when it solves. The tool's own
+  * Scala library stays off this list, so `scala.caps` is not both an object and a package.
   */
 object DocClasspath:
   def of(
@@ -22,7 +22,7 @@ object DocClasspath:
     val modules = graph.projects.collect { case item: Module => item }
     val chain   = Module.chain(module, modules, cell.platform)
     for
-      lock  <- Resolve.readLock(repo).mapError(GraphCompileError.Lock(_))
+      lock  <- ResolutionService.open(repo, graph).flatMap(_.current).mapError(GraphCompileError.Lock(_))
       tools <- LockedTools.make(lock, graph)
       found <- UpstreamCells
         .read(module, chain, cell.version, cell.platform, UpstreamCells.declared(repo, modules, cell.platform))

@@ -22,6 +22,7 @@ import histos.central.{KeyServer, ReleaseFeed}
 import histos.cli.{Appearance, Paint, Stdio}
 import histos.theme.Theme
 import histos.plugin.RepoPath
+import histos.Resolution
 import histos.version.CommitSha
 import histos.workflow.PinScan
 import histos.workspace.{IoFailure, Workspace}
@@ -348,28 +349,37 @@ object DoctorSurface:
     repo.getFileName.toString
 end DoctorSurface
 
-/** Lock-backed deps commands. Network access goes through [[Net]]. */
+/** Deps commands read the jars the build actually uses. Network access goes through [[Net]]. */
 object DepsSurface:
   final case class DepsResult(code: Int, text: String)
 
-  /** Why a command ends before its own work: no lock, a file it could not read, or a supply fault. */
+  /** Why a command ends before its own work: no pin, a file it could not read, or a supply fault. */
   private enum Stop:
     case NoLock
+    case Unsolved
     case Unread(failure: IoFailure)
     case Fault(fault: SupplyFault)
 
     def result: DepsResult = this match
       case NoLock          => DepsResult(1, "dependencies.lock is missing\n")
+      case Unsolved        => DepsResult(1, "the build solves and has no resolution report yet\n")
       case Unread(failure) => DepsResult(1, failure.message + "\n")
       case Fault(fault)    => DepsResult(1, fault.message + "\n")
   end Stop
 
   /** A cooldown counts days to today in UTC on the caller's clock. */
-  def check(repo: Path, policy: SupplyChain, net: Net): UIO[DepsResult] =
-    propose(repo, policy, net, false).fold(_.result, (proposal, _) => DepsResult(0, proposal.text))
+  def check(repo: Path, resolution: Resolution, policy: SupplyChain, net: Net): UIO[DepsResult] =
+    propose(repo, resolution, policy, net, false).fold(_.result, (proposal, _) => DepsResult(0, proposal.text))
 
-  def update(repo: Path, policy: SupplyChain, net: Net, yes: Boolean, security: Boolean): UIO[DepsResult] =
-    propose(repo, policy, net, security).foldZIO(
+  def update(
+      repo: Path,
+      resolution: Resolution,
+      policy: SupplyChain,
+      net: Net,
+      yes: Boolean,
+      security: Boolean,
+  ): UIO[DepsResult] =
+    propose(repo, resolution, policy, net, security).foldZIO(
       stop => ZIO.succeed(stop.result),
       (proposal, graph) =>
         if !yes then ZIO.succeed(DepsResult(0, proposal.text))
@@ -386,8 +396,8 @@ object DepsSurface:
           ),
     )
 
-  def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =
-    lock(repo).foldZIO(
+  def audit(repo: Path, resolution: Resolution, report: Boolean, net: Net): UIO[DepsResult] =
+    pins(repo, resolution).foldZIO(
       stop => ZIO.succeed(stop.result),
       text =>
         query(net, purls(text, directOnly = false))
@@ -450,16 +460,16 @@ object DepsSurface:
                   yield sent,
         )
 
-  def alert(repo: Path, policy: SupplyChain, net: Net): URIO[GitRead, DepsResult] =
+  def alert(repo: Path, resolution: Resolution, policy: SupplyChain, net: Net): URIO[GitRead, DepsResult] =
     (dryRun <*> githubToken).flatMap: (dry, token) =>
       if token.isEmpty && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
       else
         githubName(repo).flatMap:
           case None       => ZIO.succeed(unnamed)
           case Some(name) =>
-            lock(repo)
+            pins(repo, resolution)
               .map(text => purls(text, directOnly = false))
-              .catchSome { case Stop.NoLock => ZIO.succeed(Nil) }
+              .catchSome { case Stop.NoLock | Stop.Unsolved => ZIO.succeed(Nil) }
               .foldZIO(
                 stop => ZIO.succeed(stop.result),
                 packages =>
@@ -489,8 +499,8 @@ object DepsSurface:
         )
 
   /** The commit is `GITHUB_SHA`, else HEAD. The ref is `GITHUB_REF`, else `refs/heads/main`. */
-  def snapshot(repo: Path, net: Net, submit: Boolean): URIO[GitRead, DepsResult] =
-    lock(repo).foldZIO(
+  def snapshot(repo: Path, resolution: Resolution, net: Net, submit: Boolean): URIO[GitRead, DepsResult] =
+    pins(repo, resolution).foldZIO(
       stop => ZIO.succeed(stop.result),
       text =>
         for
@@ -516,9 +526,15 @@ object DepsSurface:
     )
 
   /** The plan the lock and the build file propose today, with the build file's text. */
-  private def propose(repo: Path, policy: SupplyChain, net: Net, security: Boolean): IO[Stop, (Proposal, String)] =
+  private def propose(
+      repo: Path,
+      resolution: Resolution,
+      policy: SupplyChain,
+      net: Net,
+      security: Boolean,
+  ): IO[Stop, (Proposal, String)] =
     for
-      text     <- lock(repo)
+      text     <- pins(repo, resolution)
       graph    <- buildFile(repo)
       day      <- today
       proposal <- Plan
@@ -552,8 +568,15 @@ object DepsSurface:
           .foreach(names)(name => Workspace.readIfPresent(repo.resolve(name)).map(_.map(name -> _)))
           .mapBoth(Stop.Unread(_), _.flatten)
 
-  private def lock(repo: Path): IO[Stop, String] =
-    Workspace.readIfPresent(repo.resolve("dependencies.lock")).mapError(Stop.Unread(_)).someOrFail(Stop.NoLock)
+  /** The jars this build uses. Lock mode reads `dependencies.lock`. Solve mode reads the resolution report. */
+  private def pins(repo: Path, resolution: Resolution): IO[Stop, String] =
+    val path = histos.resolve.ResolutionService.file(repo, resolution)
+    Workspace.readIfPresent(path).mapError(Stop.Unread(_)).flatMap:
+      case Some(text) => ZIO.succeed(text)
+      case None       =>
+        resolution match
+          case Resolution.Lock  => ZIO.fail(Stop.NoLock)
+          case Resolution.Solve => ZIO.fail(Stop.Unsolved)
 
   /** `histos.scala`, or no text when the checkout has none. */
   private def buildFile(repo: Path): IO[Stop, String] =

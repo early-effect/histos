@@ -604,21 +604,22 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
         case Right(loaded) =>
-          val policy = loaded.graph.supply
-          val net    = histos.supply.Net.live
+          val policy     = loaded.graph.supply
+          val resolution = loaded.graph.resolution
+          val net        = histos.supply.Net.live
           val effect = action match
             case DepsAction.Check =>
-              histos.supply.DepsSurface.check(repo, policy, net)
+              histos.supply.DepsSurface.check(repo, resolution, policy, net)
             case DepsAction.Update(yes, security) =>
-              histos.supply.DepsSurface.update(repo, policy, net, yes, security)
+              histos.supply.DepsSurface.update(repo, resolution, policy, net, yes, security)
             case DepsAction.Audit(report) =>
-              histos.supply.DepsSurface.audit(repo, report, net)
+              histos.supply.DepsSurface.audit(repo, resolution, report, net)
             case DepsAction.Pr(security, open) =>
               histos.supply.DepsSurface.pullRequest(repo, policy, net, security, open)
             case DepsAction.Alert =>
-              histos.supply.DepsSurface.alert(repo, policy, net)
+              histos.supply.DepsSurface.alert(repo, resolution, policy, net)
             case DepsAction.Snapshot(submit) =>
-              histos.supply.DepsSurface.snapshot(repo, net, submit)
+              histos.supply.DepsSurface.snapshot(repo, resolution, net, submit)
           effect
             .provide(histos.supply.GitRead.live)
             .map: result =>
