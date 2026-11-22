@@ -30,13 +30,13 @@ object BuildSite extends DocsSite:
 
   @navLabel("Why")
   final case class Why(
+      lineage: Lineage.type,
       metals: Metals.type,
       mcp: Mcp.type,
       cache: Cache.type,
       workflows: Workflows.type,
       publishing: Publishing.type,
       plugins: Plugins.type,
-      lineage: Lineage.type,
   )
 
   final case class HistosNav(start: Start, reference: Reference, why: Why) derives SiteNav

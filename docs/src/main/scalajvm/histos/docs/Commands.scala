@@ -169,7 +169,7 @@ without asking. `--branch <name>` sets the CI branch.
       md"""
 `histos init` writes the project into the current directory. The same `--bare`, `--yes`,
 and `--branch` flags apply. `--from sbt` drafts the build from `build.sbt`. `--from zipx`
-drafts it from `project/ZipxVersions.scala`.
+drafts it from `project/ZipxVersions.scala` in a [zipx](https://www.earlyeffect.rocks/zipx/) build.
 """
     ),
   )
@@ -271,7 +271,7 @@ asking.
     section("setup")(
       md"""
 `histos setup supply-chain` writes the files the supply-chain checks expect. `--from zipx`
-starts from a zipx layout. `--fix` rewrites what it can, and `--yes` does not ask.
+starts from a [zipx](https://www.earlyeffect.rocks/zipx/) layout. `--fix` rewrites what it can, and `--yes` does not ask.
 """
     ),
   )

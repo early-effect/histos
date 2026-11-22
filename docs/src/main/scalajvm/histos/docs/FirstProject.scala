@@ -40,7 +40,8 @@ If you pass neither `--bare` nor `--yes`, Histos asks.
     section("Start from an sbt or zipx build")(
       md"""
 If the directory already has an sbt build, `histos init --from sbt` reads `build.sbt` and
-drafts `histos.scala` from it. `histos init --from zipx` reads `project/ZipxVersions.scala`.
+drafts `histos.scala` from it. `histos init --from zipx` reads `project/ZipxVersions.scala`
+from a [zipx](https://www.earlyeffect.rocks/zipx/) build.
 Anything the draft does not know how to map is left as a comment, so you can see what still
 needs a decision. The draft is a starting point. Read it before you trust it.
 """,

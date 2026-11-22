@@ -36,6 +36,10 @@ From an agent, the client speaks MCP, the Model Context Protocol, on standard in
 
 All three reach one JVM server, and that server works on one project graph. There are not
 three copies of the build.
+
+If you already build with sbt, Mill, or Bazel, [Why Histos](why-histos.html) is the
+difference in purpose: a program that returns one graph, a skip that is a claim about
+the bytes, and a cache you place and pin yourself.
 """,
       illustration {
         MermoidAscent.diagram(Figures.clients)
