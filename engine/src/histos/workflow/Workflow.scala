@@ -1095,10 +1095,11 @@ object Workflow:
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
 
-  /** Restore, then the suite, then save. The suite writes new products into the restored store. A taken key is deleted
+  /** Restore, then the work, then save. The work writes new products into the restored store. A taken key is deleted
     * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
     * restore hit, because a miss has no key to replace. A matrix is more than one writer, so it does not open this
-    * scope. The doc check restores and does not save. Versions, plugin docs, deploy, workflow, and release do not
+    * scope. A local suite's publish restores and saves: test and scaladoc install that jar and compile the same
+    * sources. The doc check restores and does not save. Versions, plugin docs, deploy, workflow, and release do not
     * either.
     */
   private val StorePath = "~/.cache/histos"
@@ -1341,9 +1342,10 @@ object Workflow:
       s"      - uses: $Checkout",
     ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "publish") ++
       coursierStep(graph.resolution) ++
-      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ List(
-        s"      - run: ${quote("./histos publish local")}"
-      ) ++ script(stageBody) ++ uploadHost
+      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ cacheWrite(
+        cacheNamespace,
+        "./histos publish local",
+      ) ++ script(stageBody) ++ uploadHost ++ storeSave
     lines.mkString("\n")
 
   private def verifyJob(graph: ProjectGraph, task: VerifyTask)(using RenderingShip): String =

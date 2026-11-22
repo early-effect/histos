@@ -196,11 +196,12 @@ The generator installs Histos with `early-effect/histos/.github/actions/setup` a
 `ci.yml` in this repository is that render. Its jobs:
 
 - `affected` computes the modules that changed.
-- `test` runs `./histos test --affected ...` on a pull request or a dispatch. It restores and saves the content store `~/.cache/histos` under a key per pull request.
+- `publish` runs when the suite installs the jar from `./histos publish local`. It compiles that jar, and it restores and saves the content store `~/.cache/histos` under the same key the suite uses: one key per pull request, and `main` on a dispatch.
+- `test` runs `./histos test --affected ...` on a pull request or a dispatch. It restores and saves that same store. On a local suite it waits for `publish`, so the compile `publish` stored is the one `test` restores.
 - `versions` runs `./histos run versions`.
-- `scaladoc` runs `./histos run doc`. This build calls `.docCheck`, so a warning fails the job.
-- `format` runs `./histos fmt --check`. This build declares `.scalafmt`.
-- `cache-seed` compiles on a push to the default branch and saves the main store.
+- `scaladoc` runs `./histos run doc`. This build calls `.docCheck`, so a warning fails the job. It restores the store and does not save it. On a local suite it waits for `publish`.
+- `format` runs `./histos fmt --check`. This build declares `.scalafmt`. It compiles nothing, so it does not restore the store.
+- `cache-seed` compiles on a push to the default branch and saves the main store. A pull request does not run it.
 - `workflow` runs `doctor` and `workflow --check`.
 - `supply-chain` checks the workflows, the lock, and the advisories.
 - `dependency-snapshot` submits the dependency graph on a push to the default branch.
