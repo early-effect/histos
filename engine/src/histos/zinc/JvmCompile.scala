@@ -19,7 +19,8 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
+import sbt.internal.inc.{Analysis, FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
+import xsbti.compile.AnalysisContents
 import sbt.util.Logger
 import xsbti.compile.{
   AnalysisContents,
@@ -64,6 +65,8 @@ final case class CompileRequest(
     checkout: Path,
     /** SHA-256 of each substituted host API jar, in order. Empty when this compile does not substitute one. */
     apiBytes: List[Sha256] = Nil,
+    /** One signature per class the upstream analyses define. Empty when this compile names no upstream. */
+    upstream: List[ClassSignature] = Nil,
 )
 
 final case class CompileOutput(
@@ -644,8 +647,24 @@ object JvmCompile:
       def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
     Files.createDirectories(request.classes)
     Files.createDirectories(request.analysis)
-    val (previous, prior) = priorResult(zinc, request.analysis, known)
-    val setup             = zinc.setup(
+    val (loaded, knownPrior) = priorResult(zinc, request.analysis, known)
+    val stored               = UpstreamApis.read(request.analysis)
+    val change               = UpstreamApis.decide(
+      stored,
+      request.upstream,
+      externalUses(knownPrior),
+      request.upstream.map(_.name).toSet,
+    )
+    val (previous, prior) =
+      change match
+        case UpstreamChange.Same    => (loaded, knownPrior)
+        case UpstreamChange.Precise =>
+          stored.foreach(table => invalidateExternal(converter, request.analysis, knownPrior, table, request.upstream))
+          (loaded, knownPrior)
+        case UpstreamChange.Unproven =>
+          forgetStored(request)
+          (zinc.emptyPreviousResult, Prior.Absent)
+    val setup = zinc.setup(
       lookup,
       false,
       request.analysis,
@@ -698,6 +717,7 @@ object JvmCompile:
               case None =>
                 ApiDigest
                   .write(request.analysis, found)
+                  .flatMap(_ => UpstreamApis.store(request.analysis, request.upstream))
                   .flatMap: _ =>
                     ProductDigest
                       .write(request.analysis, request.classes, request.checkout)
@@ -772,6 +792,57 @@ object JvmCompile:
           case analysis: sbt.internal.inc.Analysis => Optional.of(analysis)
           case _                                   => Optional.empty
       case None => Optional.empty
+
+  /** Drop the products of every source that uses a changed upstream class, and drop their stamps. Zinc recompiles a
+    * source whose product is gone. A stamp left behind points at a file that is no longer there, and Zinc then
+    * recompiles every source. The other sources keep their products and their stamps.
+    */
+  private def invalidateExternal(
+      converter: xsbti.FileConverter,
+      dir: Path,
+      prior: Prior,
+      stored: List[ClassSignature],
+      now: List[ClassSignature],
+  ): Unit =
+    prior match
+      case Prior.Known(found: Analysis) =>
+        val analysis  = found
+        val relations = analysis.relations
+        val changed   = UpstreamApis.changedNames(stored, now)
+        val used      = changed.flatMap(name => name.forms.flatMap(form => relations.usesExternal(form.value)))
+        val sources   = used.flatMap(relations.definesClass)
+        val products  = sources.flatMap(relations.products).toSet
+        val stamps    = analysis.stamps.filter(product => !products.contains(product), Nil, _ => true)
+        val next      = analysis.copy(stamps = stamps)
+        products.foreach: product =>
+          Files.deleteIfExists(converter.toPath(product))
+        val zip   = dir.resolve("inc.zip")
+        val store = FileAnalysisStore.binary(zip.toFile)
+        store
+          .get()
+          .toScala
+          .foreach: contents =>
+            store.set(AnalysisContents.create(next, contents.getMiniSetup))
+      case Prior.Absent | Prior.Unreadable => ()
+
+  /** Whether the previous analysis recorded a member-reference use of this binary name. An absent analysis used
+    * nothing. Inheritance and macro uses are not on the public relation, so a change there is
+    * [[UpstreamChange.Unproven]] and the cell compiles again.
+    */
+  private def externalUses(prior: Prior): BinaryName => Boolean =
+    prior match
+      case Prior.Known(analysis) =>
+        val relations = analysis.relations
+        name => name.forms.exists(form => relations.usesExternal(form.value).nonEmpty)
+      case Prior.Absent | Prior.Unreadable => _ => false
+
+  /** Drop the previous result so the compile that follows has nothing to reuse. A missing directory is already clean.
+    */
+  private def forgetStored(request: CompileRequest): Unit =
+    deleteFiles(request.analysis)
+    deleteProduced(request.classes)
+    Files.createDirectories(request.classes)
+    Files.createDirectories(request.analysis)
 
   /** The previous analysis, when the store has one. An unreadable analysis is not "no previous compile": that would
     * count every source as compiled.

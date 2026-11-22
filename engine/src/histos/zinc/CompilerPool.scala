@@ -99,7 +99,9 @@ private[zinc] final class CompilerPool(
                 .attemptBlockingInterrupt(
                   JvmCompile.once(request, ready, extra, hear, digest, known, onPulse)
                 )
-                .mapError(_ => CompileError.Io(IoFailure(request.classes, IoFault.Write)))
+                .mapError(thrown =>
+                  CompileError.Threw(thrown.getClass.getName + ": " + String.valueOf(thrown.getMessage))
+                )
                 .flatMap(ZIO.fromEither)
                 .flatMap { (output, stored) =>
                   stored match

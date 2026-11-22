@@ -31,6 +31,7 @@ object CompileInputs:
       CompileRow(CompileInput.Sources, sources.value),
       CompileRow(CompileInput.Artifacts, join(request.artifactHashes)),
       CompileRow(CompileInput.Apis, join(request.upstreamApis ++ request.apiBytes)),
+      CompileRow(CompileInput.Upstream, UpstreamApis.digest(request.upstream).value),
       CompileRow(CompileInput.Tools, join(request.compilationTools.map(_.fingerprint))),
     ) ++ request.coverage.toList.map(text => CompileRow(CompileInput.Coverage, text))
 

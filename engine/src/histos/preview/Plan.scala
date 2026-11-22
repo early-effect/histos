@@ -632,7 +632,7 @@ object Plan:
           CompileError.NoSources | CompileError.Outside(_, _) | CompileError.Banned(_, _) | CompileError.Failed(_) |
           CompileError.Toolchain(_) | CompileError.JsLibrary(_) | CompileError.NativeFetch(_) |
           CompileError.NativeOrigin(_) | CompileError.NativeLibrary(_) | CompileError.Stored(_) |
-          CompileError.Remote(_) | CompileError.NoNir(_) =>
+          CompileError.Remote(_) | CompileError.NoNir(_) | CompileError.Threw(_) =>
         PreviewError.Sources(IoFailure(root, IoFault.Walk))
 
   private def testFault(repo: Path, error: ModuleTestError): PreviewError =

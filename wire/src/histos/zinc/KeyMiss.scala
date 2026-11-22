@@ -5,7 +5,7 @@ import histos.{Platform, ProjectName, ScalaVersion}
 
 /** One named compile input. The token is what a miss prints. */
 enum CompileInput:
-  case Scala, Platform, Jdk, Runtime, Flags, Sources, Artifacts, Apis, Tools, Compiler, Coverage
+  case Scala, Platform, Jdk, Runtime, Flags, Sources, Artifacts, Apis, Upstream, Tools, Compiler, Coverage
 
   def token: String = this match
     case Scala     => "scala"
@@ -16,6 +16,7 @@ enum CompileInput:
     case Sources   => "sources"
     case Artifacts => "artifacts"
     case Apis      => "apis"
+    case Upstream  => "upstream"
     case Tools     => "tools"
     case Compiler  => "compiler"
     case Coverage  => "coverage"
@@ -32,6 +33,7 @@ object CompileInput:
       case "sources"   => Some(CompileInput.Sources)
       case "artifacts" => Some(CompileInput.Artifacts)
       case "apis"      => Some(CompileInput.Apis)
+      case "upstream"  => Some(CompileInput.Upstream)
       case "tools"     => Some(CompileInput.Tools)
       case "compiler"  => Some(CompileInput.Compiler)
       case "coverage"  => Some(CompileInput.Coverage)

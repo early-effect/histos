@@ -82,6 +82,9 @@ enum CompileError:
   case Failed(diagnostics: List[CompileDiagnostic])
   case Toolchain(miss: ToolchainMiss)
   case Io(failure: histos.workspace.IoFailure)
+
+  /** `once` threw. The detail is the thrown type and its message. The compile did not finish. */
+  case Threw(detail: String)
   case JsLibrary(miss: JsLibraryMiss)
   case NativeFetch(error: histos.native.NativeFetch)
   case NativeOrigin(error: histos.native.NativeToolchainError)
@@ -104,6 +107,7 @@ enum CompileError:
     case Failed(diagnostics) => diagnostics.map(_.text).mkString("\n")
     case Toolchain(miss)     => miss.message
     case Io(failure)         => failure.message
+    case Threw(detail)       => detail
     case JsLibrary(miss)     => miss.message
     case NativeFetch(error)  => error.message
     case NativeOrigin(error) => error.message
