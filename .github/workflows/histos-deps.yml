@@ -36,7 +36,7 @@ jobs:
           fetch-tags: "true"
           persist-credentials: false
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@440863e64cd2ff222c1eb53c85ac53cc0a184dc8 # 440863e64cd2ff222c1eb53c85ac53cc0a184dc8
+      - uses: early-effect/histos/.github/actions/setup@891cdd1c043b568606320f3dd232edbe75523871 # 891cdd1c043b568606320f3dd232edbe75523871
       - run: ./histos doctor --preflight histos-deps
         env:
           HISTOS_SECRET_PRESENT_HISTOS_APP_ID: ${{ secrets.HISTOS_APP_ID != '' }}
