@@ -2,6 +2,8 @@ package histos.supply
 
 import histos.version.CommitSha
 
+import java.nio.file.Files
+
 import zio.{IO, Ref, ZIO}
 import zio.test.*
 
@@ -41,6 +43,29 @@ object PullRequestSpec extends ZIOSpecDefault:
           text.contains("opened"),
         )
     },
+    test("a path or a longer remote name is not the branch tip") {
+      ZIO.scoped:
+        for
+          repo <- ZIO.acquireRelease(ZIO.attemptBlocking(Files.createTempDirectory("histos-tip")).orDie)(path =>
+            ZIO.attemptBlocking(deleteTree(path)).orDie
+          )
+          _ <- command(repo, "git", "init", "-q") *>
+            command(repo, "git", "config", "user.email", "deps@example.com") *>
+            command(repo, "git", "config", "user.name", "deps") *>
+            ZIO.attemptBlocking(Files.createDirectories(repo.resolve("histos"))).orDie *>
+            command(repo, "git", "add", "histos") *>
+            command(repo, "git", "commit", "-q", "--allow-empty", "-m", "path")
+          head <- command(repo, "git", "rev-parse", "HEAD")
+          _    <- command(
+            repo,
+            "git",
+            "update-ref",
+            "refs/remotes/origin/histos/deps-longer",
+            head.trim,
+          )
+          found <- ZIO.serviceWithZIO[GitRead](_.tip(repo, weekly))
+        yield assertTrue(found.isEmpty, head.trim.nonEmpty)
+    }.provide(GitRead.live).mapError(message => SupplyFault.Refused(message, 1)),
     test("a refused branch create fails before a commit") {
       exercise(weekly, List(Reply(422, """{"message":"Reference already exists"}"""))).map: (result, sent) =>
         assertTrue(
@@ -86,6 +111,19 @@ object PullRequestSpec extends ZIOSpecDefault:
         .either
       calls <- sent.get
     yield (text, calls)
+
+  private def command(repo: java.nio.file.Path, args: String*): ZIO[Any, String, String] =
+    ZIO
+      .attemptBlocking:
+        val process = new ProcessBuilder(args*).directory(repo.toFile).redirectErrorStream(true).start()
+        val text    = String(process.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
+        (process.waitFor(), text)
+      .mapError(_.getMessage)
+      .flatMap: (code, text) =>
+        if code == 0 then ZIO.succeed(text) else ZIO.fail(s"${args.mkString(" ")} exited $code")
+
+  private def deleteTree(root: java.nio.file.Path): Unit =
+    if Files.exists(root) then Files.walk(root).sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
 
   private def script(rest: Ref[List[Reply]], sent: Ref[List[Exchange]]): Net =
     new Net:

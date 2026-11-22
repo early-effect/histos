@@ -46,7 +46,9 @@ object GitRead:
       sha(repo, "HEAD")
 
     def tip(repo: Path, branch: BranchName): UIO[Option[CommitSha]] =
-      sha(repo, branch.value)
+      sha(repo, s"refs/heads/${branch.value}").flatMap:
+        case Some(found) => ZIO.some(found)
+        case None        => sha(repo, s"refs/remotes/origin/${branch.value}")
 
     def changed(repo: Path): UIO[List[String]] =
       git(repo, "diff", "--name-only", "HEAD").map(
@@ -54,7 +56,8 @@ object GitRead:
       )
 
     private def sha(repo: Path, rev: String): UIO[Option[CommitSha]] =
-      git(repo, "rev-parse", rev).map(_.flatMap(text => CommitSha.from(text.trim).toOption))
+      git(repo, "rev-parse", "--verify", "--quiet", s"$rev^{commit}")
+        .map(_.flatMap(text => CommitSha.from(text.trim).toOption))
 
     /** The output of a git that exited zero. */
     private def git(repo: Path, args: String*): UIO[Option[String]] =
