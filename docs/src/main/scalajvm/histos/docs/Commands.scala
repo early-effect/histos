@@ -221,9 +221,9 @@ does not change `histos.version`.
 object CommandsDependencies extends DocSpec:
   def doc = page("Commands: dependencies")(
     md"""
-A locked build reads `dependencies.lock` and does not resolve. A build that solves
-resolves from `histos.scala` and remembers the result in `.histos/resolution`. `resolve`
-writes or checks the lock. `deps` looks at the jars the build is actually using.
+A hermetic build reads `dependencies.lock` and does not resolve. A solved build resolves
+from `histos.scala` and remembers the result. The Resolution page is that choice.
+`resolve` writes or checks the lock. `deps` looks at the jars the build is actually using.
 """,
     cite[histos.cli.Help.type](_.flags),
     section("resolve")(

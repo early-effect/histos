@@ -14,6 +14,9 @@ object FirstProjectSuite extends DocSpecSuite:
 object BuildModelSuite extends DocSpecSuite:
   def doc = BuildModel.doc
 
+object ResolutionSuite extends DocSpecSuite:
+  def doc = ResolutionPage.doc
+
 object CommandsInfoSuite extends DocSpecSuite:
   def doc = CommandsInfo.doc
 

@@ -228,6 +228,7 @@ object PluginRuntime:
                     upstream,
                     env,
                     scheduler,
+                    report,
                     lock,
                     caller,
                     events,
@@ -283,6 +284,7 @@ object PluginRuntime:
         upstream: String,
         env: Map[String, String],
         scheduler: Scheduler,
+        report: histos.resolve.ResolutionService,
         lock: IO[PluginFault, DependencyLock],
         caller: InvocationContext,
         events: PluginEvents.Invocation,
@@ -296,9 +298,11 @@ object PluginRuntime:
               .hash(hashRequest(id, task, env, passed))
               .mapError(error => PluginFault.Task(error))
             inputs   <- withUpstream(hashed.inputs, upstream)
-            compiled <- PluginCells.classpath(repo, graph, task, lock)
-            linked   <- PluginCells.scripts(repo, graph, task).mapError(PluginFault.Task(_))
-            action   <- ZIO.fromEither(
+            compiled <- PluginCells
+              .classpath(repo, graph, task, lock)
+              .provideSome[Resolve](zio.ZLayer.succeed(report))
+            linked <- PluginCells.scripts(repo, graph, task).mapError(PluginFault.Task(_))
+            action <- ZIO.fromEither(
               actionOf(id, task, inputs).left.map(error => PluginFault.Task(error))
             )
             held <- Ref.make[Option[PluginOutput]](None)

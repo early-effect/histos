@@ -71,7 +71,7 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       task: DeclaredTask,
       lock: IO[PluginFault, DependencyLock],
-  ): ZIO[Resolve, PluginFault, List[CellClasspath]] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, List[CellClasspath]] =
     ZIO
       .fromEither(selected(graph, task).left.map(PluginFault.Task(_)))
       .flatMap: found =>
@@ -225,7 +225,9 @@ private[load] object PluginCells:
           sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
           _       <- ZIO.unless(sources.isEmpty)(
             compileTests(repo, graph, cell, sources, jdk, origin, lock)
-              .provideSomeLayer[Resolve & histos.cache.ContentStore & histos.schedule.RemoteCache](compilers)
+              .provideSomeLayer[
+                Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.schedule.RemoteCache
+              ](compilers)
               .mapError(PluginFault.Tested(_))
           )
         yield ()
@@ -240,7 +242,8 @@ private[load] object PluginCells:
       origin: NativeOrigin,
       lock: DependencyLock,
   ): ZIO[
-    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache,
+    Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.zinc.Compilers &
+      histos.schedule.RemoteCache,
     ModuleTestError,
     Unit,
   ] =
@@ -256,7 +259,9 @@ private[load] object PluginCells:
       sources = None,
       classesWritten = None,
     )
-    for _ <- TestCompile
+    for
+      service <- ZIO.service[histos.resolve.ResolutionService]
+      _       <- TestCompile
         .compiledTests(
           repo,
           modules,
@@ -273,7 +278,7 @@ private[load] object PluginCells:
         .provideSome[
           Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.schedule.RemoteCache
         ](
-          zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+          zio.ZLayer.fromZIO(LockedTools.make(lock, graph, service))
         )
     yield ()
 
@@ -282,7 +287,7 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       cell: Cell,
       lock: DependencyLock,
-  ): ZIO[Resolve, PluginFault, CellClasspath] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, CellClasspath] =
     pathsOf(repo, graph, cell, lock, ApiDep.plugin(cell.module, graph))
 
   private def pathsOf(
@@ -291,19 +296,20 @@ private[load] object PluginCells:
       cell: Cell,
       lock: DependencyLock,
       pin: Boolean,
-  ): ZIO[Resolve, PluginFault, CellClasspath] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, CellClasspath] =
     val modules      = modulesOf(graph)
     val repositories = BuildResolvers(graph.resolvers)
     for
-      compile <- compileClasspath(repo, cell, modules, lock, repositories, pin)
-        .provideSome[Resolve](
-          zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+      service <- ZIO.service[histos.resolve.ResolutionService]
+      compile <- compileClasspath(repo, cell, modules, repositories, pin)
+        .provideSome[Resolve & histos.resolve.ResolutionService](
+          zio.ZLayer.fromZIO(LockedTools.make(lock, graph, service))
         )
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
       test    <-
         if sources.isEmpty then ZIO.succeed(compile)
         else
-          testJars(cell, lock, repositories)
+          testJars(cell, repositories)
             .map: extra =>
               val kept = if pin then extra.filterNot(ApiDep.resolvedJar) else extra
               testClasses(repo, cell) :: (compile ++ kept)
@@ -319,10 +325,9 @@ private[load] object PluginCells:
       repo: Path,
       cell: Cell,
       modules: List[Module],
-      lock: DependencyLock,
       repositories: Repositories,
       pin: Boolean,
-  ): ZIO[Resolve & LockedTools, PluginFault, List[Path]] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService & LockedTools, PluginFault, List[Path]] =
     for
       read <- UpstreamCells
         .read(
@@ -336,7 +341,6 @@ private[load] object PluginCells:
       upstream = read.map(_.classes)
       fetched <- materialize(
         cell,
-        lock,
         repositories,
         ClasspathScope.Compile,
         cell.module.dependencies,
@@ -345,7 +349,6 @@ private[load] object PluginCells:
       transitive <- ZIO.foreach(read): found =>
         materialize(
           Cell(found.module, found.version, cell.platform),
-          lock,
           repositories,
           ClasspathScope.Compile,
           found.module.dependencies,
@@ -361,9 +364,8 @@ private[load] object PluginCells:
 
   private def testJars(
       cell: Cell,
-      lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, PluginFault, List[Path]] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, List[Path]] =
     val compileDeps = Dep.select(cell.module.dependencies, cell.platform)
     val testDeps    = Dep.select(cell.module.testDependencies, cell.platform)
     if testDeps.isEmpty then ZIO.succeed(Nil)
@@ -371,14 +373,12 @@ private[load] object PluginCells:
       for
         compile <- materialize(
           cell,
-          lock,
           repositories,
           ClasspathScope.Compile,
           cell.module.dependencies,
         )
         both <- materialize(
           cell,
-          lock,
           repositories,
           ClasspathScope.Test,
           compileDeps ++ testDeps,
@@ -387,11 +387,10 @@ private[load] object PluginCells:
 
   private def materialize(
       cell: Cell,
-      lock: DependencyLock,
       repositories: Repositories,
       scope: ClasspathScope,
       dependencies: List[Dep],
-  ): ZIO[Resolve, PluginFault, List[Path]] =
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, List[Path]] =
     val request = ResolveCell(
       cell.module.name,
       Dep.select(dependencies, cell.platform),
@@ -400,8 +399,8 @@ private[load] object PluginCells:
       repositories,
       scope,
     )
-    Resolve
-      .materialize(request, lock)
+    ZIO
+      .serviceWithZIO[histos.resolve.ResolutionService](_.module(request))
       .mapBoth(PluginFault.Resolved(_), _.artifacts.map(_.path))
 
   private def testSources(
