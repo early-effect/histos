@@ -873,6 +873,245 @@ artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
 evict org.scala-lang scala-library 2.13.4 2.13.18
 evict org.scala-lang scala3-library_3 3.3.6 3.3.8
+cell docs 3.10.1 jvm
+direct rocks.earlyeffect specular-core 0.21.4 binary
+direct rocks.earlyeffect specular-site 0.21.4 binary
+direct rocks.earlyeffect early-effect-docs-theme 0.21.4 binary
+direct rocks.earlyeffect mermoid-ascent 0.2.0 binary
+direct org.scala-lang scala3-tasty-inspector 3.10.1 binary
+direct dev.zio zio 2.1.27 binary
+artifact rocks.earlyeffect specular-core_3 0.21.4 dd8723f0ef6a30b4524aac7dfced5685f734e0995a561947463f6645f3650bc6 central
+artifact rocks.earlyeffect specular-site_3 0.21.4 8bc9d7656aad2e9315c0b5cea2e5f7287c06867548e23d1ca2e33951f571522f central
+artifact rocks.earlyeffect early-effect-docs-theme_3 0.21.4 15bcebf2c415d80c2792749a8eeebf9ffa45798cbdccf2743c41b09ba6e0ca46 central
+artifact rocks.earlyeffect mermoid-ascent_3 0.2.0 7ae6ab9a53aecabcf62f4c0913975d8fe15e4c791b56a0e026e6653e58ad949f central
+artifact org.scala-lang scala3-tasty-inspector_3 3.10.1 fe8ca32de2484877bd588949000ae531608a91c682ec9fbeafa961b4a119c173 central
+artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
+artifact dev.zio zio-json_3 1.1.0 0ba7e691c657da15f487b0b0619c2934b88520a657f753dae1fd543c35cab40d central
+artifact rocks.earlyeffect ascent-core_3 0.10.1 6580587e60af9791b3b8b08dc0288a9ae8cfe5a1aa889e1d9ce275d28b540a28 central
+artifact rocks.earlyeffect ascent-css_3 0.10.1 d80770e229267288fe1c283057a13be4f3e9e5529b1217f6b416e0ddb7bf0afd central
+artifact org.scalameta scalameta_3 4.17.3 ee5862f7909ae8a72fb01e5eb93db5c95abb4b350b564def4c862b8c52337cc4 central
+artifact org.scalameta scalafmt-core_3 3.11.5 db284b94f9ea777722137ba601964f8d1f7151732cf82cf5da38e6484248576c central
+artifact rocks.earlyeffect ascent-html_3 0.10.0 36dc1491182652c08096a839660f98ad55f1580a7f92f7c3576a62719c63e35e central
+artifact rocks.earlyeffect ascent-preview_3 0.11.1 8cf7dc890a27fe4fbdccb0921c2af09ba27e9d38566b9445d92794991c550f8d central
+artifact rocks.earlyeffect heddle_3 0.12.0 d68fa43fc987f2c71bdd743f748971205c9951414653e551c7529ec7c2788964 central
+artifact org.commonmark commonmark 0.30.0 090f0a758ac2f4f51aa86dff9dff0fdf7403666d0efd29f59886dc8e8b1eac53 central
+artifact org.commonmark commonmark-ext-gfm-tables 0.30.0 5e28b48e66f7697bee4dfeb4c8f8f08a84a2827d91b53bbd9bd5445e82d14bda central
+artifact rocks.earlyeffect mermoid_3 0.2.0 3706ee347d7ef1de383c0879f7acdc3a3d465cd32609761e5a13061a474dd796 central
+artifact org.scala-lang scala3-library_3 3.10.1 de6f5d7f9175fd0c1043bb2ca26f349959e00d4c9dbfd1a1f30f6144843a3d13 central
+artifact org.scala-lang scala3-compiler_3 3.10.1 786e93def1988c1c59d6348d335333f3624cfaee0d4191cbcc9040b46aa11992 central
+artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
+artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
+artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
+artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
+artifact rocks.earlyeffect ascent-dom-types_3 0.11.1 a594fb76cf4bdabd4aa4dc36219c157c698faa83e031c4120fb606538c9b2a3f central
+artifact com.lihaoyi fastparse_3 3.1.1 e01290ae240b88be4772e1afacf7cc6552a83fa23a98c6e1fdff4ad3028f1cf3 central
+artifact org.scalameta parsers_3 4.17.3 856725ca406c1343d0bf9dd8f0a7ef56298379f8c70b1308cfb34879ce88e033 central
+artifact org.scalameta scalafmt-sysops_3 3.11.5 bda82f1285bfc5eee28a7c6d853b00b81a68da1ff7a88cc67ed2fbf8afbdcafd central
+artifact org.scalameta scalafmt-config_3 3.11.5 472494d4ecd00df4ebcdef88229730979df25d157e5f4f2e5fea3250edfd645f central
+artifact org.scalameta scalafmt-macros_3 3.11.5 daff3dca549b0686219e0088d1869afc80863f62fa5c0decc72c6815480a1185 central
+artifact org.scalameta mdoc-parser_3 2.9.1 694bf0e88858a1552f4cd089fb62a5544724e489385ca358e5ee51a94f42b92f central
+artifact rocks.earlyeffect ascent-mount-engine_3 0.11.0 d525ea1fe77d361569b13adea00f0650d2d4461c40b9fb4609383efdcf5b0a66 central
+artifact io.github.kitlangton neotype_3 0.7.2 bd1ce033b8fd70c2b693afa36aef4c161ef2557fd00c7e1c82b9fc52ec91314e central
+artifact org.scala-lang scala-library 3.10.1 ff0a773187f827ea7b596e4f370098abc417d6a4de24858ff907bbb6af97b9a5 central
+artifact org.scala-lang scala3-interfaces 3.10.1 a39fb9ea2bbacfc9a4c602a28bc9954fea8d2c48ee9e366fb3485160eb151dfc central
+artifact org.scala-lang tasty-core_3 3.10.1 536b6c5b85ee5a59986b218bc8143fd8a8b59d1bbbb218a9c780f96b1bcca6fc central
+artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
+artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754eca7c234f61224a53d6bfa661 central
+artifact org.scala-sbt compiler-interface 1.12.1 8571d6dae6c3f7f4e782d0bda16ca832e06f749f60cd0e1c66d28dba621c27a9 central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
+artifact com.lihaoyi sourcecode_3 0.4.4 40cc148f8baab769de72892443476a05eed7471a9b5cd2cbc2a47bf22cad30d3 central
+artifact com.lihaoyi geny_3 1.1.0 45663793503bb2acf44736d74f1dbbcb69c953ba6c0bf91a50b640cb3bfd69b5 central
+artifact org.scalameta trees_3 4.17.3 59796996a4dd2dc6cf33e70e283296cb0dc12c2c3e9d6f328160e13048ed677c central
+artifact org.scalameta metaconfig-core_3 0.18.7 7d9306989f345b5509571d98eb389f1885bf22a008fb105311bca3b1450a66fa central
+artifact org.scalameta metaconfig-typesafe-config_3 0.18.7 b29167d5581dff78abd12f2d9a07661d0c3d70d6941db49cf9a754f0b43e621f central
+artifact rocks.earlyeffect ascent-dom-core_3 0.11.1 7f7229226d8ec0bace1797b02205cab5bd414e258b53e12d05493f7c18544a79 central
+artifact io.github.kitlangton neotype-internal_3 0.7.2 e59814e1eb7f39b4548efe3a8f5b44022e0869a7815f0bd70d41a2e179b95083 central
+artifact io.github.kitlangton comptime_3 0.7.2 c200237eb2220429cebe7088a65ee44786532e0762906c29cb52c15845befb1a central
+artifact org.ow2.asm asm 9.11.1 ae4e6e10d59d0a1500317764b21881ad883f8550e33c66e6142f7032c6fb566c central
+artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1f2a2029141fa3f483154a central
+artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
+artifact org.scala-sbt util-interface 1.12.4 cd6916d1e622c3e662bf58d739babae022a582ec48107f5fb84b25cc56b0c3dc central
+artifact org.scalameta common_3 4.17.3 96e571322821ff3574357a5eb69cdca6409fd3c43c1adca47fd92a11f15d1bd1 central
+artifact org.scalameta io_2.13 4.17.3 c9aa7493cf90a1acafcc96dad84670409aeb3b5e280a38ce40332eb6a21cf49f central
+artifact org.scalameta trees2_2.13 4.17.3 3f3729adf6faa48802f8b7c77ac67a6077cb99073596dc3eaf48d6ca9371fe55 central
+artifact org.scalameta metaconfig-pprint_3 0.18.7 795e95014e7d7ea0e3e796bf7e637531c7d33f82ab07c372d420e0444c754e3e central
+artifact org.typelevel paiges-core_3 0.4.4 e84067f072fa7ccd3e31d491fedbf21267be75dbc7f8736c268c3d4b46f88d81 central
+artifact org.scala-lang scala-reflect 2.13.18 6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b central
+artifact com.typesafe config 1.4.9 47d13e3196c84f2a8ccd014ae563738c3da5b7406b38e03505ec0601a2f4fc37 central
+artifact org.scalameta common2_2.13 4.17.3 d16050f3557e472ac3489501edd4d941d975bc0a6f72a54363b6598e29a972d0 central
+artifact com.lihaoyi fansi_3 0.5.1 df4b447704664563cb0fba9cf52d3fc7509654ab592824d5c2eb4647e6701ac4 central
+evict com.lihaoyi sourcecode_3 0.4.0 0.4.4
+evict dev.zio zio-streams_3 2.1.26 2.1.27
+evict dev.zio zio-test_3 2.1.26 2.1.27
+evict dev.zio zio_3 2.1.26 2.1.27
+evict org.scala-lang scala-library 2.12.21 3.10.1
+evict org.scala-lang scala-library 2.13.15 3.10.1
+evict org.scala-lang scala-library 2.13.18 3.10.1
+evict org.scala-lang scala-library 2.13.4 3.10.1
+evict org.scala-lang scala-library 3.9.0 3.10.1
+evict org.scala-lang scala-reflect 2.13.15 2.13.18
+evict org.scala-lang scala-reflect 2.13.4 2.13.18
+evict org.scala-lang scala3-compiler_3 3.3.8 3.10.1
+evict org.scala-lang scala3-library_3 3.3.1 3.10.1
+evict org.scala-lang scala3-library_3 3.3.3 3.10.1
+evict org.scala-lang scala3-library_3 3.3.6 3.10.1
+evict org.scala-lang scala3-library_3 3.3.8 3.10.1
+evict org.scala-lang scala3-library_3 3.9.0 3.10.1
+evict org.scala-lang scala3-tasty-inspector_3 3.9.0 3.10.1
+test docs 3.10.1 jvm
+direct rocks.earlyeffect specular-core 0.21.4 binary
+direct rocks.earlyeffect specular-site 0.21.4 binary
+direct rocks.earlyeffect early-effect-docs-theme 0.21.4 binary
+direct rocks.earlyeffect mermoid-ascent 0.2.0 binary
+direct org.scala-lang scala3-tasty-inspector 3.10.1 binary
+direct dev.zio zio 2.1.27 binary
+direct rocks.earlyeffect specular-zio-test 0.21.4 binary
+direct dev.zio zio-test 2.1.27 binary
+direct dev.zio zio-test-sbt 2.1.27 binary
+artifact rocks.earlyeffect specular-core_3 0.21.4 dd8723f0ef6a30b4524aac7dfced5685f734e0995a561947463f6645f3650bc6 central
+artifact rocks.earlyeffect specular-site_3 0.21.4 8bc9d7656aad2e9315c0b5cea2e5f7287c06867548e23d1ca2e33951f571522f central
+artifact rocks.earlyeffect early-effect-docs-theme_3 0.21.4 15bcebf2c415d80c2792749a8eeebf9ffa45798cbdccf2743c41b09ba6e0ca46 central
+artifact rocks.earlyeffect mermoid-ascent_3 0.2.0 7ae6ab9a53aecabcf62f4c0913975d8fe15e4c791b56a0e026e6653e58ad949f central
+artifact org.scala-lang scala3-tasty-inspector_3 3.10.1 fe8ca32de2484877bd588949000ae531608a91c682ec9fbeafa961b4a119c173 central
+artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact rocks.earlyeffect specular-zio-test_3 0.21.4 153e897161846f500e9c80f4cbdbcc74df792e167bb32ecfa97b5902656c6da8 central
+artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
+artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+artifact dev.zio zio-json_3 1.1.0 0ba7e691c657da15f487b0b0619c2934b88520a657f753dae1fd543c35cab40d central
+artifact rocks.earlyeffect ascent-core_3 0.10.1 6580587e60af9791b3b8b08dc0288a9ae8cfe5a1aa889e1d9ce275d28b540a28 central
+artifact rocks.earlyeffect ascent-css_3 0.10.1 d80770e229267288fe1c283057a13be4f3e9e5529b1217f6b416e0ddb7bf0afd central
+artifact org.scalameta scalameta_3 4.17.3 ee5862f7909ae8a72fb01e5eb93db5c95abb4b350b564def4c862b8c52337cc4 central
+artifact org.scalameta scalafmt-core_3 3.11.5 db284b94f9ea777722137ba601964f8d1f7151732cf82cf5da38e6484248576c central
+artifact rocks.earlyeffect ascent-html_3 0.10.0 36dc1491182652c08096a839660f98ad55f1580a7f92f7c3576a62719c63e35e central
+artifact rocks.earlyeffect ascent-preview_3 0.11.1 8cf7dc890a27fe4fbdccb0921c2af09ba27e9d38566b9445d92794991c550f8d central
+artifact rocks.earlyeffect heddle_3 0.12.0 d68fa43fc987f2c71bdd743f748971205c9951414653e551c7529ec7c2788964 central
+artifact org.commonmark commonmark 0.30.0 090f0a758ac2f4f51aa86dff9dff0fdf7403666d0efd29f59886dc8e8b1eac53 central
+artifact org.commonmark commonmark-ext-gfm-tables 0.30.0 5e28b48e66f7697bee4dfeb4c8f8f08a84a2827d91b53bbd9bd5445e82d14bda central
+artifact rocks.earlyeffect mermoid_3 0.2.0 3706ee347d7ef1de383c0879f7acdc3a3d465cd32609761e5a13061a474dd796 central
+artifact org.scala-lang scala3-library_3 3.10.1 de6f5d7f9175fd0c1043bb2ca26f349959e00d4c9dbfd1a1f30f6144843a3d13 central
+artifact org.scala-lang scala3-compiler_3 3.10.1 786e93def1988c1c59d6348d335333f3624cfaee0d4191cbcc9040b46aa11992 central
+artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
+artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
+artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
+artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
+artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
+artifact rocks.earlyeffect ascent-dom-types_3 0.11.1 a594fb76cf4bdabd4aa4dc36219c157c698faa83e031c4120fb606538c9b2a3f central
+artifact com.lihaoyi fastparse_3 3.1.1 e01290ae240b88be4772e1afacf7cc6552a83fa23a98c6e1fdff4ad3028f1cf3 central
+artifact org.scalameta parsers_3 4.17.3 856725ca406c1343d0bf9dd8f0a7ef56298379f8c70b1308cfb34879ce88e033 central
+artifact org.scalameta scalafmt-sysops_3 3.11.5 bda82f1285bfc5eee28a7c6d853b00b81a68da1ff7a88cc67ed2fbf8afbdcafd central
+artifact org.scalameta scalafmt-config_3 3.11.5 472494d4ecd00df4ebcdef88229730979df25d157e5f4f2e5fea3250edfd645f central
+artifact org.scalameta scalafmt-macros_3 3.11.5 daff3dca549b0686219e0088d1869afc80863f62fa5c0decc72c6815480a1185 central
+artifact org.scalameta mdoc-parser_3 2.9.1 694bf0e88858a1552f4cd089fb62a5544724e489385ca358e5ee51a94f42b92f central
+artifact rocks.earlyeffect ascent-mount-engine_3 0.11.0 d525ea1fe77d361569b13adea00f0650d2d4461c40b9fb4609383efdcf5b0a66 central
+artifact io.github.kitlangton neotype_3 0.7.2 bd1ce033b8fd70c2b693afa36aef4c161ef2557fd00c7e1c82b9fc52ec91314e central
+artifact org.scala-lang scala-library 3.10.1 ff0a773187f827ea7b596e4f370098abc417d6a4de24858ff907bbb6af97b9a5 central
+artifact org.scala-lang scala3-interfaces 3.10.1 a39fb9ea2bbacfc9a4c602a28bc9954fea8d2c48ee9e366fb3485160eb151dfc central
+artifact org.scala-lang tasty-core_3 3.10.1 536b6c5b85ee5a59986b218bc8143fd8a8b59d1bbbb218a9c780f96b1bcca6fc central
+artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
+artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754eca7c234f61224a53d6bfa661 central
+artifact org.scala-sbt compiler-interface 1.12.1 8571d6dae6c3f7f4e782d0bda16ca832e06f749f60cd0e1c66d28dba621c27a9 central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
+artifact com.lihaoyi sourcecode_3 0.4.4 40cc148f8baab769de72892443476a05eed7471a9b5cd2cbc2a47bf22cad30d3 central
+artifact com.lihaoyi geny_3 1.1.0 45663793503bb2acf44736d74f1dbbcb69c953ba6c0bf91a50b640cb3bfd69b5 central
+artifact org.scalameta trees_3 4.17.3 59796996a4dd2dc6cf33e70e283296cb0dc12c2c3e9d6f328160e13048ed677c central
+artifact org.scalameta metaconfig-core_3 0.18.7 7d9306989f345b5509571d98eb389f1885bf22a008fb105311bca3b1450a66fa central
+artifact org.scalameta metaconfig-typesafe-config_3 0.18.7 b29167d5581dff78abd12f2d9a07661d0c3d70d6941db49cf9a754f0b43e621f central
+artifact rocks.earlyeffect ascent-dom-core_3 0.11.1 7f7229226d8ec0bace1797b02205cab5bd414e258b53e12d05493f7c18544a79 central
+artifact io.github.kitlangton neotype-internal_3 0.7.2 e59814e1eb7f39b4548efe3a8f5b44022e0869a7815f0bd70d41a2e179b95083 central
+artifact io.github.kitlangton comptime_3 0.7.2 c200237eb2220429cebe7088a65ee44786532e0762906c29cb52c15845befb1a central
+artifact org.ow2.asm asm 9.11.1 ae4e6e10d59d0a1500317764b21881ad883f8550e33c66e6142f7032c6fb566c central
+artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1f2a2029141fa3f483154a central
+artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
+artifact org.scala-sbt util-interface 1.12.4 cd6916d1e622c3e662bf58d739babae022a582ec48107f5fb84b25cc56b0c3dc central
+artifact org.scalameta common_3 4.17.3 96e571322821ff3574357a5eb69cdca6409fd3c43c1adca47fd92a11f15d1bd1 central
+artifact org.scalameta io_2.13 4.17.3 c9aa7493cf90a1acafcc96dad84670409aeb3b5e280a38ce40332eb6a21cf49f central
+artifact org.scalameta trees2_2.13 4.17.3 3f3729adf6faa48802f8b7c77ac67a6077cb99073596dc3eaf48d6ca9371fe55 central
+artifact org.scalameta metaconfig-pprint_3 0.18.7 795e95014e7d7ea0e3e796bf7e637531c7d33f82ab07c372d420e0444c754e3e central
+artifact org.typelevel paiges-core_3 0.4.4 e84067f072fa7ccd3e31d491fedbf21267be75dbc7f8736c268c3d4b46f88d81 central
+artifact org.scala-lang scala-reflect 2.13.18 6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b central
+artifact com.typesafe config 1.4.9 47d13e3196c84f2a8ccd014ae563738c3da5b7406b38e03505ec0601a2f4fc37 central
+artifact org.scalameta common2_2.13 4.17.3 d16050f3557e472ac3489501edd4d941d975bc0a6f72a54363b6598e29a972d0 central
+artifact com.lihaoyi fansi_3 0.5.1 df4b447704664563cb0fba9cf52d3fc7509654ab592824d5c2eb4647e6701ac4 central
+evict com.lihaoyi sourcecode_3 0.4.0 0.4.4
+evict dev.zio zio-streams_3 2.1.26 2.1.27
+evict dev.zio zio-test-sbt_3 2.1.26 2.1.27
+evict dev.zio zio-test_3 2.1.26 2.1.27
+evict dev.zio zio_3 2.1.26 2.1.27
+evict org.scala-lang scala-library 2.12.21 3.10.1
+evict org.scala-lang scala-library 2.13.15 3.10.1
+evict org.scala-lang scala-library 2.13.18 3.10.1
+evict org.scala-lang scala-library 2.13.4 3.10.1
+evict org.scala-lang scala-library 3.9.0 3.10.1
+evict org.scala-lang scala-reflect 2.13.15 2.13.18
+evict org.scala-lang scala-reflect 2.13.4 2.13.18
+evict org.scala-lang scala3-compiler_3 3.3.8 3.10.1
+evict org.scala-lang scala3-library_3 3.3.1 3.10.1
+evict org.scala-lang scala3-library_3 3.3.3 3.10.1
+evict org.scala-lang scala3-library_3 3.3.6 3.10.1
+evict org.scala-lang scala3-library_3 3.3.8 3.10.1
+evict org.scala-lang scala3-library_3 3.9.0 3.10.1
+evict org.scala-lang scala3-tasty-inspector_3 3.9.0 3.10.1
+cell docs 3.10.1 js
+direct rocks.earlyeffect specular-core 0.21.4 binary
+direct dev.zio zio 2.1.27 binary
+artifact rocks.earlyeffect specular-core_sjs1_3 0.21.4 063dc6e1c78401a88eb9f28da1e2e2171808a1ad8d86fd3f9aa7db43eb8e1740 central
+artifact dev.zio zio_sjs1_3 2.1.27 183e6757dc939e9d865a5520b14170fbef6fa89c211e0a6281aa4038d6abf482 central
+artifact dev.zio zio-test_sjs1_3 2.1.27 591708c3a05a4269dd5ebf5b30cc9b2725d1e58f9ad6b66113167b7c63bdda98 central
+artifact dev.zio zio-json_sjs1_3 1.1.0 c7325829de15f431cae7aaa0118e4aa362d210a3c0de25d59d594272bc7d3fa7 central
+artifact rocks.earlyeffect ascent-js_sjs1_3 0.11.0 3969c4748d238db46e7f41ca3680795bec46d19ea8e664eea00ecf9f21f242ae central
+artifact org.scala-js scalajs-dom_sjs1_3 2.8.1 6dd9db9a5850a5063ada815a81abcb9efdc16a3c652f888cd15dba7928034613 central
+artifact dev.zio zio-internal-macros_sjs1_3 2.1.27 7abbdebb7451811b56cc1e23bf28f22a5f907bd6935fed2f42b2240d369441dd central
+artifact dev.zio zio-stacktracer_sjs1_3 2.1.27 0dc996ebb88ff0752d73c072f3eab5fac20aef0155db3d4ad7fae29e1cb1f842 central
+artifact org.scala-lang scala3-library_sjs1_3 3.9.0 682650e37eadfcc80ce2eead917af8c85de3014bc5aaa00473ac545f1d1422fb central
+artifact org.scala-js scalajs-library_2.13 1.22.0 b2d2299545962a3b8ae9e9e04dcc2a158a6ee3fbae9117ef3348a118a5192ede central
+artifact dev.zio izumi-reflect_sjs1_3 3.0.11 bae6274af7dc6155ceaeb96836b704bb2cb641023fe91639cef1fe2d9eeecb1b central
+artifact org.scala-lang.modules scala-collection-compat_sjs1_3 2.14.0 9e027058bd74aa75857373cbbb673615db2f3b6b594ef66dea1436b681a70d14 central
+artifact org.scala-js scala-js-macrotask-executor_sjs1_3 1.1.1 2a7c9664a759c153b5ea85cc7c36850c571abe37267386f4eb0ce1d5dbe346b6 central
+artifact org.scala-js scalajs-weakreferences_sjs1_2.13 1.0.0 833f26bf9c52ca9a905da42504fa27c9f96297dbc2496091bb6eeb6071541e3c central
+artifact dev.zio zio-streams_sjs1_3 2.1.27 9e48d5b9b524bcb120058710ad7a5374e48d010dd7df79cc7e668b3852627f4b central
+artifact org.portable-scala portable-scala-reflect_sjs1_2.13 1.1.3 39b942ebce51e6e17c778afbb02a510d30089c6c0048393941ef92859f20c318 central
+artifact io.github.cquiroz scala-java-time_sjs1_3 2.7.0 ace28ea52202d530f823452ac09b329d5ab9d62ff9d5a30f549b0936ce065e11 central
+artifact io.github.cquiroz scala-java-time-tzdb_sjs1_3 2.7.0 4a38b046c0433e094b809a414acaf3be197e3127d048123fcba44452b2d1f5d9 central
+artifact rocks.earlyeffect ascent-core_sjs1_3 0.10.1 2786686e3b55099a633343bc38fde95ab45abcaca2ec1770f8527b3c4f622b7d central
+artifact rocks.earlyeffect ascent-dom-facade_sjs1_3 0.11.1 70b91ec06fccc0a34b2ecbfaed8c8f796378c42fafa7b3a2bf9f1672ad0cf613 central
+artifact rocks.earlyeffect ascent-css_sjs1_3 0.10.1 c2d39d7b3f4ce38a76b9690097acd2081de65f3f3f47e620bc85e58b531ce16e central
+artifact rocks.earlyeffect ascent-mount-engine_sjs1_3 0.11.0 17e3d9dbd8d089f8847791031a4db68227531420e5163973115c86ffb83ab13d central
+artifact org.scala-js scalajs-scalalib_2.13 3.9.0 1a455701f5683d3bf7c509ebd80bc8f08f882fe478a9be1a87d6b65dea0642c2 central
+artifact org.scala-lang scala-library 3.9.0 b844bf6fb3080c73df6b9c523b7a69b9ef4a980bb15e5c37c35443d1d0b0e0cd central
+artifact org.scala-js scalajs-javalib 1.22.0 aedc43bf2c51e66bc6c6ff2bd5ab0a7829788b6b601ca7271b0cf79cf5fb9caf central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_sjs1_3 3.0.11 ee1a26b505dc01771d1d309dc17962f995c0b9f6c1a8f3f95b270f44aab7cb71 central
+artifact io.github.cquiroz scala-java-locales_sjs1_3 1.5.4 75523c9c6e45be58e52fee7f1fac31a4ba9d1e1030956b5065cf0ff34740fa30 central
+artifact rocks.earlyeffect ascent-dom-types_sjs1_3 0.11.1 949fc4dd4d4cc692f9870d7eccce0d6c4ef0042cb27228e158936ed9c46f7870 central
+artifact com.lihaoyi fastparse_sjs1_3 3.1.1 25d56d549d1aaee6aa2dbeda2de05899c0817acd95273dcf56fb4660a03e6edd central
+artifact rocks.earlyeffect ascent-dom-core_sjs1_3 0.11.1 fd00b2939e08d49e4e70c3517235c9f4ef1303abc79b047275cc1f57241fc23b central
+artifact org.scala-lang scala3-library_3 3.9.0 9343f9651453945fc6a9b75bb4fd230418ee28a1f88ea28ee429f3ebe0511aba central
+artifact io.github.cquiroz cldr-api_sjs1_3 4.5.0 9fd6295405ed5d039319a5637d6803baa6de3396d10f81c9db24448c8dd099b4 central
+artifact com.lihaoyi sourcecode_sjs1_3 0.4.0 f68d5b2bd5c0f832644f710ae752f79f9ded9038b585894b343811c272fdc488 central
+artifact com.lihaoyi geny_sjs1_3 1.1.0 b2c146ca6d889a3f2931714ed3c4c251aecc71f05edf33695dff73a3c5b037fd central
+evict dev.zio zio-streams_sjs1_3 2.1.26 2.1.27
+evict dev.zio zio-test_sjs1_3 2.1.26 2.1.27
+evict dev.zio zio_sjs1_3 2.1.26 2.1.27
+evict org.scala-js scalajs-library_2.13 1.0.0 1.22.0
+evict org.scala-js scalajs-library_2.13 1.12.0 1.22.0
+evict org.scala-js scalajs-library_2.13 1.16.0 1.22.0
+evict org.scala-js scalajs-library_2.13 1.20.1 1.22.0
+evict org.scala-js scalajs-library_2.13 1.21.0 1.22.0
+evict org.scala-js scalajs-library_2.13 1.6.0 1.22.0
+evict org.scala-js scalajs-library_2.13 1.7.1 1.22.0
+evict org.scala-js scalajs-scalalib_2.13 2.13.18+1.22.0 3.9.0
+evict org.scala-lang scala-library 2.13.18 3.9.0
+evict org.scala-lang scala-library 2.13.4 3.9.0
+evict org.scala-lang scala-library 2.13.5 3.9.0
+evict org.scala-lang scala3-library_sjs1_3 3.1.3 3.9.0
+evict org.scala-lang scala3-library_sjs1_3 3.3.1 3.9.0
+evict org.scala-lang scala3-library_sjs1_3 3.3.3 3.9.0
+evict org.scala-lang scala3-library_sjs1_3 3.3.6 3.9.0
+evict org.scala-lang scala3-library_sjs1_3 3.3.8 3.9.0
 tool compiler 3.10.1 jvm
 root org.scala-lang scala3-compiler_3 3.10.1 closure build
 root org.scala-lang scala3-sbt-bridge 3.10.1 closure build
@@ -937,6 +1176,20 @@ artifact io.get-coursier interface 1.0.29-M4 a9173f8348005f7a64ae4748854c473e8ac
 artifact org.slf4j slf4j-api 1.7.36 d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0 central
 evict org.scala-lang scala-library 2.12.20 3.10.0
 evict org.scala-lang scala-library 2.13.17 3.10.0
+tool compiler 2.13.18 jvm
+root org.scala-lang scala-library 2.13.18 closure build
+root org.scala-lang scala-compiler 2.13.18 closure build
+root org.scala-lang scala-reflect 2.13.18 closure build
+root org.scala-lang scala2-sbt-bridge 2.13.18 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact org.scala-lang scala-compiler 2.13.18 2f15891fcae7aad30a3892194fb2abb6224cf7ce5d2bd90fba7f1c48682fca21 central
+artifact org.scala-lang scala-reflect 2.13.18 6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b central
+artifact org.scala-lang scala2-sbt-bridge 2.13.18 353e62142fea31901b01f229df2e0ab7c5b210b4d194d4e1badf1a92ad206262 central
+artifact io.github.java-diff-utils java-diff-utils 4.16 620403030d676a4a27f780a3acec7438dee1b1651a1c804fa6bb11bb07399a6f central
+artifact org.jline jline 3.29.0 ed2680487642df95379f220c09c0f77e25095713387e2bc00c2d6581bb79c804 central jdk8
 tool compiler 3.9.0 jvm
 root org.scala-lang scala3-compiler_3 3.9.0 closure build
 root org.scala-lang scala3-sbt-bridge 3.9.0 closure build
@@ -967,6 +1220,95 @@ evict org.jline jline-terminal 4.0.14 4.3.1
 evict org.jline jline-terminal-jni 4.0.14 4.3.1
 evict org.scala-lang scala-library 2.12.20 3.9.0
 evict org.scala-lang scala-library 2.13.17 3.9.0
+tool semanticdb 2.13.18 jvm
+root org.scalameta semanticdb-scalac_2.13.18 4.17.3 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scalameta semanticdb-scalac_2.13.18 4.17.3 3aa0687e564957303f87c31388ec133d5a1002a842a065cd96f5ebcec3ca8e6a central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+tool jslibraries 3.10.1 js:1.22.0
+root org.scala-lang scala-library 3.10.1 single build
+root org.scala-lang scala3-library_3 3.10.1 single build
+root org.scala-lang scala3-library_sjs1_3 3.10.1 single build
+root org.scala-js scalajs-library_2.13 1.22.0 single build
+root org.scala-js scalajs-scalalib_2.13 3.10.1 single build
+root org.scala-js scalajs-javalib 1.22.0 single build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-lang scala-library 3.10.1 ff0a773187f827ea7b596e4f370098abc417d6a4de24858ff907bbb6af97b9a5 central
+artifact org.scala-lang scala3-library_3 3.10.1 de6f5d7f9175fd0c1043bb2ca26f349959e00d4c9dbfd1a1f30f6144843a3d13 central
+artifact org.scala-lang scala3-library_sjs1_3 3.10.1 4c680a47c7573cd4f5f67316cf8f42453d48b8bbf0d0d2230fb7f1d5f2088bd7 central
+artifact org.scala-js scalajs-library_2.13 1.22.0 b2d2299545962a3b8ae9e9e04dcc2a158a6ee3fbae9117ef3348a118a5192ede central
+artifact org.scala-js scalajs-scalalib_2.13 3.10.1 b0cc662cd7fe841bf544035cb36e2660eadf2028463c9d887db06efbd6ff4f40 central
+artifact org.scala-js scalajs-javalib 1.22.0 aedc43bf2c51e66bc6c6ff2bd5ab0a7829788b6b601ca7271b0cf79cf5fb9caf central
+evict org.scala-js scalajs-scalalib_2.13 2.13.18+1.22.0 3.10.1
+evict org.scala-lang scala-library 2.13.18 3.10.1
+tool jslinker 2.13.18 js:1.22.0
+root org.scala-js scalajs-linker_2.13 1.22.0 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-js scalajs-linker_2.13 1.22.0 095d634f6472593872b84c2c8b91177a9c775fc2090cfcc3461f4f4e5b92f13d central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact org.scala-js scalajs-linker-interface_2.13 1.22.0 b172e0ab407cbf0c3d209c999d1eaf0633e98c7e080d7bb70b73140c4eb169eb central
+artifact org.scala-js scalajs-ir_2.13 1.22.0 43163d728e9c4a935241c35b31e8c0bbb1c2807f2a8567712bcd0aae20d6bc3a central
+artifact com.google.javascript closure-compiler v20220202 23d91c2bda0be80312b48ede19faee27e09842e02c56c8b14f3921d09589af0f central
+artifact org.scala-lang.modules scala-parallel-collections_2.13 1.2.0 4eae6e68cf44e9f709970355590ae981883edf6484608d747376a56cbb285432 central
+artifact org.scala-js scalajs-logging_2.13 1.2.0 58dc4732f1afaf899e208ba8766b957c1a6af050107127de7098714fd1f3602a central
+evict org.scala-lang scala-library 2.13.15 2.13.18
+evict org.scala-lang scala-library 2.13.2 2.13.18
+tool jsenvironment 2.13.18 node
+root org.scala-js scalajs-env-nodejs_2.13 1.6.0 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-js scalajs-env-nodejs_2.13 1.6.0 fe71f3ffe1a173e0845894bade0c6bd8428e4e119485485de0ae02cfcf7c1ba3 central
+artifact org.scala-lang scala-library 2.13.2 6a1c9846feb8f5d7d33b91e61e056d272215a79747a2b7b5e5ece690bf151d5d central
+artifact org.scala-js scalajs-js-envs_2.13 1.6.0 1741281c79746e10e9778755d0027ead8f4b44abe753574093d2e6714add3db8 central
+artifact com.google.jimfs jimfs 1.3.1 b31e5da8d4d73bf9634ca8543af099517d45e9c2e6b47b76c6bcc28736902f14 central
+artifact org.scala-js scalajs-logging_2.13 1.2.0 58dc4732f1afaf899e208ba8766b957c1a6af050107127de7098714fd1f3602a central
+artifact com.google.guava guava 33.4.8-jre f3d7f57f67fd622f4d468dfdd692b3a5e3909246c28017ac3263405f0fe617ed central
+artifact com.google.guava failureaccess 1.0.3 cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb central
+artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
+artifact org.jspecify jspecify 1.0.0 1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab central
+artifact com.google.errorprone error_prone_annotations 2.36.0 77440e270b0bc9a249903c5a076c36a722c4886ca4f42675f2903a1c53ed61a5 central
+artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04c2bbfd11bf7c17e0c342c94c9de7a70a7c64 central
+tool jssuite 2.13.18 suite:1.22.0:node
+root org.scala-js scalajs-env-nodejs_2.13 1.6.0 closure build
+root org.scala-js scalajs-linker_2.13 1.22.0 closure build
+root org.scala-js scalajs-sbt-test-adapter_2.13 1.22.0 closure build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-js scalajs-env-nodejs_2.13 1.6.0 fe71f3ffe1a173e0845894bade0c6bd8428e4e119485485de0ae02cfcf7c1ba3 central
+artifact org.scala-js scalajs-linker_2.13 1.22.0 095d634f6472593872b84c2c8b91177a9c775fc2090cfcc3461f4f4e5b92f13d central
+artifact org.scala-js scalajs-sbt-test-adapter_2.13 1.22.0 4a0580134481a29bc0726c50f9b0afe6e68e23b0f4466a49b00c626e3c40cdb8 central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact org.scala-js scalajs-js-envs_2.13 1.6.0 1741281c79746e10e9778755d0027ead8f4b44abe753574093d2e6714add3db8 central
+artifact com.google.jimfs jimfs 1.3.1 b31e5da8d4d73bf9634ca8543af099517d45e9c2e6b47b76c6bcc28736902f14 central
+artifact org.scala-js scalajs-linker-interface_2.13 1.22.0 b172e0ab407cbf0c3d209c999d1eaf0633e98c7e080d7bb70b73140c4eb169eb central
+artifact org.scala-js scalajs-ir_2.13 1.22.0 43163d728e9c4a935241c35b31e8c0bbb1c2807f2a8567712bcd0aae20d6bc3a central
+artifact com.google.javascript closure-compiler v20220202 23d91c2bda0be80312b48ede19faee27e09842e02c56c8b14f3921d09589af0f central
+artifact org.scala-lang.modules scala-parallel-collections_2.13 1.2.0 4eae6e68cf44e9f709970355590ae981883edf6484608d747376a56cbb285432 central
+artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
+artifact org.scala-js scalajs-logging_2.13 1.2.0 58dc4732f1afaf899e208ba8766b957c1a6af050107127de7098714fd1f3602a central
+artifact com.google.guava guava 33.4.8-jre f3d7f57f67fd622f4d468dfdd692b3a5e3909246c28017ac3263405f0fe617ed central
+artifact com.google.guava failureaccess 1.0.3 cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb central
+artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
+artifact org.jspecify jspecify 1.0.0 1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab central
+artifact com.google.errorprone error_prone_annotations 2.36.0 77440e270b0bc9a249903c5a076c36a722c4886ca4f42675f2903a1c53ed61a5 central
+artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04c2bbfd11bf7c17e0c342c94c9de7a70a7c64 central
+evict com.google.jimfs jimfs 1.1 1.3.1
+evict org.scala-lang scala-library 2.13.15 2.13.18
+evict org.scala-lang scala-library 2.13.2 2.13.18
+tool jstestbridge 2.13.18 js:1.22.0
+root org.scala-js scalajs-test-bridge_2.13 1.22.0 single build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-js scalajs-test-bridge_2.13 1.22.0 bcf08131cf2db3c8a51491591325f96bc95d2c527ddeee195a4f38c7f5ce8897 central
 tool nativelibraries 3.10.0 native:0.5.13-20261118-78ae329-SNAPSHOT
 root org.scala-native nscplugin_3.10.0 0.5.13-20261118-78ae329-SNAPSHOT single build
 root org.scala-native nativelib_native0.5_3 0.5.13-20261118-78ae329-SNAPSHOT single build
