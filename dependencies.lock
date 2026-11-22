@@ -1331,6 +1331,12 @@ artifact org.scala-native javalib_native0.5_3 0.5.13-20261118-78ae329-SNAPSHOT d
 artifact org.scala-native auxlib_native0.5_3 0.5.13-20261118-78ae329-SNAPSHOT 832951d5f0d4cade4b0ce79944a678957a9e67f909ce92e7cfb32bdb1b07a58b maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-native scalalib_native0.5_3 3.10.0+0.5.13-20261118-78ae329-SNAPSHOT ebaaed8883601a0985e7099ae4c558ffa02700f8cb19381b372d16c795602899 maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-native scala3lib_native0.5_3 3.10.0+0.5.13-20261118-78ae329-SNAPSHOT 3c39b1c3ca185b6675890fe0cfc1196149106af21df3eba0cb6e5d6be054c04e maven:https://central.sonatype.com/repository/maven-snapshots/
+tool nativetestinterface 3.10.0 native:0.5.13-20261118-78ae329-SNAPSHOT
+root org.scala-native test-interface_native0.5_3 0.5.13-20261118-78ae329-SNAPSHOT single build
+resolver ivy-local
+resolver maven:https://central.sonatype.com/repository/maven-snapshots/
+resolver central
+artifact org.scala-native test-interface_native0.5_3 0.5.13-20261118-78ae329-SNAPSHOT d6f53ca2c87aba771a9f5e3d51bd3004e8d3311e00c4960494b79443c105c12a maven:https://central.sonatype.com/repository/maven-snapshots/
 tool nativelinker 3.9.0 native:0.5.13-20261118-78ae329-SNAPSHOT
 root org.scala-native tools_3 0.5.13-20261118-78ae329-SNAPSHOT single build
 root org.scala-native nir_3 0.5.13-20261118-78ae329-SNAPSHOT single build
