@@ -148,8 +148,9 @@ object Main extends ZIOAppDefault:
     val repo = Path.of("").toAbsolutePath.normalize
     ApiClock.admit(repo).flatMap { admitted =>
       val noted = admitted match
-        case ApiClock.Admit.Warn(line) => ZIO.succeed(java.lang.System.err.println(line))
-        case ApiClock.Admit.Go         => ZIO.unit
+        case ApiClock.Admit.Warn(line)          => ZIO.succeed(java.lang.System.err.println(line))
+        case ApiClock.Admit.Rebuild(_, fact, _) => ZIO.succeed(java.lang.System.err.println(fact))
+        case ApiClock.Admit.Go                  => ZIO.unit
       noted *>
         talk(repo, call, appearance).foldZIO(
           error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),

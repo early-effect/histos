@@ -12,6 +12,10 @@ object ActionPins:
     built("actions/checkout", "3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1")
   val cache: BuiltIn =
     built("actions/cache", "55cc8345863c7cc4c66a329aec7e433d2d1c52a9", "v6.1.0")
+
+  /** The restore half of [[cache]]. The same commit, so a saved key is the key a later job reads. */
+  val cacheRestore: BuiltIn =
+    built("actions/cache/restore", "55cc8345863c7cc4c66a329aec7e433d2d1c52a9", "v6.1.0")
   val appToken: BuiltIn =
     built("actions/create-github-app-token", "64ab729a6294000f5aa4a4bc0b73d1f32bc45510", "v3.3.0")
   val uploadArtifact: BuiltIn =
@@ -28,7 +32,18 @@ object ActionPins:
     built("actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9", "v5.0.0")
 
   val all: List[BuiltIn] =
-    List(checkout, cache, appToken, uploadArtifact, setupJava, downloadArtifact, setupNode, deployPages, uploadPages)
+    List(
+      checkout,
+      cache,
+      cacheRestore,
+      appToken,
+      uploadArtifact,
+      setupJava,
+      downloadArtifact,
+      setupNode,
+      deployPages,
+      uploadPages,
+    )
 
   def line(name: ActionName, pin: ActionPin): String =
     s"${name.value}@${pin.sha.value} # ${pin.tag}"

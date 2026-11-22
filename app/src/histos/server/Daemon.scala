@@ -792,6 +792,8 @@ object Daemon:
                           val noted = admitted match
                             case ApiClock.Admit.Warn(line) =>
                               out(Message.Event(histos.build.BuildEvent.Err(line)))
+                            case ApiClock.Admit.Rebuild(_, fact, _) =>
+                              out(Message.Event(histos.build.BuildEvent.Err(fact)))
                             case ApiClock.Admit.Go => ZIO.unit
                           noted *>
                             (if adopts(target) then withGraph(target, out, relay)

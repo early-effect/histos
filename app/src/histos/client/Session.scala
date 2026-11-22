@@ -92,8 +92,9 @@ object Session:
         text =>
           ApiClock.admit(repo).flatMap { admitted =>
             val warned = admitted match
-              case ApiClock.Admit.Warn(line) => Console.printLineError(line).ignore
-              case ApiClock.Admit.Go         => ZIO.unit
+              case ApiClock.Admit.Warn(line)          => Console.printLineError(line).ignore
+              case ApiClock.Admit.Rebuild(_, fact, _) => Console.printLineError(fact).ignore
+              case ApiClock.Admit.Go                  => ZIO.unit
             warned *>
               Attach.decide(repo, text).flatMap {
                 case Decision.DifferentVersion(socket) =>

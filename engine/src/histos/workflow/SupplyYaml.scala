@@ -28,7 +28,8 @@ object SupplyYaml:
     (List(
       s"  $name:"
     ) ++ List(
-      s"    runs-on: ${Workflow.runner}"
+      "    needs: [affected]",
+      s"    runs-on: ${Workflow.runner}",
     ) ++ Workflow.jobLimit(graph) ++ List(
       "    permissions:"
     ) ++ List(
@@ -60,6 +61,7 @@ object SupplyYaml:
           (List(
             s"  $name:"
           ) ++ List(
+            "    needs: [affected]",
             s"    if: ${quote(Workflow.onDefaultPush)}",
             s"    runs-on: ${Workflow.runner}",
           ) ++ Workflow.jobLimit(graph) ++ List(

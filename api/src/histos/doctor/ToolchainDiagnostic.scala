@@ -64,7 +64,7 @@ object ToolchainExplain:
       |Add the missing field on the build. The call is .runnerTools(RunnerTools(node, llvm, playwright)). node is Some(NodeFloor(25)) when any module is Js. llvm is Some(ToolRevision("<ClangMajor>.0.0")) when any module is Native. The revision's major is the modules' ClangMajor. The finding prints the call with the values filled in.""".stripMargin
 
   val local: String =
-    """The running jar was packed from a commit this checkout contains. When that commit is not HEAD, or the tree was dirty when the jar was packed, this check warns and the command still runs.
+    """The running jar was packed from a commit this checkout contains. When that commit is not HEAD, the command packs this checkout with publish local and runs again on the jar that pack prints. When the tree was dirty, there is no commit to pack: commit, and the next command packs it.
       |
       |HISTOS_PIN selects the toolchain for this process. It does not change histos.version. That file is the pin CI installs. update rewrites the pin and ignores HISTOS_PIN. Unset HISTOS_PIN to run the pin. publish local prints the id it installed.""".stripMargin
 
@@ -194,8 +194,8 @@ enum ToolchainDiagnostic(
         fixes(
           Fix.Steps(
             lines(
-              "Unset HISTOS_PIN to run the pin in build.properties.",
-              "Or run publish local from this checkout and export the HISTOS_PIN it prints.",
+              "A commit mismatch packs this checkout and runs the command again on that jar.",
+              "A dirty tree has no commit to pack. Commit, and the next command packs it.",
             )
           )
         ),
