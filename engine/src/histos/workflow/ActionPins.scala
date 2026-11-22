@@ -21,7 +21,7 @@ object ActionPins:
   val uploadArtifact: BuiltIn =
     built("actions/upload-artifact", "cf430e030ddbb5b0abf93d22962f4752f3646cd9", "v7.0.2")
   val setupJava: BuiltIn =
-    built("actions/setup-java", "77dd5b2ce225ea11469928ac317850245a74ae78", "v6.2.0")
+    built("actions/setup-java", "d1374f8ac74474200d16ef8ecee22c7ae7a51880", "v6.3.0")
   val downloadArtifact: BuiltIn =
     built("actions/download-artifact", "9000827ccba6bdab643e8b6fd33ac0654aef8333", "v8.0.2")
   val setupNode: BuiltIn =
