@@ -78,7 +78,7 @@ object DistStock:
       case Some(linked) =>
         for
           machine  <- Machine.load(repo).mapError(error => ToolchainPublishError.Upload(error.message))
-          identity <- ToolchainIdentity.discover(repo).flatMap {
+          identity <- ToolchainIdentity.discover(repo, ship.release).flatMap {
             case Some(found) => ZIO.succeed(found)
             case None        => ZIO.fail(ToolchainPublishError.Upload("could not read the commit at HEAD"))
           }

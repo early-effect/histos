@@ -35,6 +35,7 @@ enum LocalPublishError:
   case NothingToPublish
   case Development(ship: ShipName, compile: CiVersion)
   case NoCommit
+  case NoToolchain
   case UnknownShip(ship: ShipName)
   case NotPublished(module: ProjectName)
   case SnapshotDependency(ship: ShipName, dependency: String)
@@ -76,6 +77,8 @@ enum LocalPublishError:
       histos.version.ShipAdvice.development(ship, compile)
     case NoCommit =>
       "could not read the commit at HEAD. A snapshot coordinate is that commit."
+    case NoToolchain =>
+      "the catalog has no toolchain ship, so the launcher has no snapshot coordinate."
     case UnknownShip(ship)                    => s"ship '${ship.value}' is not in the catalog"
     case NotPublished(module)                 => s"'${module.value}' is not in a ship"
     case SnapshotDependency(ship, dependency) =>

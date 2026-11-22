@@ -1,6 +1,6 @@
 package histos
 
-import histos.version.CommitSha
+import histos.version.ShipNumber
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -14,21 +14,15 @@ final case class ToolchainIdentity(coordinate: String, commit: String, dirty: Bo
 object ToolchainIdentity:
   val entry: String = "META-INF/histos/toolchain.json"
 
-  /** None when this checkout has no toolchain ship, no commit, or git does not answer. */
-  def discover(repo: Path): UIO[Option[ToolchainIdentity]] =
+  /** `number` is the toolchain ship on the loaded catalog. Git supplies the commit. None when git does not answer. */
+  def discover(repo: Path, number: ShipNumber): UIO[Option[ToolchainIdentity]] =
     SnapshotId
-      .current(repo, SnapshotId.head)
+      .head(repo)
       .flatMap:
-        case None             => ZIO.none
-        case Some(coordinate) =>
-          git(repo, List("rev-parse", "HEAD")).flatMap:
-            case None      => ZIO.none
-            case Some(raw) =>
-              CommitSha.from(raw.trim) match
-                case Left(_)    => ZIO.none
-                case Right(sha) =>
-                  git(repo, List("status", "--porcelain")).map: status =>
-                    status.map(text => ToolchainIdentity(coordinate, sha.value, text.trim.nonEmpty))
+        case None      => ZIO.none
+        case Some(sha) =>
+          git(repo, List("status", "--porcelain")).map: status =>
+            status.map(text => ToolchainIdentity(SnapshotId.render(number, sha), sha.value, text.trim.nonEmpty))
 
   def coordinateOf(text: String): Option[String] =
     parse(text).map(_.coordinate)

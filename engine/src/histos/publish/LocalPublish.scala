@@ -446,7 +446,7 @@ object LocalPublish:
       bytes  <- ProductCache
         .materialize(remote, store, ready.key, jarPath, ready.write(jarPath))
         .mapError(cached)
-      stamped <- stampAssembly(repo, cell, module, jarPath, bytes)
+      stamped <- stampAssembly(repo, graph, cell, module, jarPath, bytes)
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
@@ -471,6 +471,7 @@ object LocalPublish:
   /** The class-jar cache stays unstamped. Only the launcher jar carries this commit and the shim digest. */
   private def stampAssembly(
       repo: Path,
+      graph: ProjectGraph,
       cell: histos.zinc.CompiledCell,
       module: Module,
       jarPath: Path,
@@ -479,15 +480,18 @@ object LocalPublish:
     module.publication match
       case Publication.Assembly(_) =>
         val jarred = (error: JarError) => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error)
-        for
-          found    <- ToolchainIdentity.discover(repo)
-          identity <- found match
-            case Some(value) => ZIO.succeed(value)
-            case None        => ZIO.fail(LocalPublishError.NoCommit)
-          shim    <- shimDigest(repo)
-          stamped <- LauncherStamp.stamp(jarPath, identity, shim).mapError(jarred)
-          _       <- writeBytes(jarPath, stamped)
-        yield stamped
+        graph.catalog.ships.find(_.toolchain.isDefined) match
+          case None       => ZIO.fail(LocalPublishError.NoToolchain)
+          case Some(ship) =>
+            for
+              found    <- ToolchainIdentity.discover(repo, ship.release)
+              identity <- found match
+                case Some(value) => ZIO.succeed(value)
+                case None        => ZIO.fail(LocalPublishError.NoCommit)
+              shim    <- shimDigest(repo)
+              stamped <- LauncherStamp.stamp(jarPath, identity, shim).mapError(jarred)
+              _       <- writeBytes(jarPath, stamped)
+            yield stamped
       case Publication.Library | Publication.SbtPlugin(_) | Publication.Application =>
         ZIO.succeed(bytes)
 
