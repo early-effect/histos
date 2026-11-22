@@ -441,8 +441,8 @@ object DepsSurface:
                       case Left(fault)  => ZIO.succeed(DepsResult(1, fault.message + "\n"))
                       case Right(calls) =>
                         val kept = calls.filter:
-                          case GhCall.OpenOrUpdate(_, _) => opens(policy, open)
-                          case _                         => true
+                          case GhCall.OpenOrUpdate(_, _, _) => opens(policy, open)
+                          case _                            => true
                         GhRun
                           .execute(net, name, token.getOrElse(""), kept, dry)
                           .map(text => DepsResult(0, text))

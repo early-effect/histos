@@ -230,7 +230,7 @@ end Bump
 enum GhCall:
   case UpdateRef(branch: BranchName, sha: CommitSha, create: Boolean)
   case CommitOnBranch(branch: BranchName, expected: CommitSha, headline: String, files: List[(String, String)])
-  case OpenOrUpdate(title: String, body: String)
+  case OpenOrUpdate(branch: BranchName, title: String, body: String)
   case Comment(body: String)
   case Close(branch: BranchName)
   case Push(branch: BranchName, signed: Boolean)
@@ -290,7 +290,7 @@ object PrFlow:
         val body = kept.changes.map(_.kind.toString).mkString(", ") + "\n" + regenerate(kept.policy.author) + marker(
           kept.main
         )
-        ref ++ commits ++ List(GhCall.OpenOrUpdate(title, body))
+        ref ++ commits ++ List(GhCall.OpenOrUpdate(kept.branch, title, body))
 
   private def dropWorkflows(request: PrRequest): PrRequest =
     val changes = request.changes.flatMap: change =>

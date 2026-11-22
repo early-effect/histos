@@ -75,6 +75,7 @@ object GhRun:
           else s"""{"sha":"${sha.value}","force":true}"""
         val method = if create then "POST" else "PATCH"
         record(net, method, url, body, token, dryRun, state.copy(head = Some(sha)), s"$method $url")
+          .flatMap(accepted => if create then ZIO.succeed(accepted.copy(head = None)) else ZIO.succeed(accepted))
       case GhCall.CommitOnBranch(branch, planned, headline, files) =>
         val expected = GhRun.expected(state, planned)
         val body     = commitBody(repo, branch, expected, headline, files)
@@ -88,10 +89,10 @@ object GhRun:
                 case None      => ZIO.fail(SupplyFault.HeadMoved(branch, expected))
                 case Some(oid) =>
                   ZIO.succeed(state.copy(head = Some(oid), notes = state.notes :+ s"commit ${oid.value}"))
-      case GhCall.OpenOrUpdate(title, body) =>
+      case GhCall.OpenOrUpdate(branch, title, body) =>
         if dryRun then ZIO.succeed(state.copy(notes = state.notes :+ s"pull $title"))
         else
-          openOrUpdate(net, repo, token, "histos/deps", title, body, base).map(note =>
+          openOrUpdate(net, repo, token, branch.value, title, body, base).map(note =>
             state.copy(notes = state.notes :+ note)
           )
       case GhCall.Comment(body) =>
@@ -114,7 +115,10 @@ object GhRun:
       note: String,
   ): IO[SupplyFault, State] =
     if dryRun then ZIO.succeed(state.copy(notes = state.notes :+ s"dry-run $note"))
-    else send(net, method, url, body, token).as(state.copy(notes = state.notes :+ note))
+    else
+      send(net, method, url, body, token).flatMap: reply =>
+        if reply.status >= 400 then ZIO.fail(SupplyFault.Refused(note, reply.status))
+        else ZIO.succeed(state.copy(notes = state.notes :+ note))
 
   private def openOrUpdate(
       net: Net,
