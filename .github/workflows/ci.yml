@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight affected
       - id: affected
         env:
@@ -48,7 +48,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight publish
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -77,7 +77,15 @@ jobs:
           else
             echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
           fi
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos publish local"
+        env:
+          HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
+          HISTOS_CACHE_MODE: "write"
       - run: |
           set -eu
           json_string() {
@@ -116,6 +124,19 @@ jobs:
           name: host
           path: host
           if-no-files-found: error
+      - if: "always()"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORE_KEY: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+        run: |
+          if [ "${{ steps.store.outputs.cache-hit }}" = "true" ]; then
+            gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
+          fi
+      - if: "always()"
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   test:
     needs: [affected, publish]
     if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
@@ -265,7 +286,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight versions
       - run: "./histos run versions"
   scaladoc:
@@ -456,7 +477,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight cache-seed
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -539,7 +560,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight workflow
       - id: app
         continue-on-error: true
@@ -569,7 +590,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
@@ -606,7 +627,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@527a292a78a563ec3b14f16462f4f4a76337b6c8 # 527a292a78a563ec3b14f16462f4f4a76337b6c8
+      - uses: early-effect/histos/.github/actions/setup@9a9f4b8cea816d0c17a9ca3f56e102c0da18fede # 9a9f4b8cea816d0c17a9ca3f56e102c0da18fede
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
         env:

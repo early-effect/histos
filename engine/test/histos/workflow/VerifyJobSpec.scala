@@ -56,25 +56,29 @@ object VerifyJobSpec extends ZIOSpecDefault:
       )
       assertTrue(
         text.map(body => !body.contains("HISTOS_SESSION") && !body.contains("HISTOS_BRANCH")) == Right(true),
-        text.map(body => publishHost(slice(body, "publish"))) == Right(true),
+        text.map(body => publishHost(slice(body, "publish")) && publishStores(slice(body, "publish"))) == Right(
+          true
+        ),
         text.map(body =>
-          suiteInstall(slice(body, "test")) && slice(body, "test").contains(
+          suiteInstall(slice(body, "test")) && restoresStore(slice(body, "test")) && slice(body, "test").contains(
             "    needs: [affected, publish]"
           ) && slice(body, "test").contains("*LockInvocationSpec*") && slice(body, "test").contains(
             "*InstalledCompilerPayloadSpec*"
           )
         ) == Right(true),
         text.map(body =>
-          suiteInstall(slice(body, "scaladoc")) && slice(body, "scaladoc").contains(
-            "    needs: [publish]"
-          )
+          suiteInstall(slice(body, "scaladoc")) && restoresStore(slice(body, "scaladoc")) &&
+            slice(body, "scaladoc").contains("    needs: [publish]") &&
+            !slice(body, "scaladoc").contains("actions/cache/save@")
         ) == Right(true),
         text.map(body =>
           suiteInstall(slice(body, "format")) && slice(body, "format").contains(
             "    needs: [publish]"
-          )
+          ) && !slice(body, "format").contains("~/.cache/histos")
         ) == Right(true),
-        text.map(body => clientJob(slice(body, "client"))) == Right(true),
+        text.map(body =>
+          clientJob(slice(body, "client")) && !slice(body, "client").contains("~/.cache/histos")
+        ) == Right(true),
         text.map(body => seedStays(slice(body, "cache-seed"))) == Right(true),
       )
     },
@@ -173,6 +177,21 @@ object VerifyJobSpec extends ZIOSpecDefault:
   private def publishHost(job: String): Boolean =
     job.contains("./histos publish local") && job.contains("name: host") && job.contains(Setup) &&
       job.contains("id: llvm")
+
+  private def publishStores(job: String): Boolean =
+    val restoreAt = job.indexOf("actions/cache/restore@")
+    val publishAt = job.indexOf("./histos publish local")
+    val saveAt    = job.indexOf("actions/cache/save@")
+    restoreAt >= 0 && publishAt > restoreAt && saveAt > publishAt &&
+    job.contains("path: \"~/.cache/histos\"") &&
+    job.contains("histos-store-") &&
+    job.contains("HISTOS_CACHE_NAMESPACE:") &&
+    job.contains("HISTOS_CACHE_MODE: \"write\"")
+
+  private def restoresStore(job: String): Boolean =
+    job.contains("actions/cache/restore@") &&
+      job.contains("path: \"~/.cache/histos\"") &&
+      job.contains("histos-store-")
 
   private def suiteInstall(job: String): Boolean =
     job.contains(NoClient) && !job.contains(Setup) && pinsEnv(job)
