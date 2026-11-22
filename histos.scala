@@ -157,7 +157,6 @@ object build extends HistosBuild:
         Resolver.Maven(RepositoryUrl("https://central.sonatype.com/repository/maven-snapshots/")),
         Resolver.Central,
       )
-      .locked
       .publishLocalSuite(
         ships(library),
         api,

@@ -231,10 +231,7 @@ object LockedTools:
                 .when(provider)(
                   histos.native.NativeRequests.suite(toolchain, catalog, repositories)
                 )
-                .toList ++
-              module.versions.all.map(version =>
-                histos.native.NativeRequests.testInterface(version, toolchain, repositories)
-              ) ++ histos.zinc.CompilerRequests.supporting(
+                .toList ++ histos.zinc.CompilerRequests.supporting(
                 List(catalog.native.bridgeScala),
                 catalog,
                 repositories,
@@ -317,9 +314,6 @@ object LockedTools:
           .mapError(ResolveError.NativeOrigin(_))
           .map: toolchain =>
             module.versions.all.map(version => histos.native.NativeRequests.libraries(version, toolchain, repos)) ++
-              module.versions.all.map(version =>
-                histos.native.NativeRequests.testInterface(version, toolchain, repos)
-              ) ++
               List(
                 histos.native.NativeRequests.linker(toolchain, catalog, repos),
                 histos.native.NativeRequests.suite(toolchain, catalog, repos),

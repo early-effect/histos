@@ -2,8 +2,6 @@ import histos.*
 import histos.plugin.*
 
 object plugins extends HistosPlugins:
-  override def resolution = Resolution.Lock
-
   override def resolvers =
     PluginResolvers.Listed(
       List(
