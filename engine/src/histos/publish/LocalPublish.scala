@@ -7,20 +7,29 @@ import histos.central.{
   DependencyVersion,
   MavenDependency,
   PomDocument,
-  PublishError,
   Published,
   Publisher,
   Revision,
 }
 import histos.native.NativeOrigin
 import histos.cache.{ContentStore, ProductCache}
-import histos.pack.{ClassJar, JarError, JarIo, JavadocStub, PackageKey}
+import histos.pack.{ClassJar, JarError, JavadocStub, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate, RecipeError, RecipeFeature, RecipeNodeId}
-import histos.resolve.{ArtifactName, Resolve, ResolveError}
+import histos.resolve.{ArtifactName, Resolve}
 import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
-import histos.select.SelectError
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, Sources}
+import histos.zinc.{
+  CompileError,
+  GraphCompile,
+  GraphCompileError,
+  ProductDigest,
+  GeneratedRoots,
+  StageRoots,
+  StageRootError,
+}
+import histos.plugin.SourceSet
+import histos.{Cell, CompilationStage}
+import histos.build.{BuildNode, ExecutionError, ExecutionProducts}
 import histos.{
   Dep,
   DepExclusion,
@@ -86,7 +95,59 @@ final case class PublishOutput(
     refused: List[String],
 )
 
+final case class PublishInputs(cells: List[histos.zinc.CompiledCell], generated: GeneratedRoots)
+
+final case class PublishCompiler[R, E](
+    ensure: List[BuildNode] => ZIO[R & zio.Scope, E | ExecutionError, ExecutionProducts]
+)
+
 object LocalPublish:
+  type ProjectionError = LocalPublishError | StageRootError
+
+  /** The executor owns generation. Its caller-scope leases stay live through jar and POM publication. */
+  def runUsing[R, E](compiler: PublishCompiler[R, E])(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[PublishName],
+      env: Map[String, String],
+      write: PublishWrite,
+      api: ApiDigest,
+  ): ZIO[R & PublishEnv, E | ExecutionError | ProjectionError, PublishOutput] =
+    ZIO.scoped:
+      go(
+        repo,
+        graph,
+        names,
+        env,
+        write,
+        api,
+        selected =>
+          val stages = graph.projects
+            .collect { case module: Module if selected.contains(module.name) => module }
+            .flatMap(module =>
+              for
+                version  <- module.versions.all
+                platform <- module.platforms.all
+              yield CompilationStage(Cell(module.name, version, platform), SourceSet.Main)
+            )
+          for
+            products <- compiler.ensure(stages.map(BuildNode.Compile(_)))
+            cells    <- ZIO.foreach(stages)(stage => ZIO.fromEither(products.require(stage)).map(_.compiled))
+          yield PublishInputs(cells, products.generatedRoots),
+      )
+
+  def sourceJar(
+      repo: Path,
+      graph: ProjectGraph,
+      cell: Cell,
+      generated: GeneratedRoots,
+      destination: Path,
+  ): zio.IO[StageRootError | JarError, Path] =
+    for
+      files <- StageRoots.of(graph).read(repo, CompilationStage(cell, SourceSet.Main), generated)
+      jar   <- ClassJar.writeNamed(files.sources.map(file => file.entry -> file.path), destination)
+    yield jar.path
+
   /** Compile the modules a decision releases and write them. A hold is reported and not written. A development session
     * is the snapshot at HEAD for a local or snapshot write. A release write is not settled.
     */
@@ -99,24 +160,35 @@ object LocalPublish:
       write: PublishWrite,
       api: ApiDigest,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
-  ): ZIO[histos.resolve.Resolve & Publisher & ContentStore, LocalPublishError, PublishOutput] =
+  ): ZIO[histos.resolve.Resolve & Publisher & ContentStore, ProjectionError, PublishOutput] =
     ZIO.scoped:
       for
         process <- CacheConfig.processEnv
         remote  <- CacheConfig.open(process).mapError(LocalPublishError.Remote(_))
-        written <- go(repo, graph, names, jdk, env, write, api, report).provideSomeLayer(ZLayer.succeed(remote))
+        written <- go(
+          repo,
+          graph,
+          names,
+          env,
+          write,
+          api,
+          selected =>
+            GraphCompile
+              .run(repo, graph, selected, jdk, NativeOrigin.read(env), None, report)
+              .mapError(LocalPublishError.Compile(_))
+              .map(cells => PublishInputs(cells, GeneratedRoots.Existing)),
+        ).provideSomeLayer(ZLayer.succeed(remote))
       yield written
 
-  private def go(
+  private def go[R, E](
       repo: Path,
       graph: ProjectGraph,
       names: List[PublishName],
-      jdk: JdkRuntime,
       env: Map[String, String],
       write: PublishWrite,
       api: ApiDigest,
-      report: histos.zinc.CompileFeed => zio.UIO[Unit],
-  ): ZIO[histos.resolve.Resolve & Publisher & ContentStore & RemoteCache, LocalPublishError, PublishOutput] =
+      compile: List[ProjectName] => ZIO[R, E, PublishInputs],
+  ): ZIO[R & PublishEnv, E | ProjectionError, PublishOutput] =
     for
       prepared <- SessionSettle.prepare(repo, graph.catalog, env, write)
       decision <- VersionTask
@@ -147,26 +219,17 @@ object LocalPublish:
                   else ZIO.fail(LocalPublishError.NothingToPublish)
                 else
                   for
-                    group <- ZIO.fromEither(organization(graph))
-                    _     <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
-                    cells <- GraphCompile
-                      .run(
-                        repo,
-                        graph,
-                        live.modules.toList,
-                        jdk,
-                        NativeOrigin.read(env),
-                        None,
-                        report,
-                      )
-                      .mapError(LocalPublishError.Compile(_))
+                    group   <- ZIO.fromEither(organization(graph))
+                    _       <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
+                    inputs  <- compile(live.modules.toList)
                     modules <- publishJobs(
                       repo,
                       graph,
                       group,
-                      jobs(plans, live.modules, cells),
+                      jobs(plans, live.modules, inputs.cells),
                       write,
                       api,
+                      inputs.generated,
                     )
                   yield PublishOutput(
                     skipped(live),
@@ -185,7 +248,8 @@ object LocalPublish:
       jobs: List[Job],
       write: PublishWrite,
       api: ApiDigest,
-  ): ZIO[PublishEnv, LocalPublishError, List[PublishedModule]] =
+      generated: GeneratedRoots,
+  ): ZIO[PublishEnv, ProjectionError, List[PublishedModule]] =
     execute(combine(jobs.map: job =>
       val cell = job.cell
       val info = StepInfo(
@@ -193,11 +257,11 @@ object LocalPublish:
         Chunk.empty,
         Set(Need.Io),
       )
-      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, write, api))))
+      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, write, api, generated))))
 
   private def combine(
-      steps: List[Step[PublishEnv, LocalPublishError, PublishedModule]]
-  ): Step[PublishEnv, LocalPublishError, List[PublishedModule]] =
+      steps: List[Step[PublishEnv, ProjectionError, PublishedModule]]
+  ): Step[PublishEnv, ProjectionError, List[PublishedModule]] =
     steps match
       case Nil =>
         Step.local[List[PublishedModule]](
@@ -205,14 +269,14 @@ object LocalPublish:
         )(ZIO.succeed(Nil))
       case head :: tail =>
         tail
-          .foldLeft[Step[PublishEnv, LocalPublishError, List[PublishedModule]]](
+          .foldLeft[Step[PublishEnv, ProjectionError, List[PublishedModule]]](
             head.map(List(_))
           ): (acc, step) =>
             acc.zip(step).map((all, next) => all :+ next)
 
   private def execute[A](
-      goal: Step[PublishEnv, LocalPublishError, A]
-  ): ZIO[PublishEnv, LocalPublishError, A] =
+      goal: Step[PublishEnv, ProjectionError, A]
+  ): ZIO[PublishEnv, ProjectionError, A] =
     ZIO.scoped:
       ZIO
         .serviceWithZIO[Histos](_.start(goal))
@@ -407,10 +471,11 @@ object LocalPublish:
       jobs: List[Job],
       write: PublishWrite,
       api: ApiDigest,
-  ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
+      generated: GeneratedRoots,
+  ): ZIO[PublishEnv, ProjectionError, PublishedModule] =
     val cell     = job.cell
     val artifact = artifactName(graph, cell.module, cell.version, cell.platform)
-    stageLibrary(repo, graph, group, job, jobs, artifact, write, api)
+    stageLibrary(repo, graph, group, job, jobs, artifact, write, api, generated)
 
   private def stageLibrary(
       repo: Path,
@@ -421,7 +486,8 @@ object LocalPublish:
       artifact: String,
       write: PublishWrite,
       api: ApiDigest,
-  ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
+      generated: GeneratedRoots,
+  ): ZIO[PublishEnv, ProjectionError, PublishedModule] =
     val cell = job.cell
     for
       name <- artifactId(group, artifact, job.revision.render)
@@ -437,7 +503,13 @@ object LocalPublish:
         )
       )
       module <- ZIO.fromEither(moduleOf(graph, cell.module))
-      packed <- sourcesOf(repo, graph, cell)
+      packed <- StageRoots
+        .of(graph)
+        .read(
+          repo,
+          CompilationStage(Cell(cell.module, cell.version, cell.platform), SourceSet.Main),
+          generated,
+        )
       jarPath = scratch(repo, cell, job.revision, Scratch.Classes)
       stamp  <- versionStamp(repo, graph, cell, module, api)
       store  <- ZIO.service[ContentStore]
@@ -448,7 +520,10 @@ object LocalPublish:
         .mapError(cached)
       stamped <- stampAssembly(repo, graph, cell, module, jarPath, bytes)
       sources <- ClassJar
-        .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
+        .writeNamed(
+          packed.sources.map(file => file.entry -> file.path),
+          scratch(repo, cell, job.revision, Scratch.SourceJar),
+        )
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
       javadoc     <- documented(repo, cell, job.revision, write)
       sourceBytes <- bytesOf(sources.path)
@@ -689,7 +764,7 @@ object LocalPublish:
     graph.get(module) match
       case Some(found: Module) =>
         val internal = found
-          .upstream(platform)
+          .upstream(platform, SourceSet.Main)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
@@ -763,33 +838,6 @@ object LocalPublish:
     graph.get(name) match
       case Some(module: Module) => ArtifactName.module(module, version, platform)
       case _                    => ArtifactName.published(name.value, version, platform)
-
-  private def sourcesOf(
-      repo: Path,
-      graph: ProjectGraph,
-      cell: histos.zinc.CompiledCell,
-  ): ZIO[Any, LocalPublishError, List[(String, Path)]] =
-    graph.get(cell.module) match
-      case Some(module: Module) =>
-        GraphCompile
-          .sourceBase(repo, module, modulesOf(graph))
-          .mapError(LocalPublishError.Compile(_))
-          .flatMap:
-            case None =>
-              ZIO.fail(LocalPublishError.Compile(GraphCompileError.NoRoot(cell.module)))
-            case Some(root) =>
-              Sources
-                .published(root, Sources.unmanagedRoot(repo, module.name.value), cell.version, cell.platform)
-                .mapError(error => LocalPublishError.SourceRead(cell.module, cell.version, cell.platform, error))
-                .flatMap:
-                  case Nil =>
-                    ZIO.fail(LocalPublishError.NoSources(cell.module, cell.version, cell.platform))
-                  case files => ZIO.succeed(files.map(file => file.entry -> file.path))
-      case _ =>
-        ZIO.fail(LocalPublishError.Compile(GraphCompileError.NoRoot(cell.module)))
-
-  private def modulesOf(graph: ProjectGraph): List[Module] =
-    graph.projects.collect { case module: Module => module }
 
   private def cached(error: LocalPublishError | RemoteError | CacheError): LocalPublishError =
     error match

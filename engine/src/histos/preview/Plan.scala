@@ -6,11 +6,13 @@ import histos.central.SnapshotRepository
 import histos.publish.{LocalPublishError, PublishName, PublishSelect, PublishWrite, SessionSettle, ShipWrite}
 import histos.select.{SelectError, Selection}
 import histos.task.TaskId
-import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestCompile}
-import histos.toolchain.VersionOrder
+import histos.testrun.SuitePattern
+import histos.plugin.SourceSet
+import histos.build.{BuildDag, BuildDagError, BuildNode, ExecutionPlan}
+import histos.zinc.{GeneratedRoots, StageFiles, StageRoot, StageRootError, StageRoots}
+import histos.{Cell, CompilationStage}
 import histos.version.{Decision, HoldReason, PublishAction, ShipName, VersionError, VersionTask}
-import histos.workspace.{IoFailure, IoFault}
-import histos.zinc.{AnalysisKind, CompileError, FileStaleness, GraphCompile, GraphCompileError, SourceStale, Sources}
+import histos.zinc.{AnalysisKind, FileStaleness, SourceStale}
 import histos.{Aggregate, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -81,27 +83,52 @@ enum RunUnit:
 
 final case class RunPlan(unit: RunUnit)
 
+final case class ProjectedStage(stage: CompilationStage, roots: List[StageRoot], files: StageFiles)
+final case class StageProjection(plan: ExecutionPlan, stages: List[ProjectedStage])
+
 object Plan:
+  type ProjectionError = PreviewError | BuildDagError | StageRootError
+
+  def project(
+      repo: Path,
+      graph: ProjectGraph,
+      nodes: List[BuildNode],
+      generated: GeneratedRoots,
+  ): IO[BuildDagError | StageRootError, StageProjection] =
+    val inventory = StageRoots.of(graph)
+    for
+      dag    <- ZIO.fromEither(BuildDag.plan(graph, nodes))
+      stages <- ZIO.foreach(dag.nodes.collect { case BuildNode.Compile(stage) => stage }) { stage =>
+        for
+          roots <- ZIO.fromEither(inventory.inventory(stage))
+          files <- inventory.read(repo, stage, generated)
+        yield ProjectedStage(stage, roots, files)
+      }
+    yield StageProjection(dag, stages)
+
   def show(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
-  ): IO[PreviewError, String] =
-    compile(repo, graph, projects).map(render(repo, _))
+      generated: GeneratedRoots = GeneratedRoots.Existing,
+  ): IO[ProjectionError, String] =
+    compile(repo, graph, projects, generated).map(render(repo, _))
 
   def compile(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
-  ): IO[PreviewError, CompilePlan] =
-    modulePlan(repo, graph, projects, Tree.Main).map(CompilePlan(_))
+      generated: GeneratedRoots = GeneratedRoots.Existing,
+  ): IO[ProjectionError, CompilePlan] =
+    modulePlan(repo, graph, projects, Tree.Main, generated).map(CompilePlan(_))
 
   def test(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
-  ): IO[PreviewError, TestPlan] =
-    modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
+      generated: GeneratedRoots = GeneratedRoots.Existing,
+  ): IO[ProjectionError, TestPlan] =
+    modulePlan(repo, graph, projects, Tree.Test, generated).map(TestPlan(_))
 
   /** Drop quick-answer names `--only` would not run. The plan's modules stay. */
   def narrow(plan: TestPlan, patterns: List[SuitePattern]): TestPlan =
@@ -162,26 +189,21 @@ object Plan:
   def cleanAll(repo: Path): CleanPlan =
     CleanPlan(fullRoots(repo), StoreFate.Kept)
 
-  /** Empty names are [[cleanAll]] and ignore `graph`. A name selects modules only: an aggregate expands, and upstream
-    * stays.
-    */
+  /** Includes generated products from the validated graph; named requests use the producer closure. */
   def clean(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
-  ): IO[PreviewError, CleanPlan] =
-    if projects.isEmpty then ZIO.succeed(cleanAll(repo))
-    else
-      ZIO
-        .fromEither(Selection.select(graph, projects))
-        .mapBoth(
-          PreviewError.Target(_),
-          selected =>
-            CleanPlan(
-              selected.modules.flatMap(module => moduleRoots(repo, module)),
-              StoreFate.Kept,
-            ),
-        )
+  ): IO[PreviewError | BuildDagError, CleanPlan] =
+    ZIO
+      .fromEither(Products.project(repo, graph, projects))
+      .mapBoth(
+        error =>
+          error match
+            case found: SelectError   => PreviewError.Target(found)
+            case found: BuildDagError => found,
+        projection => CleanPlan(projection.roots.map(_.path), StoreFate.Kept),
+      )
 
   /** Product roots, plus this repo's content-store entries. Does not delete them and does not count bytes.
     */
@@ -248,22 +270,64 @@ object Plan:
       graph: ProjectGraph,
       projects: List[ProjectName],
       tree: Tree,
-  ): IO[PreviewError, List[PlanUnit]] =
+      generated: GeneratedRoots,
+  ): IO[ProjectionError, List[PlanUnit]] =
     val modules = graph.projects.collect { case module: Module => module }
+    val scope   = tree match
+      case Tree.Main => SourceSet.Main
+      case Tree.Test => SourceSet.Test
     for
-      selected <- ZIO
-        .fromEither(Selection.select(graph, projects))
-        .mapError(PreviewError.Target(_))
-      chosen  = selected.modules.map(_.name).toSet
-      closure = Module.closure(modules, chosen)
-      _     <- ZIO.fromEither(acyclic(closure)).mapError(PreviewError.Cycle(_))
-      bases <- ZIO.foreach(closure): module =>
-        GraphCompile
-          .sourceBase(repo, module, modules)
-          .mapBoth(rootFault(repo, _), base => module.name -> base)
-      listed <- ZIO.foreach(modules): module =>
-        cells(repo, module, modules, closure, chosen, bases.toMap, tree, graph)
-    yield listed.flatten
+      selected <- ZIO.fromEither(Selection.select(graph, projects)).mapError(PreviewError.Target(_))
+      chosen = selected.modules.map(_.name).toSet
+      projection <- project(
+        repo,
+        graph,
+        selected.modules.flatMap(module =>
+          for
+            version  <- module.versions.all
+            platform <- module.platforms.all
+          yield BuildNode.Compile(CompilationStage(Cell(module.name, version, platform), scope))
+        ),
+        generated,
+      )
+      listed <- ZIO.foreach(projection.stages) { projected =>
+        val stage = projected.stage
+        val cell  = stage.cell
+        val found = projected.files.sources.map(_.path)
+        val kind  = stage.scope match
+          case SourceSet.Main => AnalysisKind.Main
+          case SourceSet.Test => AnalysisKind.Test
+        val stageTree = stage.scope match
+          case SourceSet.Main => Tree.Main
+          case SourceSet.Test => Tree.Test
+        for
+          dependencies <- ZIO.fromEither(projection.plan.dependencies(BuildNode.Compile(stage)))
+          stale        <- SourceStale.read(
+            repo,
+            SourceStale.directory(repo, cell.module, cell.version, cell.platform, kind),
+            found,
+          )
+          quick <- ZIO
+            .foreach(modules.find(_.name == cell.module))(module =>
+              quickOf(repo, module, modules, cell.version, cell.platform, stageTree, graph)
+            )
+            .map(_.flatten)
+        yield PlanUnit.Chosen(
+          cell.module,
+          cell.version,
+          cell.platform,
+          if chosen.contains(cell.module) then Reason.Selected else Reason.Upstream,
+          dependencies.collect {
+            case BuildNode.Compile(upstream) if upstream.cell.module != cell.module => upstream.cell.module
+          }.distinct,
+          found,
+          stale,
+          quick,
+        )
+      }
+    yield listed ++ modules
+      .filterNot(module => projection.stages.exists(_.stage.cell.module == module.name))
+      .map(module => PlanUnit.NotSelected(module.name))
 
   private def renderUnits(repo: Path, units: List[PlanUnit]): String =
     units
@@ -271,93 +335,6 @@ object Plan:
         case chosen: PlanUnit.Chosen => renderChosen(repo, chosen)
         case PlanUnit.NotSelected(_) => Nil
       .mkString("\n")
-
-  private def acyclic(modules: List[Module]): Either[ProjectName, Unit] =
-    val names = modules.map(_.name).toSet
-    def step(
-        done: Set[ProjectName],
-        rest: List[Module],
-    ): Either[ProjectName, Unit] =
-      val (ready, later) = rest.partition: module =>
-        module.upstreamNames.forall: dependency =>
-          !names.contains(dependency) || done.contains(dependency)
-      ready match
-        case Nil =>
-          later match
-            case module :: _ => Left(module.name)
-            case Nil         => Right(())
-        case _ =>
-          step(done ++ ready.map(_.name), later)
-    step(Set.empty, modules)
-
-  private def cells(
-      repo: Path,
-      module: Module,
-      modules: List[Module],
-      closure: List[Module],
-      selected: Set[ProjectName],
-      bases: Map[ProjectName, Option[Path]],
-      tree: Tree,
-      graph: ProjectGraph,
-  ): IO[PreviewError, List[PlanUnit]] =
-    if !closure.exists(_.name == module.name) then ZIO.succeed(List(PlanUnit.NotSelected(module.name)))
-    else
-      val reason =
-        if selected.contains(module.name) then Reason.Selected
-        else Reason.Upstream
-      val versions =
-        module.versions.all.sortWith: (left, right) =>
-          VersionOrder.compare(left.value, right.value) < 0
-      val platforms = List(Platform.Jvm, Platform.Js, Platform.Native).filter(
-        module.platforms.all.contains
-      )
-      ZIO
-        .foreach(versions): version =>
-          ZIO.foreach(platforms): platform =>
-            val upstreams = Module.chain(module, closure, platform).map(_.name)
-            val base      = bases.get(module.name).flatten
-            paths(repo, module, modules, version, platform, base, tree).flatMap: found =>
-              val kind = tree match
-                case Tree.Main => AnalysisKind.Main
-                case Tree.Test => AnalysisKind.Test
-              val dir = SourceStale.directory(repo, module.name, version, platform, kind)
-              SourceStale
-                .read(repo, dir, found)
-                .flatMap: stale =>
-                  quickOf(repo, module, modules, version, platform, tree, graph).map: quick =>
-                    PlanUnit.Chosen(
-                      module.name,
-                      version,
-                      platform,
-                      reason,
-                      upstreams,
-                      found,
-                      stale,
-                      quick,
-                    )
-        .map(_.flatten)
-
-  private def paths(
-      repo: Path,
-      module: Module,
-      modules: List[Module],
-      version: ScalaVersion,
-      platform: Platform,
-      base: Option[Path],
-      tree: Tree,
-  ): IO[PreviewError, List[Path]] =
-    tree match
-      case Tree.Main =>
-        base match
-          case Some(root) =>
-            Sources
-              .select(root, version, platform)
-              .mapBoth(sourceFault(root, _), identity)
-          case None => ZIO.succeed(Nil)
-      case Tree.Test =>
-        TestCompile
-          .testSources(repo, module, modules, version, platform)
-          .mapError(testFault(repo, _))
 
   private enum ShipWord:
     case Publish(ship: ShipName, revision: String, members: ::[ProjectName])
@@ -478,9 +455,6 @@ object Plan:
 
   private def fullRoots(repo: Path): List[Path] =
     (Products.moduleRoots ++ Products.sharedRoots).map(name => dot(repo).resolve(name))
-
-  private def moduleRoots(repo: Path, module: Module): List[Path] =
-    Products.moduleRoots.map(name => dot(repo).resolve(name).resolve(module.name.value))
 
   private def dot(repo: Path): Path = repo.resolve(".histos")
 
@@ -613,50 +587,4 @@ object Plan:
     val shown = if file.startsWith(root) then root.relativize(file) else file
     shown.iterator.asScala.map(_.toString).mkString("/")
 
-  private def rootFault(repo: Path, error: GraphCompileError): PreviewError =
-    error match
-      case GraphCompileError.RootRead(path) =>
-        PreviewError.Sources(IoFailure(path, IoFault.Stat))
-      case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.UnknownCell(_, _) |
-          GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) |
-          GraphCompileError.MissingUpstream(_, _, _, _) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) |
-          GraphCompileError.Cycle(_) | GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) |
-          GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) | GraphCompileError.Assets(_, _, _, _) |
-          GraphCompileError.Cells(_) | GraphCompileError.Recipe(_) | GraphCompileError.ApiDependency(_) =>
-        PreviewError.Sources(IoFailure(repo, IoFault.Stat))
-
-  private def sourceFault(root: Path, error: CompileError): PreviewError =
-    error match
-      case CompileError.Io(failure) => PreviewError.Sources(failure)
-      case CompileError.Resolved(_) | CompileError.UnsupportedPlatform(_) | CompileError.UnsupportedScala(_) |
-          CompileError.NoSources | CompileError.Outside(_, _) | CompileError.Banned(_, _) | CompileError.Failed(_) |
-          CompileError.Toolchain(_) | CompileError.JsLibrary(_) | CompileError.NativeFetch(_) |
-          CompileError.NativeOrigin(_) | CompileError.NativeLibrary(_) | CompileError.Stored(_) |
-          CompileError.Remote(_) | CompileError.NoNir(_) | CompileError.Threw(_) =>
-        PreviewError.Sources(IoFailure(root, IoFault.Walk))
-
-  private def testFault(repo: Path, error: ModuleTestError): PreviewError =
-    error match
-      case ModuleTestError.Target(found)                            => PreviewError.Target(found)
-      case ModuleTestError.Compile(GraphCompileError.Cycle(module)) =>
-        PreviewError.Cycle(module)
-      case ModuleTestError.Compile(GraphCompileError.Target(found)) =>
-        PreviewError.Target(found)
-      case ModuleTestError.Compile(GraphCompileError.RootRead(path)) =>
-        PreviewError.Sources(IoFailure(path, IoFault.Stat))
-      case ModuleTestError.Sources(_, _, CompileError.Io(failure)) =>
-        PreviewError.Sources(failure)
-      case ModuleTestError.Root(path) =>
-        PreviewError.Sources(IoFailure(path, IoFault.Stat))
-      case ModuleTestError.Pattern(error) =>
-        PreviewError.Pattern(error)
-      case ModuleTestError.Tool(_, _, _) | ModuleTestError.Compile(_) | ModuleTestError.Lock(_) |
-          ModuleTestError.LockRead(_) | ModuleTestError.Sources(_, _, _) | ModuleTestError.MissingSources(_, _) |
-          ModuleTestError.MissingProvider(_, _) | ModuleTestError.ProviderDependency(_, _) |
-          ModuleTestError.NoneDiscovered(_, _) | ModuleTestError.NoneMatched(_) | ModuleTestError.Mixed(_) |
-          ModuleTestError.Process(_, _, _) | ModuleTestError.Main(_) | ModuleTestError.Absent(_) |
-          ModuleTestError.MissingUpstream(_, _, _) | ModuleTestError.Work(_) | ModuleTestError.Runner(_) |
-          ModuleTestError.LinkFailed(_, _, _, _) | ModuleTestError.NoNode(_, _, _) | ModuleTestError.Stamp(_) |
-          ModuleTestError.Record(_) | ModuleTestError.Api(_, _, _) | ModuleTestError.Remote(_) =>
-        PreviewError.Sources(IoFailure(repo, IoFault.Stat))
 end Plan
