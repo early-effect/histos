@@ -146,6 +146,64 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("a runtime hit retains the scheduler generation with one restore and no producer invocation") {
+      fixture { f =>
+        for
+          _                <- f.run("old")
+          fresh            <- f.runtime.committed(id)
+          freshPaths       <- fresh.read.mapError(PluginFault.Products(_))
+          freshSite        <- ZIO.fromEither(freshPaths.directory(site)).mapError(PluginFault.Products(_))
+          _                <- f.reads.set(0)
+          replay           <- f.run("old")
+          hitReads         <- f.reads.get
+          producerAfterHit <- f.count.get
+          hit              <- f.runtime.committed(id)
+          hitPaths         <- hit.read.mapError(PluginFault.Products(_))
+          hitSite          <- ZIO.fromEither(hitPaths.directory(site)).mapError(PluginFault.Products(_))
+          _                <- f.run("new")
+          laterPaths       <- hit.read.mapError(PluginFault.Products(_))
+          laterSite        <- ZIO.fromEither(laterPaths.directory(site)).mapError(PluginFault.Products(_))
+          oldPages         <- ZIO.foreach(List(freshSite, hitSite, laterSite))(path =>
+            ZIO.attemptBlocking(Files.readString(path.resolve("index.html"))).orDie
+          )
+          oldAsset <- ZIO.attemptBlocking(Files.readString(hitSite.resolve("assets/client.js"))).orDie
+          oldStamp <- ZIO.attemptBlocking(Files.readString(hitSite.resolve("stamp"))).orDie
+          current  <- f.read("site/index.html")
+          count    <- f.count.get
+        yield assertTrue(
+          replay.text == PluginRuntime.cacheHit("old"),
+          hit.manifest == fresh.manifest,
+          freshSite == hitSite,
+          laterSite == hitSite,
+          hitReads == hit.manifest.contentDigests.size + 1,
+          producerAfterHit == 1,
+          count == 2,
+          oldPages == List("old", "old", "old"),
+          oldAsset == "old",
+          oldStamp == "old",
+          current == "new",
+        )
+      }
+    },
+    test("malformed cached entries preserve their product error through the runtime classifier") {
+      fixture { f =>
+        val invalid = new ActionCache:
+          def get(digest: Digest): IO[histos.schedule.CacheError, Option[String]] =
+            f.cache.get(digest).map(_.map(_.replace("assets/client.js", "../escape")))
+          def put(digest: Digest, value: String): IO[histos.schedule.CacheError, Unit] =
+            f.cache.put(digest, value)
+        for
+          _      <- f.run("old")
+          failed <- f.copy(cache = invalid).run("old").either
+          count  <- f.count.get
+          page   <- f.read("site/index.html")
+        yield assertTrue(
+          failed == Left(PluginFault.Products(ProductError.InvalidEntry("../escape"))),
+          count == 1,
+          page == "old",
+        )
+      }
+    },
     test("fixed generation readers retain old bytes while preview uses the logical Directory and excludes clean") {
       fixture { f =>
         for
@@ -324,6 +382,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
       reload: ZIO[Scope, Nothing, PluginRuntime],
       behavior: Ref[Behavior],
       count: Ref[Int],
+      reads: Ref[Int],
       ready: Promise[Nothing, Unit],
       store: ContentStore,
       cache: ActionCache,
@@ -353,11 +412,12 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
           repo      <- Workspace.work("runtime-products").catchAll(error => ZIO.dieMessage(error.message))
           _         <- hostFacts
           count     <- Ref.make(0)
+          reads     <- Ref.make(0)
           behavior  <- Ref.make(Behavior.Publish)
           ready     <- Promise.make[Nothing, Unit]
           hold      <- Promise.make[Nothing, Unit]
           storePath <- ZIO.attemptBlocking(Files.createDirectories(repo.resolve("store"))).orDie
-          store  = ContentStore.in(storePath)
+          store  = counting(ContentStore.in(storePath), reads)
           plugin = Producer(behavior, count, ready, hold)
           graph  = ProjectGraph.trusted(
             List(
@@ -402,6 +462,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
               reload,
               behavior,
               count,
+              reads,
               ready,
               store,
               ContentStore.actions(store),
@@ -412,6 +473,11 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
         yield result
       }
       .provide(Resolve.coursier, ZLayer.fromZIO(PluginProducts.make(publication)))
+
+  private def counting(store: ContentStore, reads: Ref[Int]): ContentStore = new ContentStore:
+    export store.{root, put, remove, list, replace, retain, kept, clean, forget}
+    def read(digest: Digest): IO[histos.schedule.CacheError, Option[Chunk[Byte]]] =
+      reads.update(_ + 1) *> store.read(digest)
 
   private final case class Producer(
       behavior: Ref[Behavior],

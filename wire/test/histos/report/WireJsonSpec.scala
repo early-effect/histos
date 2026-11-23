@@ -1,7 +1,7 @@
 package histos.report
 
 import histos.*
-import histos.load.{LoadError, PluginFault, ProductError}
+import histos.load.{LoadError, NamedProduct, OutputManifest, PluginFault, ProductEntry, ProductEntryPath, ProductError}
 import histos.schedule.{CacheError, Digest, ScheduleError}
 import histos.workspace.{IoFailure, IoFault}
 import java.nio.file.Path
@@ -97,6 +97,26 @@ object WireJsonSpec extends ZIOSpecDefault:
         )
       ) :+ CallResult.Fault(BuildFault.Plugin(PluginFault.MissingProduct(task)))
       assertTrue(results.forall(result => result.toJson.fromJson[CallResult] == Right(result)))
+    },
+    test("generic product entry paths validate at the wire edge and round-trip inside manifests") {
+      val entry    = ProductEntryPath("assets/@scope/client+v1.js")
+      val manifest = OutputManifest(
+        "site",
+        List(
+          NamedProduct(
+            histos.plugin.DeclaredOutput.Directory(OutputName("site"), RepoPath("site")),
+            List(ProductEntry.RootDirectory, ProductEntry.Directory(entry)),
+          )
+        ),
+      )
+      val invalid = List("", "../page", "assets/../page", "/page", "C:/page", "a\\b", "nul\u0000page")
+      assertTrue(
+        entry.toJson == "\"assets/@scope/client+v1.js\"",
+        entry.toJson.fromJson[ProductEntryPath] == Right(entry),
+        manifest.toJson.fromJson[OutputManifest] == Right(manifest),
+        manifest.toJson.replace(entry.value, "../escape").fromJson[OutputManifest].isLeft,
+        invalid.forall(raw => raw.toJson.fromJson[ProductEntryPath].isLeft),
+      )
     },
     test("compilation stages retain main/test scope, platform, module, and version") {
       assertTrue(stages.forall(stage => stage.toJson.fromJson[CompilationStage] == Right(stage)))

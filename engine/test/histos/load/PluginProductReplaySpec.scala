@@ -174,7 +174,7 @@ object PluginProductReplaySpec extends ZIOSpecDefault:
     },
   )
   private def counting(store: ContentStore, reads: Ref[Int]): ContentStore = new ContentStore:
-    export store.{root, put, remove, list, replace, kept, clean, forget}
+    export store.{root, put, remove, list, replace, retain, kept, clean, forget}
     def read(digest: histos.schedule.Digest): IO[histos.schedule.CacheError, Option[zio.Chunk[Byte]]] =
       reads.update(_ + 1) *> store.read(digest)
 

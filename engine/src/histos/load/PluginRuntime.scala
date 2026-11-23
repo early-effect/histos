@@ -270,11 +270,11 @@ object PluginRuntime:
             )
             outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
             output  <- outcome match
-              case Outcome.Done(text) =>
+              case Outcome.Done(_) =>
                 made.get.flatMap(found =>
                   found.get(id.render) match
                     case Some(output) => ZIO.succeed(output)
-                    case None         => cached(id, text)
+                    case None         => ZIO.fail(PluginFault.MissingProduct(id))
                 )
               case Outcome.Failed(failures) => failed(failures)
           yield output
@@ -340,26 +340,29 @@ object PluginRuntime:
             )
             store <- ZIO.service[ContentStore]
             request = ProductRequest(repo, task, caller.id)
-            fresh <- Ref.make(Option.empty[CommittedOutputs])
-            info  = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
-            local = Step.run(
-              Step.hermetic[String](info)(
-                produce(id, task, plugin, passed, made, compiled, linked, fresh, env, caller, events)
+            info    = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
+            local   = Step.run(
+              Step.local[CommittedOutputs](info)(
+                produce(id, task, plugin, passed, made, compiled, linked, env, caller, events)
                   .provide(ZLayer.succeed(store))
               ) @@ PluginAspects.loader(threads)
             )
-            text <- scheduler
+            result <- scheduler
               .cached(action, ActionDigest.of(action, Map.empty), request, local)
               .provide(ZLayer.succeed(store), ZLayer.succeed(products))
               .mapError:
                 case ScheduleError.Failed(_, error) => error
                 case ScheduleError.Products(error)  => PluginFault.Products(error)
                 case other                          => PluginFault.Scheduled(other)
-            observed <- fresh.get
-            _        <-
-              if task.outputs.isEmpty || observed.nonEmpty then ZIO.unit
-              else restoreCommitted(id, request, text)
-          yield text
+            _ <- keep(result.outputs.manifest)
+            _ <- retained.update(_ + (id -> result.outputs))
+            _ <- made.update(found =>
+              found + (id.render -> found.getOrElse(
+                id.render,
+                PluginManifest.output(result.outputs.manifest).copy(text = cacheHit(result.outputs.manifest.text)),
+              ))
+            )
+          yield result.record
 
     private def withUpstream(
         inputs: List[Input],
@@ -396,11 +399,10 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         compiled: List[histos.plugin.CellClasspath],
         linked: List[histos.plugin.LinkedScript],
-        fresh: Ref[Option[CommittedOutputs]],
         env: Map[String, String],
         caller: InvocationContext,
         events: PluginEvents.Invocation,
-    ): ZIO[ContentStore, PluginFault, String] =
+    ): ZIO[ContentStore, PluginFault, CommittedOutputs] =
       def call(destinations: OutputDestinations): ZIO[Any, PluginFault, PluginOutput] =
         for
           hashed <- PluginInputs.hash(hashRequest(id, task, env, args)).mapError(PluginFault.Task(_))
@@ -421,49 +423,23 @@ object PluginRuntime:
           )
             .mapError(PluginFault.Task(_))
         yield output
-      if task.outputs.isEmpty then
+      ZIO.scoped:
         for
-          output <- call(OutputDestinations.empty)
-          _      <- ZIO.fromEither(PluginProducts.validateReport(Nil, output)).mapError(PluginFault.Task(_))
-          _      <- made.update(_ + (id.render -> output))
-        yield output.text
-      else
-        ZIO.scoped:
-          for
-            staged   <- products.stage(ProductRequest(repo, task, caller.id)).mapError(PluginFault.Products(_))
-            output   <- call(staged.destinations)
-            manifest <- products.seal(staged, output).mapError(PluginFault.Products(_))
-            text     <- ZIO.uninterruptibleMask: restore =>
-              for
-                committed <- restore(products.commit(staged, manifest).mapError(PluginFault.Products(_)))
-                _         <- keep(manifest)
-                _         <- retained.update(_ + (id -> committed))
-                _         <- fresh.set(Some(committed))
-                _         <- made.update(_ + (id.render -> PluginManifest.output(manifest)))
-              yield PluginManifest.store(manifest)
-          yield text
+          staged    <- products.stage(ProductRequest(repo, task, caller.id)).mapError(PluginFault.Products(_))
+          output    <- call(staged.destinations)
+          manifest  <- products.seal(staged, output).mapError(PluginFault.Products(_))
+          committed <- ZIO.uninterruptibleMask: restore =>
+            for
+              committed <- restore(products.commit(staged, manifest).mapError(PluginFault.Products(_)))
+              _         <- keep(manifest)
+              _         <- made.update(_ + (id.render -> PluginManifest.output(manifest)))
+            yield committed
+        yield committed
 
     private def keep(manifest: OutputManifest): ZIO[ContentStore, PluginFault, Unit] =
       ZIO
         .serviceWithZIO[ContentStore](_.retain(CacheProject.of(repo), manifest.contentDigests))
         .mapError(error => PluginFault.Products(ProductError.Cache(error)))
-
-    private def restoreCommitted(
-        id: PluginTaskId,
-        request: ProductRequest,
-        stored: String,
-    ): ZIO[ContentStore, PluginFault, Unit] =
-      for
-        manifest <- ZIO
-          .fromEither(PluginManifest.products(stored))
-          .mapError(PluginFault.Products(_))
-          .flatMap(value => ZIO.fromOption(value).orElseFail(PluginFault.Products(ProductError.InvalidManifest)))
-        restored <- ZIO.scoped(products.restore(request, manifest)).mapError(PluginFault.Products(_))
-        _        <- restored match
-          case RestoreResult.Hit(output) => keep(manifest) *> retained.update(_ + (id -> output))
-          case RestoreResult.Miss        =>
-            ZIO.serviceWithZIO[ContentStore](store => ZIO.fail(PluginFault.Products(ProductError.Missing(store.root))))
-      yield ()
 
     private def invoke(
         plugin: HistosPlugin,
@@ -530,17 +506,6 @@ object PluginRuntime:
             .left
             .map(_ => PluginRunError.Defect("ActionId"))
             .map(dep => acc :+ dep)
-
-    private def cached(id: PluginTaskId, stored: String): IO[PluginFault, PluginOutput] =
-      taskOf(id) match
-        case None                               => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
-        case Some(task) if task.outputs.isEmpty => ZIO.succeed(PluginOutput(cacheHit(stored), Nil, Nil))
-        case Some(_)                            =>
-          ZIO
-            .fromEither(PluginManifest.products(stored))
-            .mapError(PluginFault.Products(_))
-            .flatMap(value => ZIO.fromOption(value).orElseFail(PluginFault.Products(ProductError.InvalidManifest)))
-            .map(manifest => PluginManifest.output(manifest).copy(text = cacheHit(manifest.text)))
 
     private def tasks: List[(PluginTaskId, DeclaredTask)] =
       graph.plugins.flatMap: plugin =>
