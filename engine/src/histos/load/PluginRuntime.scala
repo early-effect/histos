@@ -207,7 +207,7 @@ object PluginRuntime:
                 cell =>
                   session.flatMap: compiled =>
                     PluginCells
-                      .compile(compiled, cell)
+                      .compile(compiled, cell, events)
                       .provideSome[Resolve & histos.cache.ContentStore](
                         zio.ZLayer.succeed(report) ++ zio.ZLayer.succeed(remote)
                       ),
@@ -425,11 +425,11 @@ object PluginRuntime:
               .attemptBlocking(
                 Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
               )
-              .orElseFail(PluginRunError.MissingOutput(declaredOutput.name))
+              .orElseFail(PluginRunError.MissingOutput(declaredOutput.name, declaredOutput.path))
               .flatMap:
                 case true  => ZIO.unit
                 case false =>
-                  ZIO.fail(PluginRunError.MissingOutput(declaredOutput.name))
+                  ZIO.fail(PluginRunError.MissingOutput(declaredOutput.name, declaredOutput.path))
 
     private def record(
         task: DeclaredTask,

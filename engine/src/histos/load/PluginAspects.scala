@@ -64,8 +64,8 @@ private[load] object PluginAspects:
       val file = repo.resolve(declared.path.value)
       ZIO
         .attemptBlocking(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
-        .orElseFail(PluginRunError.MissingOutput(declared.name))
+        .orElseFail(PluginRunError.MissingOutput(declared.name, declared.path))
         .flatMap:
           case true  => ZIO.unit
-          case false => ZIO.fail(PluginRunError.MissingOutput(declared.name))
+          case false => ZIO.fail(PluginRunError.MissingOutput(declared.name, declared.path))
 end PluginAspects

@@ -116,7 +116,7 @@ end PluginIo
 /** What `run` fails with. Interruption is not one of these. */
 enum PluginRunError:
   case Failed(detail: PluginDetail)
-  case MissingOutput(name: OutputName)
+  case MissingOutput(name: OutputName, path: RepoPath)
   case ExtraOutput(path: String)
   case MissingArg(name: ParamName)
   case MissingNote(module: ProjectName, key: NoteKey)
@@ -129,16 +129,16 @@ enum PluginRunError:
   case Unverified(source: SourceId)
 
   def message: String = this match
-    case Failed(detail)           => detail.value
-    case MissingOutput(name)      => s"plugin output ${name.value} was not written"
-    case ExtraOutput(path)        => s"plugin wrote '$path', which was not declared"
-    case MissingArg(name)         => s"plugin argument ${name.value} is missing"
-    case MissingNote(module, key) => s"module ${module.value} has no note ${key.value}"
-    case Unknown(id)              => s"plugin task ${id.render} is not in the graph"
-    case Cycle(path)              => s"plugin task cycle ${path.map(_.render).mkString(" -> ")}"
-    case Defect(binary)           => s"plugin task failed ($binary)"
-    case EngineLeak(binary)       => s"plugin task links '$binary'"
-    case Linkage(binary)          => s"plugin task is missing class $binary"
-    case Closed                   => "plugin generation is closed"
-    case Unverified(source)       => s"plugin source ${source.value} has no verified closure"
+    case Failed(detail)            => detail.value
+    case MissingOutput(name, path) => s"plugin output ${name.value} was not written at ${path.value}"
+    case ExtraOutput(path)         => s"plugin wrote '$path', which was not declared"
+    case MissingArg(name)          => s"plugin argument ${name.value} is missing"
+    case MissingNote(module, key)  => s"module ${module.value} has no note ${key.value}"
+    case Unknown(id)               => s"plugin task ${id.render} is not in the graph"
+    case Cycle(path)               => s"plugin task cycle ${path.map(_.render).mkString(" -> ")}"
+    case Defect(binary)            => s"plugin task failed ($binary)"
+    case EngineLeak(binary)        => s"plugin task links '$binary'"
+    case Linkage(binary)           => s"plugin task is missing class $binary"
+    case Closed                    => "plugin generation is closed"
+    case Unverified(source)        => s"plugin source ${source.value} has no verified closure"
 end PluginRunError

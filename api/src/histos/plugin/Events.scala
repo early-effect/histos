@@ -13,6 +13,7 @@ enum GenerationPluginEvent:
 enum InvocationPluginEvent:
   case Diagnosis(noted: Noted)
   case Message(text: PluginDetail)
+  case Err(text: PluginDetail)
 
 enum PluginEventError:
   case Closed
