@@ -160,6 +160,32 @@ object Resolve:
       _ <- write(path, DependencyLock(solved, kept, tools))
     yield path.toString
 
+  /** Solve this graph and write `.histos/resolution`. A solved build has no lock. Deps commands call this when the
+    * report is missing, so CI can audit without compiling first.
+    */
+  def remember(
+      repo: Path,
+      graph: ProjectGraph,
+      repositories: Repositories,
+      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
+  ): ZIO[Resolve, ResolveError, Unit] =
+    for
+      planned <- LockedTools.plan(repo, graph, native)
+      _       <- ZIO.foreachDiscard(cells(graph, repositories))(prepare)
+      solved  <- ZIO.foreach(cells(graph, repositories))(cell =>
+        ZIO.serviceWithZIO[Resolve](_.resolve(cell)).map(lockCell(cell, _))
+      )
+      tools <- ZIO.foreach(planned)(request =>
+        ZIO
+          .serviceWithZIO[Resolve](_.resolveTool(request))
+          .flatMap(classpath =>
+            val cell = lockTool(request, classpath)
+            ZIO.fromEither(LockedTools.validate(request, cell)).as(cell)
+          )
+      )
+      _ <- write(ResolutionService.reportPath(repo), DependencyLock(solved, Nil, tools))
+    yield ()
+
   private[resolve] def lockTool(request: ToolRequest, classpath: Classpath): LockedTool =
     LockedTool(
       request.id,

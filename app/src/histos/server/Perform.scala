@@ -116,11 +116,15 @@ object Perform:
 
             call match
               case Call.Compile(projects) =>
-                held(build => follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say))))
+                held(build =>
+                  follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins)))
+                )
               case Call.Test(projects, patterns, mode, filter) =>
                 held(build =>
                   follow(
-                    withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, filter, jdk, machine, say))
+                    withJdk(jdk =>
+                      Calls.test(repo, build.graph, projects, patterns, mode, filter, jdk, machine, say, build.plugins)
+                    )
                   )
                 )
               case Call.PublishWithdraw =>

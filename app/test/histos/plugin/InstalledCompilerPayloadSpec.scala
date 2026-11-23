@@ -9,12 +9,12 @@ import java.nio.file.{Files, Path}
 import zio.test.*
 import zio.ZIO
 
-/** The installed distribution. `HISTOS_JAR` is the payload and `HISTOS_REPO` is the checkout lock. A missing value
-  * fails the assertion. This does not solve.
+/** The installed distribution. `HISTOS_JAR` is the payload and `HISTOS_REPO` is the checkout. A missing value fails the
+  * assertion. This does not solve. A solved checkout has no `dependencies.lock`, and materialize must not create one.
   */
 object InstalledCompilerPayloadSpec extends ZIOSpecDefault:
   def spec = suite("installed compiler payload")(
-    test("materialize checks the installed jar and leaves dependencies.lock unchanged") {
+    test("materialize checks the installed jar and does not write a lock") {
       val jar  = named("HISTOS_JAR")
       val repo = named("HISTOS_REPO")
       (jar, repo) match
@@ -33,13 +33,15 @@ object InstalledCompilerPayloadSpec extends ZIOSpecDefault:
       for
         home <- jdkHome
         lock = repo.resolve("dependencies.lock")
-        before <- bytes(lock)
-        root   <- Workspace.work("histos-a8-cas").mapError(HostCompilerError.Io(_))
-        cas    <- ZIO
+        existed <- present(lock)
+        before  <- if existed then bytes(lock) else ZIO.succeed(Array.emptyByteArray)
+        root    <- Workspace.work("histos-a8-cas").mapError(HostCompilerError.Io(_))
+        cas     <- ZIO
           .attemptBlocking(Files.createDirectories(root.resolve("cas")))
           .mapError(_ => HostCompilerError.Io(IoFailure(root.resolve("cas"), IoFault.Temp)))
-        session <- HostCompilerInputs.materialize(jar, home, ContentStore.in(cas))
-        after   <- bytes(lock)
+        session    <- HostCompilerInputs.materialize(jar, home, ContentStore.in(cas))
+        stillThere <- present(lock)
+        after      <- if stillThere then bytes(lock) else ZIO.succeed(Array.emptyByteArray)
       yield
         val roles  = session.tools.map(_.entry.role).toSet
         val signed = HostCompilerInputs.sign(
@@ -54,6 +56,7 @@ object InstalledCompilerPayloadSpec extends ZIOSpecDefault:
           roles.contains(HostToolRole.Interfaces),
           roles.contains(HostToolRole.Runtime),
           session.fingerprint == signed.fingerprint,
+          existed == stillThere,
           before.sameElements(after),
         )
     }
@@ -65,6 +68,11 @@ object InstalledCompilerPayloadSpec extends ZIOSpecDefault:
       .flatMap:
         case Some(home) => ZIO.succeed(Path.of(home))
         case None       => ZIO.fail(HostCompilerError.Io(IoFailure(Path.of("java.home"), IoFault.Stat)))
+
+  private def present(path: Path): ZIO[Any, HostCompilerError, Boolean] =
+    ZIO
+      .attemptBlocking(Files.isRegularFile(path))
+      .mapError(_ => HostCompilerError.Io(IoFailure(path, IoFault.Stat)))
 
   private def bytes(path: Path): ZIO[Any, HostCompilerError, Array[Byte]] =
     ZIO

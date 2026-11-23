@@ -424,6 +424,7 @@ object GraphCompile:
                 inside,
                 coverage,
                 plugins = histos.load.ApiDep.modules(graph),
+                emitted = Emitted.directories(graph),
               )
               val goal = ScheduleCells.goal(
                 plan,
@@ -647,6 +648,33 @@ object GraphCompile:
                     case None      => ZIO.none
                 yield found
 
+  /** Committed sources from the module directory and every extra root. Filters still apply per root. */
+  private def selectRoots(
+      repo: Path,
+      module: Module,
+      primary: Path,
+      version: ScalaVersion,
+      platform: Platform,
+      emitted: Map[ProjectName, List[String]],
+  ): IO[CompileError, List[Path]] =
+    val written = emitted.getOrElse(module.name, Nil).map(repo.resolve)
+    ZIO
+      .foreach(Sources.roots(repo, primary, module) ++ written)(root => Sources.select(root, version, platform))
+      .map(_.flatten.distinct)
+
+  private def selectTests(
+      repo: Path,
+      module: Module,
+      primary: Path,
+      version: ScalaVersion,
+      platform: Platform,
+      emitted: Map[ProjectName, List[String]],
+  ): IO[CompileError, List[Path]] =
+    val written = emitted.getOrElse(module.name, Nil).map(repo.resolve)
+    ZIO
+      .foreach(Sources.roots(repo, primary, module) ++ written)(root => Sources.tests(root, version, platform))
+      .map(_.flatten.distinct)
+
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
@@ -656,11 +684,11 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      listed <- Sources.select(base, version, platform).mapError(failed)
+      committed <- selectRoots(plan.repo, module, base, version, platform, plan.emitted).mapError(failed)
       extraRoot = Sources.unmanagedRoot(plan.repo, module.name.value)
       extra <- Sources.select(extraRoot, version, platform).mapError(failed)
-      sources = Sources.prefer(base, listed, extraRoot, extra)
-      tests    <- Sources.tests(base, version, platform).mapError(failed)
+      sources = Sources.prefer(base, committed, extraRoot, extra)
+      tests    <- selectTests(plan.repo, module, base, version, platform, plan.emitted).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
         else if sources.isEmpty then vacant(plan, module.name, version, platform)

@@ -99,6 +99,9 @@ enum BuildError:
   case TwoAssets(name: ProjectName, position: SourcePos)
   case DuplicateResource(name: ProjectName, resource: ResourceName, position: SourcePos)
   case RemoteNeeds(name: ProjectName, needs: Set[Need], position: SourcePos)
+  case TestAggregateSelf(name: ProjectName, position: SourcePos)
+  case TestAggregatePlatform(name: ProjectName, member: ProjectName, position: SourcePos)
+  case TestAggregatePublished(ship: ShipName, module: ProjectName, position: SourcePos)
   case ToolchainLauncher(
       ship: ShipName,
       module: ProjectName,
@@ -176,6 +179,12 @@ enum BuildError:
     case RemoteNeeds(name, needs, position) =>
       val listed = needs.toList.map(needWord).sorted.mkString(", ")
       s"'${name.value}' stores remote test results and needs $listed (${position.line}:${position.column})"
+    case TestAggregateSelf(name, position) =>
+      s"'${name.value}' aggregates its own native tests (${position.line}:${position.column})"
+    case TestAggregatePlatform(name, member, position) =>
+      s"'${name.value}' aggregates '${member.value}', which does not build Native (${position.line}:${position.column})"
+    case TestAggregatePublished(ship, module, position) =>
+      s"ship '${ship.value}' lists '${module.value}', which is a native test aggregate and is not published (${position.line}:${position.column})"
     case ToolchainLauncher(ship, module, fault, position) =>
       val why = fault match
         case ToolchainLauncherFault.Missing   => "that module is not in the build"

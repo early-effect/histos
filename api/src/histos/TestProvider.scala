@@ -84,9 +84,16 @@ private object ProviderLibraryMacro:
 end ProviderLibraryMacro
 
 /** A framework the child process runs. `Zio` is the provider `histos test` uses when a module does not name another one
-  * and does not name a main.
+  * and does not name a main. `properties` are JVM system properties that child receives.
   */
-final case class TestProvider private (framework: FrameworkClass, library: ProviderLibrary)
+final case class TestProvider private (
+    framework: FrameworkClass,
+    library: ProviderLibrary,
+    properties: List[SystemProperty] = Nil,
+):
+  /** System properties for the JVM test child. A second call replaces the list. */
+  def properties(property: SystemProperty, rest: SystemProperty*): TestProvider =
+    copy(properties = property +: rest.toList)
 
 object TestProvider:
   val Zio: TestProvider = trusted(

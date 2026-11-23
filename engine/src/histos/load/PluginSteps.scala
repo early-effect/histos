@@ -69,7 +69,8 @@ private[load] object PluginSteps:
               linkStep(cell, compile, link)
             )
             sameTasks = declared.dependsOn.collect:
-              case TaskDep.Same(name) => PluginTaskId(id.plugin, name)
+              case TaskDep.Same(name)     => PluginTaskId(id.plugin, name)
+              case TaskDep.Generate(name) => PluginTaskId(id.plugin, name)
             deps <- sameTasks.foldLeft[Either[PluginFault, List[CellStep]]](
               Right(upstreams)
             ): (acc, dep) =>

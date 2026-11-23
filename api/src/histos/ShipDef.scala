@@ -154,5 +154,7 @@ object ShipLink:
     projects.find(_.name.value == member.name) match
       case None                     => Left(BuildError.MissingProject(member.name, member.position))
       case Some(project: Aggregate) => Left(BuildError.AggregateShipMember(ship, project.name, defn.position))
-      case Some(project: Module)    => Right(project.name)
+      case Some(project: Module) if project.testAggregates.nonEmpty =>
+        Left(BuildError.TestAggregatePublished(ship, project.name, defn.position))
+      case Some(project: Module) => Right(project.name)
 end ShipLink

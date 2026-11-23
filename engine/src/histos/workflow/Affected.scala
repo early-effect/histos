@@ -33,8 +33,10 @@ object Affected:
 
   private def owner(modules: List[Module], path: String): Option[ProjectName] =
     val ranked = modules.flatMap { module =>
-      val root = module.baseDirectory
-      if path == root || path.startsWith(s"$root/") then Some(root.length -> module.name) else None
+      val roots = module.baseDirectory :: module.sources.map(_.value)
+      roots.collect {
+        case root if path == root || path.startsWith(s"$root/") => root.length -> module.name
+      }
     }
     ranked.sortBy { case (length, name) => (-length, name.value) }.headOption.map(_._2)
 

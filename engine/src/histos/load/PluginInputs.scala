@@ -149,6 +149,8 @@ private[load] object PluginInputs:
           .scriptDigest(repo, graph, name, version)
           .flatMap: sha =>
             named(s"in:link:${name.value}:${star(version)}", InputValue.Hash(sha)).map(Some(_))
+      case histos.plugin.TaskDep.Generate(_)                      => ZIO.none
+      case histos.plugin.TaskDep.Emit(_)                          => ZIO.none
       case histos.plugin.TaskDep.Compile(name, version, platform) =>
         cells(repo, graph, name, version, platform).flatMap: sha =>
           named(

@@ -1127,13 +1127,15 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): ZIO[
     Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =
     opened(say) { remote =>
-      layout(say, graph) *>
+      emitted(repo, graph, plugins, projects, remote) *>
+        layout(say, graph) *>
         CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
           GraphCompile
             .strict(
@@ -1319,13 +1321,15 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): ZIO[
     Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =
     opened(say) { remote =>
-      layout(say, graph) *>
+      emitted(repo, graph, plugins, projects, remote) *>
+        layout(say, graph) *>
         CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
           CompileConsole.notes(graph.moduleColumn).flatMap { notes =>
             Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
@@ -1464,6 +1468,26 @@ object Calls:
         _ => runs.update(_ - runId),
       )
     yield ()
+
+  /** Run plugin tasks that emit sources for the modules about to compile. */
+  private def emitted(
+      repo: Path,
+      graph: ProjectGraph,
+      plugins: histos.load.PluginRuntime,
+      projects: List[ProjectName],
+      remote: histos.schedule.RemoteCache,
+  ): ZIO[ContentStore & Resolve & histos.resolve.ResolutionService, ServerError, Unit] =
+    val _ = repo
+    ZIO.serviceWithZIO[ContentStore]: store =>
+      ZIO.foreachDiscard(histos.zinc.Emitted.tasks(graph, projects)): id =>
+        plugins
+          .run(id, histos.plugin.PluginArgs.empty)
+          .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
+            ZLayer.succeed(ContentStore.actions(store)),
+            ZLayer.succeed(remote),
+          )
+          .mapError(error => ServerError.Exited(error.message))
+          .unit
 
   /** Open the process cache for this call. A bad URI fails the call. An unset URI is off. */
   private def opened[R](say: Say)(body: RemoteCache => ZIO[R, ServerError, Unit]): ZIO[R, ServerError, Unit] =

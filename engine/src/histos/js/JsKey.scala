@@ -21,6 +21,7 @@ object JsKey:
       products: List[Sha256],
       initialize: Boolean = true,
       arguments: List[String] = Nil,
+      optimize: histos.JsOptimize = histos.JsOptimize.Fast,
   ): Sha256 =
     val entry =
       if initialize then main.binary else "exports"
@@ -32,9 +33,10 @@ object JsKey:
          |products
          |${products.map(_.value).mkString("\n")}
          |""".stripMargin
-    val text =
+    val asked =
       if arguments.isEmpty then base
       else base + "args\n" + encoded(arguments) + "\n"
+    val text = asked + s"optimize\n${optimize.token}\n"
     Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 
   /** Count, then one Base64 line per argument. Empty arguments stay out of the key. */

@@ -45,6 +45,41 @@ release. You do not write `SNAPSHOT` in the catalog.
 """,
       cite[histos.Dep.type](_.from),
     ),
+    section("Sources live in more than one directory")(
+      md"""
+A module compiles the sources under its own directory. That is `<name>/src`, or the
+directory you named with `in`.
+
+When the same tree belongs in more than one module, add it with `sources`. Each extra
+directory uses the layout you already know: `scala`, `java`, and a filter such as
+`jvm`, `js`, `native`, or `scala-2.13`. A file under `jvm` is compiled for the JVM and
+left out of Scala.js. The module directory stays the first root. Naming a directory
+twice does not compile it twice.
+
+```scala
+val shared = path"shared/src"
+val core   = module("core", Jvm, Js)(scala"3.8.1").sources(shared)
+```
+""",
+      cite[histos.Module](_.sources),
+    ),
+    section("Native libraries")(
+      md"""
+A Native module links the libraries you name. `link` takes `Ssl`, `Crypto`, `Gc`,
+`Unwind`, or `Stdcxx`. You do not write a linker flag. On macOS, `Ssl` and `Crypto`
+use Homebrew OpenSSL when `/opt/homebrew/opt/openssl@3` is installed. On Linux they
+are the system libraries, and the generated native job installs them.
+
+A second `link` replaces the set. A module that builds no Native code cannot call it.
+
+```scala
+val core = module("core", Jvm, Native)(scala"3.8.1")
+  .clang(ClangMajor(21))
+  .link(NativeLibrary.Ssl, NativeLibrary.Crypto)
+```
+""",
+      cite[histos.NativeLibrary](_.token),
+    ),
     section("What this repository builds")(
       md"""
 This repository is itself a Histos build. `object build extends HistosBuild` in

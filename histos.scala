@@ -47,8 +47,25 @@ object build extends HistosBuild:
     val jacksonDatabind = jacksonCore.module("jackson-databind")
     val jackson3        = dep"tools.jackson.core:jackson-core:3.2.4"
     val jackson3Bind    = jackson3.module("jackson-databind")
-    val engine          = module("engine", Jvm)(scala3)
-      .dependsOn(central, api, wire)
+    val splice          = module("splice", Jvm)(scala3)
+      .artifact(artifact"histos-splice")
+      .libraryDependencies(
+        zio,
+        dep"io.get-coursier::coursier-cache:2.1.26",
+        dep"org.apache.commons:commons-compress:1.28.0",
+        dep"com.google.javascript:closure-compiler:v20260726",
+        dep"org.scala-js::scalajs-ir:1.22.0",
+        dep"org.scala-js::scalajs-linker-interface:1.22.0",
+      )
+      .testDependencies(
+        zioTest,
+        zioTestSbt,
+        dep"org.graalvm.polyglot:polyglot:25.2.4",
+        dep"org.graalvm.js:js-language:25.2.4",
+        dep"org.graalvm.truffle:truffle-runtime:25.2.4",
+      )
+    val engine = module("engine", Jvm)(scala3)
+      .dependsOn(central, api, wire, splice)
       .libraryDependencies(
         zio,
         zioJson,
@@ -74,6 +91,7 @@ object build extends HistosBuild:
         dep"tools.jackson.dataformat:jackson-dataformat-yaml:3.2.4",
         dep"org.jsoup:jsoup:1.24.1",
         dep"com.google.guava:guava:33.8.0-jre",
+        dep"com.typesafe::mima-core:1.1.5",
       )
       .testDependencies(
         zioTest,
@@ -107,7 +125,7 @@ object build extends HistosBuild:
         asmTree,
       )
     val library =
-      Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
+      Ship("histos").next(0, 5, 0)(api, wire, splice, central, engine, app).toolchain(launcher = app, client = client)
     val docs = module("docs", Jvm, Js)(scala3)
       .dependsOn(Jvm)(api, app)
       .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
@@ -161,6 +179,7 @@ object build extends HistosBuild:
         ships(library),
         api,
         wire,
+        splice,
         client,
         central,
         engine,

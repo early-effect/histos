@@ -350,6 +350,7 @@ private[testrun] object SuiteLaunch:
                   jdk,
                   binary,
                   cell.version,
+                  libraries = module.libraries,
                 ),
                 classes :: linked.paths,
               )
@@ -379,6 +380,71 @@ private[testrun] object SuiteLaunch:
           ),
       )
     yield stream
+
+  /** Compiles each aggregated module's native tests before the one link. A module with no tests is skipped. */
+  private def compileAggregates(
+      repo: Path,
+      modules: List[Module],
+      owner: Module,
+      cell: CompiledCell,
+      jdk: JdkRuntime,
+      runtimes: histos.toolchain.Runtimes,
+      lock: histos.resolve.DependencyLock,
+      repositories: histos.resolve.Repositories,
+      hear: CompileProblem => Unit,
+      onPulse: CompilePulse => Unit,
+  ): ZIO[
+    Resolve & histos.resolve.LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.schedule.RemoteCache,
+    ModuleTestError,
+    Unit,
+  ] =
+    ZIO.foreachDiscard(owner.testAggregates): name =>
+      modules.find(_.name == name) match
+        case None         => ZIO.unit
+        case Some(member) =>
+          val primary = repo.resolve(member.baseDirectory).resolve("src")
+          ZIO
+            .foreach(histos.zinc.Sources.roots(repo, primary, member)): root =>
+              histos.zinc.Sources.tests(root, cell.version, Platform.Native)
+            .mapBoth(
+              error => ModuleTestError.Sources(member.name, cell.version, error),
+              _.flatten.distinct,
+            )
+            .flatMap: sources =>
+              if sources.isEmpty then ZIO.unit
+              else
+                TestCompile
+                  .compiledTests(
+                    repo,
+                    modules,
+                    member,
+                    cell,
+                    sources,
+                    jdk,
+                    runtimes.native,
+                    lock,
+                    repositories,
+                    hear,
+                    onPulse = onPulse,
+                  )
+                  .unit
+
+  private def memberLibraries(modules: List[Module], owner: Module): Set[histos.NativeLibrary] =
+    owner.testAggregates.flatMap(name => modules.find(_.name == name).toList.flatMap(_.libraries)).toSet
+
+  /** Test class directories of the modules this native binary also runs. Empty when the module names none. */
+  private def aggregateClasses(
+      repo: Path,
+      modules: List[Module],
+      owner: Module,
+      cell: CompiledCell,
+  ): List[Path] =
+    owner.testAggregates.flatMap: name =>
+      modules
+        .find(_.name == name)
+        .map: member =>
+          TestCompile.testClasses(repo, member.name, cell.version, cell.platform)
 
   private[testrun] def runNativeProvider(
       repo: Path,
@@ -424,7 +490,8 @@ private[testrun] object SuiteLaunch:
           if !keep then ZIO.succeed(ZStream.empty)
           else
             for
-              _         <- TestCompile.fresh(linkDir)
+              _ <- compileAggregates(repo, modules, module, cell, jdk, runtimes, lock, repositories, hear, onPulse)
+              _ <- TestCompile.fresh(linkDir)
               toolchain <- nativeToolchain(module, cell, runtimes.native)
               iface     <- ZIO.serviceWithZIO[LockedTools](tools =>
                 tools
@@ -436,7 +503,8 @@ private[testrun] object SuiteLaunch:
                     _.artifacts.map(_.path),
                   )
               )
-              classpath = classes :: linked.paths.filterNot(replacedInterface) ++ iface
+              members   = aggregateClasses(repo, modules, module, cell)
+              classpath = (classes :: members) ++ linked.paths.filterNot(replacedInterface) ++ iface
               binary <- NativeLink
                 .linkClasspath(
                   NativeLinkRequest(
@@ -447,6 +515,7 @@ private[testrun] object SuiteLaunch:
                     jdk,
                     entry,
                     cell.version,
+                    libraries = module.libraries ++ memberLibraries(modules, module),
                   ),
                   classpath,
                 )
@@ -908,6 +977,7 @@ private[testrun] object SuiteLaunch:
                     ProviderRunner.Main,
                     work,
                     note.environment,
+                    provider.properties,
                   ),
                   cell.platform,
                 )
@@ -967,6 +1037,7 @@ private[testrun] object SuiteLaunch:
       main: MainClass,
       work: Path,
       extra: Map[String, String] = Map.empty,
+      properties: List[histos.SystemProperty] = Nil,
   ): ChildRequest =
     ChildRequest(
       Platform.Jvm,
@@ -975,6 +1046,7 @@ private[testrun] object SuiteLaunch:
       main,
       work,
       TestCompile.suiteEnv(repo, runtimes.env) ++ extra,
+      arguments = properties.map(_.argument),
     )
 
   /** Header, then lines as the process writes them, then the cell. A child that holds the pipes after the process exits

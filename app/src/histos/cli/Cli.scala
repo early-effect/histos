@@ -607,7 +607,21 @@ object Cli:
           val policy     = loaded.graph.supply
           val resolution = loaded.graph.resolution
           val net        = histos.supply.Net.live
-          val effect     = action match
+          val remembered =
+            resolution match
+              case histos.Resolution.Lock  => ZIO.unit
+              case histos.Resolution.Solve =>
+                val path = histos.resolve.ResolutionService.reportPath(repo)
+                ZIO.attemptBlocking(java.nio.file.Files.isRegularFile(path)).orDie.flatMap { present =>
+                  if present then ZIO.unit
+                  else
+                    histos.resolve.Resolve.remember(
+                      repo,
+                      loaded.graph,
+                      histos.resolve.BuildResolvers(loaded.graph.resolvers),
+                    )
+                }
+          val effect = action match
             case DepsAction.Check =>
               histos.supply.DepsSurface.check(repo, resolution, policy, net)
             case DepsAction.Update(yes, security) =>
@@ -620,14 +634,18 @@ object Cli:
               histos.supply.DepsSurface.alert(repo, resolution, policy, net)
             case DepsAction.Snapshot(submit) =>
               histos.supply.DepsSurface.snapshot(repo, resolution, net, submit)
-          effect
-            .provide(histos.supply.GitRead.live)
-            .map: result =>
-              val exit =
-                if result.code == 0 then CliExit.Success
-                else if result.code == 2 then CliExit.Usage
-                else CliExit.Failed
-              Completed(exit, result.text, "", Playback.Held)
+          remembered.either.flatMap {
+            case Left(error) =>
+              ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held))
+            case Right(_) =>
+              effect.provide(histos.supply.GitRead.live).map { result =>
+                val exit =
+                  if result.code == 0 then CliExit.Success
+                  else if result.code == 2 then CliExit.Usage
+                  else CliExit.Failed
+                Completed(exit, result.text, "", Playback.Held)
+              }
+          }
 
   /** The surface reads the build and the zipx files and writes the build on the calling thread. */
   private def setup(

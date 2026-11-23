@@ -41,6 +41,7 @@ object ShipChecks:
   val releasesId = CheckId.trusted("ship.releases")
   val bumpId     = CheckId.trusted("ship.should-bump")
   val pinId      = CheckId.trusted("ship.pin")
+  val binaryId   = CheckId.trusted("ship.binary")
 
   def read(path: Path): UIO[ReleasesFile] =
     ZIO
@@ -68,6 +69,7 @@ object ShipChecks:
             case None      => ZIO.succeed(List(pin(None, Listing.Unasked)))
             case Some(pin) =>
               listing(feed, Some(ReleaseFeed.histos)).map(found => List(ShipChecks.pin(Some(pin.choice), found))),
+      local(binaryId)(binaries(repo, graph, feed)),
     )
 
   def outcomes(
@@ -178,6 +180,88 @@ object ShipChecks:
         listing(feed, module(graph, ship)).map(ship.name -> _)
       )
       .map(_.toMap)
+
+  /** Compare compiled JVM classes with the previous Central release. A missing class directory is not a failure. */
+  private def binaries(repo: Path, graph: ProjectGraph, feed: ReleaseFeed): UIO[List[Outcome]] =
+    graph.catalog.ships match
+      case Nil   => ZIO.succeed(List(Outcome.Ok(binaryId, "no catalog")))
+      case ships => ZIO.foreach(ships)(ship => binaryOne(repo, graph, feed, ship)).map(_.flatten)
+
+  private def binaryOne(repo: Path, graph: ProjectGraph, feed: ReleaseFeed, ship: Ship): UIO[List[Outcome]] =
+    ship match
+      case line: Ship.Line =>
+        jvmMember(graph, line) match
+          case None =>
+            ZIO.succeed(List(Outcome.Ok(binaryId, s"${line.name.value} has no JVM member")))
+          case Some(member) =>
+            val classes = histos.zinc.GraphCompile.classesDir(repo, member.name, member.versions.first)
+            ZIO
+              .attemptBlocking(Files.isDirectory(classes))
+              .orDie
+              .flatMap: present =>
+                if !present then ZIO.succeed(List(Outcome.Ok(binaryId, s"${line.name.value} has not been compiled")))
+                else
+                  listing(feed, module(graph, line)).flatMap:
+                    case Listing.Newest(Some(previous)) if Ordering[ShipNumber].lt(previous, line.number) =>
+                      fetchJar(module(graph, line), previous).foldZIO(
+                        detail =>
+                          ZIO.succeed(
+                            List(
+                              Outcome.Skipped(
+                                binaryId,
+                                Probe.Registry,
+                                Fix.Steps(::(s"$detail. Reach it, then run histos doctor again.", Nil)),
+                              )
+                            )
+                          ),
+                        jar => ZIO.succeed(List(judge(line, previous, BinaryCheck.compare(jar, classes, line.number)))),
+                      )
+                    case Listing.Unreachable(error) => ZIO.succeed(List(skipped(binaryId, error)))
+                    case _                          =>
+                      ZIO.succeed(List(Outcome.Ok(binaryId, s"${line.name.value} has no previous release")))
+
+  private def jvmMember(graph: ProjectGraph, ship: Ship.Line): Option[Module] =
+    ship.members.flatMap { name =>
+      graph.get(name).collect { case module: Module if module.platforms.all.contains(histos.Platform.Jvm) => module }
+    }.headOption
+
+  private def judge(ship: Ship.Line, previous: ShipNumber, difference: BinaryCheck.Difference): Outcome =
+    difference match
+      case BinaryCheck.Difference.None =>
+        Outcome.Ok(binaryId, s"${ship.name.value} matches ${previous.render}")
+      case BinaryCheck.Difference.Break(part, _) if BinaryCheck.covers(previous, ship.number, part) =>
+        Outcome.Ok(
+          binaryId,
+          s"${ship.name.value} ${ship.number.render} covers a ${part.token} from ${previous.render}",
+        )
+      case BinaryCheck.Difference.Break(part, _) =>
+        Outcome.Found(ShipDiagnostic.BinaryBump(ship.name, ship.number, part.token))
+
+  private def fetchJar(maven: Option[MavenModule], revision: ShipNumber): ZIO[Any, String, Path] =
+    maven match
+      case None         => ZIO.fail("the ship names no published module")
+      case Some(listed) =>
+        ZIO
+          .attemptBlocking {
+            val dependency = coursier
+              .Dependency(
+                coursier.Module(
+                  coursier.Organization(listed.group.value),
+                  coursier.ModuleName(listed.artifact.value),
+                ),
+                coursier.version.VersionConstraint(revision.render),
+              )
+              .copy(transitive = false)
+            coursier.Fetch().addDependencies(dependency).run().toList
+          }
+          .mapError(error => Option(error.getMessage).getOrElse(error.toString))
+          .flatMap: files =>
+            files.map(_.toPath).find { path =>
+              val name = Option(path.getFileName).map(_.toString).getOrElse("")
+              name.endsWith(".jar") && !name.contains("sources") && !name.contains("javadoc")
+            } match
+              case Some(path) => ZIO.succeed(path)
+              case None       => ZIO.fail(s"no jar for ${listed.artifact.value} ${revision.render}")
 
   private def listing(feed: ReleaseFeed, module: Option[MavenModule]): UIO[Listing] =
     module match

@@ -30,6 +30,33 @@ you do not want a later host to rebuild it.
 """,
       cite[histos.PluginPublication].signature,
     ),
+    section("A task can write sources")(
+      md"""
+`TaskDep.Emit` names a module. The task's output directories are source roots for
+that module, using the same `jvm`, `js`, and `native` filters as a directory you
+named with `sources`. `histos compile` and `histos test` run the task first, then
+compile what it wrote.
+
+The task must declare at least one output directory. It must not also wait for
+that module to compile: that would be a cycle. `TaskDep.Generate` only orders
+two tasks. It does not add sources.
+""",
+      cite[histos.plugin.TaskDep].signature,
+    ),
+    section("A task can wait for another task")(
+      md"""
+`TaskDep.Generate` names another task of the same plugin. Histos runs that task
+first, then this one. The name has to be a task the plugin declared. A missing
+name is refused when the build loads.
+
+This is how a task that writes files runs before a task that reads them. It does
+not, by itself, add those files to a module's compile. A module still compiles
+the sources under its directory and any extra directory named with `sources`.
+A file the build copies into the class directory after compile is a
+`GeneratedAsset`, which is a resource, not a source.
+""",
+      cite[histos.plugin.TaskDep].signature,
+    ),
     section("Specular, as a worked example")(
       md"""
 This documentation site is built by Specular, which is a Histos plugin. The build names

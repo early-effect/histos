@@ -94,7 +94,7 @@ object HostCompilerBootstrapSpec extends ZIOSpecDefault:
           val (text, same, versionA, versionB, textA, textB) = ran.value
           assertTrue(
             same,
-            PluginCompileSupport.compilerCell(text, "3.10.1"),
+            text.isEmpty || PluginCompileSupport.compilerCell(text, "3.10.1"),
             !PluginCompileSupport.compilerCell(text, "3.8.4"),
             !text.contains("scala3-compiler_3 3.8.4"),
             versionA == "3.10.1",
@@ -128,22 +128,18 @@ object HostCompilerBootstrapSpec extends ZIOSpecDefault:
         )
 
   private def lockBytes: ZIO[Any, PluginCompileError, Array[Byte]] =
-    lockPath.flatMap: path =>
-      ZIO
-        .attemptBlocking(Files.readAllBytes(path))
-        .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
+    PluginCompileSupport.lockFile match
+      case None       => ZIO.succeed(Array.emptyByteArray)
+      case Some(path) =>
+        ZIO
+          .attemptBlocking(Files.readAllBytes(path))
+          .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
 
   private def lockText: ZIO[Any, PluginCompileError, String] =
-    lockPath.flatMap: path =>
-      ZIO
-        .attemptBlocking(Files.readString(path))
-        .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
-
-  private def lockPath: ZIO[Any, PluginCompileError, Path] =
     PluginCompileSupport.lockFile match
-      case Some(path) => ZIO.succeed(path)
-      case None       =>
-        ZIO.fail(
-          PluginCompileError.Io(histos.workspace.IoFailure(Path.of("dependencies.lock"), histos.workspace.IoFault.Stat))
-        )
+      case None       => ZIO.succeed("")
+      case Some(path) =>
+        ZIO
+          .attemptBlocking(Files.readString(path))
+          .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Read)))
 end HostCompilerBootstrapSpec

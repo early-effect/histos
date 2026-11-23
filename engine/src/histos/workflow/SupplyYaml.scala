@@ -2,12 +2,18 @@ package histos.workflow
 
 import histos.doctor.DoctorPlacement
 import histos.supply.{DailyAudit, MainAlert, PrAuthor, SecurityFixes, Snapshot}
-import histos.ProjectGraph
+import histos.{ProjectGraph, Resolution}
 
 /** Supply-chain workflows. Neither placement adds a job. */
 object SupplyYaml:
   val depsName: String  = "histos-deps.yml"
   val auditName: String = "histos-audit.yml"
+
+  /** A hermetic build checks the lock. A solved build has no lock to check. */
+  def resolveCheck(graph: ProjectGraph): List[String] =
+    graph.resolution match
+      case Resolution.Lock  => List("      - run: ./histos resolve --check")
+      case Resolution.Solve => Nil
 
   def preflight(graph: ProjectGraph, job: String): List[String] =
     graph.supply.placement match
@@ -43,8 +49,8 @@ object SupplyYaml:
       "          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}",
       "          restore-keys: histos-osv-",
     ) ++ preflight(graph, name) ++ fullDoctor(policy.updates.author) ++ List(
-      "      - run: ./histos workflow --check",
-      "      - run: ./histos resolve --check",
+      "      - run: ./histos workflow --check"
+    ) ++ resolveCheck(graph) ++ List(
       "      - run: ./histos deps audit",
       "      - if: failure() && github.event_name != 'pull_request'",
       "        run: ./histos deps alert",

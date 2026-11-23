@@ -44,6 +44,17 @@ It does not change `histos.version`.
 """,
       cite[histos.cli.Help.type](_.entries).elided(12),
     ),
+    section("What kind of bump")(
+      md"""
+`histos doctor` compares the class files of this build with the previous Central
+release of the same ship. When they differ, it names the component to move: `patch`,
+`minor`, or `major`. On a `0.x` line any binary difference is a minor bump.
+
+`histos bump` rewrites `.next`. It does not decide the component. You pass
+`--minor` or `--major` when the doctor named one. The default is the next patch.
+""",
+      cite[histos.version.BumpPart](_.token),
+    ),
     section("What happens after the bundle is uploaded")(
       md"""
 The default release publishes to Maven Central's portal and waits until the portal says

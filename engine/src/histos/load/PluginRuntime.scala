@@ -481,6 +481,8 @@ object PluginRuntime:
         case (Left(err), _)                                       => Left(err)
         case (Right(acc), histos.plugin.TaskDep.Compile(_, _, _)) => Right(acc)
         case (Right(acc), histos.plugin.TaskDep.Link(_, _))       => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Generate(_))      => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Emit(_))          => Right(acc)
         case (Right(acc), histos.plugin.TaskDep.Same(name))       =>
           ActionId
             .from(PluginTaskId(plugin, name).render)

@@ -37,6 +37,7 @@ final case class RunnerTools(
     llvm: Option[ToolRevision],
     playwright: Option[ToolRevision],
     nodePath: Option[NodePath] = None,
+    browsers: Set[Browser] = Set(Browser.Firefox),
 )
 
 object RunnerTools:
