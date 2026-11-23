@@ -75,6 +75,24 @@ sealed trait ModuleDef[P] extends ProjectDef:
   ): ModuleDef[P] =
     rewriteThreadStack(stack)
 
+  /** System libraries this Native module links. A second call replaces the set. */
+  def link(library: NativeLibrary, rest: NativeLibrary*)(using
+      @implicitNotFound(
+        "link is a Native setting, and this module does not build Native"
+      ) native: Platform.Native.type <:< P
+  ): ModuleDef[P] =
+    rewriteLink(library +: rest)
+
+  /** This module's native test binary also runs the named modules' native tests. Every named module has to build
+    * Native. A second call replaces the list.
+    */
+  def testAggregate(module: ModuleDef[?], rest: ModuleDef[?]*)(using
+      @implicitNotFound(
+        "testAggregate is a Native setting, and this module does not build Native"
+      ) native: Platform.Native.type <:< P
+  ): ModuleDef[P] =
+    rewriteTestAggregate(module +: rest.toList)
+
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef[P]
 
@@ -100,6 +118,16 @@ sealed trait ModuleDef[P] extends ProjectDef:
 
   /** Sources live in `<directory>/src` instead of `<name>/src`. */
   def in(directory: ProjectPath): ModuleDef[P]
+
+  /** More source directories, each with the same `scala` / `jvm` / `js` / `native` layout as the module directory. The
+    * module directory stays the first root. A repeated path is one path.
+    */
+  def sources(root: ProjectPath, rest: ProjectPath*): ModuleDef[P]
+
+  /** `Suite` is the everyday `histos test`. `Verify` runs only when the module is named, which is how a browser suite
+    * stays out of that command. A second call replaces the lane.
+    */
+  def lane(lane: TestLane): ModuleDef[P]
 
   /** The class `histos run` starts. A module that does not name one is not linked. */
   def main(main: MainClass): ModuleDef[P]
@@ -153,6 +181,8 @@ sealed trait ModuleDef[P] extends ProjectDef:
   private[histos] def rewriteNativeVersion(version: NativeVersion): ModuleDef[P]
   private[histos] def rewriteClang(major: ClangMajor): ModuleDef[P]
   private[histos] def rewriteThreadStack(stack: ThreadStack): ModuleDef[P]
+  private[histos] def rewriteLink(libraries: Seq[NativeLibrary]): ModuleDef[P]
+  private[histos] def rewriteTestAggregate(modules: List[ModuleDef[?]]): ModuleDef[P]
 end ModuleDef
 
 object ModuleDef:
@@ -190,6 +220,10 @@ object ModuleDef:
       Set.empty,
       ThreadStack.default,
       None,
+      Nil,
+      Set.empty,
+      Nil,
+      TestLane.Suite,
     )
 
 /** The stored module. Graph reads these fields. Callers see [[ModuleDef]]. */
@@ -220,6 +254,10 @@ private[histos] final class ModuleBody[P](
     val needs: Set[Need],
     val threadStack: ThreadStack,
     val pluginPublication: Option[PluginPublication],
+    val sources: List[ProjectPath],
+    val libraries: Set[NativeLibrary],
+    val testAggregates: List[ModuleDef[?]],
+    val lane: TestLane,
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -248,6 +286,12 @@ private[histos] final class ModuleBody[P](
 
   override def in(directory: ProjectPath): ModuleDef[P] =
     revise(directory = Some(directory))
+
+  override def sources(root: ProjectPath, rest: ProjectPath*): ModuleDef[P] =
+    revise(sources = (sources ++ (root +: rest)).distinct)
+
+  override def lane(lane: TestLane): ModuleDef[P] =
+    revise(lane = lane)
 
   override def main(main: MainClass): ModuleDef[P] =
     revise(mainClass = Some(main))
@@ -300,6 +344,12 @@ private[histos] final class ModuleBody[P](
   override private[histos] def rewriteThreadStack(stack: ThreadStack): ModuleDef[P] =
     revise(threadStack = stack)
 
+  override private[histos] def rewriteLink(libraries: Seq[NativeLibrary]): ModuleDef[P] =
+    revise(libraries = libraries.toSet)
+
+  override private[histos] def rewriteTestAggregate(modules: List[ModuleDef[?]]): ModuleDef[P] =
+    revise(testAggregates = modules.distinctBy(_.name))
+
   private def add(edges: List[ProjectEdge]): ModuleDef[P] =
     revise(edges = dependsOn ++ edges)
 
@@ -326,6 +376,10 @@ private[histos] final class ModuleBody[P](
       needs: Set[Need] = this.needs,
       threadStack: ThreadStack = this.threadStack,
       pluginPublication: Option[PluginPublication] = this.pluginPublication,
+      sources: List[ProjectPath] = this.sources,
+      libraries: Set[NativeLibrary] = this.libraries,
+      testAggregates: List[ModuleDef[?]] = this.testAggregates,
+      lane: TestLane = this.lane,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -354,6 +408,10 @@ private[histos] final class ModuleBody[P](
       needs,
       threadStack,
       pluginPublication,
+      sources,
+      libraries,
+      testAggregates,
+      lane,
     )
 end ModuleBody
 

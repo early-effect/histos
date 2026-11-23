@@ -35,6 +35,7 @@ final case class JsLinkRequest(
     revision: Option[histos.JsVersion] = None,
     initialize: Boolean = true,
     arguments: List[String] = Nil,
+    optimize: histos.JsOptimize = histos.JsOptimize.Fast,
 )
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
@@ -47,13 +48,13 @@ object JsLink:
   def link(
       request: JsLinkRequest
   ): ZIO[LockedTools & ContentStore & LinkerStarts & RemoteCache, JsLinkError, JsLinked] =
-    val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize, arguments) =
+    val JsLinkRequest(version, main, classpath, _, _, kind, revision, initialize, arguments, optimize) =
       request
     for
       view <- ZIO.service[LockedTools]
       selected = revision.getOrElse(view.catalog.js.revision)
       digests <- productsOf(classpath)
-      key = JsKey.of(version, selected, kind, main, digests, initialize, arguments)
+      key = JsKey.of(version, selected, kind, main, digests, initialize, arguments, optimize)
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
       _      <- ProductCache.stage(remote, store, key).mapError(carried)
@@ -78,7 +79,7 @@ object JsLink:
       request: JsLinkRequest,
       selected: histos.JsVersion,
   ): ZIO[LockedTools & LinkerStarts, JsLinkError, Path] =
-    val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize, arguments) =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize, arguments, optimize) =
       request
     val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
@@ -103,7 +104,7 @@ object JsLink:
         listed,
         (classpath ++ libraries).map(_.toAbsolutePath.toString).mkString("\n"),
       )
-      _ <- write(source, bridge)
+      _ <- write(source, bridge(optimize))
       _ <- JvmCompile
         .compile(
           CompileRequest(
@@ -143,17 +144,26 @@ object JsLink:
           )
         )
         .mapError(error => JsLinkError.Linker(error.message))
-      script <- ran.exit.value match
+      linked <- ran.exit.value match
         case 0 => readJs(child.resolve("js.path"))
         case _ =>
           ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
+      script <- optimize match
+        case histos.JsOptimize.Fast => ZIO.succeed(linked)
+        case histos.JsOptimize.Full =>
+          histos.splice.Splice
+            .full(linked, work.resolve("full.js"))
+            .mapError(error => JsLinkError.Linker(error.message))
     yield script
 
   private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
     ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
       ZIO.fromEither(ProductDigest.read(dir)).mapError(JsLinkError.Product(_))
 
-  private def bridge: String =
+  private def bridge(optimize: histos.JsOptimize): String =
+    val optimizer = optimize match
+      case histos.JsOptimize.Fast => "false"
+      case histos.JsOptimize.Full => "true"
     """package subprocess
       |
       |import java.nio.file.{Files, Path}
@@ -179,7 +189,7 @@ object JsLink:
       |    val mainClass = sys.env.get("JS_MAIN").map(_.trim).filter(_.nonEmpty)
       |    val classpath = Files.readAllLines(Path.of(sys.env("JS_CLASSPATH"))).asScala.map(Path.of(_)).toSeq
       |    Files.createDirectories(output)
-      |    val base = StandardConfig().withOptimizer(false).withSourceMap(false).withBatchMode(true)
+      |    val base = StandardConfig().withOptimizer($optimizer).withSourceMap(false).withBatchMode(true)
       |    val kind = sys.env.getOrElse("JS_MODULE", "nomodule")
       |    val config = kind match {
       |      case "esmodule" => base.withModuleKind(ModuleKind.ESModule)

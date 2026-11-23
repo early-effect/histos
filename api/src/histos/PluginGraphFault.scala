@@ -26,6 +26,8 @@ enum PluginGraphFault:
   case UnknownPluginModule(raw: String, position: SourcePos)
   case PluginOnAggregate(name: ProjectName, position: SourcePos)
   case DuplicatePluginCoordinate(render: String, position: SourcePos)
+  case EmitCycle(plugin: PluginId, task: TaskName, module: ProjectName)
+  case EmitEmpty(plugin: PluginId, task: TaskName)
 
   def message: String = this match
     case DuplicatePlugin(id)               => s"plugin ${id.value} is registered twice"
@@ -61,4 +63,8 @@ enum PluginGraphFault:
       s"'${name.value}' is an aggregate, and a plugin coordinate names a module (${position.line}:${position.column})"
     case DuplicatePluginCoordinate(render, position) =>
       s"plugin $render is named twice (${position.line}:${position.column})"
+    case EmitCycle(plugin, task, module) =>
+      s"plugin ${plugin.value} task ${task.value} emits sources for '${module.value}' and also waits for it to compile"
+    case EmitEmpty(plugin, task) =>
+      s"plugin ${plugin.value} task ${task.value} emits sources and declares no output directory"
 end PluginGraphFault

@@ -39,7 +39,9 @@ private[load] object PluginCells:
       case (Right(acc), TaskDep.Same(_))                          => Right(acc)
       case (Right(acc), TaskDep.Compile(name, version, platform)) =>
         named(graph, name, version, platform).map(acc ++ _)
-      case (Right(acc), TaskDep.Link(_, _)) => Right(acc)
+      case (Right(acc), TaskDep.Link(_, _))  => Right(acc)
+      case (Right(acc), TaskDep.Generate(_)) => Right(acc)
+      case (Right(acc), TaskDep.Emit(_))     => Right(acc)
 
   def links(
       graph: ProjectGraph,
@@ -51,6 +53,8 @@ private[load] object PluginCells:
         named(graph, name, version, Some(Platform.Js)).map(acc ++ _)
       case (Right(acc), TaskDep.Compile(_, _, _)) => Right(acc)
       case (Right(acc), TaskDep.Same(_))          => Right(acc)
+      case (Right(acc), TaskDep.Generate(_))      => Right(acc)
+      case (Right(acc), TaskDep.Emit(_))          => Right(acc)
 
   def named(
       graph: ProjectGraph,

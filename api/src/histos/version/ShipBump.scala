@@ -6,6 +6,12 @@ enum BumpPart:
   case Minor
   case Patch
 
+  def token: String = this match
+    case Major => "major"
+    case Minor => "minor"
+    case Patch => "patch"
+end BumpPart
+
 /** Where Coursier found a stable. A maven repository wins over ivy2 local. */
 enum StablePlace:
   case Remote

@@ -39,5 +39,32 @@ GitHub Actions.
 """,
       cite[histos.plugin.SitePublish].signature,
     ),
+    section("A library ship publishes snapshots")(
+      md"""
+A catalog with a ship gets `histos-snapshots.yml`. You run it from the Actions tab.
+It publishes the snapshot coordinate of that commit. A library does not have to
+package an extra file to get this workflow. A build with no ship does not get the
+file, and `histos workflow --update` deletes a stale copy.
+""",
+      cite[histos.version.Ship](_.release),
+    ),
+    section("OpenSSL on the native job")(
+      md"""
+A native module that links `Ssl` or `Crypto` needs the headers and the shared
+libraries on the runner. The native test job installs clang, the C++ library,
+libgc, libunwind, and libssl. A job that does not link those libraries skips
+the install.
+""",
+      cite[histos.NativeLibrary](_.token),
+    ),
+    section("Browsers the suite installs")(
+      md"""
+A test job installs Playwright when the build names a Playwright revision. The
+browsers it installs are the ones on `RunnerTools`. Firefox is the default. Name
+Chromium or WebKit and those are installed too, including the system libraries they
+need. A job that does not run a browser installs none.
+""",
+      cite[histos.Browser](_.token),
+    ),
   )
 end Workflows

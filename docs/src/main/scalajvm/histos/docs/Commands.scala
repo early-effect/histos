@@ -89,6 +89,21 @@ also forgets this repository in the content store, so the next compile cannot re
 stored result. `--full` does not take a project name. It is the whole repo.
 """
     ),
+    section("A production JavaScript file")(
+      md"""
+A Scala.js link is fast by default: the optimizer stays off, and the script is what
+the linker wrote. The production file is the `splice` module, which is sbt-splice
+without sbt. `Splice.fast` bundles the linker's own imports. `Splice.full` is that
+bundle, minified. `Splice.closure` runs Closure advanced on the Scala.js output and
+does not shake mapped libraries. Each one fetches a pinned esbuild when it needs
+one. There is no npm and no `package.json`.
+
+`JsOptimize.Full` is `Splice.full` with no mapped libraries: one classic script.
+Name libraries when the linker still says `import "preact"`. Fast and full do not
+share a cached script. A module you run while editing stays on the fast link.
+""",
+      cite[histos.JsOptimize](_.token),
+    ),
     section("fmt")(
       md"""
 `histos fmt` formats sources with the scalafmt version the build locked. Name projects,
@@ -141,6 +156,45 @@ for code you do not want measured.
 `histos affected --base <sha>` prints the modules whose sources differ from that commit.
 You use the list to decide what to test, or you pass it to `histos test --affected`.
 """
+    ),
+    section("One native test binary")(
+      md"""
+Linking a Native test binary is the slow part of a native suite. When several native
+modules should run as one binary, give one module `testAggregate` and name the others.
+`histos test nativeTests native` compiles each member's tests, links once, and runs
+once. `histos test core native` still links `core` on its own.
+
+The aggregating module builds Native, it is not published, and it can have no sources
+of its own. A member that does not build Native is refused when the build file compiles.
+
+```scala
+val nativeTests = module("nativeTests", Native)(scala"3.8.1")
+  .clang(ClangMajor(21))
+  .testAggregate(core, wire)
+```
+""",
+      cite[histos.Module](_.testAggregates),
+    ),
+    section("Browser suites")(
+      md"""
+A suite that opens a browser does not belong in `histos test`. Mark that module
+`lane(TestLane.Verify)`. A plain `histos test` skips it. `histos test browsers` runs
+it, and a verify job can run that same command.
+
+The JVM child receives the system properties you put on the test provider. Chekhov
+reads `chekhov.browsers`. The generated job installs the browsers `RunnerTools`
+names. Firefox is the one you get when you name none.
+
+```scala
+val browsers = module("browsers", Jvm)(scala"3.8.1")
+  .lane(TestLane.Verify)
+  .testProvider(
+    TestProvider.Zio.properties(SystemProperty("chekhov.browsers=chromium,firefox,webkit"))
+  )
+```
+""",
+      cite[histos.SystemProperty.type](_.from),
+      cite[histos.Browser](_.token),
     ),
     section("watch")(
       md"""

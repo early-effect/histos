@@ -13,7 +13,13 @@ object NativeBridge:
       clangpp: Path,
       classpath: List[Path],
       optimize: Boolean,
+      libraries: Set[histos.NativeLibrary] = Set.empty,
+      os: Option[String] = None,
+      opensslHome: Option[Path] = None,
   ): String =
+    val (compile, link) = NativeFlags.of(libraries, os.getOrElse(""), opensslHome)
+    val compileArgs     = (List("-Qunused-arguments") ++ compile).map(arg => s""""${escape(arg)}"""").mkString(", ")
+    val linkArgs        = link.map(arg => s""""${escape(arg)}"""").mkString(", ")
     val entries = classpath.map(path => s"""Path.of("${escape(path.toAbsolutePath.toString)}")""").mkString(", ")
     s"""package subprocess
        |
@@ -46,7 +52,8 @@ object NativeBridge:
        |            .withLinkStubs(true)
        |            .withOptimize($optimize)
        |            .withMultithreading(true)
-       |            .withCompileOptions(Seq("-Qunused-arguments"))
+       |            .withCompileOptions(Seq($compileArgs))
+       |            .withLinkingOptions(Seq($linkArgs))
        |        )
        |      Build.buildCachedAwait(config)(using scope)
        |    }

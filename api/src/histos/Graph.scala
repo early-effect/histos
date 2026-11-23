@@ -4,6 +4,7 @@ import histos.plugin.{
   BuildServices,
   CiSettings,
   DeclaredInput,
+  DeclaredTask,
   HistosPlugin,
   JobCheck,
   ModuleNote,
@@ -66,6 +67,10 @@ final case class Module(
     resources: List[GeneratedAsset] = Nil,
     threadStack: ThreadStack = ThreadStack.default,
     pluginLibrary: Option[PluginPublication] = None,
+    sources: List[ProjectPath] = Nil,
+    libraries: Set[NativeLibrary] = Set.empty,
+    testAggregates: List[ProjectName] = Nil,
+    lane: TestLane = TestLane.Suite,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -587,42 +592,73 @@ object Projects:
                       deps :+ _
                     )
       .flatMap: deps =>
-        if m.testStore == TestStore.Remote && m.needs.nonEmpty then
-          Left(BuildError.RemoteNeeds(n.name, m.needs, m.position))
+        aggregateNames(n.name, m, byName).flatMap: aggregates =>
+          if m.testStore == TestStore.Remote && m.needs.nonEmpty then
+            Left(BuildError.RemoteNeeds(n.name, m.needs, m.position))
+          else linked(n, m, deps, aggregates)
+
+  /** Native test members, after the names exist. A member that does not build Native is refused. */
+  private def aggregateNames(
+      owner: ProjectName,
+      module: ModuleBody[?],
+      byName: Map[String, Named],
+  ): Either[BuildError, List[ProjectName]] =
+    module.testAggregates.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, member) =>
+      acc.flatMap: names =>
+        if member.name == module.name then Left(BuildError.TestAggregateSelf(owner, module.position))
         else
-          (m.test, m.provider) match
-            case (Some(_), Some(_)) =>
-              Left(BuildError.MixedTest(n.name, m.position))
-            case _ =>
-              publicationOf(n.name, m).map: (publication, asset) =>
-                Module(
-                  n.name,
-                  m.platforms,
-                  m.versions,
-                  m.dependencies,
-                  deps,
-                  m.position,
-                  m.clang,
-                  m.test,
-                  m.testDependencies,
-                  m.provider,
-                  m.nativeVersion,
-                  m.jsVersion,
-                  m.directory,
-                  m.jsEnv,
-                  m.jsModule,
-                  m.mainClass,
-                  m.notes,
-                  m.flags,
-                  m.published,
-                  publication,
-                  asset,
-                  m.testStore,
-                  m.needs,
-                  m.resources,
-                  m.threadStack,
-                  m.pluginPublication,
-                )
+          lookup(member, byName).flatMap: named =>
+            named.defn match
+              case body: ModuleBody[?] if body.platforms.all.contains(Platform.Native) =>
+                Right(names :+ named.name)
+              case _: ModuleBody[?] =>
+                Left(BuildError.TestAggregatePlatform(owner, named.name, module.position))
+              case _: AggregateDef =>
+                Left(BuildError.TestAggregatePlatform(owner, named.name, module.position))
+
+  private def linked(
+      n: Named,
+      m: ModuleBody[?],
+      deps: List[ProjectDep],
+      aggregates: List[ProjectName],
+  ): Either[BuildError, Project] =
+    (m.test, m.provider) match
+      case (Some(_), Some(_)) =>
+        Left(BuildError.MixedTest(n.name, m.position))
+      case _ =>
+        publicationOf(n.name, m).map: (publication, asset) =>
+          Module(
+            n.name,
+            m.platforms,
+            m.versions,
+            m.dependencies,
+            deps,
+            m.position,
+            m.clang,
+            m.test,
+            m.testDependencies,
+            m.provider,
+            m.nativeVersion,
+            m.jsVersion,
+            m.directory,
+            m.jsEnv,
+            m.jsModule,
+            m.mainClass,
+            m.notes,
+            m.flags,
+            m.published,
+            publication,
+            asset,
+            m.testStore,
+            m.needs,
+            m.resources,
+            m.threadStack,
+            m.pluginPublication,
+            m.sources,
+            m.libraries,
+            aggregates,
+            m.lane,
+          )
 
   private def publicationOf(
       name: ProjectName,
@@ -917,7 +953,7 @@ object Projects:
     val problem = registered.flatMap: plugin =>
       plugin.contribution.tasks.flatMap: task =>
         task.inputs.flatMap(inputOf(plugin, modules, _)) ++ task.dependsOn
-          .flatMap(depOf(plugin, modules, _))
+          .flatMap(dep => emitOr(plugin, modules, task, dep))
     problem.headOption match
       case Some(err) => Left(err)
       case None      => Right(())
@@ -940,6 +976,25 @@ object Projects:
             if present then None
             else Some(BuildError.PluginGraph(PluginGraphFault.MissingNote(name, plugin.id, key)))
 
+  private def emitOr(
+      plugin: RegisteredPlugin,
+      modules: Map[ProjectName, Module],
+      task: DeclaredTask,
+      dep: TaskDep,
+  ): Option[BuildError] =
+    dep match
+      case TaskDep.Emit(name) =>
+        val waits = task.dependsOn.exists {
+          case TaskDep.Compile(module, _, _) => module == name
+          case _                             => false
+        }
+        if !modules.contains(name) then
+          Some(BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(plugin.id, name)))
+        else if waits then Some(BuildError.PluginGraph(PluginGraphFault.EmitCycle(plugin.id, task.name, name)))
+        else if task.outputs.isEmpty then Some(BuildError.PluginGraph(PluginGraphFault.EmitEmpty(plugin.id, task.name)))
+        else None
+      case other => depOf(plugin, modules, other)
+
   private def depOf(
       plugin: RegisteredPlugin,
       modules: Map[ProjectName, Module],
@@ -951,6 +1006,9 @@ object Projects:
         cellOf(plugin, modules, name, version, platform)
       case TaskDep.Link(name, version) =>
         cellOf(plugin, modules, name, version, Some(Platform.Js))
+      case TaskDep.Generate(name) =>
+        if plugin.contribution.tasks.exists(_.name == name) then None
+        else Some(BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, name)))
 
   private def cellOf(
       plugin: RegisteredPlugin,

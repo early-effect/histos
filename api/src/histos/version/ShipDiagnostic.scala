@@ -58,6 +58,23 @@ enum ShipDiagnostic(
         ),
       )
 
+  case BinaryBump(ship: ShipName, number: ShipNumber, word: String)
+      extends ShipDiagnostic(
+        CheckId.trusted("ship.binary"),
+        Level.Error,
+        s"${ship.value} ${number.render} breaks the previous release",
+        ShipAdvice.binaryBump(ship, number, word),
+        "The doctor compares the class files of this build with the previous Central release of the same ship. histos bump rewrites .next and does not choose the component. On a 0.x line any binary difference is a minor bump.",
+        fixes(
+          Fix.Steps(
+            lines(
+              s"Run histos bump --$word.",
+              "A patch is a compatible change. A minor or a major is a break.",
+            )
+          )
+        ),
+      )
+
   case ShouldBump(ship: ShipName, number: ShipNumber, reason: BumpReason)
       extends ShipDiagnostic(
         CheckId.trusted("ship.should-bump"),

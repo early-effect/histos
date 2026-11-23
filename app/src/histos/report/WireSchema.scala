@@ -1,6 +1,7 @@
 package histos.report
 
 import heddle.endpoint.{Schema, SchemaDoc}
+import histos.SystemProperty
 import histos.jdk.{
   JdkError,
   JdkMajor,
@@ -562,6 +563,8 @@ private object WireSchemaCall extends WireSchemaSupport:
   given Schema[SuiteNameError] = Schema.derived
 
   given Schema[ProviderLibrary] = Schema.derived
+
+  given Schema[SystemProperty] = text("SystemProperty")
 
   given Schema[TestProvider] = Schema.derived
 

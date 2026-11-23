@@ -10,9 +10,14 @@ object Selection:
   /** Empty names are every module, in graph order. A module name is that module. An aggregate name is its direct module
     * children. A repeated name is `SelectError.Duplicate`. A token that is not a project name never reaches here.
     */
+  /** Every module `histos test` runs when no name is given. A [[histos.TestLane.Verify]] module is named to run. */
+  def suite(graph: ProjectGraph): Selected =
+    val modules = graph.projects.collect { case module: Module if module.lane == histos.TestLane.Suite => module }
+    Selected(modules, Set.empty)
+
   def select(graph: ProjectGraph, names: List[ProjectName]): Either[SelectError, Selected] =
     val modules = graph.projects.collect { case module: Module => module }
-    if names.isEmpty then Right(Selected(modules, Set.empty))
+    if names.isEmpty then Right(suite(graph))
     else
       names
         .foldLeft[Either[SelectError, List[ProjectName]]](Right(Nil)): (acc, name) =>

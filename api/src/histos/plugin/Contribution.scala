@@ -37,6 +37,12 @@ enum TaskDep:
 
   /** Link this JavaScript cell and put the script on the run request. */
   case Link(module: ProjectName, version: Option[ScalaVersion])
+
+  /** Run this task first. It does not add sources to a module. */
+  case Generate(name: TaskName)
+
+  /** This task's output directories are source roots for `module`. It must not also [[Compile]] that module. */
+  case Emit(module: ProjectName)
 end TaskDep
 
 final case class CommandSpec(

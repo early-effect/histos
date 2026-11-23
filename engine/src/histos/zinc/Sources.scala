@@ -69,6 +69,11 @@ end SourceFilter
 final case class PackagedSource(entry: String, path: Path)
 
 object Sources:
+  /** The module directory, then each extra root the module named. A missing directory is absent, not an error. */
+  def roots(repo: Path, primary: Path, module: histos.Module): List[Path] =
+    val extra = module.sources.map(root => repo.resolve(root.value))
+    (primary :: extra).distinct
+
   /** Main sources. `src/test` is not main. `.scala`, and `.java` on the JVM, whose path filters match. */
   def select(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
     collect(root, version, platform, Tree.Main)

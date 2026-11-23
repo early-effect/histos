@@ -371,14 +371,12 @@ object Workflow:
       case Nil   => Right(None)
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
-  /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
-    * list emits nothing, so update deletes a stale copy. A toolchain ship publishes the jar and the link kit. Two
-    * toolchain ships fail the render.
+  /** Every ship publishes snapshots. A graph with no ship emits nothing, so update deletes a stale copy. A toolchain
+    * ship also publishes the jar and the link kit. Two toolchain ships fail the render.
     */
   private def snapshotWorkflow(graph: ProjectGraph)(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
     toolchain(graph).map: _ =>
-      if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
-        Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
+      if graph.catalog.ships.nonEmpty then Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
       else None
 
   /** `HISTOS_BRANCH` is `default` so the pointer moves from any ref. `publish snapshots` compiles the link kit on this
@@ -763,7 +761,8 @@ object Workflow:
     nodeStep(if need.node then tools.node else None, scope) ++
       npmCi(install) ++
       llvmStep(if need.llvm then tools.llvm else None, scope) ++
-      playwrightStep(if need.playwright then tools.playwright else None, scope) ++
+      opensslStep(need.openssl, scope) ++
+      playwrightStep(if need.playwright then tools.playwright else None, tools.browsers, scope) ++
       coursierStep(resolution)
 
   private def npmCi(install: NpmInstall): List[String] =
@@ -864,11 +863,29 @@ object Workflow:
           "          fi",
         ) ++ cell.toList.map(text => s"        if: $text")
 
-  private def playwrightStep(revision: Option[ToolRevision], scope: MatrixScope): List[String] =
+  /** Native modules that link OpenSSL need the headers and the shared libraries on the runner. */
+  private def opensslStep(needed: Boolean, scope: MatrixScope): List[String] =
+    if !needed then Nil
+    else
+      val names = NativeCi.packages.mkString(" ")
+      val cell  = cellFlag(scope, "llvm")
+      List(
+        "      - name: Install native link libraries",
+        "        run: |",
+        "          sudo apt-get update",
+        s"          sudo apt-get install -y $names",
+      ) ++ cell.toList.map(text => s"        if: $text")
+
+  private def playwrightStep(
+      revision: Option[ToolRevision],
+      browsers: Set[histos.Browser],
+      scope: MatrixScope,
+  ): List[String] =
     revision match
       case None         => Nil
       case Some(pinned) =>
         val version = pinned.value
+        val named   = browsers.toList.map(_.token).sorted.mkString(" ")
         val cell    = cellFlag(scope, "playwright")
         cacheStep(
           Some("playwright"),
@@ -881,11 +898,11 @@ object Workflow:
           "          if [ \"${{ steps.playwright.outputs.cache-hit }}\" != \"true\" ]; then",
           "            mkdir -p \"$dir\"",
           s"            npm install --prefix \"$$dir\" --no-fund --no-audit --no-progress playwright@$version",
-          "            node \"$dir/node_modules/playwright/cli.js\" install firefox",
+          s"            node \"$$dir/node_modules/playwright/cli.js\" install $named",
           "          fi",
           "          test -d \"$dir/node_modules/playwright\"",
           "          find /etc/apt -type f -print0 | xargs -0 -r sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'",
-          "          timeout 180s node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
+          s"          timeout 180s node \"$$dir/node_modules/playwright/cli.js\" install-deps $named",
         ) ++ cell.toList.map(text => s"        if: $text")
 
   private def affectedJob(graph: ProjectGraph)(using RenderingShip): String =
@@ -927,7 +944,7 @@ object Workflow:
   private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph)(using RenderingShip): String =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
-    val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
+    val any     = needs.foldLeft(ToolNeed(false, false, false, false))(_ || _)
     val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  cache-seed:"
@@ -948,7 +965,7 @@ object Workflow:
   private def testJob(jobs: List[TestJob], graph: ProjectGraph, lock: NpmLock)(using RenderingShip): List[String] =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
-    val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
+    val any     = needs.foldLeft(ToolNeed(false, false, false, false))(_ || _)
     val matrix  = jobs.exists {
       case TestJob.Split(_, _, _) => true
       case _                      => false
@@ -1042,11 +1059,16 @@ object Workflow:
     if lock == NpmLock.Present && graph.runnerTools.node.isDefined && runsJs then NpmInstall.On(scope)
     else NpmInstall.Off
 
-  private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean):
+  private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean, openssl: Boolean):
     def ||(other: ToolNeed): ToolNeed =
-      ToolNeed(node || other.node, llvm || other.llvm, playwright || other.playwright)
+      ToolNeed(
+        node || other.node,
+        llvm || other.llvm,
+        playwright || other.playwright,
+        openssl || other.openssl,
+      )
 
-    def any: Boolean = node || llvm || playwright
+    def any: Boolean = node || llvm || playwright || openssl
   end ToolNeed
 
   private def toolNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
@@ -1057,6 +1079,7 @@ object Workflow:
       tools.node.isDefined && (javascript || browser),
       tools.llvm.isDefined && native,
       browser,
+      NativeCi.openssl(modules),
     )
 
   private def modulesOf(job: TestJob, modules: List[Module]): List[Module] =
@@ -1232,7 +1255,13 @@ object Workflow:
   private def coverageJob(graph: ProjectGraph, floors: CoverageFloors)(using RenderingShip): String =
     val command = ("./histos coverage" :: (floors.argv ++ graph.coverageExcludes.argv)).mkString(" ")
     val prepare =
-      steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole, NpmInstall.Off)
+      steps(
+        graph.runnerTools,
+        graph.resolution,
+        ToolNeed(false, false, false, false),
+        MatrixScope.Whole,
+        NpmInstall.Off,
+      )
     val lines = List(
       "  coverage:"
     ) ++ verifyIf ++ afterAffected(Nil) ++ List(
@@ -1251,7 +1280,13 @@ object Workflow:
   /** Beside the suite. It does not wait for the suite, and it compiles nothing, so it restores no store. */
   private def formatJob(graph: ProjectGraph)(using RenderingShip): String =
     val prepare =
-      steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole, NpmInstall.Off)
+      steps(
+        graph.runnerTools,
+        graph.resolution,
+        ToolNeed(false, false, false, false),
+        MatrixScope.Whole,
+        NpmInstall.Off,
+      )
     (List(
       "  format:"
     ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
@@ -1266,7 +1301,7 @@ object Workflow:
   private def docNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
     val native     = modules.exists(_.platforms.all.contains(Platform.Native))
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
-    ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
+    ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false, NativeCi.openssl(modules))
 
   /** The required check. It runs on a pull request and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph)(using RenderingShip): String =
