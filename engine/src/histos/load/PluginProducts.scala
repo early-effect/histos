@@ -7,6 +7,7 @@ import histos.schedule.Digest
 import histos.workspace.IoFault
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path, StandardCopyOption}
+import java.util.Locale
 import zio.*
 
 /** The hook runs before the non-interruptible pointer switch, never after publication. */
@@ -61,9 +62,9 @@ final class PluginProducts private (
 
   def stage(request: ProductRequest): ZIO[Scope, ProductError, StagedOutputs] =
     for
+      _    <- validateRequest(request)
       gate <- lock(request)
       _    <- gate.withPermitScoped
-      _    <- validateRequest(request)
       home = anchor(request)
       _         <- ancestors(base(request), home)
       container <- ZIO.acquireRelease(
@@ -115,6 +116,7 @@ final class PluginProducts private (
       manifest: OutputManifest,
   ): ZIO[Scope & ContentStore, ProductError, RestoreResult] =
     for
+      _     <- validateRequest(request)
       _     <- ZIO.fromEither(validateManifest(request, manifest))
       store <- ZIO.service[ContentStore]
       hashes = manifest.products.flatMap(_.entries.flatMap(hashOf)).distinct
@@ -151,17 +153,18 @@ final class PluginProducts private (
     yield result
 
   def clean(request: ProductRequest): IO[ProductError, Unit] =
-    lock(request).flatMap: gate =>
+    validateRequest(request) *> lock(request).flatMap: gate =>
       gate.withPermit(readGate.withPermit:
         for
-          _      <- validateRequest(request)
           active <- readers.get
           _      <- ZIO
             .fail(ProductError.ActiveReaders)
             .when(active.exists((path, count) => path.startsWith(anchor(request)) && count > 0))
           _ <- ZIO.foreachDiscard(request.task.outputs): output =>
             val target = base(request).resolve(output.path.value)
-            ancestors(base(request), target.getParent) *> delete(target)
+            ancestors(base(request), target.getParent) *> (output.kind match
+              case OutputKind.File      => unlinkFile(target)
+              case OutputKind.Directory => delete(target))
           _ <- ancestors(base(request), anchor(request)) *> delete(anchor(request))
         yield ())
 
@@ -283,7 +286,12 @@ final class PluginProducts private (
     val valid   = outputs.map(_.name).distinct.size == outputs.size &&
       paths.distinct.size == paths.size &&
       !paths.exists(path => paths.exists(other => other != path && other.startsWith(path + "/"))) &&
-      !paths.exists(path => path == ".histos" || path.startsWith(".histos/"))
+      !paths.exists(path =>
+        path
+          .split("/", 2)
+          .headOption
+          .exists(segment => Set(".histos", ".git", ".bsp").contains(segment.toLowerCase(Locale.ROOT)))
+      )
     ZIO.fail(ProductError.InvalidManifest).unless(valid).unit
 
   private def scanAll(request: ProductRequest, root: Path): IO[ProductError, List[NamedProduct]] =

@@ -2,7 +2,7 @@ package histos.schedule
 
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.*
-import histos.load.{NamedProduct, OutputManifest, ProductEntry, ProductError}
+import histos.load.{NamedProduct, OutputManifest, ProductEntry, ProductEntryPath, ProductError}
 import zio.json.*
 
 import java.nio.file.{Files, LinkOption, Path}
@@ -71,10 +71,10 @@ object PluginManifest:
         case EntryData.RootFile(hash) =>
           Sha256.from(hash).left.map(_ => ProductError.InvalidManifest).map(ProductEntry.RootFile(_))
         case EntryData.Directory(path) =>
-          ArtifactPath.from(path).left.map(_ => ProductError.InvalidEntry(path)).map(ProductEntry.Directory(_))
+          ProductEntryPath.from(path).map(ProductEntry.Directory(_))
         case EntryData.File(path, hash) =>
           for
-            p <- ArtifactPath.from(path).left.map(_ => ProductError.InvalidEntry(path))
+            p <- ProductEntryPath.from(path)
             h <- Sha256.from(hash).left.map(_ => ProductError.InvalidManifest)
           yield ProductEntry.File(p, h))
       output = kind match

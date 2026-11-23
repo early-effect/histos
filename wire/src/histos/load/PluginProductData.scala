@@ -12,8 +12,8 @@ final case class ProductRequest(repo: Path, task: DeclaredTask, invocation: Invo
 enum ProductEntry:
   case RootDirectory
   case RootFile(hash: Sha256)
-  case Directory(path: ArtifactPath)
-  case File(path: ArtifactPath, hash: Sha256)
+  case Directory(path: ProductEntryPath)
+  case File(path: ProductEntryPath, hash: Sha256)
 
 final case class NamedProduct(output: DeclaredOutput, entries: List[ProductEntry])
 final case class OutputManifest(text: String, products: List[NamedProduct]):

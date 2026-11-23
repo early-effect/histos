@@ -205,7 +205,7 @@ object PluginProductsSpec extends ZIOSpecDefault:
               staged <- fixture.products.stage(fixture.request)
               _      <- fixture.fill(staged, "new")
               site <- ZIO.fromEither(staged.destinations.directory(OutputName("site"))).mapError(ProductError.Report(_))
-              _    <- fixture.write(site.resolve("bad name.html"), "invalid")
+              _    <- fixture.write(site.resolve("bad\\name.html"), "invalid")
               result <- fixture.products.seal(staged, ProductFixture.report).either
             yield result
           after <- fixture.read("site/index.html")

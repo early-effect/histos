@@ -14,7 +14,7 @@ import histos.schedule.{
   ScheduleError,
   Scheduler,
 }
-import zio.{ZEnvironment, ZIO, ZLayer}
+import zio.{IO, Ref, ZEnvironment, ZIO, ZLayer}
 import zio.test.*
 
 object PluginProductReplaySpec extends ZIOSpecDefault:
@@ -39,7 +39,6 @@ object PluginProductReplaySpec extends ZIOSpecDefault:
           digest = ActionDigest.of(action, Map.empty)
           local  = fixture
             .produce("old")
-            .map(committed => PluginManifest.store(committed.manifest))
             .provideEnvironment(ZEnvironment(store))
           first <- scheduler
             .cached(action, digest, fixture.request, local)
@@ -58,7 +57,58 @@ object PluginProductReplaySpec extends ZIOSpecDefault:
           stamp <- fixture.read("site/stamp")
           stale <- fixture.io(java.nio.file.Files.exists(fixture.root.resolve("site/stale.html")))
           count <- fixture.count.get
-        yield assertTrue(first == second, page == "old", stamp == "old", !stale, count == 1)
+        yield assertTrue(
+          first.record == second.record,
+          first.outputs.manifest == second.outputs.manifest,
+          page == "old",
+          stamp == "old",
+          !stale,
+          count == 1,
+        )
+    },
+    test("fresh and hit results retain their fixed generation with exactly one hit restore") {
+      ProductFixture.use: fixture =>
+        for
+          store <- ZIO.service[ContentStore]
+          reads <- Ref.make(0)
+          tracked = counting(store, reads)
+          environment <- (ZLayer.succeed(Parallelism(1, 1, 1)) >>> Histos.live).build
+          scheduler = Scheduler(environment.get[Histos], ContentStore.actions(tracked), RemoteCache.unconfigured)
+          action <- ZIO
+            .fromEither(ActionId.from("leased"))
+            .mapError(_ => ProductError.InvalidManifest)
+            .map(id => Action(id, Nil, Nil, Policy.Plugin(Seal.Hermetic, Set.empty)))
+          digest   = ActionDigest.of(action, Map.empty)
+          local    = fixture.produce("old").provideEnvironment(ZEnvironment(tracked))
+          services = ZEnvironment(tracked, fixture.products)
+          fresh            <- scheduler.cached(action, digest, fixture.request, local).provideEnvironment(services)
+          freshLease       <- fresh.outputs.read
+          freshSite        <- ZIO.fromEither(freshLease.directory(OutputName("site")))
+          _                <- reads.set(0)
+          hit              <- scheduler.cached(action, digest, fixture.request, local).provideEnvironment(services)
+          hitLease         <- hit.outputs.read
+          hitSite          <- ZIO.fromEither(hitLease.directory(OutputName("site")))
+          hitReads         <- reads.get
+          producerAfterHit <- fixture.count.get
+          _                <- fixture.produce("new")
+          oldPages         <- ZIO.foreach(List(freshSite, hitSite))(site =>
+            fixture.io(java.nio.file.Files.readString(site.resolve("index.html")))
+          )
+          oldAsset <- fixture.io(java.nio.file.Files.readString(hitSite.resolve("assets/client.js")))
+          oldStamp <- fixture.io(java.nio.file.Files.readString(hitSite.resolve("stamp")))
+          current  <- fixture.read("site/index.html")
+          count    <- fixture.count.get
+        yield assertTrue(
+          fresh.record == hit.record,
+          hit.record == PluginManifest.store(hit.outputs.manifest),
+          hitReads == hit.outputs.manifest.contentDigests.size + 1,
+          producerAfterHit == 1,
+          count == 2,
+          oldPages == List("old", "old"),
+          oldAsset == "old",
+          oldStamp == "old",
+          current == "new",
+        )
     },
     test("unsafe cached entries retain the typed product error and do not launch the producer") {
       ProductFixture.use: fixture =>
@@ -78,7 +128,6 @@ object PluginProductReplaySpec extends ZIOSpecDefault:
             .mapError(ProductError.Cache(_))
           local = fixture
             .produce("new")
-            .map(next => PluginManifest.store(next.manifest))
             .provideEnvironment(ZEnvironment(store))
           failed <- scheduler
             .cached(action, digest, fixture.request, local)
@@ -124,4 +173,10 @@ object PluginProductReplaySpec extends ZIOSpecDefault:
         )
     },
   )
+  private def counting(store: ContentStore, reads: Ref[Int]): ContentStore = new ContentStore:
+    export store.{root, put, remove, list, replace, kept, clean, forget}
+    def read(digest: histos.schedule.Digest): IO[histos.schedule.CacheError, Option[zio.Chunk[Byte]]] =
+      reads.update(_ + 1) *> store.read(digest)
+
   def spec = tests
+end PluginProductReplaySpec

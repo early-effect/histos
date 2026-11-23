@@ -25,6 +25,15 @@ private[load] object PluginProductFiles:
           case true  => ZIO.fail(ProductError.Link(part))
           case false => ZIO.unit
 
+  def unlinkFile(path: Path): IO[ProductError, Unit] =
+    io(path, IoFault.Delete):
+      if Files.notExists(path, NoLinks) then Right(())
+      else if Files.isSymbolicLink(path) || Files.isRegularFile(path, NoLinks) then
+        Files.deleteIfExists(path)
+        Right(())
+      else Left(ProductError.Kind(path, OutputKind.File))
+    .flatMap(ZIO.fromEither(_))
+
   def delete(path: Path): IO[ProductError, Unit] =
     paths(path).flatMap: entries =>
       ZIO.foreachDiscard(entries.sortBy(_.getNameCount).reverse): entry =>
@@ -60,7 +69,7 @@ private[load] object PluginProductFiles:
             else
               ZIO
                 .fromEither(
-                  ArtifactPath
+                  ProductEntryPath
                     .from(root.relativize(path).iterator.asScala.map(_.toString).mkString("/"))
                     .left
                     .map(_ => ProductError.InvalidEntry(path.toString))

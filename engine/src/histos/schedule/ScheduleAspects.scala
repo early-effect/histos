@@ -14,7 +14,7 @@ private[schedule] object ScheduleAspects:
       digest: Digest,
       request: ProductRequest,
       products: PluginProducts,
-  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[OwnedResult]] =
     cache
       .get(digest)
       .mapError(ScheduleError.Cache(_))
@@ -27,7 +27,7 @@ private[schedule] object ScheduleAspects:
       digest: Digest,
       request: ProductRequest,
       products: PluginProducts,
-  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[OwnedResult]] =
     remote.mode match
       case RemoteMode.Off                     => ZIO.none
       case RemoteMode.Read | RemoteMode.Write =>
@@ -43,21 +43,19 @@ private[schedule] object ScheduleAspects:
       stored: String,
       request: ProductRequest,
       products: PluginProducts,
-  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
-    if request.task.outputs.isEmpty then ZIO.some(stored)
-    else
-      ZIO
-        .fromEither(PluginManifest.products(stored))
-        .mapError(ScheduleError.Products(_))
-        .flatMap:
-          case None           => ZIO.none
-          case Some(manifest) =>
-            ZIO
-              .scoped(products.restore(request, manifest))
-              .mapError(ScheduleError.Products(_))
-              .map:
-                case RestoreResult.Miss   => None
-                case RestoreResult.Hit(_) => Some(stored)
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[OwnedResult]] =
+    ZIO
+      .fromEither(PluginManifest.products(stored))
+      .mapError(ScheduleError.Products(_))
+      .flatMap:
+        case None           => ZIO.none
+        case Some(manifest) =>
+          ZIO
+            .scoped(products.restore(request, manifest))
+            .mapError(ScheduleError.Products(_))
+            .map:
+              case RestoreResult.Miss         => None
+              case RestoreResult.Hit(outputs) => Some(OwnedResult(stored, outputs))
 
   def cached(
       cache: ActionCache,
