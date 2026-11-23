@@ -55,7 +55,7 @@ the sources under its directory and any extra directory named with `sources`.
 A file the build copies into the class directory after compile is a
 `GeneratedAsset`, which is a resource, not a source.
 """,
-      cite[histos.plugin.TaskDep].signature,
+      cite[histos.GeneratedAsset].signature,
     ),
     section("A task runs a program")(
       md"""

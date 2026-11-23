@@ -366,13 +366,13 @@ private[histos] object BootstrapLoad:
   ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
     plan match
       case histos.plugin.PluginLoadPlan.UseExactBinary =>
-        ZIO.succeed(stamped.paths)
+        runtime(classpath, stamped.paths)
       case histos.plugin.PluginLoadPlan.Reject(refusal) =>
         ZIO.fail(LoadError.Plugin(PluginLoadError.Refused(path, refusal)))
       case histos.plugin.PluginLoadPlan.Rebuild =>
         stamped.drift match
           case None =>
-            ZIO.succeed(stamped.paths)
+            runtime(classpath, stamped.paths)
           case Some(drift) =>
             extract(drift.path).flatMap: extracted =>
               if extracted.sources.isEmpty then ZIO.fail(LoadError.Plugin(drift))
@@ -400,8 +400,15 @@ private[histos] object BootstrapLoad:
                           case PluginCompileError.Host(error) => LoadError.HostCompiler(error)
                           case other                          =>
                             LoadError.CompileFailed(List(CompilerMessage.fromCompiler(other.message)))
-                  kept = stamped.paths.filterNot(_ == drift.path)
+                  kept <- runtime(classpath, stamped.paths.filterNot(_ == drift.path))
                 yield kept :+ classes
+
+  /** Drop a plugin jar that defines a class the running toolchain already loaded. The toolchain copy is the one that
+    * runs. This covers the Scala library inside the toolchain jar and every other jar `Boundary.jars` found.
+    */
+  private def runtime(host: List[Path], paths: List[Path]): ZIO[Any, LoadError, List[Path]] =
+    ClasspathIndex.includeAll(host).flatMap: seen =>
+      ZIO.filter(paths)(path => ClasspathIndex.shares(seen, path).map(hit => !hit))
 
   private def publicationOf(path: Path): ZIO[Any, LoadError, histos.plugin.PublicationFact] =
     entry(path, "META-INF/histos/plugin.json").flatMap:
