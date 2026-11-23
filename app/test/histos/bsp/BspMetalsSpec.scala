@@ -509,16 +509,23 @@ object BspMetalsSpec extends ZIOSpecDefault:
       case _                             => ZIO.fail("HISTOS_REPO is not set")
     }
 
+  /** The compiler tool record. A solved checkout keeps it in `.histos/resolution`. A hermetic checkout keeps it in
+    * `dependencies.lock`. A solved checkout does not need the lock.
+    */
   private def compilerLock(graph: Either[BuildError, ProjectGraph]): ZIO[Any, String, DependencyLock] =
     checkout.flatMap { root =>
-      val path = root.resolve("dependencies.lock")
-      readLock(path, graph)
+      val lock   = root.resolve("dependencies.lock")
+      val report = histos.resolve.ResolutionService.reportPath(root)
+      ZIO
+        .attemptBlocking(if Files.isRegularFile(lock) then lock else report)
+        .orDie
+        .flatMap(readLock(_, graph))
     }
 
   private def readLock(path: Path, graph: Either[BuildError, ProjectGraph]): ZIO[Any, String, DependencyLock] =
     ZIO
       .attemptBlocking(Files.readString(path))
-      .mapError(_ => s"no dependencies.lock at $path")
+      .mapError(_ => s"no compiler record at $path")
       .flatMap: text =>
         val lines = text.linesIterator.toList
         val start = lines.indexWhere(_ == "tool compiler 3.10.1 jvm")
