@@ -60,24 +60,52 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         Projects(use(plugin(List(parent, sibling))), core).isRight,
       )
     },
-    test("JVM Main can emit JVM Test and JS Main in the same docs module") {
-      val docs     = module("docs", Jvm, Js)(scala3)
+    test("JVM Main emits one source File to JVM Test and JS Main without owning its sibling") {
+      val docs    = module("docs", Jvm, Js)(scala3)
+      val file    = DeclaredOutput.File(transcript, RepoPath("target/transcripts/GeneratedTranscript.scala"))
+      val sibling = task(
+        TaskName("sibling"),
+        Nil,
+        List(DeclaredOutput.File(OutputName("sibling"), RepoPath("target/transcripts/Independent.scala"))),
+      )
       val producer = task(
         generate,
         List(
           TaskDep.CompileScoped(ProjectName("docs"), None, Some(Jvm), SourceSet.Main),
-          TaskDep
-            .EmitScoped(ProjectName("docs"), SourceSet.Test, PlatformSelection.only(Jvm), RootKind.Sources, transcript),
-          TaskDep
-            .EmitScoped(ProjectName("docs"), SourceSet.Main, PlatformSelection.only(Js), RootKind.Sources, transcript),
+          TaskDep.EmitScoped(
+            ProjectName("docs"),
+            SourceSet.Test,
+            PlatformSelection.only(Jvm),
+            EmittedContent.SourceFile(ArtifactPath("dev/earlyeffect/docs/GeneratedTranscript.scala")),
+            transcript,
+          ),
+          TaskDep.EmitScoped(
+            ProjectName("docs"),
+            SourceSet.Main,
+            PlatformSelection.only(Js),
+            EmittedContent.SourceFile(ArtifactPath("dev/earlyeffect/docs/GeneratedTranscript.scala")),
+            transcript,
+          ),
         ),
-        List(directory),
+        List(file),
       )
       val site = task(
         TaskName("site"),
         List(TaskDep.Compile(ProjectName("docs"), None, Some(Jvm)), TaskDep.Link(ProjectName("docs"), None)),
       )
-      assertTrue(Projects(use(plugin(List(producer, site))), docs).isRight)
+      val widened   = producer.copy(outputs = List(directory))
+      val collision = sibling.copy(outputs = List(file))
+      assertTrue(
+        Projects(use(plugin(List(producer, sibling, site))), docs).isRight,
+        contractFault(Projects(use(plugin(List(widened, sibling, site))), docs)).exists {
+          case ContractFault.OutputOverlap(_, _, _) => true
+          case _                                    => false
+        },
+        contractFault(Projects(use(plugin(List(producer, collision, site))), docs)).exists {
+          case ContractFault.OutputOverlap(_, _, _) => true
+          case _                                    => false
+        },
+      )
     },
     test("test-complete Compile still waits for tests and therefore detects a test producer cycle") {
       val producer = task(
@@ -88,7 +116,7 @@ object MigrationContractsSpec extends ZIOSpecDefault:
             ProjectName("core"),
             SourceSet.Test,
             PlatformSelection.only(Jvm),
-            RootKind.Resources,
+            EmittedContent.ResourceTree,
             transcript,
           ),
         ),
@@ -103,7 +131,13 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         List(
           TaskDep.CompileScoped(ProjectName("downstream"), None, Some(Jvm), SourceSet.Main),
           TaskDep
-            .EmitScoped(ProjectName("core"), SourceSet.Main, PlatformSelection.only(Jvm), RootKind.Sources, transcript),
+            .EmitScoped(
+              ProjectName("core"),
+              SourceSet.Main,
+              PlatformSelection.only(Jvm),
+              EmittedContent.SourceTree,
+              transcript,
+            ),
         ),
         List(directory),
       )
@@ -115,7 +149,7 @@ object MigrationContractsSpec extends ZIOSpecDefault:
             ProjectName("client"),
             SourceSet.Main,
             PlatformSelection.only(Js),
-            RootKind.Resources,
+            EmittedContent.ResourceTree,
             transcript,
           ),
         )
@@ -130,7 +164,7 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         ProjectName("core"),
         SourceSet.Test,
         PlatformSelection.only(Jvm),
-        RootKind.Resources,
+        EmittedContent.ResourceFile(ResourceName("transcripts.txt")),
         transcript,
       )
       val file   = task(generate, List(dep), List(DeclaredOutput.File(transcript, RepoPath("target/transcripts.txt"))))
@@ -142,14 +176,34 @@ object MigrationContractsSpec extends ZIOSpecDefault:
             ProjectName("core"),
             SourceSet.Test,
             PlatformSelection.only(Js),
-            RootKind.Resources,
+            EmittedContent.ResourceTree,
             transcript,
           )
         ),
       )
       assertTrue(
         Projects(use(plugin(List(file))), core).isRight,
-        Projects(use(plugin(List(file.copy(outputs = List(directory))))), core).isRight,
+        Projects(
+          use(
+            plugin(
+              List(
+                file.copy(
+                  outputs = List(directory),
+                  dependsOn = List(
+                    TaskDep.EmitScoped(
+                      ProjectName("core"),
+                      SourceSet.Test,
+                      PlatformSelection.only(Jvm),
+                      EmittedContent.ResourceTree,
+                      transcript,
+                    )
+                  ),
+                )
+              )
+            )
+          ),
+          core,
+        ).isRight,
         contractFault(Projects(use(plugin(List(absent))), core)) == Some(
           ContractFault.EmittedOutput(PluginTaskId(PluginId("migration"), generate), transcript)
         ),
@@ -157,6 +211,87 @@ object MigrationContractsSpec extends ZIOSpecDefault:
           case BuildError.PluginGraph(PluginGraphFault.PluginMissingCell(_, _, _, Some(Js))) => true
           case _                                                                             => false
         },
+      )
+    },
+    test("browser resource Files declare exact classpath names independent of generated paths") {
+      val browser = module("appsBrowser", Jvm)(scala3)
+      val counter = task(
+        TaskName("counter"),
+        List(
+          TaskDep.EmitScoped(
+            ProjectName("appsBrowser"),
+            SourceSet.Test,
+            PlatformSelection.only(Jvm),
+            EmittedContent.ResourceFile(ResourceName("apps-browser/counter-view.js")),
+            OutputName("counter"),
+          )
+        ),
+        List(DeclaredOutput.File(OutputName("counter"), RepoPath("target/browser-assets/counter-view.js"))),
+      )
+      val reference = task(
+        TaskName("reference"),
+        List(
+          TaskDep.EmitScoped(
+            ProjectName("appsBrowser"),
+            SourceSet.Test,
+            PlatformSelection.only(Jvm),
+            EmittedContent.ResourceFile(ResourceName("apps-browser/reference-host.js")),
+            OutputName("reference"),
+          )
+        ),
+        List(DeclaredOutput.File(OutputName("reference"), RepoPath("target/browser-assets/reference-host.js"))),
+      )
+      val graph = Projects(use(plugin(List(counter, reference))), browser)
+      val names = graph.map(_.plugins.flatMap(_.contribution.tasks.flatMap(_.dependsOn.collect {
+        case TaskDep.EmitScoped(_, SourceSet.Test, _, EmittedContent.ResourceFile(name), _) => name
+      })))
+      assertTrue(
+        names == Right(
+          List(ResourceName("apps-browser/counter-view.js"), ResourceName("apps-browser/reference-host.js"))
+        ),
+        EmittedContent.ResourceFile(ResourceName("apps-browser/counter-view.js")).outputKind == OutputKind.File,
+        EmittedContent.ResourceFile(ResourceName("apps-browser/counter-view.js")).rootKind == RootKind.Resources,
+        EmittedContent.ResourceTree.outputKind == OutputKind.Directory,
+        !typeChecks("""import histos.plugin.*; EmittedContent.ResourceFile()"""),
+        !typeChecks("""import histos.plugin.*; EmittedContent.ResourceFile("apps-browser/counter-view.js")"""),
+        !typeChecks(
+          """import histos.*; import histos.plugin.*; EmittedContent.ResourceFile(ResourceName("../counter-view.js"))"""
+        ),
+        !typeChecks(
+          """import histos.*; import histos.plugin.*; TaskDep.EmitScoped(ProjectName("appsBrowser"), SourceSet.Test, PlatformSelection.only(Jvm), RootKind.Resources, OutputName("counter"))"""
+        ),
+      )
+    },
+    test("emission shape mismatches are refused with typed expected and actual kinds") {
+      val file = DeclaredOutput.File(transcript, RepoPath("target/transcripts.txt"))
+      val id   = PluginTaskId(PluginId("migration"), generate)
+      def graph(output: DeclaredOutput, content: EmittedContent): Either[BuildError, ProjectGraph] =
+        Projects(
+          use(
+            plugin(
+              List(
+                task(
+                  generate,
+                  List(
+                    TaskDep
+                      .EmitScoped(ProjectName("core"), SourceSet.Test, PlatformSelection.only(Jvm), content, transcript)
+                  ),
+                  List(output),
+                )
+              )
+            )
+          ),
+          core,
+        )
+      assertTrue(
+        contractFault(graph(directory, EmittedContent.ResourceFile(ResourceName("transcripts.txt")))) ==
+          Some(ContractFault.EmittedOutputKind(id, transcript, OutputKind.File, OutputKind.Directory)),
+        contractFault(graph(file, EmittedContent.ResourceTree)) ==
+          Some(ContractFault.EmittedOutputKind(id, transcript, OutputKind.Directory, OutputKind.File)),
+        contractFault(graph(directory, EmittedContent.SourceFile(ArtifactPath("docs/Generated.scala")))) ==
+          Some(ContractFault.EmittedOutputKind(id, transcript, OutputKind.File, OutputKind.Directory)),
+        contractFault(graph(file, EmittedContent.SourceTree)) ==
+          Some(ContractFault.EmittedOutputKind(id, transcript, OutputKind.Directory, OutputKind.File)),
       )
     },
     test("test edges expose upstream tests without entering the main chain") {
@@ -196,7 +331,13 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         List(
           TaskDep.CompileScoped(ProjectName("core"), None, Some(Jvm), SourceSet.Test),
           TaskDep
-            .EmitScoped(ProjectName("old"), SourceSet.Main, PlatformSelection.only(Jvm), RootKind.Sources, transcript),
+            .EmitScoped(
+              ProjectName("old"),
+              SourceSet.Main,
+              PlatformSelection.only(Jvm),
+              EmittedContent.SourceTree,
+              transcript,
+            ),
         ),
         List(directory),
       )
@@ -289,6 +430,50 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         link == TaskDep.Link(ProjectName("client"), None, Some(JsOptimize.Fast)),
       )
     },
+    test("observed result constructors require completed scope and effective link mode") {
+      assertTrue(
+        !typeChecks(
+          """import histos.*; import histos.plugin.*; CellClasspath(ProjectName("core"), scala"3.10.1", Jvm, Nil, Nil)"""
+        ),
+        !typeChecks(
+          """import histos.*; import histos.plugin.*; import java.nio.file.Path; LinkedScript(ProjectName("core"), scala"3.10.1", Path.of("script.js"))"""
+        ),
+        typeChecks(
+          """import histos.*; import histos.plugin.*; CellClasspath(ProjectName("core"), scala"3.10.1", Jvm, Nil, Nil, SourceSet.Main)"""
+        ),
+        typeChecks(
+          """import histos.*; import histos.plugin.*; import java.nio.file.Path; LinkedScript(ProjectName("core"), scala"3.10.1", Path.of("script.js"), JsOptimize.Full)"""
+        ),
+      )
+    },
+    test("named classpath factories and omission overloads state their fixed semantics") {
+      val mainPath = Path.of("main-classes")
+      val testPath = Path.of("test-classes")
+      val main     = CellClasspath.mainOnly(ProjectName("core"), scala3, Jvm, List(mainPath))
+      val tests = CellClasspath.testComplete(ProjectName("core"), scala3, Jvm, List(mainPath), List(testPath, mainPath))
+      val script = LinkedScript(
+        ProjectName("core"),
+        scala3,
+        Path.of("script.js"),
+        JsOptimize.effective(JsOptimize.Fast, Some(JsOptimize.Full), None),
+      )
+      assertTrue(
+        main.scope == SourceSet.Main,
+        main.test.isEmpty,
+        tests.scope == SourceSet.Test,
+        tests.test == List(testPath, mainPath),
+        main.stage == CompilationStage(Cell(ProjectName("core"), scala3, Jvm), SourceSet.Main),
+        script.optimize == JsOptimize.Full,
+        PluginOutput("", Nil) == PluginOutput("", Nil, Nil),
+        TaskDep.Link(ProjectName("core"), None) == TaskDep.Link(ProjectName("core"), None, None),
+        typeChecks(
+          """import histos.plugin.*; import java.nio.file.Path; def make(invocation: InvocationContext, events: PluginEvents.Invocation) = RunRequest(PluginTaskId(PluginId("review"), TaskName("task")), Path.of("repo"), Nil, PluginArgs.empty, Nil, invocation, events)"""
+        ),
+        typeChecks(
+          """import histos.plugin.*; import java.nio.file.Path; def make(invocation: InvocationContext, events: PluginEvents.Invocation) = RunRequest(PluginTaskId(PluginId("review"), TaskName("task")), Path.of("repo"), Nil, PluginArgs.empty, Nil, invocation, events, destinations = OutputDestinations.empty)"""
+        ),
+      )
+    },
     test("VM options and properties are distinct from program arguments and persist in the module") {
       val options = JvmOptions(List(JvmFlag("-Xmx2g")), List(SystemProperty("example.mode=checked")))
       assertTrue(
@@ -311,6 +496,8 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         graph.map(_.runnerTools.jdk.map(_.value)) == Right(Some(25)),
         graph.map(_.verify) == Right(List(verify)),
         verify.run.command == "test core --platform jvm",
+        VerifyRun.Tests(TestSelection(platforms = PlatformSelection.only(Jvm, Js, Native))).command ==
+          "test --platform jvm,js,native",
         contractFault(Projects.verify(unsupported)(core)).contains(ContractFault.TestPlatform(ProjectName("core"), Js)),
         JdkFloor.from(0) == Left(JdkFloorError.NotPositive(0)),
       )

@@ -11,7 +11,9 @@ enum RootKind:
   case Sources
   case Resources
 
-/** An exact repository-relative directory, without implicit layout expansion. */
+/** An exact repository-relative directory, without implicit layout expansion. Generated File consumption uses
+  * [[histos.plugin.EmittedContent]], never a widened parent [[ScopedRoot]].
+  */
 final case class ScopedRoot(
     path: RepoPath,
     scope: SourceSet,

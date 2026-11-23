@@ -29,7 +29,7 @@ enum VerifyRun:
       val platforms = selection.platforms match
         case PlatformSelection.All          => Nil
         case PlatformSelection.Only(chosen) =>
-          List("--platform", chosen.all.distinct.map(_.toString.toLowerCase).mkString(","))
+          List("--platform", chosen.all.distinct.map(_.token).mkString(","))
       (List("test") ++ modules ++ platforms).mkString(" ")
 end VerifyRun
 

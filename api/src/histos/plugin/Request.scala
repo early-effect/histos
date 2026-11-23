@@ -45,7 +45,11 @@ final case class WrittenFile(name: OutputName, path: RepoPath)
 
 final case class WrittenDirectory(name: OutputName, path: RepoPath)
 
-final case class PluginOutput(text: String, files: List[WrittenFile], directories: List[WrittenDirectory] = Nil)
+final case class PluginOutput(text: String, files: List[WrittenFile], directories: List[WrittenDirectory])
+
+object PluginOutput:
+  def apply(text: String, files: List[WrittenFile]): PluginOutput =
+    new PluginOutput(text, files, Nil)
 
 /** Invocation-owned staging paths, not the final published repository paths. */
 enum OutputDestination:
@@ -88,16 +92,30 @@ final case class CellClasspath(
     platform: Platform,
     compile: List[Path],
     test: List[Path],
-    scope: SourceSet = SourceSet.Test,
+    scope: SourceSet,
 ):
   def stage: histos.CompilationStage = histos.CompilationStage(histos.Cell(module, version, platform), scope)
 
-/** The script `TaskDep.Link` wrote. */
+object CellClasspath:
+  def mainOnly(module: ProjectName, version: ScalaVersion, platform: Platform, compile: List[Path]): CellClasspath =
+    CellClasspath(module, version, platform, compile, Nil, SourceSet.Main)
+
+  def testComplete(
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+      compile: List[Path],
+      test: List[Path],
+  ): CellClasspath =
+    CellClasspath(module, version, platform, compile, test, SourceSet.Test)
+end CellClasspath
+
+/** The script `TaskDep.Link` wrote, with its observed effective optimization mode. */
 final case class LinkedScript(
     module: ProjectName,
     version: ScalaVersion,
     script: Path,
-    optimize: histos.JsOptimize = histos.JsOptimize.Fast,
+    optimize: histos.JsOptimize,
 )
 
 final case class RunRequest(
@@ -110,10 +128,49 @@ final case class RunRequest(
     events: PluginEvents.Invocation,
     compiled: List[CellClasspath] = Nil,
     linked: List[LinkedScript] = Nil,
-    destinations: OutputDestinations = OutputDestinations.empty,
+    destinations: OutputDestinations,
 ):
   def file(name: OutputName): Either[PluginRunError, Path]      = destinations.file(name)
   def directory(name: OutputName): Either[PluginRunError, Path] = destinations.directory(name)
+
+object RunRequest:
+  /** A request with no declared output destinations. */
+  def apply(
+      id: PluginTaskId,
+      repo: Path,
+      modules: List[ModuleView],
+      args: PluginArgs,
+      inputs: List[MaterialInput],
+      invocation: InvocationContext,
+      events: PluginEvents.Invocation,
+  ): RunRequest =
+    new RunRequest(id, repo, modules, args, inputs, invocation, events, Nil, Nil, OutputDestinations.empty)
+
+  def apply(
+      id: PluginTaskId,
+      repo: Path,
+      modules: List[ModuleView],
+      args: PluginArgs,
+      inputs: List[MaterialInput],
+      invocation: InvocationContext,
+      events: PluginEvents.Invocation,
+      compiled: List[CellClasspath],
+  ): RunRequest =
+    new RunRequest(id, repo, modules, args, inputs, invocation, events, compiled, Nil, OutputDestinations.empty)
+
+  def apply(
+      id: PluginTaskId,
+      repo: Path,
+      modules: List[ModuleView],
+      args: PluginArgs,
+      inputs: List[MaterialInput],
+      invocation: InvocationContext,
+      events: PluginEvents.Invocation,
+      compiled: List[CellClasspath],
+      linked: List[LinkedScript],
+  ): RunRequest =
+    new RunRequest(id, repo, modules, args, inputs, invocation, events, compiled, linked, OutputDestinations.empty)
+end RunRequest
 
 /** What `use` registered. `contribution` is the data the graph keeps. `plugin` is the value `contribute` ran on, and
   * the runtime calls `run` on it. The second parameter list keeps the value out of equality, so two evaluations of one

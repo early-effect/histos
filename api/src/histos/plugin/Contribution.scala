@@ -1,7 +1,7 @@
 package histos.plugin
 
 import histos.doctor.DoctorCheck
-import histos.{JsOptimize, Platform, PlatformSelection, ProjectName, RootKind, ScalaVersion}
+import histos.{JsOptimize, Platform, PlatformSelection, ProjectName, ResourceName, RootKind, ScalaVersion}
 
 /** Data copied onto the project graph. Not an effect. */
 final case class Contribution(
@@ -48,6 +48,30 @@ object DeclaredOutput:
   /** The original declaration owns one file. Directory ownership must be explicit. */
   def apply(name: OutputName, path: RepoPath): DeclaredOutput = File(name, path)
 
+/** File consumption never scans or owns its parent. Trees are relative to the declared Directory root. */
+enum EmittedContent:
+  /** Compile only this File. The caller names its package-relative source-jar entry; source text defines the package.
+    */
+  case SourceFile(entry: ArtifactPath)
+
+  /** Compile the selected source tree and retain its root-relative source-jar entries. */
+  case SourceTree
+
+  /** Copy only this File to the exact classpath-relative name, independently of its generated repository path. */
+  case ResourceFile(name: ResourceName)
+
+  /** Copy the resource tree with names relative to its declared Directory root. */
+  case ResourceTree
+
+  def outputKind: OutputKind = this match
+    case SourceFile(_) | ResourceFile(_) => OutputKind.File
+    case SourceTree | ResourceTree       => OutputKind.Directory
+
+  def rootKind: RootKind = this match
+    case SourceFile(_) | SourceTree     => RootKind.Sources
+    case ResourceFile(_) | ResourceTree => RootKind.Resources
+end EmittedContent
+
 enum TaskDep:
   /** Test-complete: both main and test classpaths are supplied to the task. */
   case Compile(module: ProjectName, version: Option[ScalaVersion], platform: Option[Platform])
@@ -57,7 +81,7 @@ enum TaskDep:
   case Same(name: TaskName)
 
   /** Link this JavaScript cell and put the script on the run request. */
-  case Link(module: ProjectName, version: Option[ScalaVersion], optimize: Option[JsOptimize] = None)
+  case Link(module: ProjectName, version: Option[ScalaVersion], optimize: Option[JsOptimize])
 
   /** Run this task first. It does not add sources to a module. */
   case Generate(name: TaskName)
@@ -65,15 +89,21 @@ enum TaskDep:
   /** This task's output directories are source roots for `module`. It must not also [[Compile]] that module. */
   case Emit(module: ProjectName)
 
-  /** One named File or Directory supplies this exact scope and platform selection. */
+  /** One named output supplies this exact scope/platform selection and must match [[EmittedContent.outputKind]]. */
   case EmitScoped(
       module: ProjectName,
       scope: SourceSet,
       platforms: PlatformSelection,
-      kind: RootKind,
+      content: EmittedContent,
       output: OutputName,
   )
 end TaskDep
+
+object TaskDep:
+  object Link:
+    /** Inherit the module/tool mode; the resolved result still requires an explicit effective mode. */
+    def apply(module: ProjectName, version: Option[ScalaVersion]): TaskDep.Link =
+      new TaskDep.Link(module, version, None)
 
 final case class CommandSpec(
     name: CommandName,

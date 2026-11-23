@@ -78,9 +78,16 @@ private[histos] object GraphContracts:
 
   private def emissions(tasks: List[(PluginTaskId, DeclaredTask)]): Either[BuildError, Unit] =
     val problem = tasks.flatMap: (id, task) =>
-      task.dependsOn.collect:
-        case TaskDep.EmitScoped(_, _, _, _, output) if !task.outputs.exists(_.name == output) =>
-          ContractFault.EmittedOutput(id, output)
+      task.dependsOn.flatMap:
+        case TaskDep.EmitScoped(_, _, _, content, name) =>
+          task.outputs.find(_.name == name) match
+            case None                                              => List(ContractFault.EmittedOutput(id, name))
+            case Some(output) if output.kind != content.outputKind =>
+              List(ContractFault.EmittedOutputKind(id, name, content.outputKind, output.kind))
+            case Some(_) => Nil
+        case TaskDep.Compile(_, _, _) | TaskDep.CompileScoped(_, _, _, _) | TaskDep.Link(_, _, _) | TaskDep.Same(_) |
+            TaskDep.Generate(_) | TaskDep.Emit(_) =>
+          Nil
     problem.headOption.toLeft(()).left.map(BuildError.Contract(_))
 
   private def acyclic(modules: List[Module], tasks: List[(PluginTaskId, DeclaredTask)]): Either[BuildError, Unit] =
