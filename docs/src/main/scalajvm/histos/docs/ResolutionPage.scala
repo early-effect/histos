@@ -26,7 +26,8 @@ published plugin can still be an exact revision in `histos.plugins.scala`. That
 revision is fetched. It does not freeze every other jar.
 
 CI caches a solved build on `histos.scala`, because that file is what the solve
-depends on.
+depends on. It does not run `histos resolve --check`. That command compares a
+fresh solve with `dependencies.lock`, and a solved build has no lock.
 """
     ),
     section("Hermetic")(
