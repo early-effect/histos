@@ -609,7 +609,7 @@ object Cli:
           val net        = histos.supply.Net.live
           val remembered =
             resolution match
-              case histos.Resolution.Lock => ZIO.unit
+              case histos.Resolution.Lock  => ZIO.unit
               case histos.Resolution.Solve =>
                 val path = histos.resolve.ResolutionService.reportPath(repo)
                 ZIO.attemptBlocking(java.nio.file.Files.isRegularFile(path)).orDie.flatMap { present =>

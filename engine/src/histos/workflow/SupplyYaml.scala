@@ -49,7 +49,7 @@ object SupplyYaml:
       "          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}",
       "          restore-keys: histos-osv-",
     ) ++ preflight(graph, name) ++ fullDoctor(policy.updates.author) ++ List(
-      "      - run: ./histos workflow --check",
+      "      - run: ./histos workflow --check"
     ) ++ resolveCheck(graph) ++ List(
       "      - run: ./histos deps audit",
       "      - if: failure() && github.event_name != 'pull_request'",

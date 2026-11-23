@@ -47,7 +47,7 @@ object build extends HistosBuild:
     val jacksonDatabind = jacksonCore.module("jackson-databind")
     val jackson3        = dep"tools.jackson.core:jackson-core:3.2.4"
     val jackson3Bind    = jackson3.module("jackson-databind")
-    val splice = module("splice", Jvm)(scala3)
+    val splice          = module("splice", Jvm)(scala3)
       .artifact(artifact"histos-splice")
       .libraryDependencies(
         zio,
