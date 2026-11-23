@@ -22,6 +22,7 @@ import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Path]
 import histos.report.WireJson.given JsonCodec[histos.MainClass]
 import histos.report.WireJson.given JsonCodec[histos.PlatformSelection]
+import histos.report.WireJson.given JsonCodec[histos.TestSelection]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
 enum ServerError:
@@ -204,11 +205,10 @@ end Attendance
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case Test(
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
-      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case PublishLocal(tokens: List[PublishToken])
 
@@ -252,11 +252,10 @@ enum Call derives JsonCodec:
   case Bsp
   case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case PreviewTest(
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
-      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])

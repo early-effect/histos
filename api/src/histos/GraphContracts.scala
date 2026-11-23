@@ -22,8 +22,8 @@ private[histos] object GraphContracts:
         case VerifyRun.BuiltIn(_) | VerifyRun.Plugin(_) => Nil
         case VerifyRun.Tests(selection)                 =>
           selection.targets match
-            case TestTargets.All                => Nil
-            case TestTargets.Named(first, rest) =>
+            case TestTargets.All | TestTargets.Filtered(_) => Nil
+            case TestTargets.Named(first, rest)            =>
               (first :: rest).flatMap: name =>
                 modules.find(_.name == name) match
                   case None         => List(ContractFault.TestModule(name))

@@ -26,11 +26,16 @@ enum VerifyRun:
       val modules = selection.targets match
         case TestTargets.All                => Nil
         case TestTargets.Named(first, rest) => (first :: rest).map(_.value).distinct
+        case TestTargets.Filtered(modules)  => List("--suite", jsonModules(modules))
       val platforms = selection.platforms match
         case PlatformSelection.All          => Nil
         case PlatformSelection.Only(chosen) =>
           List("--platform", chosen.all.distinct.map(_.token).mkString(","))
-      (List("test") ++ modules ++ platforms).mkString(" ")
+      val affected = selection.affected.toList.flatMap(names => List("--affected", jsonModules(names)))
+      (List("test") ++ modules ++ platforms ++ affected).mkString(" ")
+
+  private def jsonModules(modules: List[ProjectName]): String =
+    "'[" + modules.distinct.map(name => "\"" + name.value + "\"").mkString(",") + "]'"
 end VerifyRun
 
 /** Whether that verify job links the native client before the task. */

@@ -5,6 +5,7 @@ import histos.ProjectName
 
 import zio.test.*
 import zio.ZIO
+import zio.json.*
 
 object TestGrammarSpec extends ZIOSpecDefault:
   private val selected = TestFilter(
@@ -22,6 +23,52 @@ object TestGrammarSpec extends ZIOSpecDefault:
   )
 
   def spec = suite("test selection")(
+    test("review F4: another flag owns its selector-looking value") {
+      val cases = List(
+        "--test"       -> CliParseError.TestTerm(TestTermError.Flag("--platform")),
+        "--tag"        -> CliParseError.TagName(TagNameError.Flag("--platform")),
+        "--ignore-tag" -> CliParseError.TagName(TagNameError.Flag("--platform")),
+        "--only"       -> CliParseError.Pattern("test --only needs a pattern"),
+      )
+      ZIO
+        .foreach(cases) { (flag, expected) =>
+          Grammar.parse(List("test", flag, "--platform", "jvm", "api")).either.map(_ == Left(expected))
+        }
+        .map(results => assertTrue(results.forall(identity)))
+    },
+    test("suite eligibility remains typed and distinct from explicit named targets") {
+      for
+        parsed <- Grammar.parse(
+          List("test", "--suite", "[\"api\",\"web\"]", "--platform", "jvm", "--affected", "[\"web\"]")
+        )
+        call    <- Operation.call(parsed)
+        invalid <- Grammar.parse(List("test", "api", "--suite", "[\"api\"]")).either
+      yield assertTrue(
+        call == histos.server.Call.Test(
+          histos.TestSelection(
+            histos.TestTargets.Filtered(List(ProjectName("api"), ProjectName("web"))),
+            histos.PlatformSelection.only(histos.Jvm),
+            Some(List(ProjectName("web"))),
+          ),
+          Nil,
+          TestMode.Run,
+          TestFilter.empty,
+        ),
+        invalid == Left(CliParseError.Pattern("test --suite cannot be combined with named projects")),
+        call.toJson.fromJson[histos.server.Call] == Right(call),
+      )
+    },
+    test("selector-looking values fail identically before and after valid selectors, including preview") {
+      val prefixes = List(List("test"), List("preview", "test"))
+      val checked  = ZIO.foreach(prefixes): prefix =>
+        ZIO.foreach(List("--platform", "--main")): value =>
+          val malformed = prefix ++ List("--test", value, "jvm", "api")
+          for
+            first   <- Grammar.parse(malformed).either
+            earlier <- Grammar.parse(prefix ++ List("--platform", "jvm") ++ List("--test", value, "api")).either
+          yield first == Left(CliParseError.TestTerm(TestTermError.Flag(value))) && earlier == first
+      checked.map(results => assertTrue(results.flatten.forall(identity)))
+    },
     test("platform unions and comma patterns are accepted by the actual grammar") {
       Grammar
         .parse(List("test", "api", "--platform", "jvm,js", "--only", "*Events*,*Protocol*"))

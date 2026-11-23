@@ -4,8 +4,9 @@ package histos
 enum Axis:
   case Platform, ScalaVersion, Module
 
-/** How CI fans out. The empty set is Aggregate, one `./histos test` job, and it is the default. A non-empty set is a
-  * matrix of those axes. There is no second renderer.
+/** The empty set is one aggregate job. Module/Platform axes partition indivisible test groups; Native groups may
+  * coalesce overlapping module rows. ScalaVersion is refused by workflow planning until test selection supports a
+  * version filter. No unsupported CLI syntax is generated.
   */
 final case class Splits private (axes: Set[Axis])
 

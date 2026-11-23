@@ -41,9 +41,10 @@ object TestCells:
     val modules = graph.projects.collect { case module: Module => module }
     val owners  = modules.filter(_.testAggregates.nonEmpty)
     for
-      _         <- validate(graph, owners).left.map(TestSelectionError.Aggregate(_))
-      requested <- select(graph, selection)
+      _        <- validate(graph, owners).left.map(TestSelectionError.Aggregate(_))
+      selected <- select(graph, selection)
     yield
+      val requested  = selected.filter(cell => selection.affected.forall(_.contains(cell.module)))
       val groups     = execution(owners, requested, selection.targets)
       val ownerRoots = groups.collect:
         case TestExecutionGroup.NativeAggregate(owner, _) if !requested.contains(owner) =>
@@ -86,18 +87,19 @@ object TestCells:
 
   private def select(graph: ProjectGraph, selection: TestSelection): Either[TestSelectionError, List[Cell]] =
     selection.targets match
-      case TestTargets.All =>
-        Right(
-          graph.projects
-            .collect { case module: Module if module.lane == TestLane.Suite => module }
-            .flatMap: module =>
-              cells(module, selection.platforms.selected(module.platforms))
-            .distinct
-        )
+      case TestTargets.All               => Right(suites(graph, selection.platforms))
+      case TestTargets.Filtered(modules) =>
+        Right(suites(graph, selection.platforms).filter(cell => modules.contains(cell.module)))
       case TestTargets.Named(first, rest) =>
         (first :: rest).distinct.foldLeft[Either[TestSelectionError, List[Cell]]](Right(Nil)): (acc, name) =>
           acc.flatMap: found =>
             named(graph, name, selection).map(picked => (found ++ picked).distinct)
+
+  private def suites(graph: ProjectGraph, platforms: histos.PlatformSelection): List[Cell] =
+    graph.projects
+      .collect { case module: Module if module.lane == TestLane.Suite => module }
+      .flatMap(module => cells(module, platforms.selected(module.platforms)))
+      .distinct
 
   private def named(
       graph: ProjectGraph,
@@ -145,8 +147,8 @@ object TestCells:
       targets: TestTargets,
   ): List[TestExecutionGroup] =
     val focused = targets match
-      case TestTargets.Named(first, rest) if rest.forall(_ == first) => Some(first)
-      case TestTargets.Named(_, _) | TestTargets.All                 => None
+      case TestTargets.Named(first, rest) if rest.forall(_ == first)           => Some(first)
+      case TestTargets.Named(_, _) | TestTargets.All | TestTargets.Filtered(_) => None
     val selected   = requested.toSet
     val aggregates = owners
       .filterNot(owner => focused.exists(owner.testAggregates.contains))

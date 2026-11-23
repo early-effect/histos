@@ -87,9 +87,15 @@ enum TestTargets:
   case All
   case Named(first: ProjectName, rest: List[ProjectName])
 
+  /** Whole-suite eligibility, without named validation or focused-singleton intent. */
+  case Filtered(modules: List[ProjectName])
+end TestTargets
+
+/** Affected masks intersect validated cells before grouping, without changing the original target intent. */
 final case class TestSelection(
     targets: TestTargets = TestTargets.All,
     platforms: PlatformSelection = PlatformSelection.All,
+    affected: Option[List[ProjectName]] = None,
 )
 
 object RunPlatform:

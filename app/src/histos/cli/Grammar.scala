@@ -473,7 +473,7 @@ object Grammar:
         tested(
           "test",
           tokens,
-          (names, affected, mode, patterns, filter) => Command.Test(names, affected, mode, patterns, filter),
+          Command.Test.apply,
         )
       case Wire.Coverage(projects, raw) =>
         ZIO
@@ -534,7 +534,7 @@ object Grammar:
         tested(
           "preview test",
           tokens,
-          (names, affected, mode, patterns, filter) => Command.PreviewTest(names, affected, mode, patterns, filter),
+          Command.PreviewTest.apply,
         )
       case Wire.PreviewPublishLocal(tokens) =>
         publishTokens(tokens).map(Command.PreviewPublishLocal(_))
@@ -572,9 +572,9 @@ object Grammar:
 
   private def splitSelection(args: List[String]): Either[CliParseError, Prepared] =
     val surface = args match
-      case "preview" :: ("compile" | "test" | "run") :: _ => true
-      case ("compile" | "test" | "run") :: _              => true
-      case _                                              => false
+      case "preview" :: ("compile" | "run") :: _ => true
+      case ("compile" | "run") :: _              => true
+      case _                                     => false
     val running = args match
       case "run" :: _ | "preview" :: "run" :: _ => true
       case _                                    => false
@@ -612,8 +612,8 @@ object Grammar:
     command match
       case found: Command.Compile                  => ZIO.succeed(found.copy(platforms = platforms))
       case found: Command.PreviewCompile           => ZIO.succeed(found.copy(platforms = platforms))
-      case found: Command.Test                     => ZIO.succeed(found.copy(platforms = platforms))
-      case found: Command.PreviewTest              => ZIO.succeed(found.copy(platforms = platforms))
+      case found: Command.Test                     => ZIO.succeed(found)
+      case found: Command.PreviewTest              => ZIO.succeed(found)
       case found: Command.Run if !found.id.builtIn =>
         ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main))
       case found: Command.PreviewRun if !found.id.builtIn =>
@@ -688,14 +688,26 @@ object Grammar:
   private def tested(
       command: String,
       tokens: List[String],
-      build: (List[ProjectName], AffectedChoice, TestMode, List[SuitePattern], TestFilter) => Command,
+      build: (
+          List[ProjectName],
+          AffectedChoice,
+          TestMode,
+          List[SuitePattern],
+          TestFilter,
+          histos.PlatformSelection,
+      ) => Command,
   ): IO[CliParseError, Command] =
     ZIO.fromEither(splitTest(command, tokens)).flatMap { parts =>
       for
         names    <- projectList(command, parts.projects)
         patterns <- ZIO.fromEither(suitePatterns(parts.patterns.distinct))
         picked   <- choice(parts.affected)
-      yield build(names, picked, parts.mode, patterns, parts.filter)
+        _        <-
+          if parts.suite.isDefined && names.nonEmpty then
+            ZIO.fail(CliParseError.Pattern(s"$command --suite cannot be combined with named projects"))
+          else ZIO.unit
+        scoped = parts.suite.fold(picked)(eligible => AffectedChoice.Within(eligible, picked))
+      yield build(names, scoped, parts.mode, patterns, parts.filter, parts.platforms)
     }
 
   private def cleaned(
@@ -715,74 +727,76 @@ object Grammar:
       mode: TestMode,
       patterns: List[String],
       filter: TestFilter,
+      platforms: histos.PlatformSelection,
+      suite: Option[List[ProjectName]],
   )
 
   /** Every list flag consumes one escaped text list; project placement is independent of flags. */
   private def splitTest(command: String, args: List[String]): Either[CliParseError, TestParts] =
-    def loop(
-        rest: List[String],
-        projects: List[String],
-        affected: Option[String],
-        quick: Boolean,
-        only: Boolean,
-        patterns: List[String],
-        tests: List[TestTerm],
-        tags: List[TagName],
-        ignored: List[TagName],
-    ): Either[CliParseError, TestParts] =
-      rest match
-        case Nil =>
-          if only && patterns.isEmpty then Left(CliParseError.Pattern(s"$command --only needs a pattern"))
-          else
-            val mode   = if quick then TestMode.Quick else TestMode.Run
-            val filter = TestFilter(tests.reverse.distinct, tags.reverse.distinct, ignored.reverse.distinct)
-            Right(TestParts(projects.reverse, affected, mode, patterns.reverse, filter))
-        case "--quick" :: tail =>
-          if quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
-          else loop(tail, projects, affected, true, only, patterns, tests, tags, ignored)
-        case "--only" :: Nil =>
-          Left(CliParseError.Pattern(s"$command --only needs a pattern"))
-        case "--only" :: value :: _ if value.startsWith("-") =>
-          Left(CliParseError.Pattern(s"$command --only needs a pattern"))
-        case "--only" :: value :: tail =>
-          histos.TextList
-            .parse(List(value))
+    def loop(rest: List[String], parts: TestParts): Either[CliParseError, TestParts] = rest match
+      case Nil               => Right(parts)
+      case "--quick" :: tail =>
+        if parts.mode == TestMode.Quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
+        else loop(tail, parts.copy(mode = TestMode.Quick))
+      case "--platform" :: Nil           => Left(CliParseError.Selection(histos.SelectionError.Empty))
+      case "--platform" :: value :: tail =>
+        histos.PlatformSelection
+          .from(List(value))
+          .left
+          .map(CliParseError.Selection(_))
+          .flatMap: selected =>
+            val combined = (parts.platforms, selected) match
+              case (histos.PlatformSelection.All, chosen)                                     => chosen
+              case (histos.PlatformSelection.Only(have), histos.PlatformSelection.Only(more)) =>
+                histos.PlatformSelection.only(have.first, (have.rest ++ more.all)*)
+              case (histos.PlatformSelection.Only(_), histos.PlatformSelection.All) => histos.PlatformSelection.All
+            loop(tail, parts.copy(platforms = combined))
+      case "--only" :: Nil => Left(CliParseError.Pattern(s"$command --only needs a pattern"))
+      case "--only" :: value :: _ if value.startsWith("-") =>
+        Left(CliParseError.Pattern(s"$command --only needs a pattern"))
+      case "--only" :: value :: tail =>
+        histos.TextList
+          .parse(List(value))
+          .left
+          .map(CliParseError.TextList(_))
+          .flatMap(entries => loop(tail, parts.copy(patterns = (parts.patterns ++ entries).distinct)))
+      case "--affected" :: Nil => Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
+      case "--affected" :: value :: _ if value.startsWith("-") =>
+        Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
+      case "--affected" :: value :: tail =>
+        if parts.affected.isDefined then Left(CliParseError.Pattern(s"$command --affected is already set"))
+        else loop(tail, parts.copy(affected = Some(value)))
+      case "--suite" :: Nil           => Left(CliParseError.Pattern(s"$command --suite needs a JSON list"))
+      case "--suite" :: value :: tail =>
+        if parts.suite.isDefined then Left(CliParseError.Pattern(s"$command --suite is already set"))
+        else
+          value
+            .fromJson[List[String]]
             .left
-            .map(CliParseError.TextList(_))
-            .flatMap(entries =>
-              loop(tail, projects, affected, quick, true, entries.reverse ++ patterns, tests, tags, ignored)
-            )
-        case "--affected" :: Nil =>
-          Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
-        case "--affected" :: value :: _ if value.startsWith("-") =>
-          Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
-        case "--affected" :: value :: tail =>
-          affected match
-            case Some(_) => Left(CliParseError.Pattern(s"$command --affected is already set"))
-            case None    => loop(tail, projects, Some(value), quick, only, patterns, tests, tags, ignored)
-        case "--test" :: Nil =>
-          Left(CliParseError.Pattern(s"$command --test needs a term"))
-        case "--test" :: value :: tail =>
-          textValues(value)(raw => TestTerm.from(raw).left.map(CliParseError.TestTerm(_))).flatMap(entries =>
-            loop(tail, projects, affected, quick, only, patterns, entries.reverse ++ tests, tags, ignored)
+            .map(_ => CliParseError.Pattern(s"$command --suite needs a JSON list"))
+            .flatMap(parsedNames)
+            .flatMap(names => loop(tail, parts.copy(suite = Some(names))))
+      case "--test" :: Nil           => Left(CliParseError.Pattern(s"$command --test needs a term"))
+      case "--test" :: value :: tail =>
+        textValues(value)(raw => TestTerm.from(raw).left.map(CliParseError.TestTerm(_))).flatMap(entries =>
+          loop(tail, parts.copy(filter = parts.filter.copy(tests = (parts.filter.tests ++ entries).distinct)))
+        )
+      case "--tag" :: Nil           => Left(CliParseError.Pattern(s"$command --tag needs a name"))
+      case "--tag" :: value :: tail =>
+        textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
+          loop(tail, parts.copy(filter = parts.filter.copy(tags = (parts.filter.tags ++ entries).distinct)))
+        )
+      case "--ignore-tag" :: Nil           => Left(CliParseError.Pattern(s"$command --ignore-tag needs a name"))
+      case "--ignore-tag" :: value :: tail =>
+        textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
+          loop(
+            tail,
+            parts.copy(filter = parts.filter.copy(ignoredTags = (parts.filter.ignoredTags ++ entries).distinct)),
           )
-        case "--tag" :: Nil =>
-          Left(CliParseError.Pattern(s"$command --tag needs a name"))
-        case "--tag" :: value :: tail =>
-          textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
-            loop(tail, projects, affected, quick, only, patterns, tests, entries.reverse ++ tags, ignored)
-          )
-        case "--ignore-tag" :: Nil =>
-          Left(CliParseError.Pattern(s"$command --ignore-tag needs a name"))
-        case "--ignore-tag" :: value :: tail =>
-          textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
-            loop(tail, projects, affected, quick, only, patterns, tests, tags, entries.reverse ++ ignored)
-          )
-        case flag :: _ if flag.startsWith("-") =>
-          Left(CliParseError.Pattern(Help.flag(command, flag)))
-        case token :: tail =>
-          loop(tail, token :: projects, affected, quick, only, patterns, tests, tags, ignored)
-    loop(args, Nil, None, false, false, Nil, Nil, Nil, Nil)
+        )
+      case flag :: _ if flag.startsWith("-") => Left(CliParseError.Pattern(Help.flag(command, flag)))
+      case token :: tail                     => loop(tail, parts.copy(projects = parts.projects :+ token))
+    loop(args, TestParts(Nil, None, TestMode.Run, Nil, TestFilter.empty, histos.PlatformSelection.All, None))
 
   private def splitClean(
       command: String,

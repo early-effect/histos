@@ -39,6 +39,20 @@ object VerifyJobSpec extends ZIOSpecDefault:
     RunnerTools(Some(NodeFloor(25)), None, Some(ToolRevision("1.62.1")))
 
   def spec = suite("verify jobs")(
+    test("review OpenSSL: matrix libraries do not depend on a pinned LLVM requirement") {
+      val native = histos
+        .module("native", histos.Native)(ScalaVersion("3.10.1"))
+        .clang(histos.ClangMajor(21))
+        .link(histos.NativeLibrary.Ssl)
+      val text = render(Projects(Splits.of(Axis.Platform), api, native), NpmLock.Absent)
+      assertTrue(
+        text.exists(body =>
+          slice(body, "test").contains("matrix.openssl == 'true'") && matrixRow(slice(body, "test"), "native").contains(
+            "openssl: \"true\""
+          )
+        )
+      )
+    },
     test("typed JVM verify tests run test, install the JDK floor and all selected browsers") {
       val tools = browser.copy(
         jdk = Some(histos.JdkFloor(25)),
@@ -226,7 +240,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
         text.map { body =>
           val job = slice(body, "test")
           job.contains("matrix.npm == 'true'") && job.contains("run: \"npm ci\"") &&
-          matrixRow(job, "web-js").contains("npm: \"true\"") && matrixRow(job, "api-jvm").contains("npm: \"false\"")
+          matrixRow(job, "web").contains("npm: \"true\"") && matrixRow(job, "api").contains("npm: \"false\"")
         } == Right(true)
       )
     },

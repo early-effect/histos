@@ -76,11 +76,7 @@ object Operation:
       case Command.Graph                                                       => Right(Call.Graph)
       case Command.Plugin(id, args)                                            => Right(Call.Task(id.render, args))
       case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
-        AffectedChoice.select(projects, affected) match
-          case None =>
-            Left(CliParseError.Pattern("nothing is affected"))
-          case Some(names) =>
-            Right(Call.Test(names, patterns, mode, filter, platforms))
+        Right(Call.Test(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter))
       case Command.Affected(_) =>
         Left(CliParseError.Rejected)
       case Command.Compile(projects, platforms) => Right(Call.Compile(projects, platforms))
@@ -118,9 +114,7 @@ object Operation:
       case Command.PreviewCompile(projects, platforms) =>
         Right(Call.PreviewCompile(projects, platforms))
       case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
-        AffectedChoice.select(projects, affected) match
-          case None        => Left(CliParseError.Pattern("nothing is affected"))
-          case Some(names) => Right(Call.PreviewTest(names, patterns, mode, filter, platforms))
+        Right(Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter))
       case Command.PreviewPublishLocal(tokens) =>
         Right(Call.PreviewPublishLocal(tokens))
       case Command.PreviewPublishSnapshots(tokens) =>

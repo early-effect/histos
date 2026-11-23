@@ -76,8 +76,8 @@ object Help:
     Entry(
       "test",
       "test",
-      "histos test [project ...] [--platform <jvm,js,native>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
-      "Run the selected suites, not their compilation dependencies. --platform, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
+      "Run the selected suites, not their compilation dependencies. --platform, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list and intersects the original selection. Whole-suite filters exclude Verify and unsupported platforms; explicitly named invalid platforms still fail even under an empty affected filter. --suite is a JSON eligibility list for whole-suite CI rows, cannot combine with named projects, and never changes a singleton into a focused named request. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "coverage",
@@ -145,7 +145,12 @@ object Help:
       "Check the lock, or write it. --refresh revalidates retained snapshot locators: offer by default, --lock=update commits, no selector means every retained locator, no fetch, and a dependency lock is not rewritten.",
     ),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),
-    Entry("workflow", "ci", "histos workflow [--check | --update]", "Check generated workflows, or write them."),
+    Entry(
+      "workflow",
+      "ci",
+      "histos workflow [--check | --update]",
+      "Check generated workflows, or write them. CI honors Module and Platform axes while keeping Native groups indivisible. ScalaVersion axes are refused with a typed error until test selection supports version filtering.",
+    ),
     Entry(
       "doctor",
       "ci",
