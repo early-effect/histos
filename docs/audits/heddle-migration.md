@@ -26,6 +26,7 @@ Base: Histos `65a1f2fe`. H0 owns public contracts and graph validation. Runtime 
 | [x] | R3, docs diamond does not cover source File ownership | JVM Main produces one source File consumed by JVM Test and JS Main; an independent task owns a sibling File; exact collisions and parent Directory ownership are rejected |
 | [x] | R4, generated File consumption and resource naming are ambiguous | EmittedContent distinguishes SourceFile/SourceTree/ResourceFile/ResourceTree; existing ArtifactPath and ResourceName name exact entries; graph rejects declared-kind mismatches with a typed fault |
 | [x] | R5, platform spelling duplicated | VerifyRun.Tests renders through Platform.token; all three canonical tokens are asserted |
+| [x] | H0-SIMP-1, broad -X allowance admits boot-classpath selectors | Reject the -Xbootclasspath family with existing Malformed before broad acceptance; runtime and literal assertions cover append, legacy and prepend forms |
 
 ## Runtime and integration ledger
 
@@ -35,6 +36,7 @@ These checkboxes do not claim completion from API declarations alone.
 | --- | --- | --- |
 | [ ] | Main/Test scheduling, emitted sources/resources, transitive generation and classpaths | H1/H2, cold compile and fixture visibility |
 | [ ] | Shared roots in source jars, packaging, BSP, affected selection and watch | H1 |
+| [ ] | Compile-time typeChecks results reused after a validator helper body changed | H1/integrator, compiler invalidation proof; H0-SIMP-1 warm-run evidence below |
 | [ ] | File/Directory ownership hashing, restore, stale cleanup and transaction safety | H1, execution-boundary proofs |
 | [ ] | JS effective-mode product identity, dependency content hashing and asynchronous ownership | H1 |
 | [ ] | Native aggregate member-only dependencies/resources and once-only suite execution | H2/H3 |
@@ -82,3 +84,10 @@ The provisional `9cb941ec` verification above completed successfully. No publica
 - R2 companion overloads and explicit result factories are covered by runtime value assertions and positive typing checks. R4 refusal checks reject absent/string resource names, escaping ResourceName literals, and the former RootKind-only scoped emission signature. Browser resource declarations preserve `apps-browser/counter-view.js` and `apps-browser/reference-host.js` as exact classpath entries.
 
 File sources contribute only the selected file and their explicit package-relative ArtifactPath source-jar entry. File resources contribute only the selected file at their explicit ResourceName. Neither contributes, scans, or owns the parent directory. Directory source/resource trees retain entries relative to their declared root. H1 owns execution of these rules, not a new package parser. Its adapters must now supply observed result scope/mode explicitly and populate destinations for output-producing requests. The H3 wire codec and assembled runtime gates remain open.
+
+## H0-SIMP-1 red/green evidence
+
+- `./histos test api --only '*MigrationContractsSpec*' --test VM --test compile`, run `25f1563a-62c5-478e-b60d-4bd5896812d2`, failed the existing runtime and literal refusal tests on JVM and Native before the production fix. Append, legacy and prepend boot-classpath forms were all accepted.
+- The production correction is one validator branch: refuse raw values beginning with `-Xbootclasspath` using `JvmFlagError.Malformed(raw)`, before the broad `-X` allowance. Public shapes, typed errors and the accepted File/Tree emission contracts are unchanged. Ordinary `-Xmx2g` and `-XX:+UnlockDiagnosticVMOptions` remain accepted.
+- The first warm post-fix run, `30fc7646-befe-4709-bb2e-a41d39ccf88b`, passed runtime assertions but reused old compile-time typeChecks results: both test compilations reported unchanged, and the literal refusals remained red. This compiler invalidation observation is recorded for H1/integration, not fixed or hidden in H0.
+- `./histos clean --full && ./histos fmt && ./histos compile api && ./histos test api && ./histos fmt --check && git diff --check` then returned exit 0. Full test run `ba4fd561-6fb0-4c28-a670-0ad0a9b1b733` passed 63 JVM and 61 Native tests, zero failures or ignored tests, with 23 migration contract tests per platform and no quick mode. All 261 API sources and 13 test sources compiled freshly. Scala and Native pins were unchanged. No runtime implementation, compiler-limit change, suppression, dummy flag, dependency or public seam was added.

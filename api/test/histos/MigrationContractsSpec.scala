@@ -483,6 +483,14 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         }) == Right(List(options)),
         JvmFlag.from("main.Class").isLeft,
         JvmFlag.from("-cp").isLeft,
+        JvmFlag.from("-Xbootclasspath/a:/tmp/extra.jar") ==
+          Left(JvmFlagError.Malformed("-Xbootclasspath/a:/tmp/extra.jar")),
+        JvmFlag.from("-Xbootclasspath:/tmp/extra.jar") ==
+          Left(JvmFlagError.Malformed("-Xbootclasspath:/tmp/extra.jar")),
+        JvmFlag.from("-Xbootclasspath/p:/tmp/extra.jar") ==
+          Left(JvmFlagError.Malformed("-Xbootclasspath/p:/tmp/extra.jar")),
+        JvmFlag.from("-Xmx2g").map(_.value) == Right("-Xmx2g"),
+        JvmFlag.from("-XX:+UnlockDiagnosticVMOptions").map(_.value) == Right("-XX:+UnlockDiagnosticVMOptions"),
         JvmFlag.from("-Dexample.mode=checked").isLeft,
       )
     },
@@ -524,6 +532,9 @@ object MigrationContractsSpec extends ZIOSpecDefault:
         !typeChecks("""import histos.*; module("client", Jvm)(scala"3.10.1").jsOptimize(JsOptimize.Full)"""),
         !typeChecks("""import histos.*; module("client", Js)(scala"3.10.1").jvmOptions(JvmOptions.empty)"""),
         !typeChecks("""import histos.*; JvmFlag("-cp")"""),
+        !typeChecks("""import histos.*; JvmFlag("-Xbootclasspath/a:/tmp/extra.jar")"""),
+        !typeChecks("""import histos.*; JvmFlag("-Xbootclasspath:/tmp/extra.jar")"""),
+        !typeChecks("""import histos.*; JvmFlag("-Xbootclasspath/p:/tmp/extra.jar")"""),
         !typeChecks("""import histos.*; JdkFloor(0)"""),
         !typeChecks("""import histos.plugin.*; DeclaredOutput.File(OutputName("page"), RepoPath("../page"))"""),
       )

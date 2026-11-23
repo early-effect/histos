@@ -14,6 +14,7 @@ object JvmFlag:
   def from(raw: String): Either[JvmFlagError, JvmFlag] =
     if raw.isEmpty then Left(JvmFlagError.Empty)
     else if raw.exists(_.isWhitespace) || raw.exists(_.isControl) then Left(JvmFlagError.Malformed(raw))
+    else if raw.startsWith("-Xbootclasspath") then Left(JvmFlagError.Malformed(raw))
     else if raw.startsWith("-X") || raw.startsWith("-ea") || raw.startsWith("-da") || raw.startsWith("--add-opens=") ||
       raw.startsWith("--add-exports=") || raw.startsWith("--enable-native-access=")
     then Right(trusted(raw))
