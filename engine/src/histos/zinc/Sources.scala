@@ -85,6 +85,46 @@ object Sources:
       paths.map: path =>
         PackagedSource(entryName(root, path), path)
 
+  /** Exact roots are package trees, not conventional layouts. */
+  def exact(root: Path, platform: Platform): IO[CompileError, List[PackagedSource]] =
+    ZIO
+      .attemptBlocking {
+        if !Files.isDirectory(root) then Nil
+        else
+          val walk = Files.walk(root)
+          try
+            walk.iterator.asScala
+              .filter(path => Files.isRegularFile(path) && source(path, platform))
+              .toList
+              .sortBy(_.toString)
+              .map(path => PackagedSource(root.relativize(path).iterator.asScala.map(_.toString).mkString("/"), path))
+          finally walk.close()
+      }
+      .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Walk)))
+
+  private[histos] def resourceEntry(
+      root: Path,
+      path: Path,
+      version: ScalaVersion,
+      platform: Platform,
+      scope: histos.plugin.SourceSet,
+  ): Option[String] =
+    val parts           = root.relativize(path).iterator.asScala.map(_.toString).toList
+    val (before, after) = parts.span(_ != "resources")
+    val tree            = scope match
+      case histos.plugin.SourceSet.Main => Tree.Main
+      case histos.plugin.SourceSet.Test => Tree.Test
+    val conventional =
+      before.forall(name => layout.contains(name) || name == "test" || SourceFilter.parse(name).isDefined)
+    if !conventional then None
+    else
+      after match
+        case "resources" :: entries if entries.nonEmpty =>
+          prefix(before, tree, seenTest = false)
+            .filter(_.forall(filter => SourceFilter.allows(filter, version, platform)))
+            .map(_ => entries.mkString("/"))
+        case _ => None
+
   /** Committed main sources, with [[prefer]] applied to unmanaged generated replacements. */
   def published(
       committedRoot: Path,
@@ -157,6 +197,17 @@ object Sources:
   private def under(root: Path, path: Path): Boolean =
     path.toAbsolutePath.normalize.startsWith(root.toAbsolutePath.normalize)
 
+  private[histos] def testEntry(root: Path, path: Path): String =
+    val parts  = root.relativize(path).iterator.asScala.map(_.toString).toList
+    val before = parts.takeWhile(name => layout.contains(name) || SourceFilter.parse(name).isDefined)
+    val rest   = parts.drop(before.size)
+    rest match
+      case "test" :: entries =>
+        splitLast(entries) match
+          case Some((dirs, file)) => (dropPrefix(dirs, seenLayout = true, seenLanguage = false) :+ file).mkString("/")
+          case None               => entryName(root, path)
+      case _ => entryName(root, path)
+
   private def entryName(root: Path, path: Path): String =
     val parts = root.relativize(path).iterator.asScala.map(_.toString).toList
     splitLast(parts) match
@@ -193,6 +244,7 @@ object Sources:
         tree match
           case Tree.Main => Some(Nil)
           case Tree.Test => if seenTest then Some(Nil) else None
+      case "resources" :: _            => None
       case "test" :: rest if !seenTest =>
         tree match
           case Tree.Main => None

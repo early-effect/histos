@@ -25,6 +25,20 @@ object Resources:
       _.map((name, path) => name.value -> path),
     )
 
+  /** Conventional resources use the same scope, platform, and Scala-prefix rules as sources. */
+  def selected(
+      root: Path,
+      version: histos.ScalaVersion,
+      platform: histos.Platform,
+      scope: histos.plugin.SourceSet,
+  ): IO[AssetError, List[(ResourceName, Path)]] =
+    filesAt(root).flatMap: files =>
+      ZIO.foreach(files.flatMap { (_, path) =>
+        histos.zinc.Sources.resourceEntry(root, path, version, platform, scope).map(_ -> path)
+      }) { (entry, path) =>
+        ZIO.fromEither(ResourceName.from(entry)).mapError(_ => AssetError.Escaped(entry)).map(_ -> path)
+      }
+
   /** Regular files under `root`. A missing directory is empty. A name that leaves the directory is refused. */
   def filesAt(root: Path): IO[AssetError, List[(ResourceName, Path)]] =
     ZIO
