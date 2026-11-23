@@ -407,8 +407,10 @@ private[histos] object BootstrapLoad:
     * runs. This covers the Scala library inside the toolchain jar and every other jar `Boundary.jars` found.
     */
   private def runtime(host: List[Path], paths: List[Path]): ZIO[Any, LoadError, List[Path]] =
-    ClasspathIndex.includeAll(host).flatMap: seen =>
-      ZIO.filter(paths)(path => ClasspathIndex.shares(seen, path).map(hit => !hit))
+    ClasspathIndex
+      .includeAll(host)
+      .flatMap: seen =>
+        ZIO.filter(paths)(path => ClasspathIndex.shares(seen, path).map(hit => !hit))
 
   private def publicationOf(path: Path): ZIO[Any, LoadError, histos.plugin.PublicationFact] =
     entry(path, "META-INF/histos/plugin.json").flatMap:
