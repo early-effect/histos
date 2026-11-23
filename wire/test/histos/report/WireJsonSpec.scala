@@ -2,7 +2,17 @@ package histos.report
 
 import histos.*
 import histos.load.LoadError
-import histos.plugin.{OutputName, PluginId, PluginTaskId, RepoPath, SourceSet, TaskName}
+import histos.plugin.{
+  ArtifactPath,
+  EmittedContent,
+  OutputKind,
+  OutputName,
+  PluginId,
+  PluginTaskId,
+  RepoPath,
+  SourceSet,
+  TaskName,
+}
 import histos.report.WireJson.given
 
 import zio.json.*
@@ -49,7 +59,10 @@ object WireJsonSpec extends ZIOSpecDefault:
     ),
     ContractFault.TestModule(other),
     ContractFault.TestPlatform(module, Platform.Native),
-  ) ++ selections.map(ContractFault.TestSelection(_))
+  ) ++ selections.map(ContractFault.TestSelection(_)) ++ (for
+    expected <- OutputKind.values.toList
+    actual   <- OutputKind.values.toList
+  yield ContractFault.EmittedOutputKind(task, output, expected, actual))
 
   def spec = suite("wire scoped contracts")(
     test("every contract fault retains its data through the enclosing socket result") {
@@ -85,6 +98,23 @@ object WireJsonSpec extends ZIOSpecDefault:
         "\"fast\"".fromJson[JsOptimize] == Right(JsOptimize.Fast),
         "\"full\"".fromJson[JsOptimize] == Right(JsOptimize.Full),
         "\"unknown\"".fromJson[JsOptimize].isLeft,
+      )
+    },
+    test("emitted file names and tree kinds retain their typed wire shapes") {
+      val source                         = ArtifactPath("dev/earlyeffect/docs/GeneratedTranscript.scala")
+      val resource                       = ResourceName("apps-browser/counter-view.js")
+      val contents: List[EmittedContent] = List(
+        EmittedContent.SourceFile(source),
+        EmittedContent.SourceTree,
+        EmittedContent.ResourceFile(resource),
+        EmittedContent.ResourceTree,
+      )
+      assertTrue(
+        contents.forall(content => content.toJson.fromJson[EmittedContent] == Right(content)),
+        "\"../Generated.scala\"".fromJson[ArtifactPath].isLeft,
+        "\"../counter-view.js\"".fromJson[ResourceName].isLeft,
+        source.toJson == "\"dev/earlyeffect/docs/GeneratedTranscript.scala\"",
+        resource.toJson == "\"apps-browser/counter-view.js\"",
       )
     },
     test("newtype codecs validate input at the wire edge") {

@@ -408,6 +408,7 @@ end WireSchemaLeaves
 private object WireSchemaBuild extends WireSchemaSupport:
   import WireSchemaLeaves.given
   import WireSchemaContract.given
+  import WireSchemaStages.given
 
   given Schema[ToolchainError] = Schema.derived
 
@@ -555,6 +556,7 @@ end WireSchemaReport
 private object WireSchemaCall extends WireSchemaSupport:
   import WireSchemaLeaves.given
   import WireSchemaContract.given
+  import WireSchemaStages.given
   import WireSchemaBuild.given
   import WireSchemaReport.given
 
@@ -732,6 +734,7 @@ end WireSchemaEvent
 object WireSchema:
   export WireSchemaLeaves.given
   export WireSchemaContract.given
+  export WireSchemaStages.given
   export WireSchemaBuild.given
   export WireSchemaReport.given
   export WireSchemaCall.given

@@ -174,21 +174,8 @@ import histos.zinc.{
 }
 import histos.{
   BuildError,
-  BuildNode,
-  Cell,
-  CompilationStage,
-  ContractFault,
   JdkFloor,
-  JsOptimize,
   JvmFlag,
-  PlatformSelection,
-  Platforms,
-  RootKind,
-  ScopedRoot,
-  SelectionError,
-  TestSelection,
-  TestTargets,
-  TextListError,
   CiFault,
   PluginGraphFault,
   ToolchainClientFault,
@@ -456,6 +443,7 @@ end WireLeaves
 private object WireBuild extends WireSupport:
   import WireLeaves.given
   import WireContract.given
+  import WireStages.given
 
   given JsonCodec[ToolchainError]    = JsonCodec.derived
   given JsonCodec[CacheError]        = JsonCodec.derived
@@ -528,21 +516,6 @@ private object WireBuild extends WireSupport:
         case histos.plugin.Need.Docker  => "docker"
       },
     )
-  given JsonCodec[Platforms]         = JsonCodec.derived
-  given JsonCodec[PlatformSelection] = JsonCodec.derived
-  given JsonCodec[TextListError]     = JsonCodec.derived
-  given JsonCodec[SelectionError]    = JsonCodec.derived
-  given JsonCodec[TestTargets]       = JsonCodec.derived
-  given JsonCodec[TestSelection]     = JsonCodec.derived
-  given JsonCodec[Cell]              = JsonCodec.derived
-  given JsonCodec[CompilationStage]  = JsonCodec.derived
-  given JsonCodec[RootKind]          = JsonCodec.derived
-  given JsonCodec[ScopedRoot]        = JsonCodec.derived
-  given JsonCodec[BuildNode]         = JsonCodec.derived
-  given JsonCodec[ContractFault]     = JsonCodec.derived
-  given JsonCodec[JsOptimize]        =
-    choose("JS optimization", JsOptimize.values.toList.map(mode => mode.token -> mode), _.token)
-
   given JsonCodec[CiFault]                = JsonCodec.derived
   given JsonCodec[PluginGraphFault]       = JsonCodec.derived
   given JsonCodec[ToolchainLauncherFault] = JsonCodec.derived
@@ -588,6 +561,7 @@ end WireBuild
 private object WireCall extends WireSupport:
   import WireLeaves.given
   import WireContract.given
+  import WireStages.given
   import WireBuild.given
 
   given JsonCodec[SuiteName]       = parsed(SuiteName.from, _.message, _.value)
@@ -705,6 +679,7 @@ end WireEvent
 object WireJson:
   export WireLeaves.given
   export WireContract.given
+  export WireStages.given
   export WireBuild.given
   export WireCall.given
   export WireEvent.given
