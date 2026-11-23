@@ -34,6 +34,11 @@ private[load] object ClasspathIndex:
   def includeAll(paths: List[Path]): IO[LoadError, Map[String, Origin]] =
     ZIO.foldLeft(paths)(Map.empty[String, Origin])(include)
 
+  /** True when `path` defines a class the host jars already define. The host copy stays. The plugin jar is not added.
+    */
+  def shares(seen: Map[String, Origin], path: Path): IO[LoadError, Boolean] =
+    entries(path).map(found => found.exists(entry => seen.contains(entry.name)))
+
   final case class Origin(path: Path, digest: String)
 
   private final case class Entry(name: String, digest: String)

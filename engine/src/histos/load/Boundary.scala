@@ -63,10 +63,6 @@ end ClassHome
 
 /** Jars the api classloader already supplies. A plugin cell must not put a second copy on a flat classpath. */
 private[load] object Boundary:
-  def supplied(name: String): Boolean =
-    name == "scala-library" || name == "scala3-library_3" || name == "zio_3" || name == "zio-stacktracer_3" ||
-      name == "izumi-reflect_3" || name.startsWith("histos-api")
-
   /** `ZIO.succeed` summons `Trace` from `zio-stacktracer`. `zio.Tag` extends `izumi.reflect.Tag`. Neither class is in
     * the zio jar. A compile that sees `Tag` without izumi-reflect aborts in the compiler.
     */
