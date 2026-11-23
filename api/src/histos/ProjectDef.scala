@@ -2,7 +2,7 @@ package histos
 
 import _root_.scala.annotation.{implicitNotFound, publicInBinary}
 
-import histos.plugin.{ModuleNote, Need, NoteKey, NoteText, PluginId, RepoPath}
+import histos.plugin.{ModuleNote, Need, NoteKey, NoteText, PluginId, RepoPath, SourceSet}
 
 /** One or more platforms. The builder requires the first, so empty is not representable.
   */
@@ -24,6 +24,7 @@ sealed trait ProjectDef:
 final case class ProjectEdge(
     project: ProjectDef,
     platforms: Option[List[Platform]],
+    scope: SourceSet = SourceSet.Main,
 )
 
 /** A module as written. `P` is the platforms `module(...)` named, as a union of the case singleton types.
@@ -36,6 +37,10 @@ sealed trait ModuleDef[P] extends ProjectDef:
       @implicitNotFound("jsVersion is a Js setting, and this module does not build Js") js: Platform.Js.type <:< P
   ): ModuleDef[P] =
     rewriteJsVersion(version)
+
+  def jsOptimize(mode: JsOptimize)(using
+      @implicitNotFound("jsOptimize is a Js setting, and this module does not build Js") js: Platform.Js.type <:< P
+  ): ModuleDef[P] = rewriteJsOptimize(mode)
 
   /** Node, jsdom, or Firefox. */
   def jsEnv(env: JsEnv)(using
@@ -103,6 +108,22 @@ sealed trait ModuleDef[P] extends ProjectDef:
 
   /** These upstreams are on the classpath only for the named platforms. */
   def dependsOn(platform: Platform, rest: Platform*)(projects: ProjectDef*): ModuleDef[P]
+
+  /** Upstream test classes and resources are visible only to this module's tests. No upstream suites run. */
+  def testDependsOn(module: ModuleDef[?], rest: ModuleDef[?]*): ModuleDef[P]
+
+  def testDependsOn(platform: Platform, rest: Platform*)(modules: ModuleDef[?]*): ModuleDef[P]
+
+  /** Exact scoped source or resource directories. A repeated root is one. */
+  def roots(root: ScopedRoot, rest: ScopedRoot*): ModuleDef[P]
+
+  /** Default for an omitted run selection. Projects validates it against the supported platforms. */
+  def runPlatform(platform: Platform): ModuleDef[P]
+
+  /** VM options are not program arguments. A second call replaces them. */
+  def jvmOptions(options: JvmOptions)(using
+      @implicitNotFound("jvmOptions is a Jvm setting, and this module does not build Jvm") jvm: Platform.Jvm.type <:< P
+  ): ModuleDef[P] = rewriteJvmOptions(options)
 
   /** Opt out of the test provider and run this main. */
   def test(main: TestMain): ModuleDef[P]
@@ -175,6 +196,8 @@ sealed trait ModuleDef[P] extends ProjectDef:
   /** Publish this module as a plugin library. Binary-only keeps binding metadata and no recipe. */
   def pluginLibrary(mode: PluginPublication): ModuleDef[P]
 
+  private[histos] def rewriteJsOptimize(mode: JsOptimize): ModuleDef[P]
+  private[histos] def rewriteJvmOptions(options: JvmOptions): ModuleDef[P]
   private[histos] def rewriteJsVersion(version: JsVersion): ModuleDef[P]
   private[histos] def rewriteJsEnv(env: JsEnv): ModuleDef[P]
   private[histos] def rewriteJsModule(kind: JsModuleKind): ModuleDef[P]
@@ -258,6 +281,10 @@ private[histos] final class ModuleBody[P](
     val libraries: Set[NativeLibrary],
     val testAggregates: List[ModuleDef[?]],
     val lane: TestLane,
+    val roots: List[ScopedRoot] = Nil,
+    val runPlatform: Option[Platform] = None,
+    val jsOptimize: Option[JsOptimize] = None,
+    val jvmOptions: JvmOptions = JvmOptions.empty,
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -271,6 +298,25 @@ private[histos] final class ModuleBody[P](
   override def dependsOn(platform: Platform, rest: Platform*)(projects: ProjectDef*): ModuleDef[P] =
     val chosen = (platform :: rest.toList).distinct
     add(projects.toList.map(project => ProjectEdge(project, Some(chosen))))
+
+  override def testDependsOn(module: ModuleDef[?], rest: ModuleDef[?]*): ModuleDef[P] =
+    add((module :: rest.toList).map(project => ProjectEdge(project, None, SourceSet.Test)))
+
+  override def testDependsOn(platform: Platform, rest: Platform*)(modules: ModuleDef[?]*): ModuleDef[P] =
+    val chosen = (platform :: rest.toList).distinct
+    add(modules.toList.map(project => ProjectEdge(project, Some(chosen), SourceSet.Test)))
+
+  override def roots(root: ScopedRoot, rest: ScopedRoot*): ModuleDef[P] =
+    revise(roots = (roots ++ (root +: rest)).distinct)
+
+  override def runPlatform(platform: Platform): ModuleDef[P] =
+    revise(runPlatform = Some(platform))
+
+  override private[histos] def rewriteJsOptimize(mode: JsOptimize): ModuleDef[P] =
+    revise(jsOptimize = Some(mode))
+
+  override private[histos] def rewriteJvmOptions(options: JvmOptions): ModuleDef[P] =
+    revise(jvmOptions = options)
 
   override def test(main: TestMain): ModuleDef[P] =
     revise(tested = Some(main))
@@ -380,6 +426,10 @@ private[histos] final class ModuleBody[P](
       libraries: Set[NativeLibrary] = this.libraries,
       testAggregates: List[ModuleDef[?]] = this.testAggregates,
       lane: TestLane = this.lane,
+      roots: List[ScopedRoot] = this.roots,
+      runPlatform: Option[Platform] = this.runPlatform,
+      jsOptimize: Option[JsOptimize] = this.jsOptimize,
+      jvmOptions: JvmOptions = this.jvmOptions,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -412,6 +462,10 @@ private[histos] final class ModuleBody[P](
       libraries,
       testAggregates,
       lane,
+      roots,
+      runPlatform,
+      jsOptimize,
+      jvmOptions,
     )
 end ModuleBody
 
