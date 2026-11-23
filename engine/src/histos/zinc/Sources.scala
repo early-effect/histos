@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{IO, NonEmptyChunk, ZIO}
 
 /** The binary series of a full Scala version. `3.10.0` is Scala 3. `2.13.18` is Scala 2.13. */
 enum ScalaSeries:
@@ -35,7 +35,7 @@ end ScalaSeries
 
 /** A directory name that filters sources. A package directory with the same name does not. */
 enum SourceFilter:
-  case PlatformDir(platform: Platform)
+  case PlatformDir(required: NonEmptyChunk[Platform])
   case SeriesDir(series: ScalaSeries)
   case ExactDir(version: ScalaVersion)
 
@@ -45,9 +45,10 @@ object SourceFilter:
 
   private def platform(name: String): Option[SourceFilter] =
     name match
-      case "jvm" | "scalajvm"       => Some(SourceFilter.PlatformDir(Platform.Jvm))
-      case "js" | "scalajs"         => Some(SourceFilter.PlatformDir(Platform.Js))
-      case "native" | "scalanative" => Some(SourceFilter.PlatformDir(Platform.Native))
+      case "jvm" | "scalajvm"       => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Jvm)))
+      case "js" | "scalajs"         => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Js)))
+      case "native" | "scalanative" => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Native)))
+      case "scalajvmnative"         => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Jvm, Platform.Native)))
       case _                        => None
 
   private def scalaDir(name: String): Option[SourceFilter] =
@@ -60,7 +61,7 @@ object SourceFilter:
 
   def allows(filter: SourceFilter, version: ScalaVersion, platform: Platform): Boolean =
     filter match
-      case PlatformDir(required) => required == platform
+      case PlatformDir(required) => required.contains(platform)
       case ExactDir(required)    => required == version
       case SeriesDir(required)   => ScalaSeries.of(version).contains(required)
 end SourceFilter
