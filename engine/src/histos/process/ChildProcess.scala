@@ -28,25 +28,6 @@ object ProcessExit:
   extension (exit: ProcessExit) def value: Int = exit
 end ProcessExit
 
-/** Compiled classes, then resolved artifacts. `classes` is a directory for a module under test, or a jar when the
-  * program is the installed toolchain.
-  */
-final case class ChildClasspath(classes: Path, artifacts: List[Path]):
-  def entries: List[Path] = classes :: artifacts
-
-final case class ChildRequest(
-    platform: Platform,
-    java: Path,
-    classpath: ChildClasspath,
-    main: MainClass,
-    work: Path,
-    environment: Map[String, String] = Map.empty,
-    directory: Option[Path] = None,
-    arguments: List[String] = Nil,
-):
-  /** Scratch stays `work`. The process directory is `directory` when the caller named one. */
-  def cwd: Path = directory.getOrElse(work)
-
 final case class ChildOutcome(
     exit: ProcessExit,
     out: ProcessOutput,
@@ -254,9 +235,8 @@ object ChildProcess:
           .forkScoped
       yield child.console ++ ZStream.fromZIO(result.await)
 
-  /** Real time. A test clock cannot close the pipe, so this wait does not sleep on the caller's clock. */
   private def pause(bound: Duration): UIO[Unit] =
-    ZIO.attemptBlockingInterrupt(Thread.sleep(bound.toMillis)).orDie
+    ZIO.sleep(bound)
 
   private def end(process: Process, group: Group): UIO[Unit] =
     val killed =
@@ -615,6 +595,7 @@ object ChildProcess:
           request.java.toString,
           Toolchain.NativeAccess,
           Toolchain.LazyVals,
+        ) ++ request.jvmOptions.arguments ++ List(
           "-cp",
           entries.map(_.toString).mkString(java.io.File.pathSeparator),
           EntryClass.binary,

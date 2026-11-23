@@ -19,12 +19,18 @@ enum NativeError:
   case Fetch(error: NativeFetch)
   case Compile(error: CompileError)
   case Link(error: LinkError)
+  case InputLink(path: java.nio.file.Path)
+  case InputsChanged(paths: List[java.nio.file.Path])
+  case MissingResource(name: histos.ResourceName)
 
   def message: String = this match
-    case Clang(miss)    => miss.message
-    case Fetch(error)   => error.message
-    case Compile(error) => error.message
-    case Link(error)    => error.message
+    case Clang(miss)           => miss.message
+    case Fetch(error)          => error.message
+    case Compile(error)        => error.message
+    case Link(error)           => error.message
+    case InputLink(path)       => s"native link input is a symbolic link: $path"
+    case MissingResource(name) => s"declared native resource is absent from the classpath: ${name.value}"
+    case InputsChanged(paths)  => s"native link inputs changed during linking: ${paths.mkString(", ")}"
 end NativeError
 
 enum NativeDeclaration:

@@ -9,7 +9,6 @@ import histos.{
   Platform,
   ProjectGraph,
   ProjectName,
-  SelectionError,
   TestLane,
   TestSelection,
   TestTargets,
@@ -32,20 +31,6 @@ enum TestExecutionGroup:
     case Direct(cell)                => List(cell)
     case NativeAggregate(_, members) => members.toList
 end TestExecutionGroup
-
-enum TestSelectionError:
-  case Selection(error: SelectionError)
-  case UnknownProject(name: ProjectName)
-  case InvalidProjectAggregateMember(aggregate: ProjectName, member: ProjectName)
-  case Aggregate(error: TestAggregateError)
-
-enum TestAggregateError:
-  case UnsupportedNative(module: ProjectName)
-  case MissingMember(owner: ProjectName, member: ProjectName)
-  case NonModuleMember(owner: ProjectName, member: ProjectName)
-  case SelfMember(owner: ProjectName)
-  case DuplicateMember(owner: ProjectName, member: ProjectName)
-  case Overlap(firstOwner: ProjectName, secondOwner: ProjectName, member: ProjectName)
 
 object TestCells:
   /** DAG roots are not a dependency closure. The DAG expands scoped Main/Test edges and picks upstream versions. A

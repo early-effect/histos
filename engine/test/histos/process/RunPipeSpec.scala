@@ -45,7 +45,7 @@ object RunPipeSpec extends ZIOSpecDefault:
       |}
       |""".stripMargin
 
-  def spec = suite("a program child")(
+  private val tests = suite("a program child")(
     test("the child sees the requested variable, the launch directory, and the arguments") {
       prepared: fixture =>
         val Fixture(java, classes, scratch, launch) = fixture
@@ -173,6 +173,8 @@ object RunPipeSpec extends ZIOSpecDefault:
         yield assertTrue(outcome == Exit.fail(ChildError.Orphan(0)))
     } @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds),
   )
+
+  def spec = tests @@ TestAspect.withLiveClock
 
   private final case class Fixture(java: Path, classes: Path, scratch: Path, launch: Path)
 
