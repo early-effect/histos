@@ -1,7 +1,10 @@
 package histos.report
 
 import histos.*
-import histos.load.LoadError
+import histos.load.{LoadError, PluginFault, ProductError}
+import histos.schedule.{CacheError, Digest, ScheduleError}
+import histos.workspace.{IoFailure, IoFault}
+import java.nio.file.Path
 import histos.plugin.{
   ArtifactPath,
   EmittedContent,
@@ -68,6 +71,31 @@ object WireJsonSpec extends ZIOSpecDefault:
     test("every contract fault retains its data through the enclosing socket result") {
       val results =
         faults.map(fault => CallResult.Fault(BuildFault.Load(LoadError.BrokenGraph(BuildError.Contract(fault)))))
+      assertTrue(results.forall(result => result.toJson.fromJson[CallResult] == Right(result)))
+    },
+    test("product failures preserve their ADT data through direct and scheduled plugin faults") {
+      val faults = List(
+        ProductError.Io(IoFailure(Path.of("site"), IoFault.Read)),
+        ProductError.Cache(CacheError.Corrupt(Digest.trusted("ab" * 32))),
+        ProductError.Report(
+          histos.plugin.PluginRunError.OutputKindMismatch(output, OutputKind.File, OutputKind.Directory)
+        ),
+        ProductError.InvalidManifest,
+        ProductError.InvalidEntry("../page"),
+        ProductError.UnsafePath(Path.of("unsafe")),
+        ProductError.Link(Path.of("link")),
+        ProductError.Missing(Path.of("missing")),
+        ProductError.Kind(Path.of("kind"), OutputKind.Directory),
+        ProductError.Unmanaged(Path.of("existing")),
+        ProductError.ActiveReaders,
+        ProductError.Changed,
+      )
+      val results = faults.flatMap(error =>
+        List(
+          CallResult.Fault(BuildFault.Plugin(PluginFault.Products(error))),
+          CallResult.Fault(BuildFault.Plugin(PluginFault.Scheduled(ScheduleError.Products(error)))),
+        )
+      ) :+ CallResult.Fault(BuildFault.Plugin(PluginFault.MissingProduct(task)))
       assertTrue(results.forall(result => result.toJson.fromJson[CallResult] == Right(result)))
     },
     test("compilation stages retain main/test scope, platform, module, and version") {

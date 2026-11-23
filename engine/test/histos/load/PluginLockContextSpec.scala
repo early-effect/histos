@@ -95,7 +95,7 @@ object PluginLockContextSpec extends ZIOSpecDefault:
         _ <- write(root.resolve("histos.scala"), main)
         _ <- BootstrapLoad
           .prepare(jars(seed, added), BootstrapLoad.Prepare(root, api))
-          .provideSomeLayer[Scope](BuildCache.ephemeral)
+          .provideSomeLayer[Scope](BuildCache.ephemeral ++ PluginProducts.live)
         text <- ZIO.attemptBlocking(Files.readString(facts, StandardCharsets.UTF_8)).orDie
       yield text
 

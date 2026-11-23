@@ -559,6 +559,7 @@ private object WireBuild extends WireSupport:
   given JsonCodec[SurveyError]     = JsonCodec.derived
 end WireBuild
 private object WireCall extends WireSupport:
+  import WireProducts.given
   import WireLeaves.given
   import WireContract.given
   import WireStages.given
@@ -680,6 +681,7 @@ object WireJson:
   export WireLeaves.given
   export WireContract.given
   export WireStages.given
+  export WireProducts.given
   export WireBuild.given
   export WireCall.given
   export WireEvent.given

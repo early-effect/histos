@@ -64,9 +64,11 @@ private[load] object PluginInputs:
       bound    <- named("plugin.binding", InputValue.Text(bindingLine(binding)))
       api      <- named("plugin.api", InputValue.Hash(digest(launcher.value)))
       taskIn   <- named("plugin.task", InputValue.Text(id.render))
+      outputs  <- named("plugin.outputs.v2", InputValue.Text(outputIdentity(task)))
+      emitted  <- named("plugin.emissions", InputValue.Text(emissionIdentity(task)))
       bytes = (jarsIn ::: places).distinctBy(_.name.value)
     yield Hashed(
-      declared.map(_._1) ::: deps ::: bytes ::: closed ::: List(argsIn, bound, api, taskIn),
+      declared.map(_._1) ::: deps ::: bytes ::: closed ::: List(argsIn, bound, api, taskIn, outputs, emitted),
       declared.map(_._2),
     )
 
@@ -358,6 +360,34 @@ private[load] object PluginInputs:
       case ArtifactFormat.Jar       => "jar"
       case ArtifactFormat.Directory => "directory"
     s"$format ${identity.digest.value}"
+
+  private def framed(values: List[String]): String = values.map(value => s"${value.length}:$value").mkString
+
+  private def outputIdentity(task: DeclaredTask): String =
+    framed(
+      task.outputs
+        .sortBy(_.name.value)
+        .flatMap(output => List(output.name.value, output.path.value, output.kind.toString))
+    )
+
+  private def emissionIdentity(task: DeclaredTask): String =
+    import histos.plugin.{EmittedContent, TaskDep}
+    val entries = task.dependsOn.flatMap:
+      case TaskDep.Compile(_, _, _) | TaskDep.CompileScoped(_, _, _, _) | TaskDep.Link(_, _, _) | TaskDep.Same(_) |
+          TaskDep.Generate(_) =>
+        Nil
+      case TaskDep.Emit(module) => List(framed(List(module.value, "main", "all", "source-tree")))
+      case TaskDep.EmitScoped(module, scope, platforms, content, output) =>
+        val selected = platforms match
+          case histos.PlatformSelection.All          => "all"
+          case histos.PlatformSelection.Only(values) => framed(values.all.map(_.token).distinct.sorted)
+        val contents = content match
+          case EmittedContent.SourceFile(entry)  => List("source-file", entry.value)
+          case EmittedContent.SourceTree         => List("source-tree")
+          case EmittedContent.ResourceFile(name) => List("resource-file", name.value)
+          case EmittedContent.ResourceTree       => List("resource-tree")
+        List(framed(List(module.value, PluginCells.scopeToken(scope), selected, output.value) ++ contents))
+    framed(entries.distinct.sorted)
 
   private def argsLine(args: PluginArgs): String =
     val texts = args.texts.map(item => s"${item.name.value}=${item.value}").sorted.mkString("\n")

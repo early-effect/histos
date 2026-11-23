@@ -202,7 +202,7 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
   private final case class Ran[A](value: A)
 
   private def hosted[A](
-      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & Scope, LoadError, A]
+      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, A]
   ): ZIO[Any, LoadError, Ran[A]] =
     ZIO.scoped {
       for
@@ -214,7 +214,7 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
             ZLayer.succeed(CompilerStarts(starts)) ++
             Compilers.live ++
             RemoteCache.off ++
-            histos.load.PluginFlights.live
+            histos.load.PluginFlights.live ++ histos.load.PluginProducts.live
         )
       yield Ran(value)
     }
@@ -341,7 +341,7 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
       api: Path,
       resolve: Resolve,
       payload: Option[Path],
-  ): ZIO[BuildCache.Env & Scope, LoadError, histos.load.LoadedBuild] =
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, histos.load.LoadedBuild] =
     BootstrapLoad.prepare(
       resolve,
       BootstrapLoad.Prepare(root, api, payload = payload),

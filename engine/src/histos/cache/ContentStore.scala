@@ -36,6 +36,7 @@ trait ContentStore:
 
   /** Replace this project's keep set. Other projects are left alone. */
   def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit]
+  def retain(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit]
   def kept: IO[CacheError, Set[Digest]]
   def clean(now: Instant, retention: Duration, mode: CacheCleanMode): IO[CacheError, List[CacheEntry]]
 
@@ -100,19 +101,27 @@ private final class DiskStore(val root: Path) extends ContentStore:
     ZIO.attemptBlocking(casEntries ++ pluginEntries).mapError(io(root, IoFault.Walk))
 
   def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit] =
+    withKeep(IoFault.Write)(dir => writeKeep(dir, project, digests))
+
+  def retain(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit] =
     withKeep(IoFault.Write): dir =>
-      val file  = dir.resolve(project.value)
-      val tmp   = Files.createTempFile(dir, s".${project.value}.", ".tmp")
-      val lines = digests.map(_.value).toList.sorted
-      val text  = if lines.isEmpty then "" else lines.mkString("\n") + "\n"
-      try
-        Files.writeString(tmp, text)
-        try Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        catch
-          case _: java.nio.file.AtomicMoveNotSupportedException =>
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
-      finally Files.deleteIfExists(tmp)
-      ()
+      val file     = dir.resolve(project.value)
+      val previous = if Files.isRegularFile(file) then linesOf(file).flatMap(Digest.from).toSet else Set.empty[Digest]
+      writeKeep(dir, project, previous ++ digests)
+
+  private def writeKeep(dir: Path, project: CacheProject, digests: Set[Digest]): Unit =
+    val file  = dir.resolve(project.value)
+    val tmp   = Files.createTempFile(dir, s".${project.value}.", ".tmp")
+    val lines = digests.map(_.value).toList.sorted
+    val text  = if lines.isEmpty then "" else lines.mkString("\n") + "\n"
+    try
+      Files.writeString(tmp, text)
+      try Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+      catch
+        case _: java.nio.file.AtomicMoveNotSupportedException =>
+          Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+    finally Files.deleteIfExists(tmp)
+    ()
 
   def kept: IO[CacheError, Set[Digest]] =
     withKeep(IoFault.Read): dir =>

@@ -92,7 +92,10 @@ private[histos] object BootstrapLoad:
       lockMode: Option[LockMode] = None,
   )
 
-  def prepare(resolve: Resolve, request: Prepare): ZIO[Scope & BuildCache.Env, LoadError, LoadedBuild] =
+  def prepare(
+      resolve: Resolve,
+      request: Prepare,
+  ): ZIO[Scope & BuildCache.Env & PluginProducts, LoadError, LoadedBuild] =
     for
       leases  <- GenerationLeases.make
       _       <- ZIO.addFinalizer(leases.retire)
@@ -116,7 +119,7 @@ private[histos] object BootstrapLoad:
       request: Prepare,
       leases: GenerationLeases,
       session: Option[histos.toolchain.HostCompilerSession],
-  ): ZIO[Scope & BuildCache.Env, LoadError, LoadedBuild] =
+  ): ZIO[Scope & BuildCache.Env & PluginProducts, LoadError, LoadedBuild] =
     val catalogFile = request.repo.resolve("histos.plugins.scala")
     leases.use:
       openGeneration(resolve, request, leases, session, catalogFile)
@@ -128,7 +131,7 @@ private[histos] object BootstrapLoad:
       leases: GenerationLeases,
       session: Option[histos.toolchain.HostCompilerSession],
       catalogFile: Path,
-  ): ZIO[Scope & BuildCache.Env, LoadError, LoadedBuild] =
+  ): ZIO[Scope & BuildCache.Env & PluginProducts, LoadError, LoadedBuild] =
     for
       launcher   <- digestOf(request.apiJar)
       boundary   <- Boundary.jars(request.apiJar)

@@ -800,7 +800,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         case Right(_)    => false
 
   private def hosted[A](
-      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & Scope, LoadError, A]
+      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & PluginProducts & Scope, LoadError, A]
   ): ZIO[Any, LoadError, Ran[A]] =
     ZIO.scoped {
       for
@@ -812,7 +812,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
             ZLayer.succeed(CompilerStarts(starts)) ++
             Compilers.live ++
             RemoteCache.off ++
-            PluginFlights.live
+            PluginFlights.live ++ PluginProducts.live
         )
         count <- starts.get
       yield Ran(count, value)
@@ -827,7 +827,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
       notice: String => UIO[Unit] = _ => ZIO.unit,
       execution: ExecutionKind = ExecutionKind.Local,
       payload: Option[Path] = None,
-  ): ZIO[BuildCache.Env & Scope, LoadError, LoadedBuild] =
+  ): ZIO[BuildCache.Env & PluginProducts & Scope, LoadError, LoadedBuild] =
     BootstrapLoad.prepare(
       resolve,
       BootstrapLoad.Prepare(root, api, payload, notice, execution),

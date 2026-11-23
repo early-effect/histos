@@ -960,7 +960,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       entries.get(name).map(bytes => new String(bytes, utf8))
 
   private def hosted[A](
-      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & Scope, LoadError, A]
+      body: (Path, Ref[Int]) => ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, A]
   ): ZIO[Any, LoadError, A] =
     ZIO.scoped {
       for
@@ -972,7 +972,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
             ZLayer.succeed(CompilerStarts(starts)) ++
             Compilers.live ++
             RemoteCache.off ++
-            histos.load.PluginFlights.live
+            histos.load.PluginFlights.live ++ histos.load.PluginProducts.live
         )
       yield value
     }
@@ -983,7 +983,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       resolve: Resolve,
       payload: Option[Path] = None,
       notice: String => zio.UIO[Unit] = _ => ZIO.unit,
-  ): ZIO[BuildCache.Env & Scope, LoadError, histos.load.LoadedBuild] =
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, histos.load.LoadedBuild] =
     BootstrapLoad.prepare(resolve, BootstrapLoad.Prepare(root, api, payload, notice))
 
   private def runTask(
@@ -991,7 +991,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       api: Path,
       cache: ActionCache,
       id: PluginId,
-  ): ZIO[BuildCache.Env & Scope, LoadError, Ran] =
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, Ran] =
     for
       loaded <- prepare(root, api, silent)
       output <- loaded.plugins
@@ -1014,7 +1014,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       root: Path,
       main: String,
       cache: ActionCache,
-  ): ZIO[BuildCache.Env & Scope, LoadError, Either[TaskError, histos.task.TaskResult]] =
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, Either[TaskError, histos.task.TaskResult]] =
     for
       _      <- ZIO.attemptBlocking(Files.createDirectories(root)).orDie
       api    <- apiJar(root.resolve("api.jar"))
@@ -1041,7 +1041,9 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       exit <- effect.either
     yield exit
 
-  private def sessionFor(root: Path): ZIO[BuildCache.Env & Scope, LoadError, HostCompilerSession] =
+  private def sessionFor(
+      root: Path
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, HostCompilerSession] =
     for
       files   <- packaged
       payload <- payloadJar(root, files, None, corrupt = false)
@@ -1113,7 +1115,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
       session: HostCompilerSession,
       helper: HelperOut,
       label: String,
-  ): ZIO[BuildCache.Env & Scope, LoadError, String] =
+  ): ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, String] =
     val base = root.resolve(s"use-$label")
     for
       source <- write(
