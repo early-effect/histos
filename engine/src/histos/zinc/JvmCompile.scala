@@ -6,10 +6,9 @@ import histos.jdk.{Sha256, Sha256Digest}
 import histos.schedule.{CacheError, RemoteCache, RemoteError}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
-import histos.resolve.{LockedTools, ResolveError}
+import histos.resolve.LockedTools
 
 import java.io.{IOException, UncheckedIOException}
-import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.Optional
@@ -17,10 +16,8 @@ import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
-import scala.util.control.NonFatal
 
 import sbt.internal.inc.{Analysis, FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
-import xsbti.compile.AnalysisContents
 import sbt.util.Logger
 import xsbti.compile.{
   AnalysisContents,
@@ -33,7 +30,7 @@ import xsbti.compile.{
   PreviousResult,
 }
 
-import zio.{Chunk, IO, UIO, ZIO, ZLayer}
+import zio.{Chunk, IO, UIO, ZIO}
 
 export histos.ScalacFlag
 export histos.ScalacFlags
@@ -67,6 +64,8 @@ final case class CompileRequest(
     apiBytes: List[Sha256] = Nil,
     /** One signature per class the upstream analyses define. Empty when this compile names no upstream. */
     upstream: List[ClassSignature] = Nil,
+    /** Stable identities with current leased readers. Empty retains legacy checkout-relative inputs. */
+    sourceInputs: List[CompileSource] = Nil,
 )
 
 final case class CompileOutput(
@@ -165,8 +164,8 @@ object CompileKey:
 
   /** Identity of a compile, excluding compiler jars. An upstream classes directory contributes its API digest, not its
     * class bytes. The digest is named `apis`, so it cannot collide with a jar checksum. Artifact checksums are the
-    * jars. The sources digest is each source's path relative to the checkout, then its bytes. The checkout path is not
-    * an input.
+    * jars. The sources digest names logical identities and content. Legacy inputs use checkout-relative paths. The
+    * checkout path is not an input.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
     Sha256Digest.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
@@ -179,6 +178,11 @@ object JvmCompile:
     */
   def sourceDigest(checkout: Path, sources: List[Path]): IO[CompileError, Sha256] =
     hashSources(checkout, sources)
+
+  /** Explicit inputs hash logical identity and current bytes. Legacy requests retain the original sources row. */
+  def sourceDigest(request: CompileRequest): IO[CompileError, Sha256] =
+    if request.sourceInputs.isEmpty then sourceDigest(request.checkout, request.sources)
+    else CompileSources.digest(request.sourceInputs)
 
   def compile(
       request: CompileRequest,
@@ -388,7 +392,7 @@ object JvmCompile:
       admitted: UIO[Unit],
       onPulse: CompilePulse => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
-    hashSources(request.checkout, request.sources)
+    sourceDigest(request)
       .flatMap(digest => CellTools.compile(platform, request, digest))
       .flatMap((cell, keyed) => drive(cell, keyed, extra, hear, stdlib, admitted, onPulse))
 
@@ -511,7 +515,7 @@ object JvmCompile:
     yield output
 
   private def stamps(request: CompileRequest, keep: Boolean): IO[CompileError, Boolean] =
-    if keep then SourceStale.current(request.checkout, request.analysis, request.sources)
+    if keep then SourceStale.current(request)
     else ZIO.succeed(false)
 
   /** A source change, or a compile with no remembered inputs, is stored only when this run wrote class files it can
@@ -560,7 +564,7 @@ object JvmCompile:
     rows.collectFirst { case CompileRow(CompileInput.Sources, value) => value } match
       case None           => ZIO.succeed(false)
       case Some(recorded) =>
-        sourceDigest(request.checkout, request.sources).map(_.value == recorded)
+        sourceDigest(request).map(_.value == recorded)
 
   /** Compile with jars the caller already checked. This does not ask the project lock for a compiler or a bridge. */
   private[histos] def compileSupplied(
@@ -591,25 +595,34 @@ object JvmCompile:
       _ => (),
     )
 
-  /** A Scala source under the checkout is named by its checkout-relative path. Java stays path-based: mixed compilation
-    * hands every source to the Scala compiler, and javac reads a real path.
-    */
+  /** Scala reads logical virtual names. Java keeps a physical reader for javac. */
   private def checkoutSources(request: CompileRequest): Array[xsbti.VirtualFile] =
-    request.sources.map(path => SourceRef.file(request.checkout, path)).toArray
+    SourceRef.files(request).toArray
 
-  private final class CheckoutFiles(checkout: Path) extends xsbti.FileConverter:
-    private val root  = checkout.toAbsolutePath.normalize
-    private val other = MappedFileConverter.empty
+  private final class CheckoutFiles(request: CompileRequest) extends xsbti.FileConverter:
+    private val root    = request.checkout.toAbsolutePath.normalize
+    private val other   = MappedFileConverter.empty
+    private val sources = SourceRef
+      .files(request)
+      .zip(
+        if request.sourceInputs.isEmpty then request.sources else request.sourceInputs.map(_.path)
+      )
+      .map((file, path) => (file, path.toAbsolutePath.normalize))
+    private val byId   = sources.map((file, path) => file.id -> path).toMap
+    private val byPath = sources.map((file, path) => path -> file).toMap
 
     def toPath(ref: xsbti.VirtualFileRef): Path =
-      ref match
-        case path: xsbti.PathBasedFile => path.toPath
-        case named                     =>
-          val resolved = root.resolve(named.id).normalize
-          if resolved.startsWith(root) then resolved else other.toPath(ref)
+      byId.get(ref.id) match
+        case Some(path) => path
+        case None       =>
+          ref match
+            case path: xsbti.PathBasedFile => path.toPath
+            case named                     =>
+              val resolved = root.resolve(named.id).normalize
+              if resolved.startsWith(root) then resolved else other.toPath(ref)
 
     def toVirtualFile(path: Path): xsbti.VirtualFile =
-      other.toVirtualFile(path)
+      byPath.getOrElse(path.toAbsolutePath.normalize, other.toVirtualFile(path))
   end CheckoutFiles
 
   private def carried(error: RemoteError | CacheError): CompileError =
@@ -629,7 +642,7 @@ object JvmCompile:
       onPulse: CompilePulse => Unit,
   ): Either[CompileError, (CompileOutput, Option[Remembered])] =
     val zinc      = new IncrementalCompilerImpl
-    val converter = new CheckoutFiles(request.checkout)
+    val converter = new CheckoutFiles(request)
     val reporter  = CollectingReporter(hear)
     val watching  = CellPulse(request.checkout, onPulse)
     val progress  = new CompileProgress:

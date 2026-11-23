@@ -104,7 +104,7 @@ object CompileReplay:
         case None         => ZIO.none
         case Some(output) =>
           SourceStale
-            .current(request.checkout, request.analysis, request.sources)
+            .current(request)
             .flatMap:
               case false => dropMarker(request).as(None)
               case true  => recalled(request, key, output)
@@ -314,7 +314,7 @@ object CompileReplay:
     for
       _      <- ZIO.fromEither(install(request, decoded))
       output <- ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
-      fresh  <- SourceStale.current(request.checkout, request.analysis, request.sources)
+      fresh  <- SourceStale.current(request)
       kept   <-
         if !fresh then store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(None)
         else

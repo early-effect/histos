@@ -708,13 +708,13 @@ object GraphCompile:
   )
 
   /** Lock checksums and source bytes. A hit does not open a compiler. A module that compiles against the host api still
-    * hashes that jar. The caller listed the sources and this hashes each path relative to the checkout, then its bytes,
-    * so an added, deleted, or edited source is a miss whatever the modified times say. The key is
-    * [[CellTools.recall]]'s, which the compile stores through the same function.
+    * hashes that jar. Logical source identities and current bytes make added, deleted, or edited inputs a miss without
+    * treating a rematerialized generation as an edit. The key is [[CellTools.recall]]'s, which the compile stores
+    * through the same function.
     */
   private def recall(
       work: CellWork,
-      sources: List[Path],
+      sourceInputs: List[CompileSource],
       upstream: List[UpstreamCell],
       apis: List[Sha256],
       classes: Path,
@@ -772,7 +772,7 @@ object GraphCompile:
                   bytes <- CompileInputs.jarBytes(jars).mapError(failed)
                   base = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
-                    sources,
+                    sourceInputs.map(_.path),
                     Nil,
                     classes,
                     recorded,
@@ -781,8 +781,9 @@ object GraphCompile:
                     coverage = identity,
                     checkout = plan.repo,
                     apiBytes = bytes,
+                    sourceInputs = sourceInputs,
                   )
-                  digest <- JvmCompile.sourceDigest(base.checkout, sources).mapError(failed)
+                  digest <- JvmCompile.sourceDigest(base).mapError(failed)
                   keyed  <- CellTools.recall(plan.tools, placed, base, digest)
                   found  <- keyed match
                     case Some(hit) => CompileReplay.recall(hit.request, hit.key).mapError(failed)
@@ -802,8 +803,9 @@ object GraphCompile:
       read <- upstreams(module, chain, version, platform, done, plan)
       cells = read.map(_._1)
       assembled <- classpathOf(plan, module, cells, version, platform)
-      paths   = CellCapture.classpath(assembled, cells)
-      sources = files.sources.map(_.path)
+      paths = CellCapture.classpath(assembled, cells)
+      sourceInputs <- ZIO.fromEither(files.compileInputs(plan.repo)).mapError(rootFailure(work, _))
+      sources = sourceInputs.map(_.path)
       compiled <-
         if sources.isEmpty then vacant(plan, module.name, version, platform, paths)
         else
@@ -814,7 +816,7 @@ object GraphCompile:
             apis     = read.map(_._2) ++ implementations
             upstream = read.flatMap(_._3)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
-            known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
+            known    <- recall(work, sourceInputs, cells, apis, classes, analysis, planned.map(_.identity))
             produced <- known match
               case Some(output) => ZIO.succeed(output)
               case None         =>
@@ -835,6 +837,7 @@ object GraphCompile:
                     checkout = plan.repo,
                     apiBytes = bytes,
                     upstream = upstream,
+                    sourceInputs = sourceInputs,
                   )
                   compiled <- compile(
                     work,
