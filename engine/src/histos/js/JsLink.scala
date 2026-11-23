@@ -3,18 +3,10 @@ package histos.js
 import histos.cache.{ContentStore, LinkReplay, LinkerStarts, ProductCache}
 import histos.jdk.{JdkRuntime, Sha256}
 import histos.pack.MainClass
-import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
+import histos.process.{ChildProcess, ChildRequest}
 import histos.schedule.{CacheError, RemoteCache, RemoteError}
 import histos.workspace.Workspace
-import histos.zinc.{
-  CompileError,
-  CompileRequest,
-  CompileToolchain,
-  GraphCompile,
-  JvmCompile,
-  ProductDigest,
-  ScalacFlags,
-}
+import histos.zinc.{CompileError, GraphCompile, ProductDigest}
 import histos.ScalaVersion
 
 import histos.resolve.LockedTools
@@ -38,12 +30,12 @@ final case class JsLinkRequest(
     optimize: histos.JsOptimize = histos.JsOptimize.Fast,
 )
 
-/** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
+/** Link `.sjsir` in a child JVM. The linker classes are the ones histos was compiled against.
   */
 final case class JsLinked(script: Path, key: Sha256)
 
 object JsLink:
-  private val BridgeMain: String = "subprocess.JsBridge"
+  private val BridgeMain: String = "histos.js.child.LinkMain"
 
   def link(
       request: JsLinkRequest
@@ -81,73 +73,18 @@ object JsLink:
   ): ZIO[LockedTools & LinkerStarts, JsLinkError, Path] =
     val JsLinkRequest(version, main, classpath, work, jdk, kind, _, initialize, arguments, optimize) =
       request
-    val output     = work.resolve("out")
-    val bridgeRoot = work.resolve("bridge")
-    val classes    = bridgeRoot.resolve("classes")
-    val source     =
-      bridgeRoot.resolve("src").resolve("subprocess").resolve("JsBridge.scala")
-    val listed = work.resolve("classpath.txt")
-    val child  = work.resolve("child")
+    val output   = work.resolve("out")
+    val mainName = if initialize then Some(main.binary) else None
     for
-      view      <- ZIO.service[LockedTools]
       libraries <- ScalaJs
         .libraries(version, Some(selected))
         .mapError(JsLinkError.Library(_))
-      linker <- view
-        .materialize(
-          histos.js.JsRequests
-            .linker(selected, view.catalog.js.bridgeScala, view.repositories)
-        )
-        .mapError(JsLinkError.Resolved(_))
-        .map(_.artifacts.map(_.path))
-      _ <- write(
-        listed,
-        (classpath ++ libraries).map(_.toAbsolutePath.toString).mkString("\n"),
-      )
-      _ <- write(source, bridge(optimize))
-      _ <- JvmCompile
-        .compile(
-          CompileRequest(
-            CompileToolchain(
-              view.catalog.js.bridgeScala,
-              histos.Platform.Jvm,
-              jdk,
-              ScalacFlags.empty,
-            ),
-            List(source),
-            linker,
-            classes,
-            bridgeRoot.resolve("analysis"),
-            Nil,
-            Nil,
-            checkout = bridgeRoot,
-          )
-        )
-        .mapError(JsLinkError.Library(_))
-      _   <- empty(output)
-      _   <- empty(child)
-      _   <- LinkerStarts.tick
-      ran <- ChildProcess
-        .run(
-          ChildRequest(
-            histos.Platform.Jvm,
-            jdk.home.resolve("bin").resolve("java"),
-            ChildClasspath(classes, linker),
-            MainClass.trusted(BridgeMain),
-            child,
-            Map(
-              "JS_OUT"       -> output.toAbsolutePath.toString,
-              "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
-              "JS_MODULE"    -> kind.token,
-            ) ++ (if initialize then Map("JS_MAIN" -> main.binary) else Map.empty)
-              ++ (if arguments.isEmpty then Map.empty else Map("JS_ARGS" -> JsKey.encoded(arguments))),
-          )
-        )
-        .mapError(error => JsLinkError.Linker(error.message))
-      linked <- ran.exit.value match
-        case 0 => readJs(child.resolve("js.path"))
-        case _ =>
-          ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
+      _      <- empty(output)
+      _      <- LinkerStarts.tick
+      linked <- ZIO
+        .attemptBlocking(Linker.link(classpath ++ libraries, output, kind, mainName, arguments, optimize))
+        .mapError(error => JsLinkError.Linker(Option(error.getMessage).getOrElse("the js linker failed")))
+        .flatMap(ZIO.fromEither(_).mapError(JsLinkError.Linker(_)))
       script <- optimize match
         case histos.JsOptimize.Fast => ZIO.succeed(linked)
         case histos.JsOptimize.Full =>
@@ -159,80 +96,6 @@ object JsLink:
   private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
     ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
       ZIO.fromEither(ProductDigest.read(dir)).mapError(JsLinkError.Product(_))
-
-  private def bridge(optimize: histos.JsOptimize): String =
-    val optimizer = optimize match
-      case histos.JsOptimize.Fast => "false"
-      case histos.JsOptimize.Full => "true"
-    """package subprocess
-      |
-      |import java.nio.file.{Files, Path}
-      |
-      |import scala.jdk.CollectionConverters._
-      |
-      |import scala.concurrent.Await
-      |import scala.concurrent.duration.Duration
-      |import scala.concurrent.ExecutionContext.Implicits.global
-      |
-      |import org.scalajs.linker.PathIRContainer
-      |import org.scalajs.linker.PathOutputDirectory
-      |import org.scalajs.linker.StandardImpl
-      |import org.scalajs.linker.interface.ModuleInitializer
-      |import org.scalajs.linker.interface.ModuleKind
-      |import org.scalajs.linker.interface.StandardConfig
-      |import org.scalajs.logging.Level
-      |import org.scalajs.logging.Logger
-      |
-      |object JsBridge {
-      |  def main(args: Array[String]): Unit = {
-      |    val output = Path.of(sys.env("JS_OUT"))
-      |    val mainClass = sys.env.get("JS_MAIN").map(_.trim).filter(_.nonEmpty)
-      |    val classpath = Files.readAllLines(Path.of(sys.env("JS_CLASSPATH"))).asScala.map(Path.of(_)).toSeq
-      |    Files.createDirectories(output)
-      |    val base = StandardConfig().withOptimizer(OPTIMIZER).withSourceMap(false).withBatchMode(true)
-      |    val kind = sys.env.getOrElse("JS_MODULE", "nomodule")
-      |    val config = kind match {
-      |      case "esmodule" => base.withModuleKind(ModuleKind.ESModule)
-      |      case "commonjs" => base.withModuleKind(ModuleKind.CommonJSModule)
-      |      case _          => base
-      |    }
-      |    val linker = StandardImpl.linker(config)
-      |    val containers = Await.result(PathIRContainer.fromClasspath(classpath), Duration.Inf)._1
-      |    val ir = Await.result(StandardImpl.irFileCache().newCache.cached(containers), Duration.Inf)
-      |    val userArgs = sys.env.get("JS_ARGS") match {
-      |      case Some(encoded) =>
-      |        val lines = encoded.split("\n", -1).toList
-      |        lines match {
-      |          case countText :: rest =>
-      |            val count = scala.util.Try(countText.toInt).toOption.getOrElse(0)
-      |            rest.take(count).map { line =>
-      |              new String(java.util.Base64.getDecoder.decode(line), java.nio.charset.StandardCharsets.UTF_8)
-      |            }
-      |          case Nil => Nil
-      |        }
-      |      case None => Nil
-      |    }
-      |    val init = mainClass.toSeq.map { name =>
-      |      if (userArgs.isEmpty) ModuleInitializer.mainMethodWithArgs(name, "main")
-      |      else ModuleInitializer.mainMethodWithArgs(name, "main", userArgs)
-      |    }
-      |    val report = Await.result(linker.link(ir, init, PathOutputDirectory(output), logger), Duration.Inf)
-      |    report.publicModules.headOption.map(_.jsFileName) match {
-      |      case Some(name) =>
-      |        Files.writeString(Path.of("js.path"), output.resolve(name).toAbsolutePath.toString)
-      |      case None =>
-      |        System.err.println("the linker wrote no module")
-      |        System.exit(1)
-      |    }
-      |  }
-      |
-      |  private val logger = new Logger {
-      |    def log(level: Level, message: => String): Unit =
-      |      if (level == Level.Error) System.err.println(message)
-      |    def trace(thrown: => Throwable): Unit = thrown.printStackTrace(System.err)
-      |  }
-      |}
-      |""".stripMargin.replace("OPTIMIZER", optimizer)
 
   private def readJs(path: Path): IO[JsLinkError, Path] =
     ZIO

@@ -86,6 +86,11 @@ object ScalaJs:
 end ScalaJs
 
 object JsRequests:
+  /** `scalajs-library` and `scalajs-scalalib` are published with a `_2.13` suffix. That is the artifact name, not the
+    * Scala version of the module being compiled.
+    */
+  private val LibrarySuffix: ScalaVersion = ScalaVersion("2.13.18")
+
   def libraries(
       version: ScalaVersion,
       revision: JsVersion,
@@ -137,7 +142,7 @@ object JsRequests:
           revision.value,
           DepKind.Binary,
         ),
-        catalog.js.bridgeScala,
+        LibrarySuffix,
         Platform.Jvm,
         single,
         None,
@@ -149,7 +154,7 @@ object JsRequests:
           version.value,
           DepKind.Binary,
         ),
-        catalog.js.bridgeScala,
+        LibrarySuffix,
         Platform.Jvm,
         single,
         None,
