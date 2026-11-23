@@ -189,7 +189,7 @@ object JsLink:
       |    val mainClass = sys.env.get("JS_MAIN").map(_.trim).filter(_.nonEmpty)
       |    val classpath = Files.readAllLines(Path.of(sys.env("JS_CLASSPATH"))).asScala.map(Path.of(_)).toSeq
       |    Files.createDirectories(output)
-      |    val base = StandardConfig().withOptimizer($optimizer).withSourceMap(false).withBatchMode(true)
+      |    val base = StandardConfig().withOptimizer(OPTIMIZER).withSourceMap(false).withBatchMode(true)
       |    val kind = sys.env.getOrElse("JS_MODULE", "nomodule")
       |    val config = kind match {
       |      case "esmodule" => base.withModuleKind(ModuleKind.ESModule)
@@ -232,7 +232,7 @@ object JsLink:
       |    def trace(thrown: => Throwable): Unit = thrown.printStackTrace(System.err)
       |  }
       |}
-      |""".stripMargin
+      |""".stripMargin.replace("OPTIMIZER", optimizer)
 
   private def readJs(path: Path): IO[JsLinkError, Path] =
     ZIO
