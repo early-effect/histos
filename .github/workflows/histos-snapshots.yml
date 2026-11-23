@@ -11,7 +11,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@1972f6fb54834cf556f3687a87cc3201503fc3d4 # 1972f6fb54834cf556f3687a87cc3201503fc3d4
+      - uses: early-effect/histos/.github/actions/setup@3356826d5be164e42c31cf88fbbab84df6147366 # 3356826d5be164e42c31cf88fbbab84df6147366
       - run: ./histos doctor --preflight snapshots
       - run: "./histos publish snapshots"
         env:
