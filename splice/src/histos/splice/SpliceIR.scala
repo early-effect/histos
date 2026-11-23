@@ -35,7 +35,7 @@ object SpliceIR:
 
     def tree(implicit ec: ExecutionContext): Future[Trees.ClassDef] =
       impl.tree.map { classDef =>
-        if classDef.jsNativeLoadSpec.isDefined || classDef.jsNativeMembers.nonEmpty then
+        if classDef.jsNativeLoadSpec.isDefined || classDef.topLevelImportDefs.nonEmpty then
           Trees.ClassDef(
             classDef.name,
             classDef.originalName,
@@ -49,17 +49,20 @@ object SpliceIR:
             classDef.methods,
             classDef.jsConstructor,
             classDef.jsMethodProps,
-            classDef.jsNativeMembers.map(transformMember),
+            classDef.topLevelImportDefs.map(transformImport),
             classDef.topLevelExportDefs,
           )(classDef.optimizerHints)(using classDef.pos)
         else classDef
       }
 
-    private def transformMember(member: Trees.JSNativeMemberDef): Trees.JSNativeMemberDef =
-      Trees.JSNativeMemberDef(
-        member.flags,
-        member.name,
-        remapSpec(member.jsNativeLoadSpec, mapped),
-      )(using member.pos)
+    private def transformImport(member: Trees.TopLevelImportDef): Trees.TopLevelImportDef =
+      member match
+        case native: Trees.JSNativeMemberDef =>
+          Trees.JSNativeMemberDef(
+            native.flags,
+            native.name,
+            remapSpec(native.jsNativeLoadSpec, mapped),
+          )(using native.pos)
+        case other => other
   end SpliceIRFile
 end SpliceIR
