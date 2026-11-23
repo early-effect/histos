@@ -23,18 +23,13 @@ import histos.resolve.{
   LockedTools,
   ResolutionService,
   Resolve,
-  ResolveError,
   ToolInput,
 }
-import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, RemoteCache, StepFailure}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
-import scala.jdk.OptionConverters.*
 
 import zio.{Chunk, IO, NonEmptyChunk, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
@@ -70,7 +65,7 @@ object GraphCompile:
         module <- ZIO
           .fromOption(modules.find(_.name == stage.cell.module))
           .orElseFail(ExecutionError.Compile(GraphCompileError.UnknownCell(stage.cell.module, stage.cell.version)))
-        _          <- roots.read(session.repo, stage, completed.generatedRoots).mapError(ExecutionError.Roots(_))
+        files      <- roots.read(session.repo, stage, completed.generatedRoots).mapError(ExecutionError.Roots(_))
         resolution <- ZIO.service[ResolutionService]
         stamped    <- ZIO.serviceWithZIO[CompileMemo](memo => resolution.current.flatMap(memo.note))
         tools      <- LockedTools.make(stamped.lock, session.graph, resolution)
@@ -89,7 +84,6 @@ object GraphCompile:
           roots,
           completed.generatedRoots,
         )
-        base <- sourceBase(session.repo, module, modules).mapError(ExecutionError.Compile(_))
         done = completed.stages.toList.collect {
           case (upstream, product) if upstream.scope == SourceSet.Main =>
             (upstream.cell.module, upstream.cell.version, upstream.cell.platform) -> product.classes
@@ -99,16 +93,11 @@ object GraphCompile:
           module,
           stage.cell.version,
           stage.cell.platform,
-          base.getOrElse(session.repo.resolve(module.baseDirectory).resolve("src")),
+          session.repo.resolve(module.baseDirectory).resolve("src"),
           done,
         )
         _      <- request.report(CompileFeed.Began(module.name, stage.cell.version, stage.cell.platform))
-        result <- reported(work, request.report).mapError(ExecutionError.Compile(_))
-        chain = Module.chain(module, modules, stage.cell.platform)
-        read <- upstreams(module, chain, stage.cell.version, stage.cell.platform, done, plan)
-          .mapError(ExecutionError.Compile(_))
-        classpath <- classpathOf(plan, module, read.map(_._1), stage.cell.version, stage.cell.platform)
-          .mapError(ExecutionError.Compile(_))
+        result <- reported(work, files, request.report).mapError(ExecutionError.Compile(_))
         recorded = analysisRoot(plan, module.name, stage.cell.version, stage.cell.platform)
         api <- ZIO
           .fromEither(ApiDigest.read(recorded))
@@ -131,7 +120,7 @@ object GraphCompile:
         recorded,
         api,
         implementation,
-        (result.cell.classes :: CellCapture.classpath(classpath, read.map(_._1))).distinct,
+        result.classpath,
       )
 
   def run(
@@ -620,35 +609,38 @@ object GraphCompile:
       ZIO.attemptBlockingInterrupt(offer(feed)).orDie
     val hear  = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
     val pulse = (step: CompilePulse) => offer(CompileFeed.Pulse(module.name, version, platform, step))
+    val work  =
+      CellWork(plan, module, version, platform, plan.repo.resolve(module.baseDirectory).resolve("src"), upstreams)
     hold(module.name) *>
-      sourceBase(plan.repo, module, plan.modules).flatMap: selected =>
-        val base = selected.getOrElse(plan.repo.resolve(module.baseDirectory).resolve("src"))
-        tell(CompileFeed.Began(module.name, version, platform)) *>
-          compileOf(
-            CellWork(plan, module, version, platform, base, upstreams),
-            hear,
-            pulse,
-          ).foldZIO(
-            error =>
-              kept(error) match
-                case Some(cellError) =>
-                  tell(CompileFeed.Failed(cellError))
-                    .as(ScheduleCells.render(upstreams))
-                case None => ZIO.fail(error)
-            ,
-            result =>
-              val paths = upstreams.updated(
-                (module.name, version, platform),
-                result.cell.classes,
-              )
-              val noted = result.miss match
-                case Some(change) =>
-                  tell(CompileFeed.Miss(module.name, version, platform, change))
-                case None => ZIO.unit
-              noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
+      (tell(CompileFeed.Began(module.name, version, platform)) *>
+        plan.roots
+          .read(plan.repo, CompilationStage(Cell(module.name, version, platform), SourceSet.Main), plan.generated)
+          .mapError(rootFailure(work, _))
+          .flatMap(files => compileOf(work, files, hear, pulse))).foldZIO(
+        error =>
+          kept(error) match
+            case Some(cellError) =>
+              tell(CompileFeed.Failed(cellError))
+                .as(ScheduleCells.render(upstreams))
+            case None => ZIO.fail(error)
+        ,
+        result =>
+          val paths = upstreams.updated(
+            (module.name, version, platform),
+            result.cell.classes,
           )
+          val noted = result.miss match
+            case Some(change) =>
+              tell(CompileFeed.Miss(module.name, version, platform, change))
+            case None => ZIO.unit
+          noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
+      )
 
-  private def reported(work: CellWork, report: CompileFeed => UIO[Unit]): ZIO[Fed, GraphCompileError, CellResult] =
+  private def reported(
+      work: CellWork,
+      files: StageFiles,
+      report: CompileFeed => UIO[Unit],
+  ): ZIO[Fed, GraphCompileError, CellResult] =
     val module   = work.module.name
     val version  = work.version
     val platform = work.platform
@@ -659,6 +651,7 @@ object GraphCompile:
           val offer = (feed: CompileFeed) => emit(ZIO.succeed(Chunk.single(feed)))
           compileOf(
             work,
+            files,
             problem => offer(CompileFeed.Diagnostic(module, version, platform, problem)),
             pulse => offer(CompileFeed.Pulse(module, version, platform, pulse)),
           ).foldCauseZIO(
@@ -711,15 +704,13 @@ object GraphCompile:
       miss: Option[KeyMiss],
       closure: Option[List[Path]],
       toolchain: Option[CapturedToolchain],
+      classpath: List[Path],
   )
 
-  /** Closure paths a plugin-library hit reads. Resolving them again hashes the compiler jars. */
-  private val ClosureFile = "replay.closure"
-
-  /** Lock checksums and source bytes. A hit does not fetch project jars or open a compiler. A module that compiles
-    * against the host api still hashes that jar. The caller listed the sources and this hashes each path relative to
-    * the checkout, then its bytes, so an added, deleted, or edited source is a miss whatever the modified times say.
-    * The key is [[CellTools.recall]]'s, which the compile stores through the same function.
+  /** Lock checksums and source bytes. A hit does not open a compiler. A module that compiles against the host api still
+    * hashes that jar. The caller listed the sources and this hashes each path relative to the checkout, then its bytes,
+    * so an added, deleted, or edited source is a miss whatever the modified times say. The key is
+    * [[CellTools.recall]]'s, which the compile stores through the same function.
     */
   private def recall(
       work: CellWork,
@@ -800,6 +791,7 @@ object GraphCompile:
 
   private def compileOf(
       work: CellWork,
+      files: StageFiles,
       hear: CompileProblem => Unit,
       onPulse: CompilePulse => Unit,
   ): ZIO[Fed, GraphCompileError, CellResult] =
@@ -807,30 +799,28 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      files <- plan.roots
-        .read(plan.repo, CompilationStage(Cell(module.name, version, platform), SourceSet.Main), plan.generated)
-        .mapError(rootFailure(work, _))
+      read <- upstreams(module, chain, version, platform, done, plan)
+      cells = read.map(_._1)
+      assembled <- classpathOf(plan, module, cells, version, platform)
+      paths   = CellCapture.classpath(assembled, cells)
       sources = files.sources.map(_.path)
       compiled <-
-        if sources.isEmpty then vacant(plan, module.name, version, platform)
+        if sources.isEmpty then vacant(plan, module.name, version, platform, paths)
         else
           val classes  = classRoot(plan, module.name, version, platform)
           val analysis = analysisRoot(plan, module.name, version, platform)
           for
-            read <- upstreams(module, chain, version, platform, done, plan)
-            cells = read.map(_._1)
             implementations <- ZIO.foreach(cells)(cell => CellCapture.implementation(cell.classes).mapError(failed))
             apis     = read.map(_._2) ++ implementations
             upstream = read.flatMap(_._3)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
             known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
             produced <- known match
-              case Some(output) => ZIO.succeed((output, Option.empty[ScalacClasspath]))
+              case Some(output) => ZIO.succeed(output)
               case None         =>
                 for
-                  _         <- CellCapture.refreshCompileTime(analysis, classes, implementations).mapError(failed)
-                  assembled <- classpathOf(plan, module, cells, version, platform)
-                  bytes     <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
+                  _     <- CellCapture.refreshCompileTime(analysis, classes, implementations).mapError(failed)
+                  bytes <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
                   request = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
                     sources,
@@ -854,23 +844,10 @@ object GraphCompile:
                     plan.admitted(module.name),
                     onPulse,
                   ).mapError(failed)
-                yield (compiled, Some(assembled))
-            (output, assembled) = produced
-            _       <- CellCapture.recordCompileTime(analysis, implementations).mapError(failed)
-            closure <- module.pluginLibrary match
-              case None    => ZIO.succeed(Option.empty[List[Path]])
-              case Some(_) =>
-                assembled match
-                  case Some(resolved) =>
-                    val paths = CellCapture.classpath(resolved, cells)
-                    writeClosure(analysis, paths).as(Some(paths))
-                  case None =>
-                    readClosure(analysis).flatMap:
-                      case Some(paths) => ZIO.succeed(Some(paths))
-                      case None        =>
-                        classpathOf(plan, module, cells, version, platform).flatMap: resolved =>
-                          val paths = CellCapture.classpath(resolved, cells)
-                          writeClosure(analysis, paths).as(Some(paths))
+                yield compiled
+            output = produced
+            _ <- CellCapture.recordCompileTime(analysis, implementations).mapError(failed)
+            closure = module.pluginLibrary.map(_ => paths)
             _ <- forgetMeasurements(plan, version, platform, classes).mapError(failed)
           yield CellResult(
             CompiledCell(
@@ -887,6 +864,7 @@ object GraphCompile:
             output.miss,
             closure,
             Some(CapturedToolchain(output.runtime, output.compiler, output.bridge)),
+            (classes :: paths).distinct,
           )
       _        <- copyResources(plan, module, version, platform, files, compiled.cell.classes)
       recorded <- (compiled.closure, compiled.toolchain) match
@@ -917,8 +895,7 @@ object GraphCompile:
             .map(capture => compiled.cell.copy(capture = capture))
     yield compiled.copy(cell = recorded)
 
-  /** A plugin-library hit reads the closure file instead. This is the miss, and the hit that has no recorded closure.
-    */
+  /** Resolve once and retain the classpath used by compilation and product capture. */
   private def classpathOf(
       plan: CompilePlan,
       module: Module,
@@ -942,28 +919,6 @@ object GraphCompile:
         )
       )
       .provideSomeLayer(ZLayer.succeed(plan.tools))
-
-  private def writeClosure(analysis: Path, paths: List[Path]): IO[GraphCompileError, Unit] =
-    val file = analysis.resolve(ClosureFile)
-    ZIO
-      .attemptBlocking {
-        Files.createDirectories(analysis)
-        val text = paths.map(_.toAbsolutePath.normalize.toString).mkString("\n")
-        Files.writeString(file, if text.isEmpty then "" else text + "\n")
-      }
-      .mapError(_ => GraphCompileError.Output(file))
-      .unit
-
-  private def readClosure(analysis: Path): IO[GraphCompileError, Option[List[Path]]] =
-    val file = analysis.resolve(ClosureFile)
-    ZIO
-      .attemptBlocking {
-        if !Files.isRegularFile(file) then None
-        else
-          val lines = Files.readString(file).split("\n", -1).toList.map(_.trim).filter(_.nonEmpty)
-          Some(lines.map(line => Path.of(line)))
-      }
-      .mapError(_ => GraphCompileError.Output(file))
 
   /** Unmanaged resources and generated assets, after compile and after a product restore. The ownership list lives in
     * the analysis directory, so a class-directory wipe does not forget which files this sync owns.
@@ -989,6 +944,7 @@ object GraphCompile:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
+      classpath: List[Path],
   ): IO[GraphCompileError, CellResult] =
     val classes = classRoot(plan, module, version, platform)
     histos.workspace.Workspace
@@ -1019,6 +975,7 @@ object GraphCompile:
             None,
             None,
             None,
+            (classes :: classpath).distinct,
           )
         )
 

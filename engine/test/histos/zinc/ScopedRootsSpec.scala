@@ -299,9 +299,49 @@ object ScopedRootsSpec extends ZIOSpecDefault:
           _       <- Workspace.delete(unrelated)
           _       <- Workspace.writeString(reserved, "must not become a resource")
           denied  <- StageRoots.of(graph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+          _       <- Workspace.delete(reserved)
+          physical = repo.resolve("target/innocent.bin")
+          _ <- Workspace.writeString(physical, "reserved File")
+          contribution = Contribution(
+            List(
+              DeclaredTask(
+                TaskName("reserved"),
+                Seal.Hermetic,
+                Set.empty,
+                Nil,
+                List(DeclaredOutput.File(OutputName("resource"), RepoPath("target/innocent.bin"))),
+                List(
+                  TaskDep.EmitScoped(
+                    moduleName,
+                    SourceSet.Main,
+                    PlatformSelection.All,
+                    EmittedContent.ResourceFile(ResourceName("META-INF/histos/plugin")),
+                    OutputName("resource"),
+                  )
+                ),
+              )
+            ),
+            Nil,
+            Nil,
+          )
+          linked = graph.withPlugins(List(RegisteredPlugin(emitted.id, contribution)(emitted)))
+          fileDenied <- StageRoots.of(linked).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+          textGraph  <- ZIO.fromEither(
+            Projects(
+              module("app", Jvm)(version).resources(
+                GeneratedAsset.Text(ResourceName("META-INF/histos/plugin"), "reserved Text")
+              )
+            )
+          )
+          textDenied <- StageRoots.of(textGraph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
         yield assertTrue(
           ignored.exists(_.resources.isEmpty),
           denied == Left(StageRootError.Resource(AssetError.CommittedEntry(reserved))),
+          fileDenied == Left(StageRootError.Resource(AssetError.CommittedEntry(physical))),
+          textDenied.left.exists {
+            case StageRootError.Resource(AssetError.CommittedEntry(_)) => true
+            case _                                                     => false
+          },
         )
       }
     },
@@ -317,17 +357,74 @@ object ScopedRootsSpec extends ZIOSpecDefault:
               )
             )
           )
-          _      <- Workspace.writeString(repo.resolve("one/shared.txt"), "one")
-          _      <- Workspace.writeString(repo.resolve("two/shared.txt"), "two")
-          result <- StageRoots.of(graph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
-        yield assertTrue(result.left.exists {
-          case StageRootError.ResourceCollision(name, paths) =>
-            name == ResourceName("shared.txt") && paths.toSet == Set(
-              repo.resolve("one/shared.txt"),
-              repo.resolve("two/shared.txt"),
+          _        <- Workspace.writeString(repo.resolve("one/shared.txt"), "one")
+          _        <- Workspace.writeString(repo.resolve("two/shared.txt"), "two")
+          result   <- StageRoots.of(graph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+          declared <- ZIO.fromEither(
+            Projects(
+              module("app", Jvm)(version).roots(
+                ScopedRoot(RepoPath("one"), SourceSet.Main, PlatformSelection.All, RootKind.Resources)
+              )
             )
-          case _ => false
-        })
+          )
+          contribution = Contribution(
+            List(
+              DeclaredTask(
+                TaskName("collision"),
+                Seal.Hermetic,
+                Set.empty,
+                Nil,
+                List(DeclaredOutput.Directory(OutputName("resource"), RepoPath("two"))),
+                List(
+                  TaskDep.EmitScoped(
+                    moduleName,
+                    SourceSet.Main,
+                    PlatformSelection.All,
+                    EmittedContent.ResourceTree,
+                    OutputName("resource"),
+                  )
+                ),
+              )
+            ),
+            Nil,
+            Nil,
+          )
+          linked = declared.withPlugins(List(RegisteredPlugin(emitted.id, contribution)(emitted)))
+          generated <- StageRoots.of(linked).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+          _         <- Workspace.writeString(repo.resolve("asset/shared.txt"), "module overlay")
+          overlays  <- ZIO.foreach(
+            List(
+              GeneratedAsset.Text(ResourceName("shared.txt"), "module overlay"),
+              GeneratedAsset.File(ResourceName("shared.txt"), RepoPath("asset/shared.txt")),
+            )
+          ) { asset =>
+            for
+              overlaid <- ZIO.fromEither(
+                Projects(
+                  module("app", Jvm)(version)
+                    .roots(ScopedRoot(RepoPath("one"), SourceSet.Main, PlatformSelection.All, RootKind.Resources))
+                    .resources(asset)
+                )
+              )
+              files <- StageRoots
+                .of(overlaid.withPlugins(List(RegisteredPlugin(emitted.id, contribution)(emitted))))
+                .read(repo, stage(Platform.Jvm, SourceSet.Main))
+            yield asset match
+              case text: GeneratedAsset.Text       => files.resources.isEmpty && files.assets == List(text)
+              case GeneratedAsset.File(name, path) =>
+                files.assets.isEmpty && files.resources == List(name -> repo.resolve(path.value))
+          }
+        yield assertTrue(
+          overlays.forall(identity),
+          List(result, generated).forall(_.left.exists {
+            case StageRootError.ResourceCollision(name, paths) =>
+              name == ResourceName("shared.txt") && paths.toSet == Set(
+                repo.resolve("one/shared.txt"),
+                repo.resolve("two/shared.txt"),
+              )
+            case _ => false
+          }),
+        )
       }
     },
   )

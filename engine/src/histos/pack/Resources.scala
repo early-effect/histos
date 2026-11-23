@@ -56,8 +56,10 @@ object Resources:
       .from(raw)
       .left
       .map(_ => AssetError.Escaped(raw))
-      .flatMap: name =>
-        if name.value == AssetError.refusedName then Left(AssetError.CommittedEntry(path)) else Right(name)
+      .flatMap(validate(_, path))
+
+  private[histos] def validate(name: ResourceName, path: Path): Either[AssetError, ResourceName] =
+    if name.value == AssetError.refusedName then Left(AssetError.CommittedEntry(path)) else Right(name)
 
   private def paths(root: Path): IO[AssetError, List[Path]] =
     ZIO

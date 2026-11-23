@@ -53,15 +53,6 @@ object Emitted:
       }
       .map(_.distinct)
 
-  /** Compatibility projection for legacy conventional Main directory consumers. Files cannot enter this map. */
-  def directories(graph: ProjectGraph): Map[ProjectName, List[String]] =
-    val pairs = graph.plugins.flatMap: plugin =>
-      plugin.contribution.tasks.flatMap: task =>
-        val modules = task.dependsOn.collect { case TaskDep.Emit(name) => name }
-        val roots   = task.outputs.collect { case DeclaredOutput.Directory(_, path) => path.value }
-        modules.map(name => name -> roots)
-    pairs.groupBy(_._1).map((name, rows) => name -> rows.flatMap(_._2).distinct)
-
   def producers(graph: ProjectGraph, stage: CompilationStage): List[PluginTaskId] =
     graph.plugins.flatMap: plugin =>
       plugin.contribution.tasks.collect:

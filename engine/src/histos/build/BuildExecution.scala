@@ -98,6 +98,9 @@ final class ExecutionProducts private[build] (private val values: Map[BuildNode,
   def stages: Map[CompilationStage, StageProduct] =
     values.values.collect { case ExecutionProduct.Compiled(value) => value.stage -> value }.toMap
 
+  private[build] def visible(nodes: Set[BuildNode]): ExecutionProducts =
+    new ExecutionProducts(values.filter((node, _) => nodes.contains(node)))
+
   private[build] def add(node: BuildNode, product: ExecutionProduct): Either[ExecutionError, ExecutionProducts] =
     val valid = node match
       case BuildNode.Compile(stage) =>
@@ -150,7 +153,8 @@ final class BuildExecution[R, E](leaves: ExecutionLeaves[R, E], scheduler: Histo
             plan.dependencies(node).left.map(ExecutionError.Graph(_)).flatMap { dependencies =>
               lookup(dependencies, built).map { previous =>
                 val effect = for
-                  completed <- products.get
+                  allowed   <- ZIO.fromEither(plan.prerequisites(node)).mapError(ExecutionError.Graph(_))
+                  completed <- products.get.map(_.visible(allowed))
                   product   <- runLeaf(request, node, completed, leaseScope)
                   _         <- products
                     .modify { state =>

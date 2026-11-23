@@ -41,6 +41,19 @@ final class ExecutionPlan private[build] (
   def dependencies(node: BuildNode): Either[BuildDagError, List[BuildNode]] =
     edges.get(node).toRight(BuildDagError.UnknownNode(node))
 
+  /** Only ancestors selected by this plan may contribute to a leaf's classpath. */
+  def prerequisites(node: BuildNode): Either[BuildDagError, Set[BuildNode]] =
+    def visit(current: BuildNode, seen: Set[BuildNode]): Either[BuildDagError, Set[BuildNode]] =
+      dependencies(current).flatMap { children =>
+        children.foldLeft[Either[BuildDagError, Set[BuildNode]]](Right(seen)) { (acc, child) =>
+          acc.flatMap { checked =>
+            if checked.contains(child) then Right(checked) else visit(child, checked + child)
+          }
+        }
+      }
+    visit(node, Set.empty)
+end ExecutionPlan
+
 /** Runtime ordering preserves engine cross-version candidates; TASTy acceptance remains at the compile leaf. */
 object BuildDag:
   def plan(graph: ProjectGraph, roots: List[BuildNode]): Either[BuildDagError, ExecutionPlan] =

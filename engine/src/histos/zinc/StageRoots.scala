@@ -51,9 +51,12 @@ final case class StageFiles(
     assets: List[GeneratedAsset.Text],
     origins: Map[Path, StageOrigin] = Map.empty,
 ):
+  def compileInputs(repo: Path): Either[StageRootError, List[CompileSource]] = CompileSources.of(repo, this)
+
   def generatedPaths: Set[Path] = origins.collect { case (path, StageOrigin.Generated(_, _) | StageOrigin.Unmanaged) =>
     path.toAbsolutePath.normalize
   }.toSet
+end StageFiles
 
 enum StageRootError:
   case UnknownStage(stage: CompilationStage)
@@ -143,19 +146,47 @@ final class StageRoots private (graph: ProjectGraph):
         .zip(selected)
         .collect { case (root, files) if root.origin != StageOrigin.Unmanaged => files.sources }
         .flatten
-      sources   = (committed.filterNot(source => replaced.contains(source.entry)) ++ replacements).distinct
-      resources = selected.flatMap(_.resources).distinct
-      assets    = modules.find(_.name == stage.cell.module).toList.flatMap { module =>
+      sources      = (committed.filterNot(source => replaced.contains(source.entry)) ++ replacements).distinct
+      resourceRows = roots.zip(selected).flatMap { (root, files) =>
+        files.resources.map(resource => root.origin -> resource)
+      }
+      assetResources = resourceRows.collect { case (StageOrigin.Unmanaged, resource) => resource }.distinct
+      assets         = modules.find(_.name == stage.cell.module).toList.flatMap { module =>
         stage.scope match
           case SourceSet.Main => module.resources.collect { case text: GeneratedAsset.Text => text }
           case SourceSet.Test => Nil
       }
+      _ <- ZIO.foreachDiscard(assets)(asset =>
+        ZIO
+          .fromEither(Resources.validate(asset.resource, Path.of(asset.resource.value)))
+          .mapError(StageRootError.Resource(_))
+      )
+      overlaid     = (assetResources.map(_._1) ++ assets.map(_.resource)).toSet
+      ordinaryRows = resourceRows.collect {
+        case row @ (StageOrigin.Conventional(_) | StageOrigin.Declared | StageOrigin.Generated(_, _), resource)
+            if !overlaid.contains(resource._1) =>
+          row
+      }.distinct
+      _ <- ZIO.fromEither(
+        ordinaryRows
+          .collect { case row @ (StageOrigin.Generated(_, _), _) => row }
+          .groupBy(_._2._1)
+          .toList
+          .sortBy(_._1.value)
+          .collectFirst {
+            case (name, providers) if providers.size > 1 =>
+              StageRootError.ResourceCollision(name, providers.map(_._2._2))
+          }
+          .toLeft(())
+      )
+      resources = ordinaryRows.map(_._2).distinct ++ assetResources
       _ <- ZIO.fromEither(sourceCollisions(sources))
       _ <- ZIO.fromEither(resourceCollisions(resources, assets))
-      origins = roots
+      retained = (sources.map(_.path) ++ resources.map(_._2)).toSet
+      origins  = roots
         .zip(selected)
         .flatMap { (root, files) =>
-          (files.sources.map(_.path) ++ files.resources.map(_._2)).map(_ -> root.origin)
+          (files.sources.map(_.path) ++ files.resources.map(_._2)).filter(retained.contains).map(_ -> root.origin)
         }
         .toMap
     yield StageFiles(sources.sortBy(_.entry), resources.sortBy(_._1.value), assets, origins)
@@ -250,8 +281,12 @@ final class StageRoots private (graph: ProjectGraph):
       files    <- root match
         case StageRoot.SourceFile(_, entry, _) =>
           ZIO.succeed(StageFiles(List(PackagedSource(entry.value, resolved)), Nil, Nil))
-        case StageRoot.ResourceFile(_, name, _) => ZIO.succeed(StageFiles(Nil, List(name -> resolved), Nil))
-        case StageRoot.Sources(_, layout, _)    =>
+        case StageRoot.ResourceFile(_, name, _) =>
+          ZIO
+            .fromEither(Resources.validate(name, resolved))
+            .mapError(StageRootError.Resource(_))
+            .map(valid => StageFiles(Nil, List(valid -> resolved), Nil))
+        case StageRoot.Sources(_, layout, _) =>
           val selected = layout match
             case StageLayout.Exact                          => Sources.exact(resolved, stage.cell.platform)
             case StageLayout.Main | StageLayout.TestSibling =>

@@ -37,7 +37,139 @@ object GeneratedDagSpec extends ZIOSpecDefault:
   private def stage(name: ProjectName, platform: Platform, scope: SourceSet): CompilationStage =
     CompilationStage(Cell(name, version, platform), scope)
 
+  private enum RootOrder:
+    case ConsumerOnly, UnrelatedFirst, ReversedFirst, UnrelatedLast
+
   private val tests = suite("generated compilation DAG")(
+    test("unrelated completed versions cannot change a transitive Main classpath") {
+      ZIO
+        .foreach(RootOrder.values.toList) { order =>
+          ZIO.scoped {
+            for
+              repo <- Workspace.work("histos-transitive-classpath-order")
+              old = ScalaVersion("3.10.0")
+              c   = module("c", Jvm)(old, version)
+              b   = module("b", Jvm)(old).dependsOn(c)
+              a   = module("a", Jvm)(version).dependsOn(b)
+              graph <- ZIO.fromEither(Projects(a, b, c))
+              _     <- Workspace.writeString(
+                repo.resolve("c/src/scala-3.10.0/demo/C.scala"),
+                "package demo\nobject C:\n  val value = 1\n",
+              )
+              _ <- Workspace
+                .writeString(repo.resolve("b/src/demo/B.scala"), "package demo\nobject B:\n  val value = C.value\n")
+              _ <- Workspace.writeString(
+                repo.resolve("a/src/demo/A.scala"),
+                "package demo\nobject A:\n  def text: String = s\"${B.value}:${C.value}\"\n",
+              )
+              unused <- Ref.make(List.empty[String])
+              plugin       = Relay(unused)
+              before       = PluginTaskId(plugin.id, TaskName("before"))
+              after        = PluginTaskId(plugin.id, TaskName("after"))
+              contribution = Contribution(
+                List(
+                  DeclaredTask(
+                    before.name,
+                    Seal.Hermetic,
+                    Set.empty,
+                    Nil,
+                    Nil,
+                    List(TaskDep.CompileScoped(ProjectName("c"), Some(version), Some(Platform.Jvm), SourceSet.Main)),
+                  ),
+                  DeclaredTask(
+                    after.name,
+                    Seal.Hermetic,
+                    Set.empty,
+                    Nil,
+                    Nil,
+                    List(TaskDep.CompileScoped(ProjectName("a"), Some(version), Some(Platform.Jvm), SourceSet.Main)),
+                  ),
+                ),
+                Nil,
+                Nil,
+              )
+              linked = graph.withPlugins(List(RegisteredPlugin(plugin.id, contribution)(plugin)))
+              firstReady <- zio.Promise.make[Nothing, Unit]
+              lastReady  <- zio.Promise.make[Nothing, Unit]
+              consumer  = stage(ProjectName("a"), Platform.Jvm, SourceSet.Main)
+              unrelated = stage(ProjectName("c"), Platform.Jvm, SourceSet.Main)
+              roots     = order match
+                case RootOrder.ConsumerOnly   => List(Node.Compile(consumer))
+                case RootOrder.UnrelatedFirst =>
+                  List(Node.Compile(consumer), Node.Compile(unrelated), Node.Generate(before))
+                case RootOrder.ReversedFirst =>
+                  List(Node.Generate(before), Node.Compile(unrelated), Node.Compile(consumer))
+                case RootOrder.UnrelatedLast =>
+                  List(Node.Compile(unrelated), Node.Compile(consumer), Node.Generate(after))
+              products <- execute(
+                repo,
+                linked,
+                roots,
+                mainLeaf = (request, compiling, completed) =>
+                  val wait = order match
+                    case RootOrder.ConsumerOnly                             => ZIO.unit
+                    case RootOrder.UnrelatedFirst | RootOrder.ReversedFirst =>
+                      if compiling.cell.module == ProjectName("b") then firstReady.await else ZIO.unit
+                    case RootOrder.UnrelatedLast => if compiling == unrelated then lastReady.await else ZIO.unit
+                  wait *> GraphCompile.stage(request, compiling, completed),
+              ) { (_, id, _) =>
+                val signal = if id == before then firstReady.succeed(()).unit else lastReady.succeed(()).unit
+                signal.as(GeneratedTask(PluginOutput("ordered", Nil, Nil), ZIO.succeed(Nil)))
+              }
+              compiled <- ZIO.fromEither(products.require(consumer))
+              text     <- PluginCompileSupport.invoke(compiled.classes, compiled.classpath, "demo.A$", "text")
+              wanted   = GraphCompile.classesDir(repo, ProjectName("c"), old, Platform.Jvm)
+              unwanted = GraphCompile.classesDir(repo, ProjectName("c"), version, Platform.Jvm)
+            yield (
+              text,
+              compiled.classpath.contains(wanted),
+              !compiled.classpath.contains(unwanted),
+              compiled.classpath
+                .filter(path => Option(path.getFileName).exists(_.toString.endsWith(".jar")))
+                .map(_.toString),
+            )
+          }
+        }
+        .map { results =>
+          val jars = results.headOption.map(_._4)
+          assertTrue(
+            results.size == 4,
+            results.forall(result => result._1 == "1:1" && result._2 && result._3),
+            results.forall(result => jars.contains(result._4)),
+          )
+        }
+        .provide(Resolve.coursier)
+    },
+    test("module Text and File resources overlay the conventional classpath entry") {
+      ZIO
+        .foreach(
+          List(
+            GeneratedAsset.Text(ResourceName("apps-browser/view.js"), "text overlay"),
+            GeneratedAsset.File(ResourceName("apps-browser/view.js"), RepoPath("assets/generated.js")),
+          )
+        ) { asset =>
+          ZIO.scoped {
+            for
+              repo  <- Workspace.work("histos-resource-overlay")
+              _     <- Workspace.writeString(repo.resolve("app/src/demo/Reader.scala"), readerSource)
+              _     <- Workspace.writeString(repo.resolve("app/src/main/resources/apps-browser/view.js"), "unmanaged")
+              _     <- Workspace.writeString(repo.resolve("assets/generated.js"), "file overlay")
+              graph <- ZIO.fromEither(Projects(module("app", Jvm)(version).resources(asset)))
+              main = stage(ProjectName("app"), Platform.Jvm, SourceSet.Main)
+              result <- execute(repo, graph, List(Node.Compile(main))) { (_, id, _) =>
+                ZIO.fail(ExecutionError.MissingProduct(Node.Generate(id)))
+              }
+              compiled <- ZIO.fromEither(result.require(main))
+              text     <- PluginCompileSupport.invoke(compiled.classes, compiled.classpath, "demo.Reader$", "text")
+              expected = asset match
+                case GeneratedAsset.Text(_, text) => text
+                case GeneratedAsset.File(_, _)    => "file overlay"
+            yield assertTrue(text == expected)
+          }
+        }
+        .map(_.foldLeft(assertTrue(true))(_ && _))
+        .provide(Resolve.coursier)
+    },
     test("a cold named consumer builds its host File producer after linking the relay") {
       ZIO
         .scoped {
@@ -423,6 +555,11 @@ object GeneratedDagSpec extends ZIOSpecDefault:
       graph: ProjectGraph,
       roots: List[Node],
       report: CompileFeed => zio.UIO[Unit] = _ => ZIO.unit,
+      mainLeaf: (ExecutionRequest, CompilationStage, ExecutionProducts) => ZIO[
+        Env & Scope,
+        ExecutionError,
+        StageProduct,
+      ] = GraphCompile.stage,
   )(
       producer: (ExecutionRequest, PluginTaskId, ExecutionProducts) => ZIO[Env & Scope, ExecutionError, GeneratedTask[
         ExecutionError
@@ -435,9 +572,11 @@ object GeneratedDagSpec extends ZIOSpecDefault:
       resolution <- ResolutionService.open(repo, graph)
       lock       <- resolution.current
       cas        <- Workspace.createDirectories(repo.resolve("cas"))
-      jdk        <- jdkRuntime
-      scheduler  <- Histos.live.build.provideSomeLayer[Scope](ZLayer.succeed(Parallelism.default)).map(_.get[Histos])
-      leaves = ExecutionLeaves[Env, ExecutionError](GraphCompile.stage, testLeaf, producer, linkLeaf)
+      home  = Path.of(sys.props.getOrElse("java.home", "."))
+      floor = JdkVersion.trusted("25", JdkMajor.trusted(25))
+      jdk = JdkRuntime(home, floor, RuntimeIdentity.Local(home, Sha256Digest.of(Chunk.fromArray(floor.value.getBytes))))
+      scheduler <- Histos.live.build.provideSomeLayer[Scope](ZLayer.succeed(Parallelism.default)).map(_.get[Histos])
+      leaves = ExecutionLeaves[Env, ExecutionError](mainLeaf, testLeaf, producer, linkLeaf)
       products <- new BuildExecution(leaves, scheduler)
         .ensure(
           ExecutionRequest(
@@ -787,10 +926,4 @@ object GeneratedDagSpec extends ZIOSpecDefault:
 
   private def io(error: IoFailure): ExecutionError = ExecutionError.Roots(StageRootError.Io(error))
 
-  private def jdkRuntime: ZIO[Any, IoFailure, JdkRuntime] =
-    val home    = Path.of(sys.props.getOrElse("java.home", "."))
-    val version = JdkVersion.trusted("25", JdkMajor.trusted(25))
-    ZIO.succeed(
-      JdkRuntime(home, version, RuntimeIdentity.Local(home, Sha256Digest.of(Chunk.fromArray(version.value.getBytes))))
-    )
 end GeneratedDagSpec
