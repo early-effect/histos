@@ -1009,6 +1009,7 @@ object Projects:
       case TaskDep.Generate(name) =>
         if plugin.contribution.tasks.exists(_.name == name) then None
         else Some(BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, name)))
+      case TaskDep.Emit(_) => None
 
   private def cellOf(
       plugin: RegisteredPlugin,

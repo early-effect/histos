@@ -270,6 +270,103 @@ evict org.scala-native scala3lib_native0.5_3 3.3.8+0.5.12 3.9.0+0.5.12
 evict org.scala-native windowslib_native0.5_3 0.5.1 0.5.12
 evict org.scala-native windowslib_native0.5_3 0.5.2 0.5.12
 evict org.scala-native windowslib_native0.5_3 0.5.8 0.5.12
+cell splice 3.10.1 jvm
+direct dev.zio zio 2.1.27 binary
+direct io.get-coursier coursier-cache 2.1.26 binary
+direct org.apache.commons commons-compress 1.28.0 java
+direct com.google.javascript closure-compiler v20260726 java
+direct org.scala-js scalajs-ir 1.22.0 binary
+direct org.scala-js scalajs-linker-interface 1.22.0 binary
+artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact io.get-coursier coursier-cache_3 2.1.26 37b78094ff5456285963c6618440cf6bd3fd0ce8affcf084c2b312a3eb5076d7 central
+artifact org.apache.commons commons-compress 1.28.0 e1522945218456f3649a39bc4afd70ce4bd466221519dba7d378f2141a4642ca central
+artifact com.google.javascript closure-compiler v20260726 b9c66f37e75388c74d264beef9e2eb9a447eebc393024d65f460273a1450ed4f central
+artifact org.scala-js scalajs-ir_3 1.22.0 feb377da78e5e3b3bb4e31566e8728940f1315b3b51226717e76a3289b6dc6ff central
+artifact org.scala-js scalajs-linker-interface_3 1.22.0 d9f47d4256839935360e44a90557f21c30800164ab72f8b21a75ee495cba75b1 central
+artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
+artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact org.scala-lang scala3-library_3 3.8.3 740c79f7fc3dae2c5eef48e85f777d679a1f0f53fdbb780bf84dea0370220a61 central
+artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
+artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.0 2ba3d5ecf2e9bc2235ed7b703228358fe43f93272632c0ebf86b31f983908e5b central
+artifact org.virtuslab.scala-cli config_3 1.17.1 9bf018388553a302ac119f912daacf2206003763ae333248d2b1e6f516b9a5d9 central
+artifact io.github.alexarchambault.windows-ansi windows-ansi 0.0.6 077dbdbb977c94fc8b1fb82113cfb0aa5304d4e307c4e0688f69a9895f0da482 central
+artifact io.get-coursier coursier-paths 2.1.26 4de4c30a96c0868ced639f71eb97272e126f1f3cea9891fc11460b05e1b1462d central
+artifact io.get-coursier coursier-util_3 2.1.26 3974b526cc024793d2d466cf9315becc6864da16333a1fd0c00248a2ef0320a3 central
+artifact commons-codec commons-codec 1.19.0 5c3881e4f556855e9c532927ee0c9dfde94cc66760d5805c031a59887070af5f central
+artifact commons-io commons-io 2.20.0 df90bba0fe3cb586b7f164e78fe8f8f4da3f2dd5c27fa645f888100ccc25dd72 central
+artifact org.apache.commons commons-lang3 3.18.0 4eeeae8d20c078abb64b015ec158add383ac581571cddc45c68f0c9ae0230720 central
+artifact org.scala-js scalajs-logging_3 1.2.0 c2e153ecece2fbe1b584faa282d81c32c17ecdb92a7d8045b90f89d712ef2692 central
+artifact org.scala-lang scala-library 3.8.3 8b5164c4be2d7a86635966b419a08b393e58b3c7bc0cafb502e0f34248722b4e central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
+artifact org.virtuslab.scala-cli specification-level_3 1.17.1 b1f2e9e21ca68e0b3798105dc5a44989b44e0363f50c2f2f2f97e0f4f51a639d central
+artifact org.fusesource.jansi jansi 2.4.1 2e5e775a9dc58ffa6bbd6aa6f099d62f8b62dcdeb4c3c3bbbe5cf2301bc2dcc1 central
+artifact io.github.alexarchambault is-terminal 0.1.2 721cb31b9ae87136b810758edbdf9dc1f363e2d8bf6d9ba2a3642d11abb09526 central
+artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a6751fbd80efcbcf800a2baac3d175cd3b67e97a5caba1 central
+evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict commons-codec commons-codec 1.18.0 1.19.0
+evict org.scala-lang scala3-library_3 3.3.6 3.8.3
+evict org.scala-lang scala3-library_3 3.3.8 3.8.3
+test splice 3.10.1 jvm
+direct dev.zio zio 2.1.27 binary
+direct io.get-coursier coursier-cache 2.1.26 binary
+direct org.apache.commons commons-compress 1.28.0 java
+direct com.google.javascript closure-compiler v20260726 java
+direct org.scala-js scalajs-ir 1.22.0 binary
+direct org.scala-js scalajs-linker-interface 1.22.0 binary
+direct dev.zio zio-test 2.1.27 binary
+direct dev.zio zio-test-sbt 2.1.27 binary
+direct org.graalvm.polyglot polyglot 25.2.4 java
+direct org.graalvm.js js-language 25.2.4 java
+direct org.graalvm.truffle truffle-runtime 25.2.4 java
+artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact io.get-coursier coursier-cache_3 2.1.26 37b78094ff5456285963c6618440cf6bd3fd0ce8affcf084c2b312a3eb5076d7 central
+artifact org.apache.commons commons-compress 1.28.0 e1522945218456f3649a39bc4afd70ce4bd466221519dba7d378f2141a4642ca central
+artifact com.google.javascript closure-compiler v20260726 b9c66f37e75388c74d264beef9e2eb9a447eebc393024d65f460273a1450ed4f central
+artifact org.scala-js scalajs-ir_3 1.22.0 feb377da78e5e3b3bb4e31566e8728940f1315b3b51226717e76a3289b6dc6ff central
+artifact org.scala-js scalajs-linker-interface_3 1.22.0 d9f47d4256839935360e44a90557f21c30800164ab72f8b21a75ee495cba75b1 central
+artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
+artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+artifact org.graalvm.polyglot polyglot 25.2.4 ce2e117a1e2f7e095538cf9a42d72e65cd56ba9eaedf2e4c5bf3bb542bd8c45c central
+artifact org.graalvm.js js-language 25.2.4 0bf0b2523d65216aead797b6f41c0ca1f1afc22f4d74b4a3f2b42c245252ca4e central
+artifact org.graalvm.truffle truffle-runtime 25.2.4 f4f37af324263c440f67c2c4a463541a17765e1846c9c7d849f66426c59a40f2 central
+artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
+artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact org.scala-lang scala3-library_3 3.8.3 740c79f7fc3dae2c5eef48e85f777d679a1f0f53fdbb780bf84dea0370220a61 central
+artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
+artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.0 2ba3d5ecf2e9bc2235ed7b703228358fe43f93272632c0ebf86b31f983908e5b central
+artifact org.virtuslab.scala-cli config_3 1.17.1 9bf018388553a302ac119f912daacf2206003763ae333248d2b1e6f516b9a5d9 central
+artifact io.github.alexarchambault.windows-ansi windows-ansi 0.0.6 077dbdbb977c94fc8b1fb82113cfb0aa5304d4e307c4e0688f69a9895f0da482 central
+artifact io.get-coursier coursier-paths 2.1.26 4de4c30a96c0868ced639f71eb97272e126f1f3cea9891fc11460b05e1b1462d central
+artifact io.get-coursier coursier-util_3 2.1.26 3974b526cc024793d2d466cf9315becc6864da16333a1fd0c00248a2ef0320a3 central
+artifact commons-codec commons-codec 1.19.0 5c3881e4f556855e9c532927ee0c9dfde94cc66760d5805c031a59887070af5f central
+artifact commons-io commons-io 2.20.0 df90bba0fe3cb586b7f164e78fe8f8f4da3f2dd5c27fa645f888100ccc25dd72 central
+artifact org.apache.commons commons-lang3 3.18.0 4eeeae8d20c078abb64b015ec158add383ac581571cddc45c68f0c9ae0230720 central
+artifact org.scala-js scalajs-logging_3 1.2.0 c2e153ecece2fbe1b584faa282d81c32c17ecdb92a7d8045b90f89d712ef2692 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
+artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
+artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
+artifact org.graalvm.sdk collections 25.2.4 c02710600f7e5fddcce9a422726e64743e8f478416c99288a2a622d16a9d7976 central
+artifact org.graalvm.sdk nativeimage 25.2.4 235376a14f41d503219e8e81cc3cade7dd45565917bb5c6936768519adc07fe1 central
+artifact org.graalvm.regex regex 25.2.4 3421cdc2712efa010139b40203461346d0c1df1804d7acdf3e24ceee766b2c39 central
+artifact org.graalvm.truffle truffle-api 25.2.4 ac5acb0e98b7e05983c34bcafc80ecdaaeb5ae0de32470d46452182dd8068628 central
+artifact org.graalvm.shadowed icu4j 25.2.4 2337312cf26f26b0d3c2eb73c155c4397944a6e4e5a6da046c9421a7b502d589 central
+artifact org.graalvm.truffle truffle-compiler 25.2.4 eb0b38486c52bab0d25507580b770b683aa2704b33c82f2616e1cc7a5e464c7e central
+artifact org.scala-lang scala-library 3.8.3 8b5164c4be2d7a86635966b419a08b393e58b3c7bc0cafb502e0f34248722b4e central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
+artifact org.virtuslab.scala-cli specification-level_3 1.17.1 b1f2e9e21ca68e0b3798105dc5a44989b44e0363f50c2f2f2f97e0f4f51a639d central
+artifact org.fusesource.jansi jansi 2.4.1 2e5e775a9dc58ffa6bbd6aa6f099d62f8b62dcdeb4c3c3bbbe5cf2301bc2dcc1 central
+artifact io.github.alexarchambault is-terminal 0.1.2 721cb31b9ae87136b810758edbdf9dc1f363e2d8bf6d9ba2a3642d11abb09526 central
+artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a6751fbd80efcbcf800a2baac3d175cd3b67e97a5caba1 central
+artifact org.graalvm.sdk word 25.2.4 fd64d18afd9813346acf3c2be3a19cc553edb3c480c3683fda80fe324687bd6a central
+artifact org.graalvm.sdk jniutils 25.2.4 88c5d7a9f334d1528e83f5fa9d101109fa55b232f85b872cf866198079d67929 central
+artifact org.graalvm.shadowed xz 25.2.4 47e18d6524be9e2eee5dbd947e2cc8ff74ffdc68a9f5cc2b7c461e4030bc1976 central
+evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict commons-codec commons-codec 1.18.0 1.19.0
+evict org.scala-lang scala-library 2.13.4 3.8.3
+evict org.scala-lang scala3-library_3 3.3.6 3.8.3
+evict org.scala-lang scala3-library_3 3.3.8 3.8.3
 cell client 3.10.0 native
 direct dev.zio zio 2.1.27 binary
 direct dev.zio zio-json 1.1.1 binary
@@ -397,6 +494,7 @@ direct tools.jackson.core jackson-databind 3.2.4 java
 direct tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 java
 direct org.jsoup jsoup 1.24.1 java
 direct com.google.guava guava 33.8.0-jre java
+direct com.typesafe mima-core 1.1.5 binary
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-json_3 1.1.1 2d50be6acbe06bf3613520f07101f24249b04bbde2e8f44a2d0c04fdf2bed5c4 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
@@ -421,6 +519,7 @@ artifact tools.jackson.core jackson-databind 3.2.4 c4af37223d5024f1294a5450598b0
 artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 b5edac76d73f983dee7bc929557aa68c38424b9a3b851caf8a382aaca67a9f32 central
 artifact org.jsoup jsoup 1.24.1 fabbb4aaf7fb5340aed0613826ecd110427999d765d8e0367cedde2950d7097c central
 artifact com.google.guava guava 33.8.0-jre 97b79ec3f2c0a6313a0c2df51ce1abdf8907e6531803467b81efcaaf99b35161 central
+artifact com.typesafe mima-core_3 1.1.5 190d499ac30859b993ab32370da4546529c3ecc023e46a5f9a6fbaeecdd37777 central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
 artifact org.scala-lang scala3-library_3 3.10.1 de6f5d7f9175fd0c1043bb2ca26f349959e00d4c9dbfd1a1f30f6144843a3d13 central
@@ -554,6 +653,7 @@ evict org.scala-lang scala3-library_3 3.1.0 3.10.1
 evict org.scala-lang scala3-library_3 3.3.3 3.10.1
 evict org.scala-lang scala3-library_3 3.3.4 3.10.1
 evict org.scala-lang scala3-library_3 3.3.6 3.10.1
+evict org.scala-lang scala3-library_3 3.3.7 3.10.1
 evict org.scala-lang scala3-library_3 3.3.8 3.10.1
 evict org.scala-lang scala3-library_3 3.8.3 3.10.1
 evict org.scala-lang scala3-library_3 3.8.4 3.10.1
@@ -590,6 +690,7 @@ direct tools.jackson.core jackson-databind 3.2.4 java
 direct tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 java
 direct org.jsoup jsoup 1.24.1 java
 direct com.google.guava guava 33.8.0-jre java
+direct com.typesafe mima-core 1.1.5 binary
 direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
 direct rocks.earlyeffect slayer 0.3.0 binary
@@ -618,6 +719,7 @@ artifact tools.jackson.core jackson-databind 3.2.4 c4af37223d5024f1294a5450598b0
 artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 b5edac76d73f983dee7bc929557aa68c38424b9a3b851caf8a382aaca67a9f32 central
 artifact org.jsoup jsoup 1.24.1 fabbb4aaf7fb5340aed0613826ecd110427999d765d8e0367cedde2950d7097c central
 artifact com.google.guava guava 33.8.0-jre 97b79ec3f2c0a6313a0c2df51ce1abdf8907e6531803467b81efcaaf99b35161 central
+artifact com.typesafe mima-core_3 1.1.5 190d499ac30859b993ab32370da4546529c3ecc023e46a5f9a6fbaeecdd37777 central
 artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
 artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
 artifact rocks.earlyeffect slayer_3 0.3.0 dc3c8309e07d34865810b2b4e7694072f678d3dd9df53ade7035cc19d8b83912 central
@@ -758,6 +860,7 @@ evict org.scala-lang scala3-library_3 3.1.0 3.10.1
 evict org.scala-lang scala3-library_3 3.3.3 3.10.1
 evict org.scala-lang scala3-library_3 3.3.4 3.10.1
 evict org.scala-lang scala3-library_3 3.3.6 3.10.1
+evict org.scala-lang scala3-library_3 3.3.7 3.10.1
 evict org.scala-lang scala3-library_3 3.3.8 3.10.1
 evict org.scala-lang scala3-library_3 3.8.3 3.10.1
 evict org.scala-lang scala3-library_3 3.8.4 3.10.1
