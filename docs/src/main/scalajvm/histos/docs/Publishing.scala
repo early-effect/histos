@@ -46,9 +46,28 @@ It does not change `histos.version`.
     ),
     section("What kind of bump")(
       md"""
-`histos doctor` compares the class files of this build with the previous Central
-release of the same ship. When they differ, it names the component to move: `patch`,
-`minor`, or `major`. On a `0.x` line any binary difference is a minor bump.
+`histos doctor --area release` checks every published JVM member and every declared
+Scala version against the newest stable release of that exact Maven coordinate. Compile
+those members first. A coordinate with no stable release is an explicit first publication,
+not a claim that a baseline was compared. Missing current classes, unreachable metadata,
+missing baseline jars, and failed analysis are incomplete verification and fail the check.
+
+The `CompatibilityAnalyzer` service currently uses MiMa for backward JVM classfile
+compatibility only. It does not prove source, behavioral, TASTy, Scala.js IR, or Native ABI
+compatibility. JS and Native requests return `UnsupportedBackend`; future analyzers can
+implement the same service with backend-specific evidence. Compile/link and artifact
+inventory checks for those backends remain separate.
+
+Baseline resolution is separate from bump policy. On a `0.x` line any binary difference
+requires a minor bump. On stable lines a missing class requires a major bump and other
+binary problems require a minor bump. A catalog number that already covers the required
+component passes.
+
+The existing doctor/preflight wiring fails closed on incomplete JVM evidence, including
+CI publish preflight. A cold preflight cannot claim compatibility before classes exist;
+CI must collect this evidence after compiling all published JVM members. Direct publish
+commands do not themselves invoke doctor, so run the check before publishing. Ordinary
+compile and test commands do not read release metadata or fetch compatibility baselines.
 
 `histos bump` rewrites `.next`. It does not decide the component. You pass
 `--minor` or `--major` when the doctor named one. The default is the next patch.
