@@ -96,23 +96,26 @@ final class JvmCompatibilityAnalyzer(mima: MiMaLib) extends CompatibilityAnalyze
               .mapError(CompatibilityError.AnalysisFailed(input, _))
             _ <- ZIO.foreachDiscard(entries.filter(entry => !entry.isDirectory && entry.getName.endsWith(".class"))):
               entry =>
-                val destination = root.resolve(entry.getName).normalize()
-                if !destination.startsWith(root) then
-                  ZIO.fail(CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
-                else
-                  ZIO.scoped:
-                    for
-                      source <- ZIO.acquireRelease(
-                        ZIO
-                          .attemptBlocking(jar.getInputStream(entry))
-                          .mapError(CompatibilityError.AnalysisFailed(input, _))
-                      )(source => ZIO.attemptBlocking(source.close()).orDie)
-                      _ <- ZIO
-                        .attemptBlockingInterrupt:
-                          Option(destination.getParent).foreach(Files.createDirectories(_))
-                          Files.copy(source, destination)
-                        .mapError(CompatibilityError.AnalysisFailed(input, _))
-                    yield ()
+                ZIO
+                  .attempt(root.resolve(entry.getName).normalize())
+                  .mapError(_ => CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
+                  .flatMap: destination =>
+                    if !destination.startsWith(root) then
+                      ZIO.fail(CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
+                    else
+                      ZIO.scoped:
+                        for
+                          source <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking(jar.getInputStream(entry))
+                              .mapError(CompatibilityError.AnalysisFailed(input, _))
+                          )(source => ZIO.attemptBlocking(source.close()).orDie)
+                          _ <- ZIO
+                            .attemptBlockingInterrupt:
+                              Option(destination.getParent).foreach(Files.createDirectories(_))
+                              Files.copy(source, destination)
+                            .mapError(CompatibilityError.AnalysisFailed(input, _))
+                        yield ()
           yield root
 
   private def problem(found: Problem): CompatibilityProblem =

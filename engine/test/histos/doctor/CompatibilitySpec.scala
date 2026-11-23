@@ -196,7 +196,10 @@ object CompatibilitySpec extends ZIOSpecDefault:
         yield assertTrue(
           report.exit == 0,
           report.oks == 2,
-          report.outcomes.exists { case Outcome.Ok(_, note) => note.contains("covers a minor"); case _ => false },
+          report.outcomes.exists {
+            case Outcome.Ok(_, note)                         => note.contains("covers a minor")
+            case Outcome.Found(_) | Outcome.Skipped(_, _, _) => false
+          },
         )
     },
     test("JVM inventory honors Scala suffixes, assembly identities and a JS-first platform list") {
@@ -261,6 +264,40 @@ object CompatibilitySpec extends ZIOSpecDefault:
             .serviceWithZIO[CompatibilityAnalyzer](_.analyze(CompatibilityInput(Platform.Jvm, jar, now)).either)
             .provideLayer(CompatibilityAnalyzer.jvm)
         yield assertTrue(result == Left(CompatibilityError.InvalidBaselineEntry(jar, "../Escape.class")))
+    },
+    test("embedded-NUL classfile entries return the exact typed analyzer error") {
+      ZIO.scoped:
+        for
+          root <- Workspace.work("nul-analyzer")
+          old  <- products(root.resolve("old"), method = true)
+          entry = "fixture/Invalid\u0000.class"
+          jar    <- baselineJar(root.resolve("nul.jar"), old, entry)
+          now    <- products(root.resolve("now"), method = true)
+          result <- ZIO
+            .serviceWithZIO[CompatibilityAnalyzer](_.analyze(CompatibilityInput(Platform.Jvm, jar, now)).either)
+            .provideLayer(CompatibilityAnalyzer.jvm)
+        yield assertTrue(result == Left(CompatibilityError.InvalidBaselineEntry(jar, entry)))
+    },
+    test("embedded-NUL classfile entries produce doctor incomplete evidence without defects") {
+      ZIO.scoped:
+        for
+          root  <- Workspace.work("nul-doctor")
+          graph <- ZIO.fromEither(built)
+          old   <- products(root.resolve("old"), method = true)
+          entry = "fixture/Invalid\u0000.class"
+          jar    <- baselineJar(root.resolve("nul.jar"), old, entry)
+          _      <- current(root, "first", method = true)
+          _      <- current(root, "second", method = true)
+          report <- run(root, graph, listed(Some(previous)), available(jar))
+        yield assertTrue(
+          report.exit == 1,
+          report.errors == 2,
+          report.oks == 0,
+          report.skipped == 0,
+          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.AnalysisFailed(error)) =>
+            error
+          } == List.fill(2)(CompatibilityError.InvalidBaselineEntry(jar, entry)),
+        )
     },
     test("the JVM layer explicitly rejects JS and Native") {
       val errors = ZIO.foreach(List(Platform.Js, Platform.Native)): backend =>

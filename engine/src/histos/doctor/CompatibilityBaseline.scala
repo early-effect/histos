@@ -20,7 +20,9 @@ trait CompatibilityBaseline:
 object CompatibilityBaseline:
   val live: ULayer[CompatibilityBaseline] = ZLayer.succeed(CoursierCompatibilityBaseline())
 
-final class CoursierCompatibilityBaseline extends CompatibilityBaseline:
+final class CoursierCompatibilityBaseline(
+    repositories: Option[Seq[coursier.Repository]] = None
+) extends CompatibilityBaseline:
   def fetch(coordinate: BaselineCoordinate): IO[BaselineError, Path] =
     ZIO
       .attemptBlockingInterrupt:
@@ -33,15 +35,16 @@ final class CoursierCompatibilityBaseline extends CompatibilityBaseline:
             coursier.version.VersionConstraint(coordinate.revision.render),
           )
           .copy(transitive = false)
-        coursier.Fetch().addDependencies(dependency).run().toList
+        val requested = coursier.Fetch().addDependencies(dependency)
+        repositories.fold(requested)(requested.withRepositories(_)).run().toList
       .mapError(BaselineError.Unavailable(coordinate, _))
       .flatMap: files =>
+        val expected = s"${coordinate.module.artifact.value}-${coordinate.revision.render}.jar"
         ZIO
           .fromOption(
             files
               .map(_.toPath)
               .find: path =>
-                val name = Option(path.getFileName).fold("")(_.toString)
-                name.endsWith(".jar") && !name.contains("sources") && !name.contains("javadoc")
+                Option(path.getFileName).exists(_.toString == expected)
           )
           .orElseFail(BaselineError.MissingJar(coordinate))
