@@ -28,7 +28,8 @@ object ProcessExit:
   extension (exit: ProcessExit) def value: Int = exit
 end ProcessExit
 
-/** Compiled classes, then resolved artifacts. The classes directory is not an optional jar.
+/** Compiled classes, then resolved artifacts. `classes` is a directory for a module under test, or a jar when the
+  * program is the installed toolchain.
   */
 final case class ChildClasspath(classes: Path, artifacts: List[Path]):
   def entries: List[Path] = classes :: artifacts
@@ -294,7 +295,7 @@ object ChildProcess:
       compiler <- ZIO.fromEither(javac(request.java))
       _        <- file(request.java, ChildError.Java(request.java))
       _        <- file(compiler, ChildError.Java(compiler))
-      _        <- directory(
+      _        <- output(
         request.classpath.classes,
         ChildError.Classes(request.classpath.classes),
       )
@@ -304,6 +305,19 @@ object ChildProcess:
         directory(request.cwd, ChildError.Start(request.cwd.toString))
       )
     yield ()
+
+  /** A module output is a class directory. The installed toolchain is a jar, and a child still has to load it.
+    */
+  private def output(path: Path, error: ChildError): IO[ChildError, Unit] =
+    ZIO
+      .attemptBlocking(Files.isDirectory(path) || jar(path))
+      .mapError(_ => ChildError.Io(IoFailure(path, IoFault.Stat)))
+      .flatMap: found =>
+        if found then ZIO.unit else ZIO.fail(error)
+
+  private def jar(path: Path): Boolean =
+    Files.isRegularFile(path) &&
+      Option(path.getFileName).exists(_.toString.endsWith(".jar"))
 
   /** A classpath entry is a jar or a classes directory. Main classes are a directory.
     */
