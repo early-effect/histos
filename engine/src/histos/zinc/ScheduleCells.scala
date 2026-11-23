@@ -25,7 +25,8 @@ final case class CompilePlan(
     coverage: Option[histos.coverage.CoverageCompile] = None,
     /** Modules named by a plugin coordinate. A `.pluginLibrary` module is a plugin without being in this set. */
     plugins: Set[ProjectName] = Set.empty,
-    emitted: Map[ProjectName, List[String]] = Map.empty,
+    roots: StageRoots,
+    generated: GeneratedRoots = GeneratedRoots.Existing,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */

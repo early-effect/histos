@@ -15,10 +15,9 @@ import histos.plugin.{
   SelectedInput,
   SourceKind,
   SourceProvenance,
-  SourceSet,
 }
 import histos.workspace.{IoFailure, IoFault}
-import histos.{Platform, ProjectName, ScalaVersion}
+import histos.{CompilationStage, Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -26,47 +25,79 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, ZIO}
 
+final case class CaptureProduct(classes: Path, classpath: List[Path])
+final case class CaptureTools(jdk: JdkVersion, runtime: List[Path], compiler: List[Path], bridge: Path)
+final case class CaptureRequest(
+    repo: Path,
+    stage: CompilationStage,
+    files: StageFiles,
+    product: CaptureProduct,
+    tools: CaptureTools,
+)
+
 /** The snapshot a plugin-library compile leaves on its cell. Compiler jars are the bridge, then the compiler classpath.
   * Runtime jars are the library jars that compile loaded. An empty list fails.
   */
 object CellCapture:
-  def record(
-      repo: Path,
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      sources: List[Path],
-      unmanagedRoot: Path,
-      sourceBase: Path,
-      classes: Path,
-      classpath: List[Path],
-      jdk: JdkVersion,
-      runtime: List[Path],
-      compiler: List[Path],
-      bridge: Path,
-  ): IO[GraphCompileError, CompilationCapture] =
-    if compiler.isEmpty then ZIO.fail(missing(module, version, platform, compilerPart(version)))
-    else if runtime.isEmpty then ZIO.fail(missing(module, version, platform, CompilerPart.Library))
+  private val CompileTimeFile = "compile-time.inputs"
+
+  /** Macro implementations may execute ordinary helpers. Their full classpath bytes are compile inputs. */
+  def implementation(path: Path): IO[CompileError, Sha256] =
+    ZIO
+      .attemptBlocking {
+        if Files.isDirectory(path) then
+          val walk = Files.walk(path)
+          try
+            val files = walk.iterator.asScala
+              .filter(Files.isRegularFile(_))
+              .toList
+              .sortBy(file => path.relativize(file).toString)
+            val bytes = files.flatMap { file =>
+              val name    = path.relativize(file).toString.replace('\\', '/')
+              val content = Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(file))).value
+              s"$name $content\n".getBytes(java.nio.charset.StandardCharsets.UTF_8).toList
+            }
+            Sha256Digest.of(Chunk.fromIterable(bytes))
+          finally walk.close()
+        else Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path)))
+      }
+      .mapError(_ => CompileError.Io(IoFailure(path, IoFault.Read)))
+
+  /** An implementation change must invalidate Zinc's old analysis as well as the outer compile key. */
+  def refreshCompileTime(analysis: Path, classes: Path, inputs: List[Sha256]): IO[CompileError, Unit] =
+    val file    = analysis.resolve(CompileTimeFile)
+    val current = inputs.map(_.value).mkString("\n")
+    for
+      previous <- histos.workspace.Workspace.readIfPresent(file).mapError(CompileError.Io(_))
+      _        <-
+        if previous.contains(current) || (previous.isEmpty && inputs.isEmpty) then ZIO.unit
+        else
+          histos.workspace.Workspace.recreate(analysis).mapError(CompileError.Io(_)) *>
+            histos.workspace.Workspace.recreate(classes).mapError(CompileError.Io(_)).unit
+    yield ()
+
+  def recordCompileTime(analysis: Path, inputs: List[Sha256]): IO[CompileError, Unit] =
+    histos.workspace.Workspace
+      .writeString(analysis.resolve(CompileTimeFile), inputs.map(_.value).mkString("\n"))
+      .mapError(CompileError.Io(_))
+
+  def record(request: CaptureRequest): IO[GraphCompileError, CompilationCapture] =
+    val cell     = request.stage.cell
+    val module   = cell.module
+    val version  = cell.version
+    val platform = cell.platform
+    val files    = request.files
+    val tools    = request.tools
+    if tools.compiler.isEmpty then ZIO.fail(missing(module, version, platform, compilerPart(version)))
+    else if tools.runtime.isEmpty then ZIO.fail(missing(module, version, platform, CompilerPart.Library))
     else
-      val refused = (error: histos.AssetError) => GraphCompileError.Assets(module, version, platform, error)
       for
-        inputs    <- selected(repo, module, version, platform, unmanagedRoot, sources, SourceKind.Scala)
-        resources <- histos.pack.Resources
-          .filesAt(sourceBase.resolve("main").resolve("resources"))
-          .mapError(refused)
-        listed <- selected(
-          repo,
-          module,
-          version,
-          platform,
-          unmanagedRoot,
-          resources.map(_._2),
-          SourceKind.Resource,
-        )
-        outputs   <- seal(module, version, platform, classes)
-        closure   <- ZIO.foreach(classpath)(member(module, version, platform, _))
-        compilers <- sealJars(module, version, platform, bridge :: compiler)
-        libraries <- sealJars(module, version, platform, runtime)
+        inputs    <- selected(request, files.sources.map(_.path), SourceKind.Scala)
+        listed    <- selected(request, files.resources.map(_._2), SourceKind.Resource)
+        outputs   <- seal(module, version, platform, request.product.classes)
+        closure   <- ZIO.foreach(request.product.classpath)(member(module, version, platform, _))
+        compilers <- sealJars(module, version, platform, tools.bridge :: tools.compiler)
+        libraries <- sealJars(module, version, platform, tools.runtime)
       yield CompilationCapture.Recorded(
         CompilationSnapshot(
           module,
@@ -81,7 +112,7 @@ object CellCapture:
           Nil,
           compilers,
           libraries,
-          jdk,
+          tools.jdk,
           outputs,
           Nil,
         )
@@ -119,27 +150,27 @@ object CellCapture:
     else assembled.paths.take(runtime) ++ dirs ++ jars
 
   private def selected(
-      repo: Path,
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      unmanagedRoot: Path,
+      request: CaptureRequest,
       paths: List[Path],
       fallback: SourceKind,
   ): IO[GraphCompileError, List[SelectedInput]] =
+    val cell     = request.stage.cell
+    val module   = cell.module
+    val version  = cell.version
+    val platform = cell.platform
     ZIO.foreach(paths): path =>
       val file = path.toAbsolutePath.normalize
-      val root = unmanagedRoot.toAbsolutePath.normalize
-      val name = repo.relativize(file).toString.replace('\\', '/')
+      val name = request.repo.toAbsolutePath.normalize.relativize(file).toString.replace('\\', '/')
       for
         relative <- ZIO.fromEither(RepoPath.from(name)).mapError(_ => unread(module, version, platform, file))
         bytes    <- read(module, version, platform, file)
       yield
-        val provenance = if file.startsWith(root) then SourceProvenance.Generated else SourceProvenance.Unmanaged
+        val provenance =
+          if request.files.generatedPaths.contains(file) then SourceProvenance.Generated else SourceProvenance.Unmanaged
         SelectedInput(
           relative,
           kind(file, fallback),
-          SourceSet.Main,
+          request.stage.scope,
           provenance,
           Digests.content(bytes),
           bytes.length.toLong,

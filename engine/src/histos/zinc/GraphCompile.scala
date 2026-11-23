@@ -1,5 +1,16 @@
 package histos.zinc
 
+import histos.build.{
+  BuildDag,
+  BuildDagError,
+  BuildNode,
+  ExecutionError,
+  ExecutionProducts,
+  ExecutionRequest,
+  StageProduct,
+}
+import histos.plugin.SourceSet
+import histos.{Cell, CompilationStage}
 import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
@@ -41,8 +52,87 @@ object GraphCompile:
   /** Resolve, the local CAS, the start counter, the compiler services, the input memo, the resolution service, and the
     * remote cache.
     */
-  private[zinc] type Fed =
+  private[histos] type Fed =
     Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo & ResolutionService & RemoteCache
+
+  /** Main compile leaf. Its upstream products were completed by BuildExecution, not discovered recursively. */
+  def stage(
+      request: ExecutionRequest,
+      stage: CompilationStage,
+      completed: ExecutionProducts,
+  ): ZIO[Fed, ExecutionError, StageProduct] =
+    val session = request.session
+    val modules = modulesOf(session.graph)
+    val roots   = StageRoots.of(session.graph)
+    if stage.scope != SourceSet.Main then ZIO.fail(ExecutionError.WrongProduct(BuildNode.Compile(stage)))
+    else
+      for
+        module <- ZIO
+          .fromOption(modules.find(_.name == stage.cell.module))
+          .orElseFail(ExecutionError.Compile(GraphCompileError.UnknownCell(stage.cell.module, stage.cell.version)))
+        _          <- roots.read(session.repo, stage, completed.generatedRoots).mapError(ExecutionError.Roots(_))
+        resolution <- ZIO.service[ResolutionService]
+        stamped    <- ZIO.serviceWithZIO[CompileMemo](memo => resolution.current.flatMap(memo.note))
+        tools      <- LockedTools.make(stamped.lock, session.graph, resolution)
+        plan = CompilePlan(
+          session.repo,
+          modules,
+          stamped.lock,
+          session.jdk,
+          session.native,
+          BuildResolvers(session.graph.resolvers),
+          tools,
+          stamped.stamp,
+          _ => ZIO.unit,
+          session.coverage,
+          histos.load.ApiDep.modules(session.graph),
+          roots,
+          completed.generatedRoots,
+        )
+        base <- sourceBase(session.repo, module, modules).mapError(ExecutionError.Compile(_))
+        done = completed.stages.toList.collect {
+          case (upstream, product) if upstream.scope == SourceSet.Main =>
+            (upstream.cell.module, upstream.cell.version, upstream.cell.platform) -> product.classes
+        }.toMap
+        work = CellWork(
+          plan,
+          module,
+          stage.cell.version,
+          stage.cell.platform,
+          base.getOrElse(session.repo.resolve(module.baseDirectory).resolve("src")),
+          done,
+        )
+        _      <- request.report(CompileFeed.Began(module.name, stage.cell.version, stage.cell.platform))
+        result <- reported(work, request.report).mapError(ExecutionError.Compile(_))
+        chain = Module.chain(module, modules, stage.cell.platform)
+        read <- upstreams(module, chain, stage.cell.version, stage.cell.platform, done, plan)
+          .mapError(ExecutionError.Compile(_))
+        classpath <- classpathOf(plan, module, read.map(_._1), stage.cell.version, stage.cell.platform)
+          .mapError(ExecutionError.Compile(_))
+        recorded = analysisRoot(plan, module.name, stage.cell.version, stage.cell.platform)
+        api <- ZIO
+          .fromEither(ApiDigest.read(recorded))
+          .mapError(error =>
+            ExecutionError.Compile(
+              GraphCompileError.Failed(module.name, stage.cell.version, stage.cell.platform, error)
+            )
+          )
+        implementation <- CellCapture
+          .implementation(result.cell.classes)
+          .mapError(error =>
+            ExecutionError.Compile(
+              GraphCompileError.Failed(module.name, stage.cell.version, stage.cell.platform, error)
+            )
+          )
+        _ <- request.report(CompileFeed.Done(result.cell))
+      yield StageProduct(
+        stage,
+        result.cell,
+        recorded,
+        api,
+        implementation,
+        (result.cell.classes :: CellCapture.classpath(classpath, read.map(_._1))).distinct,
+      )
 
   def run(
       session: CompileSession,
@@ -299,7 +389,16 @@ object GraphCompile:
       .left
       .map(GraphCompileError.Target(_))
       .map: selected =>
-        Module.closure(modules, selected.modules.map(_.name).toSet)
+        mainClosure(modules, selected.modules.map(_.name).toSet)
+
+  private def mainClosure(modules: List[Module], roots: Set[ProjectName]): List[Module] =
+    val wanted = modules
+      .filter(module => roots.contains(module.name))
+      .flatMap { module =>
+        module.name :: module.platforms.all.flatMap(platform => Module.chain(module, modules, platform).map(_.name))
+      }
+      .toSet
+    modules.filter(module => wanted.contains(module.name))
 
   private def pickCells(
       graph: ProjectGraph,
@@ -321,27 +420,22 @@ object GraphCompile:
     } match
       case Some(error) => Left(error)
       case None        =>
-        Right(Module.closure(modules, cells.map(_._1).toSet))
+        Right(mainClosure(modules, cells.map(_._1).toSet))
 
-  private def layersOf(
-      modules: List[Module]
-  ): Either[GraphCompileError, List[List[Module]]] =
-    val names = modules.map(_.name).toSet
-    def step(
-        done: Set[ProjectName],
-        rest: List[Module],
-        built: List[List[Module]],
-    ): Either[GraphCompileError, List[List[Module]]] =
-      val (ready, later) = rest.partition: module =>
-        module.upstreamNames.forall(dependency => !names.contains(dependency) || done.contains(dependency))
-      ready match
-        case Nil =>
-          later match
-            case module :: _ => Left(GraphCompileError.Cycle(module.name))
-            case Nil         => Right(built.reverse)
-        case _ =>
-          step(done ++ ready.map(_.name), later, ready :: built)
-    step(Set.empty, modules, Nil)
+  private def legacyDagFailure(repo: Path, error: BuildDagError): GraphCompileError = error match
+    case BuildDagError.UnknownNode(BuildNode.Compile(stage)) =>
+      GraphCompileError.UnknownCell(stage.cell.module, stage.cell.version)
+    case BuildDagError.UnknownNode(BuildNode.Link(cell, _)) => GraphCompileError.UnknownCell(cell.module, cell.version)
+    case BuildDagError.UnknownNode(BuildNode.Generate(_))   => GraphCompileError.RootRead(repo)
+    case BuildDagError.MissingUpstream(stage, module)       =>
+      GraphCompileError.MissingUpstream(stage.cell.module, module, stage.cell.version, stage.cell.platform)
+    case BuildDagError.MissingCell(_, module, Some(version), _) => GraphCompileError.UnknownCell(module, version)
+    case BuildDagError.MissingCell(_, _, None, _)               => GraphCompileError.RootRead(repo)
+    case BuildDagError.Declaration(histos.BuildError.Contract(histos.ContractFault.Cycle(path))) =>
+      path
+        .collectFirst { case histos.BuildNode.Compile(stage) => GraphCompileError.Cycle(stage.cell.module) }
+        .getOrElse(GraphCompileError.RootRead(repo))
+    case BuildDagError.Declaration(_) => GraphCompileError.RootRead(repo)
 
   /** The spec holds one cell so an unrelated cell can start. Production does not.
     */
@@ -406,9 +500,21 @@ object GraphCompile:
         val compiled =
           for
             selected <- ZIO.fromEither(picked)
-            _        <- ZIO.fromEither(layersOf(selected))
-            report   <- ZIO.service[ResolutionService]
-            stamped  <- ZIO.serviceWithZIO[CompileMemo]: memo =>
+            _        <- ZIO
+              .fromEither(
+                BuildDag.plan(
+                  graph,
+                  selected.flatMap { module =>
+                    for
+                      version <- module.versions.all
+                      target  <- module.platforms.all.filter(chosen => platform.forall(_ == chosen))
+                    yield BuildNode.Compile(CompilationStage(Cell(module.name, version, target), SourceSet.Main))
+                  },
+                )
+              )
+              .mapError(legacyDagFailure(repo, _))
+            report  <- ZIO.service[ResolutionService]
+            stamped <- ZIO.serviceWithZIO[CompileMemo]: memo =>
               report.current.flatMap(lock => memo.note(lock))
             tools   <- LockedTools.make(stamped.lock, graph, report)
             outcome <-
@@ -424,7 +530,7 @@ object GraphCompile:
                 inside,
                 coverage,
                 plugins = histos.load.ApiDep.modules(graph),
-                emitted = Emitted.directories(graph),
+                roots = StageRoots.of(graph),
               )
               val goal = ScheduleCells.goal(
                 plan,
@@ -515,35 +621,79 @@ object GraphCompile:
     val hear  = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
     val pulse = (step: CompilePulse) => offer(CompileFeed.Pulse(module.name, version, platform, step))
     hold(module.name) *>
-      sourceBase(plan.repo, module, plan.modules).flatMap:
-        case None =>
-          tell(CompileFeed.Failed(GraphCompileError.NoRoot(module.name)))
-            .as(ScheduleCells.render(upstreams))
-        case Some(base) =>
-          tell(CompileFeed.Began(module.name, version, platform)) *>
-            compileOf(
-              CellWork(plan, module, version, platform, base, upstreams),
-              hear,
-              pulse,
-            ).foldZIO(
-              error =>
-                kept(error) match
-                  case Some(cellError) =>
-                    tell(CompileFeed.Failed(cellError))
-                      .as(ScheduleCells.render(upstreams))
-                  case None => ZIO.fail(error)
-              ,
-              result =>
-                val paths = upstreams.updated(
-                  (module.name, version, platform),
-                  result.cell.classes,
+      sourceBase(plan.repo, module, plan.modules).flatMap: selected =>
+        val base = selected.getOrElse(plan.repo.resolve(module.baseDirectory).resolve("src"))
+        tell(CompileFeed.Began(module.name, version, platform)) *>
+          compileOf(
+            CellWork(plan, module, version, platform, base, upstreams),
+            hear,
+            pulse,
+          ).foldZIO(
+            error =>
+              kept(error) match
+                case Some(cellError) =>
+                  tell(CompileFeed.Failed(cellError))
+                    .as(ScheduleCells.render(upstreams))
+                case None => ZIO.fail(error)
+            ,
+            result =>
+              val paths = upstreams.updated(
+                (module.name, version, platform),
+                result.cell.classes,
+              )
+              val noted = result.miss match
+                case Some(change) =>
+                  tell(CompileFeed.Miss(module.name, version, platform, change))
+                case None => ZIO.unit
+              noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
+          )
+
+  private def reported(work: CellWork, report: CompileFeed => UIO[Unit]): ZIO[Fed, GraphCompileError, CellResult] =
+    val module   = work.module.name
+    val version  = work.version
+    val platform = work.platform
+    ZIO.scoped {
+      for
+        result <- zio.Promise.make[GraphCompileError, CellResult]
+        events = ZStream.asyncScoped[Fed, GraphCompileError, CompileFeed] { emit =>
+          val offer = (feed: CompileFeed) => emit(ZIO.succeed(Chunk.single(feed)))
+          compileOf(
+            work,
+            problem => offer(CompileFeed.Diagnostic(module, version, platform, problem)),
+            pulse => offer(CompileFeed.Pulse(module, version, platform, pulse)),
+          ).foldCauseZIO(
+            cause =>
+              result.failCause(cause) *> ZIO
+                .attemptBlockingInterrupt(
+                  emit(ZIO.failCause(cause.map(error => Some(error))))
                 )
-                val noted = result.miss match
-                  case Some(change) =>
-                    tell(CompileFeed.Miss(module.name, version, platform, change))
-                  case None => ZIO.unit
-                noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
-            )
+                .orDie,
+            completed => result.succeed(completed) *> end(emit, None),
+          ).forkScoped
+        }
+        _         <- events.tap(report).runDrain
+        completed <- result.await
+      yield completed
+    }
+
+  private def rootFailure(work: CellWork, error: StageRootError): GraphCompileError =
+    val CellWork(plan, module, version, platform, base, _) = work
+    error match
+      case StageRootError.Source(error)              => GraphCompileError.Failed(module.name, version, platform, error)
+      case StageRootError.Resource(error)            => GraphCompileError.Assets(module.name, version, platform, error)
+      case StageRootError.ResourceCollision(name, _) =>
+        GraphCompileError.Assets(module.name, version, platform, histos.AssetError.Duplicate(name))
+      case StageRootError.Io(error) => GraphCompileError.Failed(module.name, version, platform, CompileError.Io(error))
+      case StageRootError.Missing(path, _)            => GraphCompileError.RootRead(path)
+      case StageRootError.Link(path)                  => GraphCompileError.RootRead(path)
+      case StageRootError.Escaped(path)               => GraphCompileError.RootRead(path)
+      case StageRootError.MissingGenerated(_)         => GraphCompileError.RootRead(base)
+      case StageRootError.DuplicateGenerated(_)       => GraphCompileError.RootRead(base)
+      case StageRootError.OutputKindMismatch(_, _, _) => GraphCompileError.RootRead(base)
+      case StageRootError.UnknownStage(stage)   => GraphCompileError.UnknownCell(stage.cell.module, stage.cell.version)
+      case StageRootError.InvalidPath(raw)      => GraphCompileError.RootRead(plan.repo.resolve(raw))
+      case StageRootError.SourceCollision(_, _) => GraphCompileError.RootRead(base)
+      case StageRootError.Contract(_)           => GraphCompileError.RootRead(base)
 
   private final case class CellWork(
       plan: CompilePlan,
@@ -648,57 +798,29 @@ object GraphCompile:
                     case None      => ZIO.none
                 yield found
 
-  /** Committed sources from the module directory and every extra root. Filters still apply per root. */
-  private def selectRoots(
-      repo: Path,
-      module: Module,
-      primary: Path,
-      version: ScalaVersion,
-      platform: Platform,
-      emitted: Map[ProjectName, List[String]],
-  ): IO[CompileError, List[Path]] =
-    val written = emitted.getOrElse(module.name, Nil).map(repo.resolve)
-    ZIO
-      .foreach(Sources.roots(repo, primary, module) ++ written)(root => Sources.select(root, version, platform))
-      .map(_.flatten.distinct)
-
-  private def selectTests(
-      repo: Path,
-      module: Module,
-      primary: Path,
-      version: ScalaVersion,
-      platform: Platform,
-      emitted: Map[ProjectName, List[String]],
-  ): IO[CompileError, List[Path]] =
-    val written = emitted.getOrElse(module.name, Nil).map(repo.resolve)
-    ZIO
-      .foreach(Sources.roots(repo, primary, module) ++ written)(root => Sources.tests(root, version, platform))
-      .map(_.flatten.distinct)
-
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
       onPulse: CompilePulse => Unit,
   ): ZIO[Fed, GraphCompileError, CellResult] =
-    val CellWork(plan, module, version, platform, base, done) = work
+    val CellWork(plan, module, version, platform, _, done) = work
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      committed <- selectRoots(plan.repo, module, base, version, platform, plan.emitted).mapError(failed)
-      extraRoot = Sources.unmanagedRoot(plan.repo, module.name.value)
-      extra <- Sources.select(extraRoot, version, platform).mapError(failed)
-      sources = Sources.prefer(base, committed, extraRoot, extra)
-      tests    <- selectTests(plan.repo, module, base, version, platform, plan.emitted).mapError(failed)
+      files <- plan.roots
+        .read(plan.repo, CompilationStage(Cell(module.name, version, platform), SourceSet.Main), plan.generated)
+        .mapError(rootFailure(work, _))
+      sources = files.sources.map(_.path)
       compiled <-
-        if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
-        else if sources.isEmpty then vacant(plan, module.name, version, platform)
+        if sources.isEmpty then vacant(plan, module.name, version, platform)
         else
           val classes  = classRoot(plan, module.name, version, platform)
           val analysis = analysisRoot(plan, module.name, version, platform)
           for
             read <- upstreams(module, chain, version, platform, done, plan)
-            cells    = read.map(_._1)
-            apis     = read.map(_._2)
+            cells = read.map(_._1)
+            implementations <- ZIO.foreach(cells)(cell => CellCapture.implementation(cell.classes).mapError(failed))
+            apis     = read.map(_._2) ++ implementations
             upstream = read.flatMap(_._3)
             planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
             known    <- recall(work, sources, cells, apis, classes, analysis, planned.map(_.identity))
@@ -706,6 +828,7 @@ object GraphCompile:
               case Some(output) => ZIO.succeed((output, Option.empty[ScalacClasspath]))
               case None         =>
                 for
+                  _         <- CellCapture.refreshCompileTime(analysis, classes, implementations).mapError(failed)
                   assembled <- classpathOf(plan, module, cells, version, platform)
                   bytes     <- CompileInputs.jarBytes(assembled.permitted).mapError(failed)
                   request = CompileRequest(
@@ -733,6 +856,7 @@ object GraphCompile:
                   ).mapError(failed)
                 yield (compiled, Some(assembled))
             (output, assembled) = produced
+            _       <- CellCapture.recordCompileTime(analysis, implementations).mapError(failed)
             closure <- module.pluginLibrary match
               case None    => ZIO.succeed(Option.empty[List[Path]])
               case Some(_) =>
@@ -764,7 +888,7 @@ object GraphCompile:
             closure,
             Some(CapturedToolchain(output.runtime, output.compiler, output.bridge)),
           )
-      _        <- copyResources(plan, module, version, platform, base, compiled.cell.classes)
+      _        <- copyResources(plan, module, version, platform, files, compiled.cell.classes)
       recorded <- (compiled.closure, compiled.toolchain) match
         case (None, _)       => ZIO.succeed(compiled.cell)
         case (Some(_), None) =>
@@ -782,19 +906,13 @@ object GraphCompile:
         case (Some(paths), Some(tools)) =>
           CellCapture
             .record(
-              plan.repo,
-              module.name,
-              version,
-              platform,
-              sources,
-              extraRoot,
-              base,
-              compiled.cell.classes,
-              paths,
-              plan.jdk.version,
-              tools.runtime,
-              tools.compiler,
-              tools.bridge,
+              CaptureRequest(
+                plan.repo,
+                CompilationStage(Cell(module.name, version, platform), SourceSet.Main),
+                files,
+                CaptureProduct(compiled.cell.classes, paths),
+                CaptureTools(plan.jdk.version, tools.runtime, tools.compiler, tools.bridge),
+              )
             )
             .map(capture => compiled.cell.copy(capture = capture))
     yield compiled.copy(cell = recorded)
@@ -855,18 +973,14 @@ object GraphCompile:
       module: Module,
       version: ScalaVersion,
       platform: Platform,
-      source: Path,
+      files: StageFiles,
       classes: Path,
   ): IO[GraphCompileError, Unit] =
     val refused  = (error: histos.AssetError) => GraphCompileError.Assets(module.name, version, platform, error)
     val manifest = analysisRoot(plan, module.name, version, platform).resolve(histos.pack.AssetSync.Manifest)
-    histos.pack.Resources
-      .filesAt(source.resolve("main").resolve("resources"))
+    histos.pack.AssetSync
+      .sync(classes, Some(manifest), files.resources, files.assets, plan.repo)
       .mapError(refused)
-      .flatMap: unmanaged =>
-        histos.pack.AssetSync
-          .sync(classes, Some(manifest), unmanaged, module.resources, plan.repo)
-          .mapError(refused)
 
   /** No main sources. The classes directory stays empty so a later test compile has a classpath root.
     */
@@ -880,6 +994,9 @@ object GraphCompile:
     histos.workspace.Workspace
       .recreate(classes)
       .mapError(_ => GraphCompileError.Output(classes)) *>
+      histos.workspace.Workspace
+        .recreate(analysisRoot(plan, module, version, platform))
+        .mapError(_ => GraphCompileError.Output(analysisRoot(plan, module, version, platform))) *>
       ZIO
         .fromEither(ApiDigest.writeEmpty(analysisRoot(plan, module, version, platform)))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error)) *>
@@ -957,7 +1074,12 @@ object GraphCompile:
       .mapError(_ => CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read)))
       .flatMap:
         case Some(found) => ZIO.succeed(found)
-        case None        => ZIO.fail(CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read)))
+        case None        =>
+          ZIO
+            .fromEither(ApiDigest.read(dir))
+            .flatMap: digest =>
+              if digest == ApiDigest.empty then ZIO.succeed(Nil)
+              else ZIO.fail(CompileError.Io(IoFailure(dir.resolve("inc.zip"), IoFault.Read)))
 
   /** Classpath root written for one JVM cell. Test compile and the test subprocess read this directory.
     */
