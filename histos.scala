@@ -48,6 +48,7 @@ object build extends HistosBuild:
     val jackson3        = dep"tools.jackson.core:jackson-core:3.2.4"
     val jackson3Bind    = jackson3.module("jackson-databind")
     val splice = module("splice", Jvm)(scala3)
+      .artifact(artifact"histos-splice")
       .libraryDependencies(
         zio,
         dep"io.get-coursier::coursier-cache:2.1.26",
@@ -124,7 +125,7 @@ object build extends HistosBuild:
         asmTree,
       )
     val library =
-      Ship("histos").next(0, 5, 0)(api, wire, central, engine, app).toolchain(launcher = app, client = client)
+      Ship("histos").next(0, 5, 0)(api, wire, splice, central, engine, app).toolchain(launcher = app, client = client)
     val docs = module("docs", Jvm, Js)(scala3)
       .dependsOn(Jvm)(api, app)
       .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
