@@ -32,13 +32,13 @@ object ToolCatalog:
   val default: ToolCatalog = ToolCatalog(
     CompilerTools(ToolRevision("4.17.3")),
     JsTools(
-      JsVersion("1.22.0"),
+      JsVersion("1.23.0"),
       ScalaVersion("2.13.18"),
-      ScalaVersion("3.9.0"),
-      ToolRevision("1.6.0"),
+      ScalaVersion("3.10.1"),
+      ToolRevision("1.7.0"),
       ToolRevision("1.1.1"),
       ToolRevision("0.1.3"),
     ),
-    NativeTools(NativeVersion("0.5.13-20261118-78ae329-SNAPSHOT"), ScalaVersion("3.10.0")),
+    NativeTools(NativeVersion("0.5.13-20261122-fa4437d-SNAPSHOT"), ScalaVersion("3.10.1")),
     FormatTools(ToolRevision("3.11.5"), ScalaVersion("2.13.18")),
   )

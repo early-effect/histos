@@ -7,14 +7,13 @@ import zio.*
 object build extends HistosBuild:
   def graph =
     val scala3        = scala"3.10.1"
-    val nativeScala   = scala"3.10.0"
-    val nativeNightly = NativeVersion("0.5.13-20261118-78ae329-SNAPSHOT")
+    val nativeNightly = NativeVersion("0.5.13-20261122-fa4437d-SNAPSHOT")
     val zio           = dep"dev.zio::zio:2.1.27"
     val zioTest       = zio.module("zio-test")
     val zioTestSbt    = zio.module("zio-test-sbt")
     val zioStreams    = zio.module("zio-streams")
     val zioJson       = dep"dev.zio::zio-json:1.1.1"
-    val api           = module("api", Jvm, Native)(nativeScala)
+    val api           = module("api", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
       .artifact(artifact"histos-api")
@@ -24,7 +23,7 @@ object build extends HistosBuild:
       .dependsOn(api)
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
-    val wire = module("wire", Jvm, Native)(nativeScala)
+    val wire = module("wire", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
       .dependsOn(api)
@@ -54,8 +53,8 @@ object build extends HistosBuild:
         dep"io.get-coursier::coursier-cache:2.1.26",
         dep"org.apache.commons:commons-compress:1.28.0",
         dep"com.google.javascript:closure-compiler:v20260726",
-        dep"org.scala-js::scalajs-ir:1.22.0",
-        dep"org.scala-js::scalajs-linker-interface:1.22.0",
+        dep"org.scala-js::scalajs-ir:1.23.0",
+        dep"org.scala-js::scalajs-linker-interface:1.23.0",
       )
       .testDependencies(
         zioTest,
@@ -72,6 +71,10 @@ object build extends HistosBuild:
         zioStreams,
         scalaCompiler,
         scaladoc,
+        dep"org.scala-js::scalajs-linker:1.23.0",
+        dep"org.scala-js::scalajs-sbt-test-adapter:1.23.0",
+        dep"org.scala-js::scalajs-env-nodejs:1.7.0",
+        dep"rocks.earlyeffect::chekhov-jsenv:0.1.3",
         dep"org.scala-sbt::zinc:2.0.5",
         dep"org.scala-sbt::sbinary:0.6.0",
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
@@ -99,7 +102,7 @@ object build extends HistosBuild:
         dep"rocks.earlyeffect::slayer:0.3.0",
         grpcStub,
       )
-    val client = module("client", Native)(nativeScala)
+    val client = module("client", Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
       .dependsOn(wire)
