@@ -5,7 +5,8 @@ import histos.process.ChildClasspath
 import java.nio.file.Path
 
 /** The classpath this histos process was started with. A child that links or runs Scala.js uses it, so the linker
-  * classes are the ones histos was compiled against.
+  * classes are the ones histos was compiled against. The first entry is a class directory in a checkout and
+  * `histos.jar` in an installed toolchain.
   */
 object HostClasspath:
   def child: Option[ChildClasspath] =

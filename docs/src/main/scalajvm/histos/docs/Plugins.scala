@@ -57,6 +57,21 @@ A file the build copies into the class directory after compile is a
 """,
       cite[histos.plugin.TaskDep].signature,
     ),
+    section("A task runs a program")(
+      md"""
+A plugin that starts a program uses `Program`. Histos reads both output streams while
+the child is still running, and prints each line before the task finishes. A CI log
+shows those lines. The exit code is returned only after both streams have closed, so a
+line written just before the process exits is still in the log.
+
+The process dies when the scope that started it closes. A task uses the invocation
+scope, so interrupt stops the program. A preview server uses the generation scope, so
+it stays up until that generation is retired.
+
+`TaskDep.Compile` prints the same way. The cell's compile lines are invocation events,
+and they show up while that cell is compiling.
+"""
+    ),
     section("Specular, as a worked example")(
       md"""
 This documentation site is built by Specular, which is a Histos plugin. The build names

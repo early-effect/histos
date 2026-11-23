@@ -3,7 +3,17 @@ package histos.load
 import histos.cache.{ContentStore, LinkerStarts}
 import histos.jdk.{JdkRuntime, Sha256, Sha256Digest}
 import histos.js.{JsLink, JsLinkRequest}
-import histos.plugin.{CellClasspath, DeclaredTask, LinkedScript, PluginDetail, PluginRunError, TaskDep}
+import histos.cli.CompileConsole
+import histos.plugin.{
+  CellClasspath,
+  DeclaredTask,
+  InvocationPluginEvent,
+  LinkedScript,
+  PluginDetail,
+  PluginEvents,
+  PluginRunError,
+  TaskDep,
+}
 import histos.program.Program
 import histos.workspace.Workspace
 import histos.resolve.LockedTools
@@ -15,7 +25,7 @@ import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, IO, ZIO, ZLayer}
+import zio.{Chunk, IO, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
 
 /** Compiles every `TaskDep.Compile` cell before the plugin task is hashed, then reads the classpath that compile wrote.
@@ -201,6 +211,7 @@ private[load] object PluginCells:
   private[load] def compile(
       session: histos.zinc.CompileSession,
       cell: Cell,
+      events: PluginEvents.Invocation,
   ): ZIO[
     Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.schedule.RemoteCache,
     PluginFault,
@@ -218,6 +229,7 @@ private[load] object PluginCells:
               List(cell.module.name -> cell.version),
               cell.platform,
             )
+            .tap(feed => report(repo, events, feed))
             .provideSomeLayer[
               Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService & histos.schedule.RemoteCache
             ](compilers ++ memo)
@@ -236,6 +248,22 @@ private[load] object PluginCells:
           )
         yield ()
       }
+
+  /** Each compile line is an invocation event, so the console shows it while the cell is still compiling. A closed
+    * handle does not fail the compile.
+    */
+  private def report(repo: Path, events: PluginEvents.Invocation, feed: CompileFeed): UIO[Unit] =
+    ZIO.foreachDiscard(CompileConsole.lines(repo, feed)): line =>
+      val text = line.text.filterNot(_.isControl)
+      if text.isEmpty then ZIO.unit
+      else
+        PluginDetail.from(text) match
+          case Left(_)       => ZIO.unit
+          case Right(detail) =>
+            val event = line match
+              case _: CompileConsole.Line.Err => InvocationPluginEvent.Err(detail)
+              case _: CompileConsole.Line.Out => InvocationPluginEvent.Message(detail)
+            events.emit(event).orElseSucceed(())
 
   private def compileTests(
       repo: Path,

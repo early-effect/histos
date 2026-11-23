@@ -6,7 +6,7 @@ import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
 import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild}
-import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs, PluginEvents}
+import histos.plugin.{FlagName, InvocationPluginEvent, NamedText, ParamName, PluginArgs, PluginEventError, PluginEvents}
 import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
@@ -927,7 +927,7 @@ object Daemon:
                         ZIO.addFinalizer(desk.discard) *>
                           warm.live.get.flatMap { generation =>
                             generation.desk.open(envelope.context).flatMap { lease =>
-                              eventsRef.set(Some(lease.invocation)) *>
+                              eventsRef.set(Some(printing(say, lease.invocation))) *>
                                 replies.take.flatMap(reply => hear(desk, say, reply)).forever.forkScoped *>
                                 write(output, wire(Message.Ready), bound) *>
                                 attended(asked, socket, input, replies)(relay => run(asked, say, relay))
@@ -938,6 +938,24 @@ object Daemon:
                 }
               }
   end handle
+
+  /** Print the line on the caller's console, then keep it on the invocation queue. The print happens on the fiber that
+    * emitted, so the line is on the log before the next one, and before the task's final fault.
+    */
+  private def printing(say: Say, inner: PluginEvents.Invocation): PluginEvents.Invocation =
+    new PluginEvents.Invocation:
+      def emit(event: InvocationPluginEvent): zio.IO[PluginEventError, Unit] =
+        show(say, event) *> inner.emit(event)
+
+  private def show(say: Say, event: InvocationPluginEvent): UIO[Unit] =
+    val told = event match
+      case InvocationPluginEvent.Message(text) =>
+        say(Message.Event(BuildEvent.Out(text.value)))
+      case InvocationPluginEvent.Err(text) =>
+        say(Message.Event(BuildEvent.Err(text.value)))
+      case InvocationPluginEvent.Diagnosis(noted) =>
+        say(Message.Event(BuildEvent.Err(noted.summary)))
+    told.orElseSucceed(())
 
   /** A client that closes its socket ends its call, so a run it left does not hold the permit or the reload lock for
     * the next one. A call never reads its socket after the call frame, so a read that ends is the client leaving. Bsp
