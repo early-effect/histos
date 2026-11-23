@@ -174,6 +174,21 @@ import histos.zinc.{
 }
 import histos.{
   BuildError,
+  BuildNode,
+  Cell,
+  CompilationStage,
+  ContractFault,
+  JdkFloor,
+  JsOptimize,
+  JvmFlag,
+  PlatformSelection,
+  Platforms,
+  RootKind,
+  ScopedRoot,
+  SelectionError,
+  TestSelection,
+  TestTargets,
+  TextListError,
   CiFault,
   PluginGraphFault,
   ToolchainClientFault,
@@ -280,8 +295,11 @@ private object WireLeaves extends WireSupport:
       list => list,
     )
 
-  given JsonCodec[ProjectName]     = parsed(ProjectName.from, _.message, _.value)
-  given JsonCodec[ScalaVersion]    = parsed(ScalaVersion.from, _.message, _.value)
+  given JsonCodec[ProjectName]  = parsed(ProjectName.from, _.message, _.value)
+  given JsonCodec[ScalaVersion] = parsed(ScalaVersion.from, _.message, _.value)
+  given JsonCodec[JvmFlag]      = parsed(JvmFlag.from, _.message, _.value)
+  given JsonCodec[JdkFloor]     =
+    JsonCodec.int.transformOrFail(raw => JdkFloor.from(raw).left.map(_.message), _.value)
   given JsonCodec[Sha256]          = parsed(Sha256.from, _.message, _.value)
   given JsonCodec[CompilerMessage] =
     JsonCodec.string.transform(CompilerMessage.fromCompiler, _.text)
@@ -510,6 +528,21 @@ private object WireBuild extends WireSupport:
         case histos.plugin.Need.Docker  => "docker"
       },
     )
+  given JsonCodec[Platforms]         = JsonCodec.derived
+  given JsonCodec[PlatformSelection] = JsonCodec.derived
+  given JsonCodec[TextListError]     = JsonCodec.derived
+  given JsonCodec[SelectionError]    = JsonCodec.derived
+  given JsonCodec[TestTargets]       = JsonCodec.derived
+  given JsonCodec[TestSelection]     = JsonCodec.derived
+  given JsonCodec[Cell]              = JsonCodec.derived
+  given JsonCodec[CompilationStage]  = JsonCodec.derived
+  given JsonCodec[RootKind]          = JsonCodec.derived
+  given JsonCodec[ScopedRoot]        = JsonCodec.derived
+  given JsonCodec[BuildNode]         = JsonCodec.derived
+  given JsonCodec[ContractFault]     = JsonCodec.derived
+  given JsonCodec[JsOptimize]        =
+    choose("JS optimization", JsOptimize.values.toList.map(mode => mode.token -> mode), _.token)
+
   given JsonCodec[CiFault]                = JsonCodec.derived
   given JsonCodec[PluginGraphFault]       = JsonCodec.derived
   given JsonCodec[ToolchainLauncherFault] = JsonCodec.derived
