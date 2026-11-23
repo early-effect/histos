@@ -287,6 +287,24 @@ object ScopedRootsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("conventional resource selection validates only resource entries and refuses reserved plugin metadata") {
+      ZIO.scoped {
+        for
+          repo  <- Workspace.work("histos-conventional-resource-metadata")
+          graph <- ZIO.fromEither(Projects(module("app", Jvm)(version)))
+          unrelated = repo.resolve("app/src").resolve(AssetError.refusedName)
+          reserved  = repo.resolve("app/src/main/resources").resolve(AssetError.refusedName)
+          _       <- Workspace.writeString(unrelated, "not a resource")
+          ignored <- StageRoots.of(graph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+          _       <- Workspace.delete(unrelated)
+          _       <- Workspace.writeString(reserved, "must not become a resource")
+          denied  <- StageRoots.of(graph).read(repo, stage(Platform.Jvm, SourceSet.Main)).either
+        yield assertTrue(
+          ignored.exists(_.resources.isEmpty),
+          denied == Left(StageRootError.Resource(AssetError.CommittedEntry(reserved))),
+        )
+      }
+    },
     test("resource names collide across distinct exact roots instead of silently overwriting") {
       ZIO.scoped {
         for

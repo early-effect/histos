@@ -32,39 +32,41 @@ object Resources:
       platform: histos.Platform,
       scope: histos.plugin.SourceSet,
   ): IO[AssetError, List[(ResourceName, Path)]] =
-    filesAt(root).flatMap: files =>
-      ZIO.foreach(files.flatMap { (_, path) =>
+    paths(root).flatMap: files =>
+      val selected = files.flatMap { path =>
         histos.zinc.Sources.resourceEntry(root, path, version, platform, scope).map(_ -> path)
-      }) { (entry, path) =>
-        ZIO.fromEither(ResourceName.from(entry)).mapError(_ => AssetError.Escaped(entry)).map(_ -> path)
+      }
+      ZIO.foreach(selected) { (entry, path) =>
+        ZIO.fromEither(named(entry, path)).map(_ -> path)
       }
 
   /** Regular files under `root`. A missing directory is empty. A name that leaves the directory is refused. */
   def filesAt(root: Path): IO[AssetError, List[(ResourceName, Path)]] =
+    val base = root.toAbsolutePath.normalize
+    paths(root).flatMap: files =>
+      ZIO.foreach(files): file =>
+        val absolute = file.toAbsolutePath.normalize
+        if !absolute.startsWith(base) then ZIO.fail(AssetError.Escaped(file.toString))
+        else
+          val name = base.relativize(absolute).iterator.asScala.map(_.toString).mkString("/")
+          ZIO.fromEither(named(name, file)).map(_ -> file)
+
+  private def named(raw: String, path: Path): Either[AssetError, ResourceName] =
+    ResourceName
+      .from(raw)
+      .left
+      .map(_ => AssetError.Escaped(raw))
+      .flatMap: name =>
+        if name.value == AssetError.refusedName then Left(AssetError.CommittedEntry(path)) else Right(name)
+
+  private def paths(root: Path): IO[AssetError, List[Path]] =
     ZIO
       .attemptBlocking {
-        if !Files.isDirectory(root) then Right(Nil)
+        if !Files.isDirectory(root) then Nil
         else
-          val base  = root.toAbsolutePath.normalize
-          val walk  = Files.walk(root)
-          val found =
-            try walk.iterator.asScala.filter(path => Files.isRegularFile(path)).toList
-            finally walk.close()
-          found
-            .sortBy(_.toString)
-            .foldLeft[Either[AssetError, List[(ResourceName, Path)]]](Right(Nil)): (acc, file) =>
-              acc.flatMap: seen =>
-                val absolute = file.toAbsolutePath.normalize
-                val relative = base.relativize(absolute)
-                val name     = relative.iterator.asScala.map(_.toString).mkString("/")
-                if !absolute.startsWith(base) then Left(AssetError.Escaped(name))
-                else
-                  ResourceName.from(name) match
-                    case Left(_)                                             => Left(AssetError.Escaped(name))
-                    case Right(safe) if safe.value == AssetError.refusedName =>
-                      Left(AssetError.CommittedEntry(file))
-                    case Right(safe) => Right(seen :+ (safe, file))
+          val walk = Files.walk(root)
+          try walk.iterator.asScala.filter(Files.isRegularFile(_)).toList.sortBy(_.toString)
+          finally walk.close()
       }
       .mapError(_ => AssetError.Unreadable(root))
-      .flatMap(ZIO.fromEither)
 end Resources

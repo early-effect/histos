@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.pack.Resources
-import histos.plugin.{ArtifactPath, EmittedContent, OutputKind, OutputName, PluginTaskId, RepoPath, SourceSet}
+import histos.plugin.{ArtifactPath, OutputKind, OutputName, PluginTaskId, RepoPath, SourceSet}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{AssetError, BuildError, CompilationStage, GeneratedAsset, Module, ProjectGraph, ResourceName, RootKind}
 
