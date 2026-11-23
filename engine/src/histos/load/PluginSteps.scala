@@ -8,7 +8,7 @@ import zio.{Chunk, ZIO}
 
 import Histos.given
 
-/** The reachable plugin tasks, with each `TaskDep.Compile` as a compile step.
+/** Reachable plugin tasks with distinct Main/Test compile stages and effective-mode link steps.
   */
 private[load] object PluginSteps:
   private type R        = histos.resolve.Resolve & histos.cache.ContentStore
@@ -18,13 +18,13 @@ private[load] object PluginSteps:
       root: PluginTaskId,
       taskOf: PluginTaskId => Option[DeclaredTask],
       cellsOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Cell]],
-      linksOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Cell]],
+      linksOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Link]],
       compile: PluginCells.Cell => ZIO[
         R,
         PluginFault,
         Unit,
       ],
-      link: PluginCells.Cell => ZIO[
+      link: PluginCells.Link => ZIO[
         R,
         PluginFault,
         String,
@@ -64,7 +64,7 @@ private[load] object PluginSteps:
             cells <- cellsOf(declared).left.map(PluginFault.Task(_))
             links <- linksOf(declared).left.map(PluginFault.Task(_))
             linked      = links.distinct
-            compileOnly = cells.distinct.filterNot(cell => linked.exists(other => same(cell, other)))
+            compileOnly = cells.distinct.filterNot(cell => linked.exists(other => cell == other.cell))
             upstreams   = compileOnly.map(cell => compileStep(cell, compile)) ++ linked.map(cell =>
               linkStep(cell, compile, link)
             )
@@ -87,12 +87,19 @@ private[load] object PluginSteps:
       ],
   ): CellStep =
     val info = StepInfo(
-      StepId.Cell(cell.module.name, cell.version, cell.platform, Phase.Compile),
+      StepId.Cell(
+        cell.module.name,
+        cell.version,
+        cell.platform,
+        cell.scope match
+          case histos.plugin.SourceSet.Main => Phase.Compile
+          case histos.plugin.SourceSet.Test => Phase.TestCompile,
+      ),
       Chunk(
         Input(
           InputName("cell"),
           InputValue.Text(
-            s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token}"
+            s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token} ${PluginCells.scopeToken(cell.scope)}"
           ),
         )
       ),
@@ -126,27 +133,25 @@ private[load] object PluginSteps:
     step @@ StepAspect.cached @@ StepAspect.remote
 
   private def linkStep(
-      cell: PluginCells.Cell,
+      request: PluginCells.Link,
       compile: PluginCells.Cell => ZIO[R, PluginFault, Unit],
-      link: PluginCells.Cell => ZIO[R, PluginFault, String],
+      link: PluginCells.Link => ZIO[R, PluginFault, String],
   ): CellStep =
-    val info = StepInfo(
-      StepId.Cell(cell.module.name, cell.version, cell.platform, Phase.Link),
+    val PluginCells.Link(cell, optimize) = request
+    val info                             = StepInfo(
+      StepId.Work(s"link:${cell.module.name.value}:${cell.version.value}:${cell.platform.token}:${optimize.token}"),
       Chunk(
         Input(
           InputName("link"),
           InputValue.Text(
-            s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token}"
+            s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token} ${optimize.token}"
           ),
         )
       ),
       Set(Need.Cpu),
     )
-    compileStep(cell, compile).andThenHermetic[String](info)(_ => link(cell)) @@
+    compileStep(cell, compile).andThenHermetic[String](info)(_ => link(request)) @@
       StepAspect.cached @@ StepAspect.remote
-
-  private def same(left: PluginCells.Cell, right: PluginCells.Cell): Boolean =
-    left.module.name == right.module.name && left.version == right.version && left.platform == right.platform
 
   private def join(left: String, right: String): String =
     if left.isEmpty then right

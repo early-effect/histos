@@ -16,6 +16,7 @@ import histos.plugin.{
   PluginRunError,
   PluginTaskId,
   RepoPath,
+  SourceSet,
   VerifiedPluginManifest,
 }
 import histos.schedule.{Input, InputName, InputValue}
@@ -135,29 +136,36 @@ private[load] object PluginInputs:
             MaterialInput.Module(name, content(sha)),
           )
 
-  /** Class directories of `TaskDep.Compile`. The compiler has already written them. The hash is the plugin cache key.
+  /** Completed stage products and effective link modes contribute to the plugin cache key.
     */
   def compileInputs(
       repo: Path,
       graph: ProjectGraph,
       task: DeclaredTask,
   ): IO[PluginRunError, List[Input]] =
-    val chosen = ZIO.foreach(task.dependsOn):
-      case histos.plugin.TaskDep.Same(_)             => ZIO.none
-      case histos.plugin.TaskDep.Link(name, version) =>
+    for
+      compiled <- ZIO.fromEither(PluginCells.selected(graph, task))
+      linked   <- ZIO.fromEither(PluginCells.links(graph, task))
+      stages   <- ZIO.foreach(compiled): cell =>
+        val name  = cell.module.name
+        val label = s"${name.value}:${cell.version.value}:${cell.platform.token}:${PluginCells.scopeToken(cell.scope)}"
+        for
+          main   <- dirHash(GraphCompile.classesDir(repo, name, cell.version, cell.platform), label)
+          hashes <- cell.scope match
+            case SourceSet.Main => ZIO.succeed(List(main))
+            case SourceSet.Test =>
+              dirHash(histos.testrun.TestCompile.testClasses(repo, name, cell.version, cell.platform), label)
+                .map(test => List(main, test))
+          sha = Sha256Digest.of(Chunk.fromArray(hashes.map(_.value).mkString("\n").getBytes(StandardCharsets.UTF_8)))
+          input <- named(s"in:dep:$label", InputValue.Hash(sha))
+        yield input
+      scripts <- ZIO.foreach(linked.distinct): request =>
+        val PluginCells.Link(cell, optimize) = request
         PluginCells
-          .scriptDigest(repo, graph, name, version)
+          .scriptDigest(repo, request)
           .flatMap: sha =>
-            named(s"in:link:${name.value}:${star(version)}", InputValue.Hash(sha)).map(Some(_))
-      case histos.plugin.TaskDep.Generate(_)                      => ZIO.none
-      case histos.plugin.TaskDep.Emit(_)                          => ZIO.none
-      case histos.plugin.TaskDep.Compile(name, version, platform) =>
-        cells(repo, graph, name, version, platform).flatMap: sha =>
-          named(
-            s"in:dep:${name.value}:${star(version)}:${starPlatform(platform)}",
-            InputValue.Hash(sha),
-          ).map(Some(_))
-    chosen.map(_.flatten)
+            named(s"in:link:${cell.module.name.value}:${cell.version.value}:${optimize.token}", InputValue.Hash(sha))
+    yield stages ++ scripts
 
   private def note(
       graph: ProjectGraph,
