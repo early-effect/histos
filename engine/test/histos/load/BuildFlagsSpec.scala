@@ -35,7 +35,7 @@ object BuildFlagsSpec extends ZIOSpecDefault:
        |  def text: String = old
        |""".stripMargin
 
-  private val suiteValue = suite("build compiler flags")(
+  private val suiteValue: Spec[Any, PluginCompileError | LoadError] = suite("build compiler flags")(
     test("direct cache applies fatal warnings, invalidates flags and extra identity, and restores classes") {
       PluginCompileSupport
         .run { (root, starts) =>
@@ -106,81 +106,84 @@ object BuildFlagsSpec extends ZIOSpecDefault:
       session <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
     yield session
 
-  private def hosted(mode: Mode) = test(s"$mode applies flags, invalidates keys, and reuses successful classes") {
-    PluginCompileSupport
-      .run { (root, starts) =>
-        for
-          session <- prepared(root)
-          source  <- PluginCompileSupport.write(root.resolve("src/Warning.scala"), Warning)
-          stages  <- mode match
-            case Mode.Hosted => ZIO.succeed(Nil)
-            case Mode.Worker =>
-              ZIO
-                .fromEither(PluginCompileSupport.frozen("src/Warning.scala", Warning.getBytes(StandardCharsets.UTF_8)))
-                .map(file => List(PluginCompileSupport.declared("Warning", file, "FLAG_PROBE", "fixed")))
-          job = PluginCompileJob(
-            PluginCompileSupport.App,
-            session,
-            root,
-            root,
-            List(source),
-            classes = root.resolve("classes"),
-            analysis = root.resolve("analysis"),
-            stages = stages,
-            flags = BuildScalac.bootstrapFlags,
+  private def hosted(mode: Mode): Spec[Any, PluginCompileError] =
+    test(s"$mode applies flags, invalidates keys, and reuses successful classes") {
+      PluginCompileSupport
+        .run { (root, starts) =>
+          for
+            session <- prepared(root)
+            source  <- PluginCompileSupport.write(root.resolve("src/Warning.scala"), Warning)
+            stages  <- mode match
+              case Mode.Hosted => ZIO.succeed(Nil)
+              case Mode.Worker =>
+                ZIO
+                  .fromEither(
+                    PluginCompileSupport.frozen("src/Warning.scala", Warning.getBytes(StandardCharsets.UTF_8))
+                  )
+                  .map(file => List(PluginCompileSupport.declared("Warning", file, "FLAG_PROBE", "fixed")))
+            job = PluginCompileJob(
+              PluginCompileSupport.App,
+              session,
+              root,
+              root,
+              List(source),
+              classes = root.resolve("classes"),
+              analysis = root.resolve("analysis"),
+              stages = stages,
+              flags = BuildScalac.bootstrapFlags,
+            )
+            first <- PluginCompiler.compile(job)
+            _     <- ZIO
+              .attemptBlocking(Files.deleteIfExists(job.classes.resolve("Warning$.class")))
+              .mapError(_ => PluginCompileError.Io(IoFailure(job.classes, IoFault.Write)))
+            again         <- PluginCompiler.compile(job)
+            warm          <- starts.get
+            warnings      <- PluginCompiler.compile(job.copy(flags = Warnings))
+            warningsAgain <- PluginCompiler.compile(job.copy(flags = Warnings))
+            changed       <- starts.get
+            text          <- PluginCompileSupport.invoke(
+              job.classes,
+              PluginCompileSupport.runtimeJars(session),
+              "Warning$",
+              "text",
+            )
+            failed       <- PluginCompiler.compile(job.copy(flags = Strict)).either
+            failedAgain  <- PluginCompiler.compile(job.copy(flags = Strict)).either
+            restored     <- PluginCompiler.compile(job)
+            restoredText <- PluginCompileSupport.invoke(
+              job.classes,
+              PluginCompileSupport.runtimeJars(session),
+              "Warning$",
+              "text",
+            )
+          yield (
+            first.key == again.key && first.key == restored.key,
+            first.key != warnings.key && warnings.key == warningsAgain.key,
+            warm,
+            changed,
+            text,
+            restoredText,
+            failed,
+            failedAgain,
           )
-          first <- PluginCompiler.compile(job)
-          _     <- ZIO
-            .attemptBlocking(Files.deleteIfExists(job.classes.resolve("Warning$.class")))
-            .mapError(_ => PluginCompileError.Io(IoFailure(job.classes, IoFault.Write)))
-          again         <- PluginCompiler.compile(job)
-          warm          <- starts.get
-          warnings      <- PluginCompiler.compile(job.copy(flags = Warnings))
-          warningsAgain <- PluginCompiler.compile(job.copy(flags = Warnings))
-          changed       <- starts.get
-          text          <- PluginCompileSupport.invoke(
-            job.classes,
-            PluginCompileSupport.runtimeJars(session),
-            "Warning$",
-            "text",
-          )
-          failed       <- PluginCompiler.compile(job.copy(flags = Strict)).either
-          failedAgain  <- PluginCompiler.compile(job.copy(flags = Strict)).either
-          restored     <- PluginCompiler.compile(job)
-          restoredText <- PluginCompileSupport.invoke(
-            job.classes,
-            PluginCompileSupport.runtimeJars(session),
-            "Warning$",
-            "text",
-          )
-        yield (
-          first.key == again.key && first.key == restored.key,
-          first.key != warnings.key && warnings.key == warningsAgain.key,
-          warm,
-          changed,
-          text,
-          restoredText,
-          failed,
-          failedAgain,
-        )
-      }
-      .map { ran =>
-        val (same, changedKey, warm, changed, text, restored, failed, failedAgain) = ran.value
-        assertTrue(
-          same,
-          changedKey,
-          warm == 1,
-          changed == 2,
-          text == "compiled",
-          restored == "compiled",
-          rejected(mode, failed),
-          rejected(mode, failedAgain),
-          ran.starts == 4,
-        ).label(s"first strict compile: $failed; repeated strict compile: $failedAgain")
-      }
-  }
+        }
+        .map { ran =>
+          val (same, changedKey, warm, changed, text, restored, failed, failedAgain) = ran.value
+          assertTrue(
+            same,
+            changedKey,
+            warm == 1,
+            changed == 2,
+            text == "compiled",
+            restored == "compiled",
+            rejected(mode, failed),
+            rejected(mode, failedAgain),
+            ran.starts == 4,
+          ).label(s"first strict compile: $failed; repeated strict compile: $failedAgain")
+        }
+    }
 
-  private def modules(bootstrap: Bootstrap) =
+  private def modules(bootstrap: Bootstrap): Spec[Any, PluginCompileError | LoadError] =
     test(s"$bootstrap plugin modules apply flags and retain resource identity") {
       PluginCompileSupport
         .run { (root, starts) =>

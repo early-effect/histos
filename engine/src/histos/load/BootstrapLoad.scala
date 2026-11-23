@@ -394,6 +394,7 @@ private[histos] object BootstrapLoad:
                             classpath,
                             classes = classes,
                             analysis = classes.resolve("analysis"),
+                            flags = BuildScalac.bootstrapFlags,
                           )
                         )
                         .mapError:
