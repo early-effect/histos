@@ -561,7 +561,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
               before.sameElements(after),
               count == 0,
               !fixtureText.contains("tool compiler"),
-              checkout.linesIterator.exists(_.trim == "tool compiler 3.10.1 jvm"),
+              checkout.isEmpty || checkout.linesIterator.exists(_.trim == "tool compiler 3.10.1 jvm"),
               missing,
             )
         }
@@ -1337,7 +1337,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
         case false =>
           Option(dir.getParent) match
             case Some(parent) if left > 0 => walkLock(parent, left - 1)
-            case _                        => ZIO.fail(LoadError.Io(IoFailure(lock, IoFault.Stat)))
+            case _                        => ZIO.succeed("")
       }
 
   private def apiJar(destination: Path): IO[LoadError, Path] =

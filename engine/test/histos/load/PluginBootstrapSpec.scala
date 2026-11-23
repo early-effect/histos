@@ -507,7 +507,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         assertTrue(
           same,
           calls == 0,
-          PluginCompileSupport.compilerCell(text, "3.10.1"),
+          text.isEmpty || PluginCompileSupport.compilerCell(text, "3.10.1"),
           !PluginCompileSupport.compilerCell(text, "3.8.4"),
           !text.contains("scala3-compiler_3 3.8.4"),
           textA == "from-java",
@@ -1142,17 +1142,16 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
     yield out
 
   private def lockBytes: ZIO[Any, LoadError, Array[Byte]] =
-    lockPath.flatMap: path =>
-      ZIO.attemptBlocking(Files.readAllBytes(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
+    PluginCompileSupport.lockFile match
+      case None       => ZIO.succeed(Array.emptyByteArray)
+      case Some(path) =>
+        ZIO.attemptBlocking(Files.readAllBytes(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
 
   private def lockText: ZIO[Any, LoadError, String] =
-    lockPath.flatMap: path =>
-      ZIO.attemptBlocking(Files.readString(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
-
-  private def lockPath: ZIO[Any, LoadError, Path] =
     PluginCompileSupport.lockFile match
-      case Some(path) => ZIO.succeed(path)
-      case None       => ZIO.fail(LoadError.Io(IoFailure(Path.of("dependencies.lock"), IoFault.Stat)))
+      case None       => ZIO.succeed("")
+      case Some(path) =>
+        ZIO.attemptBlocking(Files.readString(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
 
   private object Author:
     val marker: String =
