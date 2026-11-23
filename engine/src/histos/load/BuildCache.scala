@@ -6,6 +6,7 @@ import histos.plugin.BootstrapError
 import histos.schedule.{Digest, RemoteCache}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompilerStarts, Compilers}
+import histos.ScalacFlags
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.file.{Files, Path, StandardCopyOption}
@@ -38,8 +39,17 @@ private[histos] object BuildCache:
       out: Path,
       extra: String,
   ): ZIO[ContentStore & CompilerStarts, LoadError, Unit] =
+    compile(sources, classpath, out, extra, BuildScalac.bootstrapFlags)
+
+  def compile(
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+      extra: String,
+      flags: ScalacFlags,
+  ): ZIO[ContentStore & CompilerStarts, LoadError, Unit] =
     for
-      key   <- identity(sources, classpath, extra)
+      key   <- identity(sources, classpath, extra, flags)
       store <- ZIO.service[ContentStore]
       hit   <- store.read(Digest.trusted(key)).mapError(failed(out, _))
       _     <- hit match
@@ -47,7 +57,7 @@ private[histos] object BuildCache:
           unpack(out, bytes)
         case None =>
           CompilerStarts.tick *>
-            BuildFile.compileSources(sources, classpath, out).catchAll(late) *>
+            BuildFile.compileSources(sources, classpath, out, flags).catchAll(late) *>
             storeZip(store, key, out)
     yield ()
 
@@ -61,12 +71,18 @@ private[histos] object BuildCache:
       case other =>
         ZIO.fail(other)
 
-  private def identity(sources: List[Path], classpath: List[Path], extra: String): ZIO[Any, LoadError, String] =
+  private def identity(
+      sources: List[Path],
+      classpath: List[Path],
+      extra: String,
+      flags: ScalacFlags,
+  ): ZIO[Any, LoadError, String] =
     for
       files <- ZIO.foreach(sources)(hashFile)
       jars  <- ZIO.foreach(classpath)(hashFile)
+      lines = files ++ jars ++ List(s"flags:${flags.canonical}", s"extra:$extra")
     yield Sha256Digest
-      .of(Chunk.fromArray((files ++ jars :+ extra).mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+      .of(Chunk.fromArray(lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
       .value
 
   private def hashFile(path: Path): ZIO[Any, LoadError, String] =

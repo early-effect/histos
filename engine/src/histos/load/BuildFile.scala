@@ -25,7 +25,7 @@ import histos.resolve.{
 }
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileProblem, CompileSeverity, Dotty, PositionBase}
-import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
+import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion, ScalacFlags}
 
 import java.nio.file.{Files, Path}
 
@@ -58,7 +58,15 @@ private[load] object BuildFile:
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, Unit] =
-    drive(labeled.map(_._1), classpath, out).flatMap: reporter =>
+    compileLabeled(labeled, classpath, out, BuildScalac.bootstrapFlags)
+
+  private[load] def compileLabeled(
+      labeled: List[(Path, String)],
+      classpath: List[Path],
+      out: Path,
+      flags: ScalacFlags,
+  ): IO[LoadError, Unit] =
+    drive(labeled.map(_._1), classpath, out, flags).flatMap: reporter =>
       if reporter.hasErrors then
         ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => labeledMessage(error, labeled))))
       else ZIO.unit
@@ -86,7 +94,15 @@ private[load] object BuildFile:
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, Unit] =
-    drive(sources, classpath, out).flatMap: reporter =>
+    compileSources(sources, classpath, out, BuildScalac.bootstrapFlags)
+
+  private[load] def compileSources(
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+      flags: ScalacFlags,
+  ): IO[LoadError, Unit] =
+    drive(sources, classpath, out, flags).flatMap: reporter =>
       if reporter.hasErrors then
         ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => labeledMessage(error, sources.map(own)))))
       else ZIO.unit
@@ -99,6 +115,14 @@ private[load] object BuildFile:
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, StoreReporter] =
+    drive(sources, classpath, out, BuildScalac.bootstrapFlags)
+
+  private[load] def drive(
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path,
+      flags: ScalacFlags,
+  ): IO[LoadError, StoreReporter] =
     Dotty
       .process(
         List(
@@ -107,7 +131,7 @@ private[load] object BuildFile:
           "-d",
           out.toString,
           "-color:never",
-        ) ++ sources.map(_.toString)
+        ) ++ flags.argv ++ sources.map(_.toString)
       )
       .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
 

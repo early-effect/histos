@@ -179,7 +179,7 @@ private[load] object PluginModules:
       case None =>
         for
           mark <- resourceMark(base)
-          _    <- BuildCache.compile(sources, classpath, out, module.flags.canonical + mark)
+          _    <- BuildCache.compile(sources, classpath, out, mark, module.flags)
         yield ()
 
   private def hostedCompile(
