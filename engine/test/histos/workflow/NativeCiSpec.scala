@@ -6,6 +6,21 @@ import zio.test.*
 
 object NativeCiSpec extends ZIOSpecDefault:
   def spec = suite("native CI packages")(
+    test("one tool calculation consumes selected stage platforms and a supplied producer closure") {
+      val consumer =
+        native(Set.empty).copy(name = ProjectName("consumer"), platforms = Platforms(Jvm, List(Js, Native)))
+      val producer      = native(Set(NativeLibrary.Ssl)).copy(name = ProjectName("producer"))
+      val graph         = ProjectGraph.trusted(List(consumer, producer))
+      val tools         = RunnerTools(Some(NodeFloor(25)), Some(ToolRevision("21.1.8")), None)
+      val consumerStage = CompilationStage(Cell(consumer.name, scala"3.9.0", Jvm), histos.plugin.SourceSet.Test)
+      val producerStage = CompilationStage(Cell(producer.name, scala"3.9.0", Native), histos.plugin.SourceSet.Main)
+      val selected      = Workflow.toolNeed(graph, List(consumerStage), tools)
+      val closure       = Workflow.toolNeed(graph, List(consumerStage, producerStage), tools)
+      assertTrue(
+        selected == Workflow.ToolNeed(Set.empty),
+        closure == Workflow.ToolNeed(Set(Workflow.Tool.Llvm, Workflow.Tool.OpenSsl)),
+      )
+    },
     test("openssl is installed when a native module links it") {
       assertTrue(NativeCi.openssl(List(native(Set(NativeLibrary.Ssl)))))
     },

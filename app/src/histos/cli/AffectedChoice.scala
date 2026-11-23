@@ -10,6 +10,15 @@ enum AffectedChoice:
   case Only(modules: List[ProjectName])
 
 object AffectedChoice:
+  def selection(
+      projects: List[ProjectName],
+      choice: AffectedChoice,
+      platforms: histos.PlatformSelection,
+  ): Option[histos.TestSelection] =
+    select(projects, choice).map:
+      case Nil           => histos.TestSelection(histos.TestTargets.All, platforms)
+      case first :: rest => histos.TestSelection(histos.TestTargets.Named(first, rest), platforms)
+
   def select(projects: List[ProjectName], choice: AffectedChoice): Option[List[ProjectName]] =
     choice match
       case AffectedChoice.Unset         => Some(projects)
@@ -18,3 +27,4 @@ object AffectedChoice:
       case AffectedChoice.Only(modules) =>
         val wanted = if projects.isEmpty then modules else projects.filter(modules.contains)
         if wanted.isEmpty then None else Some(wanted)
+end AffectedChoice

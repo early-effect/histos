@@ -110,9 +110,14 @@ object CompletionSurface:
     Flag("--lock=frozen", "Lock mode frozen"),
   )
 
+  private val platformFlag =
+    Flag("--platform", "Select platforms, repeat or use commas", Some(fixed("jvm", "js", "native")), many = true)
+  private val runFlags = List(platformFlag, Flag("--main", "Select a main class", Some(Slot.Free)))
+
   private val testFlags = List(
+    platformFlag,
     Flag("--quick", "Skip a suite whose stamp still matches"),
-    Flag("--only", "Run suites that match", Some(Slot.Free)),
+    Flag("--only", "Run suites that match, repeat or use commas", Some(Slot.Free), many = true),
     Flag("--affected", "Modules from histos affected", Some(Slot.Free)),
     Flag("--test", "Keep a test whose label contains the term", Some(Slot.Free), many = true),
     Flag("--tag", "Keep a test that has the tag", Some(Slot.Free), many = true),
@@ -148,9 +153,9 @@ object CompletionSurface:
   private val run = Node(
     "run",
     sentence("run"),
+    flags = runFlags,
     args = List(
-      Pos(asked(Query.Modules, "inspect", "versions", "doc"), many = false, name = "module"),
-      Pos(fixed("jvm", "js", "native"), many = false, required = false, name = "platform"),
+      Pos(asked(Query.Modules, "inspect", "versions", "doc"), many = false, name = "module")
     ),
   )
 
@@ -178,7 +183,7 @@ object CompletionSurface:
     Node("help", sentence("help"), args = List(Pos(Slot.Free, many = true, name = "topic"))),
     Node("graph", sentence("graph")),
     Node("observe", sentence("observe")),
-    Node("compile", sentence("compile"), args = List(projects)),
+    Node("compile", sentence("compile"), flags = List(platformFlag), args = List(projects)),
     run,
     Node(
       "clean",
@@ -329,7 +334,7 @@ object CompletionSurface:
       "preview",
       sentence("preview"),
       children = List(
-        Node("compile", "Show the compile plan", args = List(projects)),
+        Node("compile", "Show the compile plan", flags = List(platformFlag), args = List(projects)),
         Node("test", "Show the test plan", flags = testFlags, args = List(projects)),
         Node(
           "publish",
@@ -352,9 +357,9 @@ object CompletionSurface:
         Node(
           "run",
           "Show the run plan",
+          flags = runFlags,
           args = List(
-            Pos(asked(Query.Modules, "inspect", "versions", "doc"), name = "module"),
-            Pos(fixed("jvm", "js", "native"), required = false, name = "platform"),
+            Pos(asked(Query.Modules, "inspect", "versions", "doc"), name = "module")
           ),
         ),
       ),

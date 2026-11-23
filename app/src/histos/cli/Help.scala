@@ -46,14 +46,14 @@ object Help:
     Entry(
       "compile",
       "build",
-      "histos compile [project ...]",
-      "Compile the named projects, or every module. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos compile [project ...] [--platform <jvm,js,native>]",
+      "Compile the named projects, or every module. Repeat --platform or use a comma list to select platforms. Named modules refuse unsupported platforms; whole-build selection keeps matching cells. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "run",
       "build",
-      "histos run <name> [jvm|js|native] [-- arg ...]",
-      "Run a module main, inspect, versions, or doc. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program.",
+      "histos run <name> [--platform <jvm|js|native>] [--main <class>] [-- arg ...]",
+      "Run a module main, inspect, versions, or doc. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. An ambiguous module requires --platform. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program.",
     ),
     Entry(
       "clean",
@@ -76,8 +76,8 @@ object Help:
     Entry(
       "test",
       "test",
-      "histos test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] [--test <term> ...] [--tag <name> ...] [--ignore-tag <name> ...]",
-      "Run the selected suites. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos test [project ...] [--platform <jvm,js,native>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
+      "Run the selected suites, not their compilation dependencies. --platform, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "coverage",

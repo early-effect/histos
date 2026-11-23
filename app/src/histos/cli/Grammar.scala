@@ -19,7 +19,7 @@ import java.nio.file.Path
 import zio.NonEmptyChunk
 import histos.scaffold.ImportSource
 import histos.version.{BumpPart, ShipName}
-import histos.{Platform, ProjectName}
+import histos.ProjectName
 
 import zio.json.*
 import zio.{IO, ZIO}
@@ -309,6 +309,7 @@ object Grammar:
           case Right(peeled) =>
             prepared(peeled.args).flatMap: ready =>
               parseRoot(ready.args, argv)
+                .flatMap(command => withSelection(command, ready))
                 .flatMap(command => withExcludes(command, ready))
                 .flatMap(command => watched(command, policy))
                 .flatMap(command => lineOf(command, peeled))
@@ -330,6 +331,7 @@ object Grammar:
           case Right(peeled) =>
             prepared(peeled.args).flatMap: ready =>
               parseRoot(ready.args, argv)
+                .flatMap(command => withSelection(command, ready))
                 .flatMap(command => withExcludes(command, ready))
                 .flatMap(command => lineOf(command, peeled))
 
@@ -400,8 +402,8 @@ object Grammar:
       case histos.server.WatchPolicy.After   => ZIO.succeed(command)
       case histos.server.WatchPolicy.Restart =>
         command match
-          case Command.Run(id, _, _) if !id.builtIn => ZIO.succeed(command)
-          case _                                    =>
+          case Command.Run(id, _, _, _) if !id.builtIn => ZIO.succeed(command)
+          case _                                       =>
             ZIO.fail(CliParseError.WatchCommand("--restart watches a program"))
 
   /** Tokens after a run's `--` are the program's arguments. Any other command keeps its text. */
@@ -420,7 +422,7 @@ object Grammar:
         case Nil          => (seen.reverse, Nil)
     loop(Nil, args)
 
-  private def parseRoot(args: List[String], programArgs: List[String] = Nil): IO[CliParseError, Command] =
+  private def parseRoot(args: List[String], programArgs: List[String]): IO[CliParseError, Command] =
     gate(args) match
       case Some(error) => ZIO.fail(error)
       case None        =>
@@ -437,7 +439,7 @@ object Grammar:
                 case "preview" :: "publish" :: Nil => ZIO.fail(CliParseError.PublishForm)
                 case _                             => ZIO.fail(CliParseError.Help)
 
-  private def command(wire: Wire, programArgs: List[String] = Nil): IO[CliParseError, Command] =
+  private def command(wire: Wire, programArgs: List[String]): IO[CliParseError, Command] =
     wire match
       case Wire.Version         => ZIO.succeed(Command.Version)
       case Wire.ToolchainClient => ZIO.succeed(Command.ToolchainClient)
@@ -467,7 +469,12 @@ object Grammar:
       case Wire.Resolve(action)         => ZIO.succeed(Command.Resolve(action))
       case Wire.Workflow(action)        => ZIO.succeed(Command.Workflow(action))
       case Wire.Fmt(check, files, args) => ZIO.fromEither(fmtOf(check, files, args))
-      case Wire.Test(tokens)            => tested("test", tokens, Command.Test.apply)
+      case Wire.Test(tokens)            =>
+        tested(
+          "test",
+          tokens,
+          (names, affected, mode, patterns, filter) => Command.Test(names, affected, mode, patterns, filter),
+        )
       case Wire.Coverage(projects, raw) =>
         ZIO
           .fromEither(histos.CoverageFloors.parse(raw))
@@ -524,7 +531,11 @@ object Grammar:
       case Wire.PreviewCompile(projects) =>
         projectList("preview compile", projects).map(Command.PreviewCompile(_))
       case Wire.PreviewTest(tokens) =>
-        tested("preview test", tokens, Command.PreviewTest.apply)
+        tested(
+          "preview test",
+          tokens,
+          (names, affected, mode, patterns, filter) => Command.PreviewTest(names, affected, mode, patterns, filter),
+        )
       case Wire.PreviewPublishLocal(tokens) =>
         publishTokens(tokens).map(Command.PreviewPublishLocal(_))
       case Wire.PreviewPublishSnapshots(tokens) =>
@@ -547,10 +558,69 @@ object Grammar:
               ZIO.fail(CliParseError.Pattern(s"'${id.render}' does not take program arguments"))
             else ZIO.succeed(Command.Plugin(id, histos.plugin.PluginArgs.empty))
 
-  private final case class Prepared(args: List[String], classlikes: List[String], files: List[String])
+  private final case class Prepared(
+      args: List[String],
+      classlikes: List[String],
+      files: List[String],
+      platforms: Option[histos.PlatformSelection] = None,
+      main: Option[histos.MainClass] = None,
+  )
 
   private def prepared(args: List[String]): IO[CliParseError, Prepared] =
-    ZIO.fromEither(splitCoverage(args))
+    ZIO.fromEither(splitSelection(args).flatMap: selected =>
+      splitCoverage(selected.args).map(coverage => coverage.copy(platforms = selected.platforms, main = selected.main)))
+
+  private def splitSelection(args: List[String]): Either[CliParseError, Prepared] =
+    val surface = args match
+      case "preview" :: ("compile" | "test" | "run") :: _ => true
+      case ("compile" | "test" | "run") :: _              => true
+      case _                                              => false
+    val running = args match
+      case "run" :: _ | "preview" :: "run" :: _ => true
+      case _                                    => false
+    def loop(
+        rest: List[String],
+        kept: List[String],
+        platforms: List[String],
+        main: Option[histos.MainClass],
+    ): Either[CliParseError, Prepared] =
+      rest match
+        case Nil =>
+          val selection = if platforms.isEmpty then Right(None)
+          else histos.PlatformSelection.from(platforms.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
+          selection.flatMap: chosen =>
+            chosen match
+              case Some(histos.PlatformSelection.Only(values)) if running && values.all.distinct.size != 1 =>
+                Left(CliParseError.Selection(histos.SelectionError.RunMany(values)))
+              case _ => Right(Prepared(kept.reverse, Nil, Nil, chosen, main))
+        case "--platform" :: Nil                  => Left(CliParseError.Selection(histos.SelectionError.Empty))
+        case "--platform" :: value :: tail        => loop(tail, kept, value :: platforms, main)
+        case "--main" :: Nil                      => Left(CliParseError.MainClass(histos.MainClassError.Empty))
+        case "--main" :: value :: tail if running =>
+          if main.isDefined then Left(CliParseError.Pattern("run --main is already set"))
+          else
+            histos.MainClass
+              .from(value)
+              .left
+              .map(CliParseError.MainClass(_))
+              .flatMap(found => loop(tail, kept, platforms, Some(found)))
+        case token :: tail => loop(tail, token :: kept, platforms, main)
+    if surface then loop(args, Nil, Nil, None) else Right(Prepared(args, Nil, Nil))
+
+  private def withSelection(command: Command, ready: Prepared): IO[CliParseError, Command] =
+    val platforms = ready.platforms.getOrElse(histos.PlatformSelection.All)
+    command match
+      case found: Command.Compile                  => ZIO.succeed(found.copy(platforms = platforms))
+      case found: Command.PreviewCompile           => ZIO.succeed(found.copy(platforms = platforms))
+      case found: Command.Test                     => ZIO.succeed(found.copy(platforms = platforms))
+      case found: Command.PreviewTest              => ZIO.succeed(found.copy(platforms = platforms))
+      case found: Command.Run if !found.id.builtIn =>
+        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main))
+      case found: Command.PreviewRun if !found.id.builtIn =>
+        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main))
+      case _ if ready.platforms.isDefined || ready.main.isDefined =>
+        ZIO.fail(CliParseError.Pattern("only module runs take --platform or --main"))
+      case other => ZIO.succeed(other)
 
   private def splitCoverage(args: List[String]): Either[CliParseError, Prepared] =
     args match
@@ -623,7 +693,7 @@ object Grammar:
     ZIO.fromEither(splitTest(command, tokens)).flatMap { parts =>
       for
         names    <- projectList(command, parts.projects)
-        patterns <- ZIO.fromEither(suitePatterns(parts.patterns))
+        patterns <- ZIO.fromEither(suitePatterns(parts.patterns.distinct))
         picked   <- choice(parts.affected)
       yield build(names, picked, parts.mode, patterns, parts.filter)
     }
@@ -647,7 +717,7 @@ object Grammar:
       filter: TestFilter,
   )
 
-  /** Projects are the words before `--only`. Patterns are the words after it. A test term is never a pattern. */
+  /** Every list flag consumes one escaped text list; project placement is independent of flags. */
   private def splitTest(command: String, args: List[String]): Either[CliParseError, TestParts] =
     def loop(
         rest: List[String],
@@ -665,18 +735,26 @@ object Grammar:
           if only && patterns.isEmpty then Left(CliParseError.Pattern(s"$command --only needs a pattern"))
           else
             val mode   = if quick then TestMode.Quick else TestMode.Run
-            val filter = TestFilter(tests.reverse, tags.reverse, ignored.reverse)
+            val filter = TestFilter(tests.reverse.distinct, tags.reverse.distinct, ignored.reverse.distinct)
             Right(TestParts(projects.reverse, affected, mode, patterns.reverse, filter))
         case "--quick" :: tail =>
           if quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
           else loop(tail, projects, affected, true, only, patterns, tests, tags, ignored)
         case "--only" :: Nil =>
           Left(CliParseError.Pattern(s"$command --only needs a pattern"))
-        case "--only" :: tail =>
-          loop(tail, projects, affected, quick, true, patterns, tests, tags, ignored)
+        case "--only" :: value :: _ if value.startsWith("-") =>
+          Left(CliParseError.Pattern(s"$command --only needs a pattern"))
+        case "--only" :: value :: tail =>
+          histos.TextList
+            .parse(List(value))
+            .left
+            .map(CliParseError.TextList(_))
+            .flatMap(entries =>
+              loop(tail, projects, affected, quick, true, entries.reverse ++ patterns, tests, tags, ignored)
+            )
         case "--affected" :: Nil =>
           Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
-        case "--affected" :: value :: tail if value.startsWith("-") =>
+        case "--affected" :: value :: _ if value.startsWith("-") =>
           Left(CliParseError.Pattern(s"$command --affected needs a JSON list"))
         case "--affected" :: value :: tail =>
           affected match
@@ -685,28 +763,23 @@ object Grammar:
         case "--test" :: Nil =>
           Left(CliParseError.Pattern(s"$command --test needs a term"))
         case "--test" :: value :: tail =>
-          TestTerm.from(value) match
-            case Left(error) => Left(CliParseError.TestTerm(error))
-            case Right(term) =>
-              loop(tail, projects, affected, quick, only, patterns, term :: tests, tags, ignored)
+          textValues(value)(raw => TestTerm.from(raw).left.map(CliParseError.TestTerm(_))).flatMap(entries =>
+            loop(tail, projects, affected, quick, only, patterns, entries.reverse ++ tests, tags, ignored)
+          )
         case "--tag" :: Nil =>
           Left(CliParseError.Pattern(s"$command --tag needs a name"))
         case "--tag" :: value :: tail =>
-          TagName.from(value) match
-            case Left(error) => Left(CliParseError.TagName(error))
-            case Right(name) =>
-              loop(tail, projects, affected, quick, only, patterns, tests, name :: tags, ignored)
+          textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
+            loop(tail, projects, affected, quick, only, patterns, tests, entries.reverse ++ tags, ignored)
+          )
         case "--ignore-tag" :: Nil =>
           Left(CliParseError.Pattern(s"$command --ignore-tag needs a name"))
         case "--ignore-tag" :: value :: tail =>
-          TagName.from(value) match
-            case Left(error) => Left(CliParseError.TagName(error))
-            case Right(name) =>
-              loop(tail, projects, affected, quick, only, patterns, tests, tags, name :: ignored)
+          textValues(value)(raw => TagName.from(raw).left.map(CliParseError.TagName(_))).flatMap(entries =>
+            loop(tail, projects, affected, quick, only, patterns, tests, tags, entries.reverse ++ ignored)
+          )
         case flag :: _ if flag.startsWith("-") =>
           Left(CliParseError.Pattern(Help.flag(command, flag)))
-        case token :: tail if only =>
-          loop(tail, projects, affected, quick, true, token :: patterns, tests, tags, ignored)
         case token :: tail =>
           loop(tail, token :: projects, affected, quick, only, patterns, tests, tags, ignored)
     loop(args, Nil, None, false, false, Nil, Nil, Nil, Nil)
@@ -732,6 +805,18 @@ object Grammar:
         case token :: tail =>
           loop(tail, token :: projects, full)
     loop(args, Nil, false)
+
+  private def textValues[A](value: String)(parse: String => Either[CliParseError, A]): Either[CliParseError, List[A]] =
+    histos.TextList
+      .parse(List(value))
+      .left
+      .map(CliParseError.TextList(_))
+      .flatMap: entries =>
+        entries.foldLeft[Either[CliParseError, List[A]]](Right(Nil)): (acc, raw) =>
+          for
+            found <- acc
+            next  <- parse(raw)
+          yield found :+ next
 
   private def suitePatterns(raw: List[String]): Either[CliParseError, List[SuitePattern]] =
     raw.foldLeft[Either[CliParseError, List[SuitePattern]]](Right(Nil)): (acc, token) =>
@@ -790,7 +875,7 @@ object Grammar:
               ZIO.succeed(Some(SetupSource.Directory(text)))
 
   private enum NamedRun:
-    case Module(id: TaskId, platform: Option[Platform])
+    case Module(id: TaskId, platform: Option[histos.PlatformSelection])
     case Plugin(id: PluginTaskId)
 
   private def choice(raw: Option[String]): IO[CliParseError, AffectedChoice] =
@@ -882,14 +967,10 @@ object Grammar:
           token match
             case Some(_) if task =>
               ZIO.fail(CliParseError.TaskPlatform(id.value))
-            case None       => ZIO.succeed(NamedRun.Module(id, None))
-            case Some(text) =>
-              ZIO
-                .fromEither(Platform.from(text))
-                .mapBoth(
-                  error => CliParseError.BadPlatform(error),
-                  platform => NamedRun.Module(id, Some(platform)),
-                )
+            case None                          => ZIO.succeed(NamedRun.Module(id, None))
+            case Some("jvm" | "js" | "native") =>
+              ZIO.fail(CliParseError.Retired("run <module> <platform>", "run <module> --platform <platform>"))
+            case Some(_) => ZIO.fail(CliParseError.UnexpectedArguments)
 
   private def forgotten(raw: String): Either[CliParseError, ForgetTarget] =
     ForgetTarget

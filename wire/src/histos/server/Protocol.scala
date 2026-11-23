@@ -11,7 +11,7 @@ import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
-import histos.{Platform, ProjectName}
+import histos.ProjectName
 
 import java.nio.file.Path
 
@@ -20,7 +20,8 @@ import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Path]
-import histos.report.WireJson.given JsonCodec[Platform]
+import histos.report.WireJson.given JsonCodec[histos.MainClass]
+import histos.report.WireJson.given JsonCodec[histos.PlatformSelection]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
 enum ServerError:
@@ -201,12 +202,13 @@ enum Attendance:
 end Attendance
 
 enum Call derives JsonCodec:
-  case Compile(projects: List[ProjectName])
+  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case Test(
       projects: List[ProjectName],
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case PublishLocal(tokens: List[PublishToken])
 
@@ -218,7 +220,13 @@ enum Call derives JsonCodec:
   case PublishDrop(id: DeploymentId)
   case PublishAssets(tokens: List[String])
   case Graph
-  case Run(id: String, platform: Option[Platform], launch: RunLaunch, args: List[String])
+  case Run(
+      id: String,
+      platform: Option[histos.PlatformSelection],
+      launch: RunLaunch,
+      args: List[String],
+      main: Option[histos.MainClass] = None,
+  )
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
   case Resolve(action: ResolveAction)
@@ -242,17 +250,18 @@ enum Call derives JsonCodec:
   case CacheVerify(projects: List[ProjectName])
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
-  case PreviewCompile(projects: List[ProjectName])
+  case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case PreviewTest(
       projects: List[ProjectName],
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
-  case PreviewRun(id: String, platform: Option[Platform])
+  case PreviewRun(id: String, platform: Option[histos.PlatformSelection], main: Option[histos.MainClass] = None)
 
   /** Project names, module names, plugin commands, or one plugin command's flags. Nothing here compiles. */
   case Catalog(query: CatalogQuery)
@@ -260,9 +269,9 @@ enum Call derives JsonCodec:
   /** A nested watch is quiet. Only the program under one watch reads stdin. */
   def attendance: Attendance =
     this match
-      case Bsp | Reboot(_) | Stop                      => Attendance.Held
-      case Run(_, _, _, _) | Watch(Run(_, _, _, _), _) => Attendance.Program
-      case _                                           => Attendance.Quiet
+      case Bsp | Reboot(_) | Stop                            => Attendance.Held
+      case Run(_, _, _, _, _) | Watch(Run(_, _, _, _, _), _) => Attendance.Program
+      case _                                                 => Attendance.Quiet
 end Call
 
 object Call:

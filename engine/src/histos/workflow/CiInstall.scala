@@ -37,14 +37,23 @@ object CiInstall:
 
   /** The first job installs the toolchain and saves both caches. */
   def prepare(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
-    caches(graph, save = true)
+    jdk(graph.runnerTools.jdk) ++ caches(graph, save = true)
 
   /** A later job restores what [[prepare]] saved and installs only on a miss. */
   def restore(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
     caches(graph, save = false)
 
   def steps(graph: ProjectGraph)(using ship: RenderingShip): List[String] =
-    restore(graph)
+    jdk(graph.runnerTools.jdk) ++ restore(graph)
+
+  def jdk(floor: Option[histos.JdkFloor]): List[String] =
+    floor.toList.flatMap: version =>
+      List(
+        s"      - uses: ${ActionPins.setupJava.line}",
+        "        with:",
+        "          distribution: temurin",
+        s"          java-version: ${quote(version.value.toString)}",
+      )
 
   private def caches(graph: ProjectGraph, save: Boolean)(using ship: RenderingShip): List[String] =
     graph.ciSetup match

@@ -39,6 +39,80 @@ object VerifyJobSpec extends ZIOSpecDefault:
     RunnerTools(Some(NodeFloor(25)), None, Some(ToolRevision("1.62.1")))
 
   def spec = suite("verify jobs")(
+    test("typed JVM verify tests run test, install the JDK floor and all selected browsers") {
+      val tools = browser.copy(
+        jdk = Some(histos.JdkFloor(25)),
+        browsers = Set(histos.Browser.Chromium, histos.Browser.Firefox, histos.Browser.WebKit),
+      )
+      val selected = histos.TestSelection(
+        histos.TestTargets.Named(histos.ProjectName("api"), Nil),
+        histos.PlatformSelection.only(Jvm),
+      )
+      val task = VerifyTask(JobName("browsers"), VerifyRun.Tests(selected))
+      val text = render(Projects.runnerTools(tools).verify(task)(api), NpmLock.Absent)
+      assertTrue(text.exists: body =>
+        val job = slice(body, "browsers")
+        job.contains("./histos test api --platform jvm") && !job.contains("./histos run test") &&
+        job.contains("setup-java") && job.contains("java-version: \"25\"") &&
+        job.contains("setup-node") && job.contains("install chromium firefox webkit") &&
+        job.contains("install-deps chromium firefox webkit") && !job.contains("id: llvm"))
+    },
+    test("selected JVM cells on a cross module do not install Native or Node tools") {
+      val cross = histos
+        .module("cross", Jvm, Js, histos.Native)(ScalaVersion("3.10.1"))
+        .clang(histos.ClangMajor(21))
+        .link(histos.NativeLibrary.Ssl)
+      val selected = histos.TestSelection(
+        histos.TestTargets.Named(histos.ProjectName("cross"), Nil),
+        histos.PlatformSelection.only(Jvm),
+      )
+      val task  = VerifyTask(JobName("jvm-check"), VerifyRun.Tests(selected))
+      val built = Projects.runnerTools(llvm.copy(node = Some(NodeFloor(25)))).verify(task)(cross)
+      val text  = render(built, NpmLock.Absent)
+      assertTrue(text.exists: body =>
+        val job = slice(body, "jvm-check")
+        job.contains("./histos test cross --platform jvm") && !job.contains("setup-node") && !job.contains(
+          "id: llvm"
+        ) && !job.contains("libssl-dev"))
+    },
+    test("Native verify tests install LLVM and OpenSSL from the requested cells") {
+      val native = histos
+        .module("native", histos.Native)(ScalaVersion("3.10.1"))
+        .clang(histos.ClangMajor(21))
+        .link(histos.NativeLibrary.Ssl)
+      val selected = histos.TestSelection(
+        histos.TestTargets.Named(histos.ProjectName("native"), Nil),
+        histos.PlatformSelection.only(histos.Native),
+      )
+      val task = VerifyTask(JobName("native-check"), VerifyRun.Tests(selected))
+      val text = render(Projects.runnerTools(llvm).verify(task)(native), NpmLock.Absent)
+      assertTrue(text.exists: body =>
+        val job = slice(body, "native-check")
+        job.contains("./histos test native --platform native") && job.contains("id: llvm") && job.contains(
+          "libssl-dev"
+        ) && !job.contains("setup-node"))
+    },
+    test("complete JVM compatibility compiles every published member before doctor") {
+      val other = module("other", Jvm)(ScalaVersion("3.10.1"))
+      val text  = render(Projects(ships(Ship("libs").next(0, 1, 0)(api, other)), api, other), NpmLock.Absent)
+      assertTrue(text.exists: body =>
+        val job     = slice(body, "compatibility")
+        val compile = job.indexOf("./histos compile api other --platform jvm")
+        val doctor  = job.indexOf("./histos doctor release")
+        compile >= 0 && doctor > compile && !job.contains("continue-on-error") && !job.contains("--preflight"))
+    },
+    test("a user job cannot collide with the complete compatibility check") {
+      val task = VerifyTask(JobName("compatibility"), host)
+      val text = render(Projects.verify(task)(ships(Ship("libs").next(0, 1, 0)(api)), api), NpmLock.Absent)
+      assertTrue(text == Left(CiError.Fault(histos.CiFault.RenderedJob(JobName("compatibility")))))
+    },
+    test("main CI runs required verification instead of publishing from skipped PR-only checks") {
+      val text = render(Projects.docCheck.scalafmt(api), NpmLock.Absent)
+      assertTrue(text.exists: body =>
+        List("test", "scaladoc", "format", "workflow").forall(name =>
+          slice(body, name).contains("github.event_name == 'push'")
+        ))
+    },
     test("affected installs the toolchain and every later job restores it") {
       val text = render(Projects(api), NpmLock.Absent)
       assertTrue(
@@ -152,7 +226,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
         text.map { body =>
           val job = slice(body, "test")
           job.contains("matrix.npm == 'true'") && job.contains("run: \"npm ci\"") &&
-          matrixRow(job, "web").contains("npm: \"true\"") && matrixRow(job, "api").contains("npm: \"false\"")
+          matrixRow(job, "web-js").contains("npm: \"true\"") && matrixRow(job, "api-jvm").contains("npm: \"false\"")
         } == Right(true)
       )
     },
@@ -227,7 +301,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
   private def render(
       built: Either[BuildError, ProjectGraph],
       lock: NpmLock,
-  ): Either[CiError | BuildError, String] =
+  ): Either[CiError | BuildError | histos.testrun.TestSelectionError, String] =
     built match
       case Left(error)  => Left(error)
       case Right(graph) =>
