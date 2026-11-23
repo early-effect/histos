@@ -20,6 +20,7 @@ private[js] object Linker:
       main: Option[String],
       arguments: List[String],
       optimize: JsOptimize,
+      ready: IO[JsLinkError, Unit] = ZIO.unit,
   ): IO[JsLinkError, Path] =
     val base   = StandardConfig().withOptimizer(optimize == JsOptimize.Full).withSourceMap(false).withBatchMode(true)
     val config = kind match
@@ -40,6 +41,7 @@ private[js] object Linker:
         )
         containers <- ZIO.fromFuture(ec => PathIRContainer.fromClasspath(classpath)(using ec)).mapError(failed)
         ir         <- ZIO.fromFuture(ec => cache.cached(containers._1)(using ec)).mapError(failed)
+        _          <- ready
         report     <- ZIO
           .fromFuture(ec => linker.link(ir, init, PathOutputDirectory(output), logger)(using ec))
           .mapError(failed)

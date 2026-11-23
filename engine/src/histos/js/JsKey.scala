@@ -35,7 +35,7 @@ object JsKey:
     val asked =
       if arguments.isEmpty then base
       else base + "args\n" + encoded(arguments) + "\n"
-    val text = "js-products-v2\n" + asked + s"optimize\n${optimize.token}\n" +
+    val text = "js-products-v3\n" + asked + s"optimize\n${optimize.token}\n" +
       "classpath\n" + encoded(classpath.map(_.value)) + "\ntools\n" + encoded(tools.map(_.value)) + "\n"
     Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 

@@ -10,55 +10,82 @@ Fast disables the Scala.js optimizer. Full enables it and passes the linked scri
 the existing `Splice.full` production minifier. Module kind, entry-point initialization
 and program arguments remain independent inputs.
 
-## Identity and output ownership
+## Input and tool generations
+
+The child never reads the caller's mutable input or host-tool paths. Inputs and tools
+are copied into parent-owned scoped trees. Copying hashes the exact bytes written;
+those same copies supply the child's IR and JVM classpaths. Canonical source paths,
+ordered content identities and deterministic relative directory inventories are in
+the key. Nested symbolic links are refused rather than omitted. Top-level aliases are
+resolved before copying and are not used by the child.
+
+This binding prevents an A-to-B-to-A overwrite from producing B under A's key. A final
+live-input comparison separately rejects a persistent change with
+`JsLinkError.InputsChanged`. The comparison is not the proof of consumed-byte identity.
+The cache discriminator excludes records produced before snapshot binding.
+
+`JsProducts.session` captures one scoped immutable tool generation. Its
+`JsLinkSession.link(request)` reuses the verified identity of those private copies
+within the owning build invocation. Recapture on tool/build reload. There is no
+path/mtime cache of mutable tools. The one-off `JsLink.link` API captures a fresh tool
+generation for each request. Each request still captures its mutable user/library
+inputs, including external dependency IR jar bytes at unchanged paths.
+
+The complete key also includes Scala and Scala.js revisions, module kind, entry-point
+policy, arguments, effective optimization and the selected JDK runtime identity.
+Full includes the minifier version, platform pin and expected binary checksum.
+The child uses the Scala 3 linker captured from the running toolchain, without an
+additional compiler bridge or JavaScript environment.
+
+## Products and child results
 
 `JsProducts.work(repo, cell, effective)` supplies a cell- and mode-specific work root.
-Under any request's work root, scripts live in `<mode>-<key>/linked/`. Alternating modes
-or changing inputs never overwrites a script returned by an earlier link. A restored
-script has the same path and bytes as a freshly produced script for that key.
+Under any request's work root, scripts live in `<mode>-<key>/linked/`. Different modes
+and input keys do not share a returned script path. Fresh and restored products use
+the same path and bytes.
 
-The key includes the Scala and Scala.js revisions, module kind, entry-point policy,
-arguments and effective optimization mode. It also includes, in classpath order:
+The shared `LinkReplay` owner must provide atomic same-key materialization. Key-specific
+paths alone do not protect a reader from an in-place rewrite during another hit.
+The integrator owns that shared seam and its overlapping-reader/publication proof;
+there is no private JS replay format or second product cache.
 
-- Every user and Scala.js library classpath entry's normalized path, canonical path and
-  content. Jar bytes are hashed, including external dependency IR. Directory files are
-  hashed in deterministic relative-path order. Replacing a jar's bytes at the same path
-  invalidates the link even when every own class is unchanged.
-- The complete running tool classpath's paths and content, not just a nominal linker
-  revision. The child uses the Scala 3 linker compiled into that toolchain.
-- The selected JDK runtime identity. Full also includes the native minifier version,
-  platform pin and expected binary checksum.
+The child reports a typed success/failure result through the repository's JSON codecs.
+Minifier, filesystem, malformed-protocol and linker errors retain their ADT branches.
+Process-start/death and missing transport results are process/transport failures.
+Stderr is only appended to an already classified Linker diagnostic, never parsed to
+choose an error category.
 
-Nested symbolic links in input directories are refused rather than silently omitted
-from the inventory. Top-level classpath aliases resolve to their canonical target.
-Inputs and tools are checked again before cache publication; a change during linking
-fails with `JsLinkError.InputsChanged`.
+## Cancellation and verification
 
-## Cancellation and publication
+The existing `ChildProcess` scope owns the JVM process group, including native minifier
+descendants. The child's IR cache and the parent's snapshot streams are scoped. Killing
+the group, rather than only interrupting `ZIO.fromFuture`, stops physical linker work.
+Only a complete successful child result with unchanged live inputs can be published.
 
-Linking and Full minification run inside one child JVM owned by `ChildProcess`.
-The child uses the ordinary Scala 3 linker and ZIO's foreign-Future adapter. There is
-no additional compiler bridge, JavaScript environment or unbounded `Await`.
-Interrupting only `ZIO.fromFuture` would leave linker work running. Instead, the parent
-owns and closes the process group, including minifier descendants, before returning
-from interruption. The IR cache is scoped inside the child as well.
+The private invocation-observation protocol signals real child boundaries and waits
+for a typed parent acknowledgement. The interruption test holds the child with its
+real IR cache loaded. It does not enumerate global processes or poll readiness.
 
-All temporary script output belongs to an invocation-scoped scratch directory. Only a
-successful child result with unchanged inputs can be saved and published. Failure or
-interruption removes scratch output, publishes no partial script and leaves earlier
-products intact. Local and remote hits restore through the existing `LinkReplay`
-format, so plugins, programs and DAG link leaves do not need separate link caches.
+The parent creates an execution-temporary root beneath its scoped scratch tree and
+sets the child's `java.io.tmpdir` at JVM startup through its dedicated launch environment.
+This happens before any child temporary-directory allocation. Paths with spaces and
+quote characters are supported. The durable Coursier/esbuild download cache is unchanged.
 
-## Proof
+The internal Splice launch observer receives the real native PID and temporary `Path`
+after process creation and before the adapter consumes output or closes the temporary scope. It is an invocation-owned effect,
+not a mutable global hook. The late-Full test holds that boundary with a real `in.js`
+and real esbuild process, then interrupts the parent. It checks JVM/native process death,
+parent scratch and minifier directory removal, and absence of a published product before
+returning from the owned effect. The parent removes the tree even when SIGKILL prevents
+child finalizers. Ordinary `Splice.full` uses the same minifier path without an observer.
 
-`engine/test/histos/js/JsProductsSpec.scala` executes actual Scala.js output under Node.
-It covers same-path dependency IR jar replacement with unchanged own classes,
-same-path tool classpath jar replacement, Fast/Full alternation and byte-for-byte restore,
-equal effective Full requests,
-failed-link publication refusal, and physical process/scratch cleanup after observing
-and interrupting a real link child. It uses scoped fibers and subprocess-start
-observation, not sleeps. `JsArgsSpec` retains argument-encoding and environment checks.
+`JsProductsSpec` retains the original dependency replacement, tool replacement,
+Fast/Full alternation/restore, failed publication and physical child cleanup proofs.
+It adds actual-source gated ABA and persistent-change checks, typed real-child error
+classification, startup-root quoting, late-Full physical cleanup and scoped-generation
+warm-work measurements. `JsArgsSpec` retains its three argument/environment checks.
+`OwnedMinifierSpec` proves typed observer-failure cleanup and parity with ordinary Full.
+Tests run actual compiled IR, linked scripts under Node and the verified native minifier.
 
-The integrator owns caller-side effective-mode resolution, DAG ordering and the
-assembled plugin/run/test entrypoint gate. Those callers must pass completed Main
-classpath products, the selected JDK and the resolved mode to the shared link leaf.
+The integrator owns effective-mode caller wiring, completed Main stage classpaths,
+selected JDKs, once-only DAG execution and the assembled plugin/run/test entrypoints.

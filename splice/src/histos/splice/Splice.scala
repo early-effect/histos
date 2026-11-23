@@ -70,6 +70,11 @@ object Splice:
   ): IO[SpliceError, Path] =
     linked(linker, output, libs, Minify.Esbuild, sourceMaps)
 
+  private[histos] def fullObserved[E](linker: Path, output: Path)(
+      onStarted: EsbuildNative.Started => IO[E, Unit]
+  ): IO[SpliceError | E, Path] =
+    linkedObserved(linker, output, Map.empty, Minify.Esbuild, false)(onStarted)
+
   /** Closure advanced on the linker output. Mapped libraries are not shaken. */
   def closure(
       linker: Path,
@@ -86,11 +91,20 @@ object Splice:
       minify: Minify,
       sourceMaps: Boolean,
   ): IO[SpliceError, Path] =
+    linkedObserved[SpliceError](linker, output, libs, minify, sourceMaps)(_ => ZIO.unit)
+
+  private def linkedObserved[E](
+      linker: Path,
+      output: Path,
+      libs: Map[String, Path],
+      minify: Minify,
+      sourceMaps: Boolean,
+  )(onStarted: EsbuildNative.Started => IO[E, Unit]): IO[SpliceError | E, Path] =
     ZIO
       .attemptBlocking(Files.readString(linker))
       .mapError(error => SpliceError.Io(Option(error.getMessage).getOrElse(linker.toString)))
       .flatMap: text =>
-        run(
+        runObserved(
           SpliceInput(
             linker = List(LinkerFile(label = "main.js", contents = text, origin = Some(linker))),
             libs = libs,
@@ -98,11 +112,16 @@ object Splice:
             minify = minify,
             sourceMaps = sourceMaps,
           )
-        )
+        )(onStarted)
 
   def run(input: SpliceInput): IO[SpliceError, Path] =
+    runObserved[SpliceError](input)(_ => ZIO.unit)
+
+  private def runObserved[E](
+      input: SpliceInput
+  )(onStarted: EsbuildNative.Started => IO[E, Unit]): IO[SpliceError | E, Path] =
     if bundlesLinker(input) then bundleProgram(input)
-    else scriptOrClosure(input)
+    else scriptOrClosure(input)(onStarted)
 
   /** `spliceFast` and `spliceFull` with at least one mapped library. esbuild bundles the linker's own imports. */
   private def bundlesLinker(input: SpliceInput): Boolean =
@@ -203,7 +222,9 @@ object Splice:
           .mapError(e => SpliceError.Io(s"could not write $stamp: ${e.getMessage}"))
 
   /** Empty `spliceLibs`, and `spliceClosure`. The primary path does not scan linker text; this one still does. */
-  private def scriptOrClosure(input: SpliceInput): IO[SpliceError, Path] =
+  private def scriptOrClosure[E](
+      input: SpliceInput
+  )(onStarted: EsbuildNative.Started => IO[E, Unit]): IO[SpliceError | E, Path] =
     for
       _         <- checkLibFiles(input.libs)
       _         <- ZIO.foreachDiscard(input.linker)(file => unresolvedIn(file.contents, file.label, input.libs))
@@ -212,7 +233,7 @@ object Splice:
       _ <- leftover(linker, input.libs.keys, input.output)
       digest = digestOf(input, libraries, linker)
       hit <- cached(input, digest)
-      _   <- ZIO.unless(hit)(build(input, libraries, linker) *> remember(input, digest))
+      _   <- ZIO.unless(hit)(build(input, libraries, linker)(onStarted) *> remember(input, digest))
     yield input.output
 
   /** Every mapped library, bundled by esbuild into one script that binds each as its `__splice_<id>`. */
@@ -265,13 +286,15 @@ object Splice:
           .mapError(e => SpliceError.Io(s"could not write $stamp: ${e.getMessage}"))
       case _ => ZIO.unit
 
-  private def build(input: SpliceInput, libraries: String, linker: String): IO[SpliceError, Unit] =
+  private def build[E](input: SpliceInput, libraries: String, linker: String)(
+      onStarted: EsbuildNative.Started => IO[E, Unit]
+  ): IO[SpliceError | E, Unit] =
     for
       compiled <- input.minify match
         case Minify.None    => ZIO.succeed(Closure.Compiled(libraries + linker, fastMap(libraries, input)))
         case Minify.Esbuild =>
           EsbuildNative
-            .optimize(libraries + linker, input.cacheDir, input.localOnly)
+            .optimizeObserved(libraries + linker, input.cacheDir, input.localOnly)(onStarted)
             .map(js => Closure.Compiled(js, None))
         case Minify.Closure =>
           // Closure reads only Scala.js's output; the library bundle goes ahead of it, and its bindings are externs.
