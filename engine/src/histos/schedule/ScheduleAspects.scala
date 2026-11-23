@@ -3,10 +3,62 @@ package histos.schedule
 import java.nio.ByteBuffer
 import java.nio.charset.{CharsetDecoder, CodingErrorAction, StandardCharsets}
 
+import histos.cache.ContentStore
+import histos.load.{PluginProducts, ProductRequest, RestoreResult}
 import zio.{Chunk, IO, UIO, ZIO}
 
 /** Cache, manifest, and remote behavior applied around a scheduled step. */
 private[schedule] object ScheduleAspects:
+  def cachedProducts(
+      cache: ActionCache,
+      digest: Digest,
+      request: ProductRequest,
+      products: PluginProducts,
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
+    cache
+      .get(digest)
+      .mapError(ScheduleError.Cache(_))
+      .flatMap:
+        case None         => ZIO.none
+        case Some(stored) => replay(stored, request, products)
+
+  def remoteProducts(
+      remote: RemoteCache,
+      digest: Digest,
+      request: ProductRequest,
+      products: PluginProducts,
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
+    remote.mode match
+      case RemoteMode.Off                     => ZIO.none
+      case RemoteMode.Read | RemoteMode.Write =>
+        RemoteMiss
+          .unanswered(remote.find(digest))(None)
+          .mapError(ScheduleError.Remote(_))
+          .flatMap:
+            case None        => ZIO.none
+            case Some(bytes) =>
+              decode(digest, bytes).mapError(ScheduleError.Remote(_)).flatMap(replay(_, request, products))
+
+  private def replay(
+      stored: String,
+      request: ProductRequest,
+      products: PluginProducts,
+  ): ZIO[ContentStore, ScheduleError[Nothing], Option[String]] =
+    if request.task.outputs.isEmpty then ZIO.some(stored)
+    else
+      ZIO
+        .fromEither(PluginManifest.products(stored))
+        .mapError(ScheduleError.Products(_))
+        .flatMap:
+          case None           => ZIO.none
+          case Some(manifest) =>
+            ZIO
+              .scoped(products.restore(request, manifest))
+              .mapError(ScheduleError.Products(_))
+              .map:
+                case RestoreResult.Miss   => None
+                case RestoreResult.Hit(_) => Some(stored)
+
   def cached(
       cache: ActionCache,
       action: Action,

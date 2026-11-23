@@ -1,14 +1,13 @@
 package histos.load
 
-import histos.plugin.{DeclaredTask, PluginOutput, PluginRunError}
+import histos.plugin.{DeclaredTask, OutputKind, PluginOutput, PluginRunError}
 import histos.step.StepAspect
 
 import java.nio.file.{Files, LinkOption, Path}
 
 import zio.{Trace, ZIO, ZIOAspect}
 
-/** The build loader follows the plugin fiber, and a declared output has to be on disk.
-  */
+/** Legacy final-path validation. Staged producers seal through [[PluginProducts]]. */
 private[load] object PluginAspects:
   def loader(
       threads: PluginThreads
@@ -23,8 +22,7 @@ private[load] object PluginAspects:
       ): ZIO[R, E, A] =
         threads.run(zio))
 
-  /** After the task returns, every declared path is a real file. An extra returned path fails first.
-    */
+  /** Check reported ownership and the declared kind at each legacy final path. */
   def declaredOutputs(
       repo: Path,
       task: DeclaredTask,
@@ -50,11 +48,7 @@ private[load] object PluginAspects:
     output.get.flatMap:
       case None          => ZIO.unit
       case Some(written) =>
-        val declared = task.outputs.map(_.path.value).toSet
-        written.files.find(file => !declared.contains(file.path.value)) match
-          case Some(extra) =>
-            ZIO.fail(PluginRunError.ExtraOutput(extra.path.value))
-          case None => present(repo, task)
+        ZIO.fromEither(PluginProducts.validateReport(task.outputs, written)) *> present(repo, task)
 
   private def present(
       repo: Path,
@@ -63,7 +57,9 @@ private[load] object PluginAspects:
     ZIO.foreachDiscard(task.outputs): declared =>
       val file = repo.resolve(declared.path.value)
       ZIO
-        .attemptBlocking(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+        .attemptBlocking(declared.kind match
+          case OutputKind.File      => Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+          case OutputKind.Directory => Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS))
         .orElseFail(PluginRunError.MissingOutput(declared.name, declared.path))
         .flatMap:
           case true  => ZIO.unit

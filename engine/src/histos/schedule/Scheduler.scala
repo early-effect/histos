@@ -11,6 +11,8 @@ import histos.step.{
 }
 
 import Histos.given
+import histos.cache.ContentStore
+import histos.load.{PluginProducts, ProductRequest}
 
 import zio.*
 
@@ -56,6 +58,26 @@ final case class Scheduler(
       verdict: Action => Verdict = Sendable.ofAction,
   ): IO[ScheduleError[E], String] =
     perform(action, digest, (_, _) => local, verdict, "")
+
+  /** Owned-output hits are restored through the same publication transaction as fresh production. */
+  def cached[E](
+      action: Action,
+      digest: Digest,
+      request: ProductRequest,
+      local: IO[E, String],
+  ): ZIO[ContentStore & PluginProducts, ScheduleError[E], String] =
+    for
+      products  <- ZIO.service[PluginProducts]
+      remoteHit <- ScheduleAspects.remoteProducts(remote, digest, request, products)
+      result    <- remoteHit match
+        case Some(value) => runner.note(Source.RemoteHit).as(value)
+        case None        =>
+          ScheduleAspects
+            .cachedProducts(cache, digest, request, products)
+            .flatMap:
+              case Some(value) => runner.note(Source.LocalHit).as(value)
+              case None        => miss(action, digest, cache, remote, (_, _) => local, Sendable.ofAction, "")
+    yield result
 
   private final case class Ready(
       byId: Map[ActionId, Action],
