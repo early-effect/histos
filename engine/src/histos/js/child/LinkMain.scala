@@ -1,74 +1,63 @@
 package histos.js.child
 
+import histos.js.{JsLinkError, Linker}
+import histos.pack.MainClass
+import histos.{JsModuleKind, JsOptimize}
+import histos.workspace.{IoFailure, IoFault}
+
 import java.nio.file.{Files, Path}
 
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.jdk.CollectionConverters.*
-import scala.util.control.NonFatal
+import zio.{IO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import org.scalajs.linker.interface.{ModuleInitializer, ModuleKind, StandardConfig}
-import org.scalajs.linker.{PathIRContainer, PathOutputDirectory, StandardImpl}
-import org.scalajs.logging.{Level, Logger}
+/** The ordinary Scala 3 linker and Splice run inside one owned process group. */
+object LinkMain extends ZIOAppDefault:
+  def run: ZIO[ZIOAppArgs, JsLinkError, Unit] =
+    for
+      args    <- getArgs
+      request <- decode(args.toList)
+      linked  <- Linker.link(
+        request.classpath,
+        request.output,
+        request.kind,
+        request.main,
+        request.arguments,
+        request.optimize,
+      )
+      script <- request.optimize match
+        case JsOptimize.Fast => ZIO.succeed(linked)
+        case JsOptimize.Full =>
+          histos.splice.Splice
+            .full(linked, request.output.resolveSibling("full.js"))
+            .mapError(error => JsLinkError.Minifier(error.message))
+      _ <- ZIO
+        .attemptBlocking(Files.writeString(request.result, script.toAbsolutePath.toString))
+        .mapError(_ => JsLinkError.Io(IoFailure(request.result, IoFault.Write)))
+    yield ()
 
-/** Links `.sjsir` into one script. Settings arrive as environment variables. There is no generated source.
-  */
-object LinkMain:
-  def main(args: Array[String]): Unit =
-    val code =
-      try body()
-      catch
-        case NonFatal(thrown) =>
-          thrown.printStackTrace(System.err)
-          1
-    if code != 0 then System.exit(code)
+  private final case class Request(
+      result: Path,
+      output: Path,
+      kind: JsModuleKind,
+      optimize: JsOptimize,
+      main: Option[String],
+      arguments: List[String],
+      classpath: List[Path],
+  )
 
-  private def body(): Int =
-    val output    = Path.of(sys.env("JS_OUT"))
-    val mainClass = sys.env.get("JS_MAIN").map(_.trim).filter(_.nonEmpty)
-    val classpath = Files.readAllLines(Path.of(sys.env("JS_CLASSPATH"))).asScala.map(Path.of(_)).toSeq
-    Files.createDirectories(output)
-    val optimize   = sys.env.get("JS_OPTIMIZE").contains("true")
-    val base       = StandardConfig().withOptimizer(optimize).withSourceMap(false).withBatchMode(true)
-    val config     = moduleKind(sys.env.getOrElse("JS_MODULE", "nomodule"), base)
-    val linker     = StandardImpl.linker(config)
-    val containers = Await.result(PathIRContainer.fromClasspath(classpath), Duration.Inf)._1
-    val ir         = Await.result(StandardImpl.irFileCache().newCache.cached(containers), Duration.Inf)
-    val arguments  = userArgs
-    val init       = mainClass.toSeq.map: name =>
-      if arguments.isEmpty then ModuleInitializer.mainMethodWithArgs(name, "main")
-      else ModuleInitializer.mainMethodWithArgs(name, "main", arguments)
-    val report = Await.result(linker.link(ir, init, PathOutputDirectory(output), logger), Duration.Inf)
-    report.publicModules.headOption match
-      case Some(module) =>
-        Files.writeString(Path.of("js.path"), output.resolve(module.jsFileName).toAbsolutePath.toString)
-        0
-      case None =>
-        System.err.println("the linker wrote no module")
-        1
-
-  private def moduleKind(kind: String, base: StandardConfig): StandardConfig =
-    kind match
-      case "esmodule" => base.withModuleKind(ModuleKind.ESModule)
-      case "commonjs" => base.withModuleKind(ModuleKind.CommonJSModule)
-      case _          => base
-
-  private def userArgs: List[String] =
-    sys.env.get("JS_ARGS") match
-      case None          => Nil
-      case Some(encoded) =>
-        encoded.split("\n", -1).toList match
-          case countText :: rest =>
-            val count = scala.util.Try(countText.toInt).toOption.getOrElse(0)
-            rest
-              .take(count)
-              .map: line =>
-                new String(java.util.Base64.getDecoder.decode(line), java.nio.charset.StandardCharsets.UTF_8)
-          case Nil => Nil
-
-  private val logger: Logger = new Logger:
-    def log(level: Level, message: => String): Unit =
-      if level == Level.Error then System.err.println(message)
-    def trace(thrown: => Throwable): Unit = thrown.printStackTrace(System.err)
+  private def decode(args: List[String]): IO[JsLinkError, Request] = args match
+    case result :: output :: kind :: mode :: entry :: main :: count :: rest =>
+      for
+        selectedKind <- ZIO.fromOption(JsModuleKind.values.find(_.token == kind)).orElseFail(JsLinkError.Bridge)
+        selectedMode <- ZIO.fromOption(JsOptimize.values.find(_.token == mode)).orElseFail(JsLinkError.Bridge)
+        size <- ZIO.fromOption(count.toIntOption.filter(n => n >= 0 && n <= rest.size)).orElseFail(JsLinkError.Bridge)
+        mainClass <- entry match
+          case "main" =>
+            ZIO.fromEither(MainClass.from(main)).mapError(_ => JsLinkError.Bridge).map(value => Some(value.binary))
+          case "exports" => ZIO.none
+          case _         => ZIO.fail(JsLinkError.Bridge)
+        paths <- ZIO
+          .attempt((Path.of(result), Path.of(output), rest.drop(size).map(Path.of(_))))
+          .mapError(_ => JsLinkError.Bridge)
+      yield Request(paths._1, paths._2, selectedKind, selectedMode, mainClass, rest.take(size), paths._3)
+    case _ => ZIO.fail(JsLinkError.Bridge)
 end LinkMain
