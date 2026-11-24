@@ -54,7 +54,7 @@ import histos.cache.{CacheProject, ContentStore}
 
 import scala.util.Try
 
-import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, IO, Ref, Scope, UIO, ZIO, ZLayer}
 
 final case class PluginLink(
     id: PluginId,
@@ -76,6 +76,9 @@ final case class TaskInvocation(
   * generation scope, and a task extends the one an acquire should die with.
   */
 trait PluginRuntime:
+  private[histos] def awaitResources: UIO[Unit]
+  private[histos] def retire: UIO[Unit]
+
   def generate(
       request: histos.build.ExecutionRequest,
       id: PluginTaskId,
@@ -202,6 +205,9 @@ object PluginRuntime:
       retained: Ref[Map[PluginTaskId, CommittedOutputs]],
       inputReads: Ref.Synchronized[Set[PluginTaskId]],
   ) extends PluginRuntime:
+    private[histos] def awaitResources: UIO[Unit] = leases.awaitResources
+    private[histos] def retire: UIO[Unit]         = leases.retire
+
     def committed(id: PluginTaskId): IO[PluginFault, CommittedOutputs] =
       retained.get.flatMap(found => ZIO.fromOption(found.get(id)).orElseFail(PluginFault.MissingProduct(id)))
 

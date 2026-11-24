@@ -2962,10 +2962,12 @@ object Main extends ZIOAppDefault:
   def run =
     for
       args <- getArgs.map(_.toList)
-      _    <- Cli
-        .launch(args, Path.of("").toAbsolutePath)
-        .flatMap(finish)
-        .provideSomeLayer[Scope](ReleaseFeed.live ++ Resolve.coursier ++ Stdio.probed)
+      done <- ZIO.scoped(
+        Cli
+          .launch(args, Path.of("").toAbsolutePath)
+          .provideSomeLayer[Scope](ReleaseFeed.live ++ Resolve.coursier ++ Stdio.probed)
+      )
+      _ <- finish(done)
     yield ()
 
   /** A successful `run` is process status 0. `exit` is the status the operating system sees.

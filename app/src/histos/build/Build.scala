@@ -143,7 +143,9 @@ object Build:
                                 .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
                     )
-                  )
+                  ) *> ((terminal, loaded) match
+                    case (Terminal.Owned, Right(Some(build))) => build.plugins.awaitResources
+                    case (Terminal.Owned, Left(_) | Right(None)) | (Terminal.Detached, _) => ZIO.unit)
                 }
             }
             beats <- heard.get

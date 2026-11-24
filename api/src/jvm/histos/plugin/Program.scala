@@ -32,7 +32,7 @@ object Program:
       events: PluginEvents.Invocation,
       watch: ProgramEvent => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[Scope, PluginRunError, Fiber[PluginRunError, Int]] =
-    body(argv, directory, events, watch).forkScoped
+    ZIO.scoped(body(argv, directory, events, watch)).forkScoped
 
   private def body(
       argv: List[String],
@@ -104,7 +104,11 @@ object Program:
       .mapError(thrown => refuse(s"could not start ${argv.mkString(" ")}: ${thrown.getClass.getName}"))
 
   private def destroy(process: Process): UIO[Unit] =
-    ZIO.attemptBlocking(process.destroyForcibly()).ignore
+    ZIO.attemptBlocking {
+      process.destroyForcibly()
+      process.waitFor()
+      ()
+    }.orDie
 
   private def refuse(message: String): PluginRunError =
     PluginDetail.from(message) match

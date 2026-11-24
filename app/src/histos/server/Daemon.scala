@@ -512,6 +512,7 @@ object Daemon:
           fingerprint <- Fingerprint.read(repo, graph.resolution)
           _           <- Record.write(repo, version, fingerprint, socket, None)
           held        <- Scope.make
+          _           <- held.addFinalizer(plugins.retire)
           uses        <- Ref.make[Uses](Uses.Live(0))
           desk        <- InvocationDesk.make
           _           <- held.addFinalizer(desk.close)

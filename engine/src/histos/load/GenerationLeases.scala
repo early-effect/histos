@@ -7,10 +7,16 @@ import zio.{Exit, Ref, Scope, UIO, ZIO, ZLayer}
 /** One candidate generation. A discarded candidate closes now. A retired generation closes after the last lease. */
 private[load] final class GenerationLeases(
     scope: Scope.Closeable,
+    resources: Scope.Closeable,
     state: Ref[GenerationLeases.State],
 ):
-  /** Service acquires register here. A task lease is what keeps them alive after retire. */
-  def generation: Scope = scope
+  /** Plugin task acquires register here. A task lease keeps them alive after retire. */
+  def generation: Scope = resources
+
+  /** A foreground host cannot exit while plugin generation resources still belong to it. */
+  def awaitResources: UIO[Unit] =
+    ZIO.suspendSucceed:
+      if resources.size == 0 then ZIO.unit else ZIO.never
 
   /** One uninterruptible region. An interrupt between the increment and the finalizer would leak the count. */
   def lease: ZIO[Scope, PluginRunError, Unit] =
@@ -40,8 +46,11 @@ private[load] final class GenerationLeases(
         (closing, if closing then next.copy(closed = true) else next)
       }
       .flatMap { closing =>
-        ZIO.when(closing)(scope.close(Exit.unit)).unit
+        ZIO.when(closing)(close).unit
       }
+
+  private def close: UIO[Unit] =
+    resources.close(Exit.unit).ensuring(scope.close(Exit.unit))
 
   private def release: UIO[Unit] =
     state
@@ -52,7 +61,7 @@ private[load] final class GenerationLeases(
         (closing, if closing then next.copy(closed = true) else next)
       }
       .flatMap { closing =>
-        ZIO.when(closing)(scope.close(Exit.unit)).unit
+        ZIO.when(closing)(close).unit
       }
 
   private def finish(force: Boolean): UIO[Unit] =
@@ -62,7 +71,7 @@ private[load] final class GenerationLeases(
         (closing, current.copy(retired = true, closed = current.closed || closing, leases = 0))
       }
       .flatMap { closing =>
-        ZIO.when(closing)(scope.close(Exit.unit)).unit
+        ZIO.when(closing)(close).unit
       }
 end GenerationLeases
 
@@ -71,9 +80,10 @@ private[load] object GenerationLeases:
 
   def make: UIO[GenerationLeases] =
     for
-      scope <- Scope.make
-      state <- Ref.make(State(0, retired = false, closed = false))
-    yield GenerationLeases(scope, state)
+      scope     <- Scope.make
+      resources <- Scope.make
+      state     <- Ref.make(State(0, retired = false, closed = false))
+    yield GenerationLeases(scope, resources, state)
 
   def layer: ZLayer[Any, Nothing, GenerationLeases] =
     ZLayer.fromZIO(make)
