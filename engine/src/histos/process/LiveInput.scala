@@ -7,8 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import zio.stream.ZStream
-import zio.{Queue, Scope, UIO, ZIO}
+import zio.{Chunk, IO, Queue, Scope, UIO, ZIO}
 
 /** The caller's standard input, as relay commands.
   *
@@ -18,48 +17,58 @@ import zio.{Queue, Scope, UIO, ZIO}
 object LiveInput:
   def open: ZIO[Scope, Nothing, RunRelay] =
     for
-      queue <- Queue.unbounded[RelayCommand]
+      queue <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
       _     <- serve(queue)
     yield RunRelay.Open(take(queue))
 
   /** `queue` receives commands until the scope closes. A second interrupt exits the process. */
   def serve(queue: Queue[RelayCommand]): ZIO[Scope, Nothing, Unit] =
-    ZIO.suspendSucceed:
-      Signals.pipe() match
-        case None       => copy(queue)
-        case Some(pipe) =>
-          val hits = new AtomicInteger(0)
-          for
-            armed <- ZIO.succeed(Signals.arm(pipe.write, hits))
-            _     <- ZIO.addFinalizer(ZIO.succeed {
-              Signals.disarm(armed)
-              Signals.stop(pipe.write)
-              Signals.close(pipe.read)
-              Signals.close(pipe.write)
-            })
-            _ <- notes(pipe.read, queue).forkScoped
-            _ <- copy(queue)
-          yield ()
+    val input = for
+      signal <- pipe
+      wake   <- pipe
+      _      <- ZIO.acquireRelease(ZIO.succeed(Signals.arm(signal.write, new AtomicInteger(0))))(armed =>
+        ZIO.succeed(Signals.disarm(armed))
+      )
+      _ <- notes(signal, queue).forkScoped
+      _ <- copy(wake, queue).forkScoped
+    yield ()
+    input.catchAll(_ => queue.offer(RelayCommand.End).unit)
 
-  private def copy(queue: Queue[RelayCommand]): ZIO[Scope, Nothing, Unit] =
-    ZStream
-      .fromInputStream(java.lang.System.in, 4096)
-      .chunks
-      .runForeach(bytes => queue.offer(RelayCommand.Stdin(bytes)).unit)
-      .ensuring(queue.offer(RelayCommand.End).unit)
-      .forkScoped
-      .unit
+  private enum InputError:
+    case Pipe, Read
 
-  private def notes(fd: Int, queue: Queue[RelayCommand]): UIO[Unit] =
-    def loop: UIO[Unit] =
-      ZIO
-        .attemptBlocking(Signals.readByte(fd))
-        .orDie
-        .flatMap:
-          case Some(Signals.Interrupt) => queue.offer(RelayCommand.Interrupt) *> loop
-          case Some(Signals.Halt)      => halt
-          case _                       => ZIO.unit
-    loop
+  private def pipe: ZIO[Scope, InputError, Signals.Pipe] =
+    ZIO.acquireRelease(
+      ZIO.fromOption(Signals.pipe()).orElseFail(InputError.Pipe)
+    )(pipe =>
+      ZIO.succeed {
+        Signals.close(pipe.read)
+        Signals.close(pipe.write)
+      }
+    )
+
+  /** The wake happens before the blocking worker is joined; descriptors outlive that join. */
+  private def read[A](pipe: Signals.Pipe)(operation: => A): IO[InputError, A] =
+    ZIO.uninterruptibleMask: restore =>
+      for
+        worker <- ZIO.attemptBlocking(operation).mapError(_ => InputError.Read).fork
+        result <- restore(worker.join).onInterrupt(ZIO.succeed(Signals.stop(pipe.write)) *> worker.await)
+      yield result
+
+  private def copy(wake: Signals.Pipe, queue: Queue[RelayCommand]): UIO[Unit] =
+    def loop: IO[InputError, Unit] =
+      read(wake)(Signals.readInput(wake.read)).flatMap:
+        case Some(bytes) => queue.offer(RelayCommand.Stdin(bytes)) *> loop
+        case None        => ZIO.unit
+    loop.ignore.ensuring(queue.offer(RelayCommand.End).unit)
+
+  private def notes(pipe: Signals.Pipe, queue: Queue[RelayCommand]): UIO[Unit] =
+    def loop: IO[InputError, Unit] =
+      read(pipe)(Signals.readByte(pipe.read)).flatMap:
+        case Some(Signals.Interrupt) => queue.offer(RelayCommand.Interrupt) *> loop
+        case Some(Signals.Halt)      => halt
+        case _                       => ZIO.unit
+    loop.ignore
 
   /** Does not complete. `exit` runs the shutdown hook, which interrupts this process. */
   private def halt: UIO[Nothing] =
@@ -73,8 +82,9 @@ object LiveInput:
   /** The upcall target. `signal` runs it, so it only writes the pipe. */
   private[process] final class Hooks(writeFd: Int, hits: AtomicInteger):
     def onInterrupt(sig: Int): Unit =
-      if hits.incrementAndGet() == 1 then Signals.mark(writeFd)
-      else Signals.halt(writeFd)
+      if sig == 2 then
+        if hits.incrementAndGet() == 1 then Signals.mark(writeFd)
+        else Signals.halt(writeFd)
 end LiveInput
 
 /** The self-pipe a [[LiveInput]] signal handler writes. A failed libc call leaves the handler unset. */
@@ -162,6 +172,55 @@ private[process] object Signals:
             case _                                                            => None
         once
       }
+    catch case _: Exception => None
+    finally arena.close()
+
+  /** Poll stdin and an owned wake pipe. Neither cancellation nor EOF closes descriptor zero. */
+  def readInput(wake: Int): Option[Chunk[Byte]] =
+    val arena = Arena.ofConfined()
+    try
+      val fds = arena.allocate(16)
+      fds.set(ValueLayout.JAVA_INT, 0, 0)
+      fds.set(ValueLayout.JAVA_SHORT, 4, 1.toShort)
+      fds.set(ValueLayout.JAVA_INT, 8, wake)
+      fds.set(ValueLayout.JAVA_SHORT, 12, 1.toShort)
+      val countLayout = libc match
+        case Libc.Linux  => ValueLayout.JAVA_LONG
+        case Libc.Darwin => ValueLayout.JAVA_INT
+      val count: Object = libc match
+        case Libc.Linux  => java.lang.Long.valueOf(2L)
+        case Libc.Darwin => Integer.valueOf(2)
+      downcall(
+        "poll",
+        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, countLayout, ValueLayout.JAVA_INT),
+      ).flatMap: poll =>
+        @scala.annotation.tailrec
+        def ready: Boolean =
+          invoke(poll, fds, count, Integer.valueOf(-1)) match
+            case Some(code: Integer) if code.intValue > 0 =>
+              fds.get(ValueLayout.JAVA_SHORT, 14) == 0 && fds.get(ValueLayout.JAVA_SHORT, 6) != 0
+            case Some(code: Integer) if code.intValue < 0 && errno == Eintr => ready
+            case _                                                          => false
+        val buf = arena.allocate(4096)
+        downcall(
+          "read",
+          FunctionDescriptor.of(
+            ValueLayout.JAVA_LONG,
+            ValueLayout.JAVA_INT,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+          ),
+        ).flatMap: read =>
+          @scala.annotation.tailrec
+          def bytes: Option[Chunk[Byte]] =
+            if !ready then None
+            else
+              invoke(read, Integer.valueOf(0), buf, java.lang.Long.valueOf(4096L)) match
+                case Some(n: java.lang.Long) if n.longValue > 0 =>
+                  Some(Chunk.fromArray(buf.asSlice(0, n.longValue).toArray(ValueLayout.JAVA_BYTE)))
+                case Some(n: java.lang.Long) if n.longValue < 0 && errno == Eintr => bytes
+                case _                                                            => None
+          bytes
     catch case _: Exception => None
     finally arena.close()
 

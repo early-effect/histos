@@ -270,10 +270,13 @@ object Client:
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
         input  = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _     <- Frame.write(output, envelope.toJson).mapError(written(socket))
-        first <- Frame.read(input).mapError(read(socket))
-        _     <- ZIO.fromEither(ready(first))
-        _     <- attachInput(terminal, envelope.call, output)
+        _        <- Frame.write(output, envelope.toJson).mapError(written(socket))
+        first    <- Frame.read(input).mapError(read(socket))
+        _        <- ZIO.fromEither(ready(first))
+        attached <- ZIO.scopeWith(_.fork)
+        // Close before the input scope joins its readers and any blocked socket writer.
+        _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
+        _ <- attached.extend[Any](attachInput(terminal, envelope.call, output))
       yield frames(input, socket)
     }
 
@@ -305,7 +308,7 @@ object Client:
     StdinFeed.of(terminal, call.attendance) match
       case StdinFeed.Live =>
         for
-          queue <- Queue.unbounded[RelayCommand]
+          queue <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
           _     <- LiveInput.serve(queue)
           _     <- forward(output, queue).forkScoped
         yield ()
