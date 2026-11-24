@@ -526,8 +526,10 @@ object Program:
                 )
             case Platform.Js =>
               ZStream.unwrap:
-                val linkDir = workDir(repo, cell)
                 for
+                  view <- ZIO.service[LockedTools]
+                  mode    = histos.JsOptimize.effective(view.catalog.js.optimize, module.jsOptimize, None)
+                  linkDir = workDir(repo, cell).resolve(mode.token)
                   node  <- runtimes.node.mapError(miss => ProgramError.NoNode(cell.module, cell.version, miss))
                   paths <- classpath(
                     repo,
@@ -550,6 +552,7 @@ object Program:
                         module.jsModule,
                         revision = module.jsVersion,
                         arguments = args,
+                        optimize = mode,
                       )
                     ),
                   ).mapError(error =>

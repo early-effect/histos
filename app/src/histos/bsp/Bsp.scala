@@ -898,30 +898,115 @@ object Bsp:
       for
         graph <- request.get
         lock  <- readLock
-        modules = modulesOf(graph)
-        chain   = Module.chain(module, modules, platform)
-        found <- withTools(
-          UpstreamCells
-            .read(module, chain, version, platform, UpstreamCells.declared(repo, modules, platform))
-            .flatMap: upstream =>
-              ZIO.serviceWithZIO[histos.zinc.CompileMemo]: memo =>
-                memo.note(lock).flatMap { stamped =>
-                  memo.classpath(
-                    repo,
-                    module,
-                    upstream,
-                    version,
-                    platform,
-                    stamped.lock,
-                    BuildResolvers(graph.resolvers),
-                    scope,
-                    stamped.stamp,
-                    ApiDep.modules(graph),
-                  )
+        paths <- scope match
+          case ClasspathScope.Compile =>
+            val modules = modulesOf(graph)
+            withTools(
+              UpstreamCells
+                .read(
+                  module,
+                  Module.chain(module, modules, platform),
+                  version,
+                  platform,
+                  UpstreamCells.declared(repo, modules, platform),
+                )
+                .flatMap { upstream =>
+                  ZIO.serviceWithZIO[histos.zinc.CompileMemo] { memo =>
+                    memo.note(lock).flatMap { stamped =>
+                      memo.classpath(
+                        repo,
+                        module,
+                        upstream,
+                        version,
+                        platform,
+                        stamped.lock,
+                        BuildResolvers(graph.resolvers),
+                        scope,
+                        stamped.stamp,
+                        ApiDep.modules(graph),
+                      )
+                    }
+                  }
                 }
+                .mapError(compiled)
+                .map(_.paths)
+            )
+          case ClasspathScope.Test =>
+            assembledTest(graph, module, version, platform, lock)
+      yield paths
+
+    private def assembledTest(
+        graph: ProjectGraph,
+        module: Module,
+        version: ScalaVersion,
+        platform: Platform,
+        lock: DependencyLock,
+    ): ZIO[Environment, BspError, List[Path]] =
+      val stage    = histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Test)
+      val modules  = modulesOf(graph)
+      val declared = modules.flatMap { item =>
+        for
+          scala  <- item.versions.all
+          target <- item.platforms.all
+        yield (item.name, scala, target) -> TestCompile.testClasses(repo, item.name, scala, target)
+      }.toMap
+      for
+        inherited <- ZIO.fromEither(scopedStages(graph, stage)).mapError(scopedGraph)
+        chain = inherited
+          .filter(_.scope == histos.plugin.SourceSet.Test)
+          .flatMap(stage => modules.find(_.name == stage.cell.module))
+          .distinct
+        main     <- assembled(module, version, platform, ClasspathScope.Compile)
+        selected <- withTools(UpstreamCells.read(module, chain, version, platform, declared).mapError(compiled))
+        upstream <- ZIO.foreach(selected) { cell =>
+          assembled(cell.module, cell.version, platform, ClasspathScope.Test).map(cell.classes :: _)
+        }
+        own <- withTools(
+          histos.zinc.ScalacClasspath
+            .of(
+              repo,
+              module,
+              Nil,
+              version,
+              platform,
+              lock,
+              BuildResolvers(graph.resolvers),
+              ClasspathScope.Test,
+              ApiDep.modules(graph),
+            )
             .mapError(compiled)
         )
-      yield found.paths
+      yield (GraphCompile.classesDir(repo, module.name, version, platform) ::
+        (main ++ upstream.flatten ++ own.paths)).distinct
+
+    private def scopedGraph(error: histos.build.BuildDagError): BspError =
+      BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.graph(error)))
+
+    /** Producer prerequisites are build ordering, not compiler classpath inputs. */
+    private def scopedStages(
+        graph: ProjectGraph,
+        stage: histos.CompilationStage,
+    ): Either[histos.build.BuildDagError, List[histos.CompilationStage]] =
+      import histos.build.{BuildDag, BuildNode}
+      val root = BuildNode.Compile(stage)
+      BuildDag.plan(graph, List(root)).flatMap { plan =>
+        def visit(
+            node: BuildNode,
+            seen: List[histos.CompilationStage],
+        ): Either[histos.build.BuildDagError, List[histos.CompilationStage]] =
+          plan.dependencies(node).flatMap { dependencies =>
+            dependencies
+              .collect { case BuildNode.Compile(stage) => stage }
+              .foldLeft[Either[histos.build.BuildDagError, List[histos.CompilationStage]]](Right(seen)) {
+                (acc, child) =>
+                  acc.flatMap { found =>
+                    if found.contains(child) then Right(found)
+                    else visit(BuildNode.Compile(child), found :+ child)
+                  }
+              }
+          }
+        visit(root, Nil)
+      }
 
     private def compiled(error: GraphCompileError): BspError =
       error match
@@ -1320,12 +1405,27 @@ object Bsp:
             plan <- ZIO
               .fromEither(histos.build.BuildDag.plan(graph, List(histos.build.BuildNode.Compile(stage))))
               .mapError(error => BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.graph(error))))
-            generators = plan.nodes.collect { case node: histos.build.BuildNode.Generate => node }
-            products <- stages(graph, generators)
-            files    <- histos.zinc.StageRoots
-              .of(graph)
-              .read(repo, stage, products.generatedRoots)
-              .mapError(error => BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.root(error))))
+            files <- ZIO.scoped {
+              for
+                views <- ZIO.foreach(plan.nodes.collect { case histos.build.BuildNode.Generate(id) => id }) { id =>
+                  ZIO
+                    .fromOption(plugins)
+                    .orElseFail(BspError.Tests(ModuleTestError.Plugin(histos.load.PluginFault.MissingProduct(id))))
+                    .flatMap(_.generated(id).mapError(error => BspError.Tests(ModuleTestError.Plugin(error))))
+                    .map(_.values.map { location =>
+                      histos.zinc.GeneratedLocation(
+                        histos.zinc.GeneratedRootId(id, location.output.name),
+                        location.output.kind,
+                        location.path,
+                      )
+                    })
+                }
+                files <- histos.zinc.StageRoots
+                  .of(graph)
+                  .read(repo, stage, histos.zinc.GeneratedRoots.Provided(views.flatten))
+                  .mapError(error => BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.root(error))))
+              yield files
+            }
           yield files.sources.map(_.path)
         }
       id match
@@ -1452,32 +1552,50 @@ object Bsp:
             identity,
             _.toMap,
           )
-        tests <- ZIO.foreach(cells)(cell =>
-          TestCompile
-            .testSources(
-              repo,
-              cell.module,
-              modulesOf(graph),
-              cell.version,
-              cell.platform,
-            )
-            .mapBoth(
-              BspError.Tests(_),
-              sources => Option.when(sources.nonEmpty)(cell),
-            )
-        )
-      yield
-        val mains  = cells.map(cell => shown(graph, Id.Main(cell.module, cell.version, cell.platform), jars))
-        val suites = tests.flatten.map(cell => shown(graph, Id.Test(cell.module, cell.version, cell.platform), jars))
-        val file   = shown(graph, Id.Build, jars)
-        Rpc.BuildTargetsResult(mains ++ suites ++ List(file))
+        tests <- ZIO.foreach(cells) { cell =>
+          val stage = histos.CompilationStage(
+            histos.Cell(cell.module.name, cell.version, cell.platform),
+            histos.plugin.SourceSet.Test,
+          )
+          val inventory = histos.zinc.StageRoots.of(graph)
+          for
+            roots <- ZIO
+              .fromEither(inventory.inventory(stage))
+              .mapError(error => BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.root(error))))
+            emitted = roots.exists(_.origin match
+              case histos.zinc.StageOrigin.Generated(_, _) => true
+              case _                                       => false)
+            eligible <-
+              if emitted then ZIO.succeed(true)
+              else
+                inventory
+                  .read(repo, stage, histos.zinc.GeneratedRoots.Provided(Nil))
+                  .mapError(error => BspError.Tests(ModuleTestError.Scoped(histos.testrun.TestFailures.root(error))))
+                  .map(_.sources.nonEmpty)
+          yield Option.when(eligible)(cell)
+        }
+        targets <- ZIO.foreach(
+          cells.map[Id.Main | Id.Test](cell => Id.Main(cell.module, cell.version, cell.platform)) ++
+            tests.flatten.map[Id.Main | Id.Test](cell => Id.Test(cell.module, cell.version, cell.platform))
+        ) { id =>
+          val stage = id match
+            case Id.Main(module, version, platform) =>
+              histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)
+            case Id.Test(module, version, platform) =>
+              histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Test)
+          ZIO
+            .fromEither(dependencyUris(graph, stage))
+            .mapError(scopedGraph)
+            .map(dependencies => shown(id, jars, dependencies))
+        }
+      yield Rpc.BuildTargetsResult(targets :+ shown(Id.Build, jars, Nil))
 
     private def shown(
-        graph: ProjectGraph,
         id: Id,
         jars: Map[String, List[Path]],
+        dependencies: List[String],
     ): Rpc.BuildTarget =
-      val (name, base, tags, version, platform, dependencies, canTest, canRun) =
+      val (name, base, tags, version, platform, canTest, canRun) =
         id match
           case Id.Main(module, version, platform) =>
             (
@@ -1486,7 +1604,6 @@ object Bsp:
               List("library"),
               version,
               platformCode(platform),
-              dependencyUris(graph, module, version, platform),
               false,
               Bsp.canRun(module),
             )
@@ -1497,7 +1614,6 @@ object Bsp:
               List("test"),
               version,
               platformCode(platform),
-              List(targetUri(Id.Main(module, version, platform))),
               true,
               false,
             )
@@ -1508,7 +1624,6 @@ object Bsp:
               List("library"),
               BuildScala,
               1,
-              Nil,
               false,
               false,
             )
@@ -1548,20 +1663,20 @@ object Bsp:
 
     private def dependencyUris(
         graph: ProjectGraph,
-        module: Module,
-        version: ScalaVersion,
-        platform: Platform,
-    ): List[String] =
-      module
-        .upstream(platform)
-        .flatMap: name =>
-          graph.get(name) match
-            case Some(dependency: Module)
-                if dependency.platforms.all.contains(
-                  platform
-                ) && dependency.versions.all.exists(_.value == version.value) =>
-              Some(targetUri(Id.Main(dependency, version, platform)))
-            case _ => None
+        stage: histos.CompilationStage,
+    ): Either[histos.build.BuildDagError, List[String]] =
+      import histos.build.{BuildDag, BuildNode}
+      val root = BuildNode.Compile(stage)
+      BuildDag
+        .plan(graph, List(root))
+        .flatMap(_.dependencies(root))
+        .map(_.collect { case BuildNode.Compile(dependency) =>
+          dependency.scope match
+            case histos.plugin.SourceSet.Main =>
+              mainUri(repo, dependency.cell.module.value, dependency.cell.version, dependency.cell.platform)
+            case histos.plugin.SourceSet.Test =>
+              testUri(repo, dependency.cell.module.value, dependency.cell.version, dependency.cell.platform)
+        })
 
     private def parsed[R, A](uri: String)(use: Id => ZIO[R, BspError, A]): ZIO[R, BspError, A] =
       request.get.flatMap(graph => ZIO.fromEither(named(uri, graph)).flatMap(use))

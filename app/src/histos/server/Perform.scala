@@ -30,7 +30,7 @@ object Perform:
       compiled: UIO[Unit],
   )
 
-  /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
+  /** Clean adopts generated ownership. Graph-free recovery is a local launcher fallback. */
   def needsGraph(call: Call): Boolean =
     call match
       case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
@@ -39,7 +39,9 @@ object Perform:
           Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
           Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
         true
-      case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
+      case Call.Clean(Nil, _) =>
+        true
+      case Call.PreviewClean(Nil, _) =>
         false
       case Call.Clean(_, CleanExtent.Full) | Call.PreviewClean(_, CleanExtent.Full) =>
         false
@@ -233,17 +235,19 @@ object Perform:
               case Call.Format(targets, mode) =>
                 held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
               case Call.Clean(Nil, CleanExtent.Products) =>
-                Calls.wipe(repo, say)
+                have match
+                  case Some(build) => Calls.clean(repo, build.graph, Nil, say, build.plugins)
+                  case None        => Calls.wipe(repo, say)
               case Call.Clean(Nil, CleanExtent.Full) =>
-                Calls.cleanFull(repo, say)
+                Calls.cleanFull(repo, say, have)
               case Call.Clean(projects, CleanExtent.Products) =>
-                held(build => Calls.clean(repo, build.graph, projects, say))
+                held(build => Calls.clean(repo, build.graph, projects, say, build.plugins))
               case Call.Clean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
               case Call.PreviewCompile(projects, platforms) =>
-                held(build => Calls.previewCompile(repo, build.graph, projects, say, platforms))
+                held(build => Calls.previewCompile(repo, build.graph, projects, say, build.plugins, platforms))
               case Call.PreviewTest(projects, patterns, _, _) =>
-                held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
+                held(build => Calls.previewTest(repo, build.graph, projects, patterns, say, build.plugins))
               case Call.PreviewPublishLocal(tokens) =>
                 held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))
               case Call.PreviewPublishSnapshots(projects) =>

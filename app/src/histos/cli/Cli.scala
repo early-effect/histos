@@ -41,7 +41,6 @@ import histos.program.ProgramError
 import histos.publish.{IvyRoot, LauncherError, LauncherPin, UpgradeNotice}
 import histos.scaffold.{ImportSource, Provision, ProvisionError, ScaffoldKind, Skeleton}
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
-import histos.select.SelectError
 import histos.toolchain.Runtimes
 import histos.mcp.HistosMcp
 import histos.resolve.{Resolve, ResolveError}
@@ -1798,16 +1797,22 @@ object Cli:
     val call = Call.Clean(projects, extent)
     extent match
       case histos.server.CleanExtent.Full =>
-        attach(repo, call, cleanFullLocal(repo))
+        attach(repo, call, cleanLoaded(repo, apiJar)(build => cleanFullLocal(repo, Some(build)))(cleanFullLocal(repo)))
       case histos.server.CleanExtent.Products =>
         attach(
           repo,
           call,
-          if projects.isEmpty then cleanLocal(repo)
+          if projects.isEmpty then cleanLoaded(repo, apiJar)(cleanNamed(repo, _, Nil))(cleanLocal(repo))
           else loaded(repo, apiJar)(cleanNamed(repo, _, projects)),
         )
 
-  private def cleanLocal(repo: Path): UIO[Completed] =
+  /** Recovery without a graph deletes ordinary products only, never generated aliases or storage. */
+  private[histos] def cleanLoaded[R](repo: Path, apiJar: Path)(
+      use: histos.load.LoadedBuild => URIO[R, Completed]
+  )(fallback: => URIO[R, Completed]): URIO[R & Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(_ => fallback, use)
+
+  private[histos] def cleanLocal(repo: Path): UIO[Completed] =
     histos.clean.Products
       .wipe(repo)
       .fold(
@@ -1815,39 +1820,38 @@ object Cli:
         _ => held(histos.clean.Products.line(Nil), CallResult.reported()),
       )
 
-  private def cleanNamed(
+  private[histos] def cleanNamed(
       repo: Path,
       build: histos.load.LoadedBuild,
       projects: List[ProjectName],
   ): UIO[Completed] =
-    histos.clean.Products
-      .named(repo, build.graph, projects)
+    histos.server.Calls
+      .cleanProducts(repo, build.graph, build.plugins, projects)
       .fold(
-        error => held("", CallResult.Fault(cleanFault(error))),
+        error => held("", CallResult.Fault(error)),
         names => held(histos.clean.Products.line(names), CallResult.reported()),
       )
 
-  private def cleanFault(error: SelectError | IoFailure): BuildFault =
-    error match
-      case found: SelectError => BuildFault.Select(found)
-      case found: IoFailure   => BuildFault.Io(found)
-
   /** Products go first. A store failure is exit 3 and does not claim success.
     */
-  private def cleanFullLocal(repo: Path): URIO[ContentStore, Completed] =
-    histos.clean.Products
-      .wipe(repo)
-      .foldZIO(
-        error => ZIO.succeed(held("", CallResult.Fault(BuildFault.Io(error)))),
-        _ =>
-          ZIO
-            .serviceWithZIO[ContentStore]: store =>
-              Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
-            .fold(
-              error => held("", CallResult.Fault(BuildFault.Cache(error))),
-              entries => held(histos.clean.Products.forgotten(entries), CallResult.reported()),
-            ),
-      )
+  private[histos] def cleanFullLocal(
+      repo: Path,
+      build: Option[histos.load.LoadedBuild] = None,
+  ): URIO[ContentStore, Completed] =
+    val removed = build match
+      case Some(build) => histos.server.Calls.cleanProducts(repo, build.graph, build.plugins, Nil).unit
+      case None        => histos.clean.Products.wipe(repo).mapError(BuildFault.Io(_))
+    removed.foldZIO(
+      error => ZIO.succeed(held("", CallResult.Fault(error))),
+      _ =>
+        ZIO
+          .serviceWithZIO[ContentStore]: store =>
+            Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
+          .fold(
+            error => held("", CallResult.Fault(BuildFault.Cache(error))),
+            entries => held(histos.clean.Products.forgotten(entries), CallResult.reported()),
+          ),
+    )
 
   private def resolve(
       repo: Path,
@@ -2683,16 +2687,25 @@ object Cli:
         dispatched(line.command)(call =>
           extent match
             case histos.server.CleanExtent.Full =>
-              attach(repo, call, machineOf(repo)(machine => storeOf(machine)(cleanFullLocal(repo))))
+              attach(
+                repo,
+                call,
+                inProcess(repo)((api, machine) =>
+                  withLoader(machine)(
+                    cleanLoaded(repo, api)(build => cleanFullLocal(repo, Some(build)))(cleanFullLocal(repo))
+                  )
+                ),
+              )
             case histos.server.CleanExtent.Products =>
               attach(
                 repo,
                 call,
-                if projects.isEmpty then cleanLocal(repo)
-                else
-                  inProcess(repo)((api, machine) =>
-                    withLoader(machine)(loaded(repo, api)(cleanNamed(repo, _, projects)))
-                  ),
+                inProcess(repo)((api, machine) =>
+                  withLoader(machine)(
+                    if projects.isEmpty then cleanLoaded(repo, api)(cleanNamed(repo, _, Nil))(cleanLocal(repo))
+                    else loaded(repo, api)(cleanNamed(repo, _, projects))
+                  )
+                ),
               )
         )
       case Command.Assembly(modules) =>

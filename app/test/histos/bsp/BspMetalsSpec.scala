@@ -223,6 +223,108 @@ object BspMetalsSpec extends ZIOSpecDefault:
         }
       }
     },
+    test(
+      "cold scoped Test import includes fixture Main/Test paths and scoped or emitted-only targets without compilation"
+    ) {
+      ZIO.scoped {
+        Workspace.work("bsp-scoped-import").flatMap { repo =>
+          import histos.plugin.*
+          val fixture  = module("fixture", Jvm)(scala3)
+          val consumer = module("consumer", Jvm)(scala3).testDependsOn(fixture)
+          val scoped   = module("scoped", Jvm)(scala3).roots(
+            ScopedRoot(RepoPath("scoped-exact"), SourceSet.Test, PlatformSelection.only(Jvm), RootKind.Sources)
+          )
+          val emitted  = module("emitted", Jvm)(scala3)
+          val producer = new HistosPlugin:
+            val id         = PluginId("bsp-emitted")
+            def contribute = Contribution(
+              List(
+                DeclaredTask(
+                  TaskName("generate"),
+                  Seal.Hermetic,
+                  Set.empty,
+                  Nil,
+                  List(DeclaredOutput.File(OutputName("source"), RepoPath("generated/Fixture.scala"))),
+                  List(
+                    TaskDep.EmitScoped(
+                      ProjectName("emitted"),
+                      SourceSet.Test,
+                      PlatformSelection.only(Jvm),
+                      EmittedContent.SourceFile(ArtifactPath("Fixture.scala")),
+                      OutputName("source"),
+                    )
+                  ),
+                )
+              ),
+              Nil,
+              Nil,
+            )
+            def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+              ZIO.fail(PluginRunError.Failed(PluginDetail("metadata must not invoke producers")))
+          val built = Projects(fixture, consumer, scoped, emitted).map(
+            _.withPlugins(
+              List(RegisteredPlugin(producer.id, producer.contribute)(producer))
+            )
+          )
+          compilerLock(built).flatMap { lock =>
+            open(repo, built, lock) { (bsp, _, _) =>
+              for
+                _       <- write(repo.resolve("fixture/src/FixtureMain.scala"), "class FixtureMain\n")
+                _       <- write(repo.resolve("fixture/test/Fixture.scala"), "class Fixture extends FixtureMain\n")
+                _       <- write(repo.resolve("consumer/test/Consumer.scala"), "class Consumer extends Fixture\n")
+                _       <- write(repo.resolve("scoped-exact/Only.scala"), "class Only\n")
+                _       <- call(bsp, "build/initialize", Json.Obj(), 1)
+                options <- call(bsp, "buildTarget/scalacOptions", targetsOf(testOf(repo, "consumer")), 2)
+                listed  <- call(bsp, "workspace/buildTargets", Json.Obj(), 3)
+                sources <- call(bsp, "buildTarget/sources", targetsOf(testOf(repo, "scoped")), 4)
+                cold    <- ZIO
+                  .attemptBlocking(
+                    Files.notExists(repo.resolve(".histos/classes")) &&
+                      Files.notExists(repo.resolve(".histos/test-classes")) && Files
+                        .notExists(repo.resolve("generated"))
+                  )
+                  .mapError(_ => IoFailure(repo, IoFault.Stat))
+                expected = List(
+                  GraphCompile.classesDir(repo, ProjectName("consumer"), scala3, Jvm),
+                  GraphCompile.classesDir(repo, ProjectName("fixture"), scala3, Jvm),
+                  TestCompile.testClasses(repo, ProjectName("fixture"), scala3, Jvm),
+                ).map(Bsp.fileUri)
+                compiled        <- call(bsp, "buildTarget/compile", targetsOf(testOf(repo, "consumer")), 5)
+                fixtureProducts <- ZIO
+                  .attemptBlocking(
+                    Files.exists(
+                      GraphCompile.classesDir(repo, ProjectName("fixture"), scala3, Jvm).resolve("FixtureMain.class")
+                    ) &&
+                      Files.exists(
+                        TestCompile.testClasses(repo, ProjectName("fixture"), scala3, Jvm).resolve("Fixture.class")
+                      ) &&
+                      Files.exists(
+                        TestCompile.testClasses(repo, ProjectName("consumer"), scala3, Jvm).resolve("Consumer.class")
+                      )
+                  )
+                  .mapError(_ => IoFailure(repo, IoFault.Stat))
+              yield
+                val paths   = parsed[Rpc.ScalacOptionsResult](options).map(_.items.flatMap(_.classpath))
+                val targets = parsed[Rpc.BuildTargetsResult](listed).map(_.targets)
+                assertTrue(
+                  paths.exists(found => expected.forall(found.contains)),
+                  targets.exists(_.exists(_.id.uri == testOf(repo, "scoped"))),
+                  targets.exists(_.exists(_.id.uri == testOf(repo, "emitted"))),
+                  targets.exists(
+                    _.find(_.id.uri == testOf(repo, "consumer")).exists(target =>
+                      target.dependencies.map(_.uri).toSet == Set(mainOf(repo, "consumer"), testOf(repo, "fixture"))
+                    )
+                  ),
+                  sources.contains(Bsp.fileUri(repo.resolve("scoped-exact/Only.scala"))),
+                  cold,
+                  parsed[Rpc.CompileResult](compiled).map(_.statusCode) == Right(1),
+                  fixtureProducts,
+                )
+            }
+          }
+        }
+      }
+    },
     test("one drifted scalacOptions target does not drop the other") {
       ZIO.scoped {
         Workspace.work("bsp-metals").flatMap { repo =>

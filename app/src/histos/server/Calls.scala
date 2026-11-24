@@ -356,7 +356,7 @@ object Calls:
           told(say, shown.mkString("\n")) *> finish(say, result),
       )
 
-  private def released[R](
+  private[histos] def released[R](
       repo: Path,
       say: Say,
       console: histos.cli.CompileConsole.Session,
@@ -370,7 +370,7 @@ object Calls:
             say,
             console,
             List(console.observation),
-            CallResult.Fault(BuildFault.Release(failure.message)),
+            CallResult.Fault(releaseFault(failure)),
           ),
       report =>
         val shown =
@@ -1181,19 +1181,53 @@ object Calls:
       }
     }
 
+  private def releaseFault(error: ReleaseError): BuildFault = error match
+    case ReleaseError.Stage(error) => BuildFault.Publish(error)
+    case other                     => BuildFault.Release(other.message)
+
+  /** Missing committed products refuse preview. Producers are never invoked by this read-only projection. */
+  private[histos] def previewUsing[A](
+      graph: ProjectGraph,
+      plugins: histos.load.PluginRuntime,
+      roots: List[histos.build.BuildNode],
+  )(use: histos.zinc.GeneratedRoots => IO[Plan.ProjectionError, A]): IO[BuildFault, A] =
+    ZIO.scoped {
+      for
+        dag <- ZIO
+          .fromEither(histos.build.BuildDag.plan(graph, roots))
+          .mapError(error => BuildFault.Preview(Plan.failure(error)))
+        views <- ZIO.foreach(dag.nodes.collect { case histos.build.BuildNode.Generate(id) => id }) { id =>
+          plugins
+            .generated(id)
+            .mapError(BuildFault.Plugin(_))
+            .map(_.values.map { location =>
+              histos.zinc.GeneratedLocation(
+                histos.zinc.GeneratedRootId(id, location.output.name),
+                location.output.kind,
+                location.path,
+              )
+            })
+        }
+        result <- use(histos.zinc.GeneratedRoots.Provided(views.flatten))
+          .mapError(error => BuildFault.Preview(Plan.failure(error)))
+      yield result
+    }
+
   def previewCompile(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
       say: Say,
+      plugins: histos.load.PluginRuntime,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   ): IO[ServerError, Unit] =
-    Plan
-      .show(repo, graph, projects, platforms = platforms)
-      .foldZIO(
-        error => fault(say, BuildFault.Preview(Plan.failure(error))),
-        text => told(say, text) *> ok(say),
-      )
+    ZIO
+      .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+      .mapError(error => BuildFault.Preview(histos.preview.PreviewError.Test(error)))
+      .flatMap { roots =>
+        previewUsing(graph, plugins, roots)(generated => Plan.show(repo, graph, projects, generated, platforms))
+      }
+      .foldZIO(error => fault(say, error), text => told(say, text) *> ok(say))
 
   def previewTest(
       repo: Path,
@@ -1201,12 +1235,22 @@ object Calls:
       selection: histos.TestSelection,
       patterns: List[histos.testrun.SuitePattern],
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): IO[ServerError, Unit] =
-    Plan
-      .testSelection(repo, graph, selection)
-      .map(plan => Plan.narrow(plan, patterns))
+    ZIO
+      .fromEither(histos.testrun.TestCells.plan(graph, selection))
+      .mapError(error =>
+        BuildFault.Preview(
+          Plan.failure(histos.preview.PreviewError.Scoped(histos.testrun.ScopedTestFailure.Selection(error)))
+        )
+      )
+      .flatMap { selected =>
+        previewUsing(graph, plugins, selected.compileStageRoots.map(histos.build.BuildNode.Compile(_))) { generated =>
+          Plan.testSelection(repo, graph, selection, generated).map(plan => Plan.narrow(plan, patterns))
+        }
+      }
       .foldZIO(
-        error => fault(say, BuildFault.Preview(Plan.failure(error))),
+        error => fault(say, error),
         plan => told(say, Plan.renderTest(repo, plan)) *> ok(say),
       )
 
@@ -1238,7 +1282,7 @@ object Calls:
         plan => told(say, Plan.renderPublish(plan)) *> ok(say),
       )
 
-  /** Empty names do not read `graph`. */
+  /** Named and whole graph-backed previews include declared generated ownership. */
   def previewClean(
       repo: Path,
       graph: ProjectGraph,
@@ -1271,25 +1315,33 @@ object Calls:
       case Left(error) => fault(say, BuildFault.Preview(Plan.failure(error)))
       case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
-  /** No names wipe every product root and do not read `graph`. The resident memo and compiler go with the products. A
-    * deleted source is not still a hit.
-    */
+  /** Generated readers must retire before any ordinary class products are deleted. */
   def clean(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
-    val removed =
-      if projects.isEmpty then histos.clean.Products.wipe(repo).as(histos.clean.Products.line(Nil))
-      else
-        histos.clean.Products
-          .named(repo, graph, projects)
-          .map(histos.clean.Products.line)
+    val removed = cleanProducts(repo, graph, plugins, projects).map(histos.clean.Products.line)
     removed.foldZIO(
-      error => fault(say, cleanFault(error)),
+      error => fault(say, error),
       line => release *> told(say, line) *> ok(say),
     )
+
+  private[histos] def cleanProducts(
+      repo: Path,
+      graph: ProjectGraph,
+      plugins: histos.load.PluginRuntime,
+      projects: List[ProjectName],
+  ): IO[BuildFault, List[ProjectName]] =
+    histos.clean.Products
+      .namedUsing(histos.clean.GeneratedCleaner(plugins.cleanProducts))(
+        repo,
+        graph,
+        projects,
+      )
+      .mapError(cleanFault)
 
   def wipe(repo: Path, say: Say): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
     histos.clean.Products
@@ -1301,25 +1353,26 @@ object Calls:
 
   /** Products go first. A store failure is exit 3 and does not claim success.
     */
-  def cleanFull(repo: Path, say: Say): ZIO[
+  def cleanFull(repo: Path, say: Say, build: Option[histos.load.LoadedBuild] = None): ZIO[
     ContentStore & histos.zinc.CompileMemo & histos.zinc.Compilers,
     ServerError,
     Unit,
   ] =
-    histos.clean.Products
-      .wipe(repo)
-      .foldZIO(
-        error => fault(say, BuildFault.Io(error)),
-        _ =>
-          release *>
-            ZIO
-              .serviceWithZIO[ContentStore]: store =>
-                zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
-              .foldZIO(
-                error => fault(say, BuildFault.Cache(error)),
-                entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
-              ),
-      )
+    val removed = build match
+      case Some(build) => cleanProducts(repo, build.graph, build.plugins, Nil).unit
+      case None        => histos.clean.Products.wipe(repo).mapError(BuildFault.Io(_))
+    removed.foldZIO(
+      error => fault(say, error),
+      _ =>
+        release *>
+          ZIO
+            .serviceWithZIO[ContentStore]: store =>
+              zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
+            .foldZIO(
+              error => fault(say, BuildFault.Cache(error)),
+              entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
+            ),
+    )
 
   /** Products are gone, or the build was reloaded. Drop remembered inputs and the resident compiler. */
   def release: zio.URIO[histos.zinc.CompileMemo & histos.zinc.Compilers, Unit] =
@@ -1527,11 +1580,15 @@ object Calls:
     }
 
   private def cleanFault(
-      error: histos.select.SelectError | histos.workspace.IoFailure
+      error: histos.select.SelectError | histos.workspace.IoFailure | histos.build.BuildDagError |
+        histos.load.PluginFault
   ): BuildFault =
     error match
       case found: histos.select.SelectError  => BuildFault.Select(found)
       case found: histos.workspace.IoFailure => BuildFault.Io(found)
+      case found: histos.load.PluginFault    => BuildFault.Plugin(found)
+      case found: histos.build.BuildDagError =>
+        BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.graph(found)))
 
   private def relative(repo: Path, path: Path): String =
     val base = repo.toAbsolutePath.normalize
