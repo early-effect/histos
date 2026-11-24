@@ -60,14 +60,30 @@ once they have the `histos` command on their `PATH`.
       cite[histos.publish.LauncherPin.type](_.Key),
       cite[histos.publish.LauncherPin.type](_.read),
     ),
-    section("Three ways to write the pin")(
+    section("Four ways to write the pin")(
       md"""
-A release pin is a ship number, such as the stable you want frozen. A pointer ends in
-`SNAPSHOT` and follows the newest build of that line. A revision pin freezes one build: a
-timestamp, or a commit. `histos update` rewrites the pin. `--follow` keeps a moving line.
-`--freeze` records the exact build you have.
+A release pin is a ship number, such as `0.5.0`. The shim runs that release.
+
+A line pointer is `<ship>-SNAPSHOT`, such as `0.5.0-SNAPSHOT`. The shim reads
+`channel-<ship>-SNAPSHOT` and runs the timestamp that file names now. `publish snapshots`
+moves that file.
+
+A commit coordinate is `<ship>-<12 hex>-SNAPSHOT`. The shim reads the channel file for
+that coordinate and runs the timestamp stored for that commit. Publishing the coordinate
+does not move the line pointer.
+
+A revision is a timestamp, `<ship>-yyyyMMdd.HHmmss-<n>`. The shim runs that build. It does
+not read a channel file. A commit is not a revision.
+
+`histos update` rewrites the pin. A release pin moves to the newest release. A pin that
+ends in `-SNAPSHOT`, a line pointer or a commit coordinate, defaults to `--follow`. That
+writes the newest line pointer, `<line>-SNAPSHOT`. `--freeze` writes the timestamp that
+pointer's channel file names now. A timestamp pin defaults to `--freeze`. `--follow` and
+`--freeze` are opposites.
 """,
       cite[histos.publish.LauncherPin.type](_.from),
+      cite[histos.publish.LauncherChoice].signature,
+      cite[histos.version.Revision.type](_.parse),
     ),
     section("One command, one toolchain")(
       md"""
@@ -86,8 +102,9 @@ Most commands run on the JVM. `compile`, `test`, `run`, `clean`, `fmt`, and `com
 instead go through `histos-client`, a native binary linked beside the jar. That binary is
 optional. The install script does not build it, and it does not install clang or the
 Coursier `cs` tool. `histos toolchain client` links the client for the jar you have. In CI,
-`./histos` stays on `java -jar`. `histos toolchain install --client` is how a CI job opts in
-and links. Passing `--client` and `--no-client` together fails.
+`./histos` stays on `java -jar` unless the install passes `--client`. A generated
+workflow's setup action does not pass that flag. Passing `--client` and `--no-client`
+together fails.
 """,
       cite[histos.cli.Command].signature.elided(16),
     ),

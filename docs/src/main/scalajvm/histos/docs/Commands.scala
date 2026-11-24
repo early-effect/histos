@@ -287,7 +287,7 @@ the Histos pin.
 """,
     cite[histos.ReleaseMode].signature,
     section("publish local")(
-      md"`histos publish local` writes the snapshot coordinate of this commit into the local Ivy repository. Another project on this machine can then depend on it."
+      md"`histos publish local` writes the snapshot coordinate of this commit into the local Ivy repository. It does not upload. Another project on this machine can then depend on it. `histos publish snapshots` publishes that coordinate."
     ),
     section("publish withdraw")(
       md"`histos publish withdraw` removes those local Ivy revisions, and the toolchain directory for this commit. The pin in `build.properties` stays."
@@ -446,8 +446,11 @@ job opted in with `toolchain install --client`.
       md"""
 `histos update` moves you to a newer Histos. Inside a project it rewrites
 `build.properties` and then runs `version` on that pin, so you see the toolchain you
-just selected. `--make-default` also writes `~/.histos/default`. `--follow` keeps a
-moving snapshot line. `--freeze` records the exact build.
+just selected. `--make-default` also writes `~/.histos/default`. A release pin moves to
+the newest release. A pin that ends in `-SNAPSHOT`, including a commit coordinate,
+defaults to `--follow`, which writes the newest line pointer. `--freeze` writes the
+timestamp that pointer's channel file names now. A timestamp pin defaults to `--freeze`.
+`--follow` and `--freeze` are opposites.
 """
     ),
     section("self update")(

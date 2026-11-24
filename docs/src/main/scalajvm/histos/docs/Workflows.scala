@@ -17,6 +17,21 @@ would write. `histos workflow --update` writes them. Neither command publishes a
 and neither changes the Histos version pinned in `build.properties`.
 """,
     cite[histos.cli.Help.type](_.render),
+    section("Which Histos a job runs")(
+      md"""
+A generated job installs the Histos named by `histos.version` in `build.properties`.
+The setup action reads that pin and runs `toolchain install` with no `--client` flag,
+so the job stays on `java -jar`. CI does not pack this checkout and hand that jar to
+the next job. There is no generated `publish` job, and Histos does not generate a
+`client` job.
+
+A catalog with a ship also gets a `compatibility` job. It runs `histos publish check`.
+`histos publish local` stays a command you run on a machine. It writes the local Ivy
+repository and does not upload, so a generated workflow cannot install its result.
+""",
+      cite[histos.workflow.CiInstall.type](_.ActionPath),
+      cite[histos.workflow.Workflow.type](_.requiredJobs),
+    ),
     section("A plugin can add a job")(
       md"""
 The generated file is not only compile and test. A plugin can contribute a job. Histos

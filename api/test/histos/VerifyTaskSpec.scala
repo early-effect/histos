@@ -25,23 +25,21 @@ object VerifyTaskSpec extends ZIOSpecDefault:
   private val api = module("api", Jvm)(scala"3.10.1")
 
   def spec = suite("verify tasks")(
-    test("a build that does not ask has no verify task and stays on the pin") {
+    test("a build that does not ask has no verify task") {
       val built = Projects(api)
       assertTrue(
         built.map(_.verify) == Right(Nil),
-        built.map(_.suiteHost) == Right(SuiteHost.Pin),
         built.map(graph => JobCheck.generated(graph).contains(JobName("publish"))) == Right(false),
       )
     },
-    test("verify appends a task and a local suite adds the publish job") {
+    test("verify appends a task and does not add a publish job") {
       val task  = VerifyTask(JobName("client"), host, ClientLink.Native)
-      val built = Projects.verify(task).publishLocalSuite(api)
+      val built = Projects.verify(task)(api)
       assertTrue(
         built.map(_.verify) == Right(List(task)),
-        built.map(_.suiteHost) == Right(SuiteHost.Local),
         built.map { graph =>
           val names = JobCheck.generated(graph)
-          names.contains(JobName("client")) && names.contains(JobName("publish"))
+          names.contains(JobName("client")) && !names.contains(JobName("publish"))
         } == Right(true),
       )
     },
@@ -59,10 +57,6 @@ object VerifyTaskSpec extends ZIOSpecDefault:
     test("a verify job cannot take the test job") {
       val built = Projects.verify(VerifyTask(JobName("test"), host))(api)
       assertTrue(built == Left(BuildError.Ci(CiFault.VerifyJobTaken(JobName("test")))))
-    },
-    test("a local suite already renders publish") {
-      val built = Projects.publishLocalSuite.verify(VerifyTask(JobName("publish"), host))(api)
-      assertTrue(built == Left(BuildError.Ci(CiFault.VerifyJobTaken(JobName("publish")))))
     },
     test("a plugin job cannot reuse a verify task's job name") {
       val plugin = new HistosPlugin:

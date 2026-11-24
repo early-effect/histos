@@ -42,14 +42,3 @@ end VerifyRun
 enum ClientLink:
   case Skip
   case Native
-
-/** Where test, scaladoc, format, and verify tasks get Histos. Pin is the setup action. Local is a publish job that runs
-  * `./histos publish local`, then those jobs install that jar. Affected, versions, workflow, supply-chain,
-  * dependency-snapshot, and cache-seed stay on the pin either way.
-  *
-  * Local lets this commit grade itself, so a bug in that jar can report the tree green. The pin should stay the judge.
-  * Histos still opts into Local. The deferred switch is `docs/audits/suite-host.md`.
-  */
-enum SuiteHost:
-  case Pin
-  case Local

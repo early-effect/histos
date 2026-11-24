@@ -1,6 +1,6 @@
 import dev.earlyeffect.specular.{Site, SiteCi, Specular}
 import histos.*
-import histos.plugin.{BuildServices, JobName, NoteKey, NoteText, PluginId, SecretName, Site as _, SitePublish, TaskName}
+import histos.plugin.{BuildServices, NoteKey, NoteText, PluginId, SecretName, Site as _, SitePublish}
 import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 import zio.*
 
@@ -173,12 +173,10 @@ object build extends HistosBuild:
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .scalafmt
       .docCheck
-      .verify(VerifyTask(JobName("client"), VerifyRun.BuiltIn(TaskName("host")), ClientLink.Native))
       .resolvers(
         Resolver.Maven(RepositoryUrl("https://central.sonatype.com/repository/maven-snapshots/")),
         Resolver.Central,
-      )
-      .publishLocalSuite(
+      )(
         ships(library),
         api,
         wire,
