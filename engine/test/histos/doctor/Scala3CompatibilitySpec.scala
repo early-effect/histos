@@ -59,7 +59,49 @@ object Scala3CompatibilitySpec extends ZIOSpecDefault:
           }
           assertTrue(sidecars, results.exists(_._1 == CompatibilityResult.Compatible), removed)
         }
-    }
+    },
+    test("unreadable TASTy cannot hide an absent bundled class or bypass matched-class analysis") {
+      PluginCompileSupport
+        .run { (root, _) =>
+          for
+            store   <- ZIO.service[ContentStore]
+            payload <- PluginCompileSupport
+              .payload(root.resolve("compiler"), "3.10.1", PluginCompileSupport.Scala3101)
+              .mapError(PluginCompileError.Host(_))
+            session <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
+            old     <- compile(root.resolve("old"), session, "def kept: Int = 1")
+            _       <- PluginCompileSupport.write(old.resolve("fixture/Api.tasty"), "unreadable metadata")
+            jar     <- baselineJar(root.resolve("bundled.jar"), old)
+            absent  <- ZIO
+              .attemptBlocking(Files.createDirectories(root.resolve("absent")))
+              .mapError(_ => PluginCompileError.Io(IoFailure(root, IoFault.Write)))
+            results <- ZIO
+              .serviceWithZIO[CompatibilityAnalyzer] { analyzer =>
+                for
+                  missing <- analyzer.analyze(CompatibilityInput(Platform.Jvm, jar, absent)).either
+                  matched <- analyzer.analyze(CompatibilityInput(Platform.Jvm, jar, old)).either
+                yield (missing, matched)
+              }
+              .provideLayer(CompatibilityAnalyzer.jvm)
+              .either
+          yield results
+        }
+        .map { ran =>
+          val missing = ran.value.exists { (result, _) =>
+            result.exists {
+              case CompatibilityResult.Incompatible(problems) =>
+                problems.contains(CompatibilityProblem.MissingClass("fixture.Api"))
+              case CompatibilityResult.Compatible => false
+            }
+          }
+          val matched = ran.value.exists { (_, result) =>
+            result match
+              case Left(CompatibilityError.AnalysisFailed(_, _)) => true
+              case _                                             => false
+          }
+          assertTrue(missing, matched)
+        }
+    },
   )
 
   def spec = proof @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)

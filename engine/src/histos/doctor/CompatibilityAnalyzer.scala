@@ -10,6 +10,7 @@ import scala.jdk.CollectionConverters.*
 
 import com.typesafe.tools.mima.core.{MemberProblem, MissingClassProblem, Problem, TemplateProblem}
 import com.typesafe.tools.mima.lib.MiMaLib
+import org.objectweb.asm.{Attribute, ClassReader, ClassVisitor, ClassWriter, Opcodes}
 import zio.{IO, Layer, Scope, ZIO, ZLayer}
 
 final case class CompatibilityInput(backend: Platform, previous: Path, current: Path)
@@ -116,10 +117,25 @@ final class JvmCompatibilityAnalyzer(mima: MiMaLib) extends CompatibilityAnalyze
                         _ <- ZIO
                           .attemptBlockingInterrupt:
                             Option(destination.getParent).foreach(Files.createDirectories(_))
-                            Files.copy(source, destination)
+                            val name   = entry.getName
+                            val absent = !Files.isRegularFile(input.current.resolve(name))
+                            if name.endsWith(".class") && absent then
+                              Files.write(destination, missingClass(source.readAllBytes()))
+                            else Files.copy(source, destination)
+                            ()
                           .mapError(CompatibilityError.AnalysisFailed(input, _))
                       yield ()
           yield root
+
+  // Absent classes still produce JVM problems. TASTy can only narrow their visibility, not restore them.
+  private def missingClass(bytes: Array[Byte]): Array[Byte] =
+    val reader  = new ClassReader(bytes)
+    val writer  = new ClassWriter(reader, 0)
+    val visitor = new ClassVisitor(Opcodes.ASM9, writer):
+      override def visitAttribute(attribute: Attribute): Unit =
+        if attribute.`type` != "TASTY" then super.visitAttribute(attribute)
+    reader.accept(visitor, 0)
+    writer.toByteArray
 
   private def problem(found: Problem): CompatibilityProblem =
     found match
