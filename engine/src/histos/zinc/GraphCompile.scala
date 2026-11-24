@@ -770,15 +770,18 @@ object GraphCompile:
                     .substituted(plan.repo, module, plan.plugins)
                     .mapError(carried)
                   bytes <- CompileInputs.jarBytes(jars).mapError(failed)
+                  plugin = covered(plan, version, platform).flatMap(_.plugin(version))
+                  runtimeHashes <- CompileInputs.jarBytes(plugin.map(_.runtime).toList).mapError(failed)
                   base = CompileRequest(
                     CompileToolchain(version, platform, plan.jdk, module.flags),
                     sourceInputs.map(_.path),
                     Nil,
                     classes,
                     recorded,
-                    hashes,
+                    hashes ++ runtimeHashes,
                     apis,
                     coverage = identity,
+                    coverageTools = plugin.fold(List.empty[ToolInput])(_.tools),
                     checkout = plan.repo,
                     apiBytes = bytes,
                     sourceInputs = sourceInputs,
@@ -922,6 +925,22 @@ object GraphCompile:
         )
       )
       .provideSomeLayer(ZLayer.succeed(plan.tools))
+      .flatMap: assembled =>
+        covered(plan, version, platform) match
+          case None       => ZIO.succeed(assembled)
+          case Some(spec) =>
+            val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
+            for
+              jars <- ZIO
+                .fromEither(
+                  histos.coverage.Classpath.tests(assembled.jars, version, spec.plugin(version).map(_.runtime))
+                )
+                .mapError:
+                  case histos.coverage.ClasspathGap.MissingRuntime =>
+                    failed(CompileError.Toolchain(ToolchainMiss.Coverage(version)))
+              extra = jars.filterNot(assembled.jars.contains)
+              hashes <- CompileInputs.jarBytes(spec.plugin(version).map(_.runtime).toList).mapError(failed)
+            yield assembled.copy(paths = assembled.paths ++ extra, jars = jars, hashes = assembled.hashes ++ hashes)
 
   /** Unmanaged resources and generated assets, after compile and after a product restore. The ownership list lives in
     * the analysis directory, so a class-directory wipe does not forget which files this sync owns.

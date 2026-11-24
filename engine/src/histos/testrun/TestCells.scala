@@ -32,19 +32,33 @@ enum TestExecutionGroup:
     case NativeAggregate(_, members) => members.toList
 end TestExecutionGroup
 
+enum TestCellPolicy:
+  case Declared, MeasuredJvm
+
 object TestCells:
   /** DAG roots are not a dependency closure. The DAG expands scoped Main/Test edges and picks upstream versions. A
     * Native owner is link configuration, not an extra requested suite. Only exact, fully selected member cells
     * aggregate; focused individual requests, unmatched Scala versions and partial groups remain direct.
     */
   def plan(graph: ProjectGraph, selection: TestSelection): Either[TestSelectionError, TestCellPlan] =
+    plan(graph, selection, TestCellPolicy.Declared)
+
+  def plan(
+      graph: ProjectGraph,
+      selection: TestSelection,
+      policy: TestCellPolicy,
+  ): Either[TestSelectionError, TestCellPlan] =
     val modules = graph.projects.collect { case module: Module => module }
     val owners  = modules.filter(_.testAggregates.nonEmpty)
     for
       _        <- validate(graph, owners).left.map(TestSelectionError.Aggregate(_))
-      selected <- select(graph, selection)
+      selected <- select(graph, selection, policy)
     yield
-      val requested  = selected.filter(cell => selection.affected.forall(_.contains(cell.module)))
+      val requested = selected.filter: cell =>
+        val eligible = policy match
+          case TestCellPolicy.Declared    => true
+          case TestCellPolicy.MeasuredJvm => histos.coverage.Cell.measures(cell.version, cell.platform)
+        eligible && selection.affected.forall(_.contains(cell.module))
       val groups     = execution(owners, requested, selection.targets)
       val ownerRoots = groups.collect:
         case TestExecutionGroup.NativeAggregate(owner, _) if !requested.contains(owner) =>
@@ -85,11 +99,23 @@ object TestCells:
                     case Some(member) => Left(TestAggregateError.Overlap(owner.name, other.name, member))
                     case None         => Right(())
 
-  private def select(graph: ProjectGraph, selection: TestSelection): Either[TestSelectionError, List[Cell]] =
+  private def select(
+      graph: ProjectGraph,
+      selection: TestSelection,
+      policy: TestCellPolicy,
+  ): Either[TestSelectionError, List[Cell]] =
     selection.targets match
       case TestTargets.All               => Right(suites(graph, selection.platforms))
       case TestTargets.Filtered(modules) =>
-        Right(suites(graph, selection.platforms).filter(cell => modules.contains(cell.module)))
+        val eligible = policy match
+          case TestCellPolicy.Declared    => suites(graph, selection.platforms)
+          case TestCellPolicy.MeasuredJvm =>
+            graph.projects
+              .collect { case module: Module =>
+                module
+              }
+              .flatMap(module => cells(module, selection.platforms.selected(module.platforms)))
+        Right(eligible.filter(cell => modules.contains(cell.module)))
       case TestTargets.Named(first, rest) =>
         (first :: rest).distinct.foldLeft[Either[TestSelectionError, List[Cell]]](Right(Nil)): (acc, name) =>
           acc.flatMap: found =>

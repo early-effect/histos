@@ -17,7 +17,7 @@ object ModuleTest:
 
   def run(asked: TestRun): ZIO[Resolve & ContentStore, ModuleTestError, List[TestReport]] =
     ZIO
-      .fromEither(TestCells.plan(asked.graph, asked.selection))
+      .fromEither(TestCells.plan(asked.graph, asked.selection, asked.cellPolicy))
       .mapError(error => ModuleTestError.Scoped(ScopedTestFailure.Selection(error)))
       .flatMap: plan =>
         console(asked)
@@ -99,7 +99,7 @@ object ModuleTest:
   ] =
     ZStream.unwrapScoped:
       for
-        plan  <- ZIO.fromEither(TestCells.plan(asked.graph, asked.selection))
+        plan  <- ZIO.fromEither(TestCells.plan(asked.graph, asked.selection, asked.cellPolicy))
         lock  <- ZIO.serviceWithZIO[ResolutionService](_.current)
         queue <- ZIO.acquireRelease(Queue.unbounded[Take[E | Error, SessionFeed]])(_.shutdown)
         session = CompileSession(asked.repo, asked.graph, asked.jdk, asked.runtimes.native, lock, asked.coverage)

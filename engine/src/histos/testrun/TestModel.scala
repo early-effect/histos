@@ -29,5 +29,6 @@ final case class TestRun(
     coverage: Option[histos.coverage.CoverageCompile] = None,
     platforms: PlatformSelection = PlatformSelection.All,
     requested: Option[TestSelection] = None,
+    cellPolicy: TestCellPolicy = TestCellPolicy.Declared,
 ):
   def selection: TestSelection = requested.getOrElse(TestSelection.named(names, platforms))

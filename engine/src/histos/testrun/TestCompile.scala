@@ -105,9 +105,15 @@ private[histos] object TestCompile:
               .map(List(_))
           else ZIO.succeed(Nil)
         inherited = (main.classpath ++ selected.flatMap(_.classpath)).distinct
-        paths     = (inherited ++ library ++ fetched.paths.filterNot(path =>
+        basePaths = (inherited ++ library ++ fetched.paths.filterNot(path =>
           cell.platform != Platform.Js && JvmCompile.isStandardLibrary(path)
         ) ++ host).distinct
+        paths <- extendRuntime(
+          session.coverage.filter(_ => histos.coverage.Cell.measures(cell.version, cell.platform)),
+          main.compiled,
+          basePaths,
+        )
+          .mapError(ExecutionError.Test(_))
         identities <- ZIO.foreach(paths)(CellCapture.implementation(_).mapError(failed))
         jars       <- ZIO.filter(paths)(path =>
           ZIO

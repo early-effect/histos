@@ -11,7 +11,6 @@ import histos.zinc.GraphCompile
 import java.nio.file.{Files, Path}
 
 import zio.{Ref, Scope, UIO, ZIO, ZLayer, durationInt}
-import histos.schedule.{Histos, Outcome, Parallelism}
 import zio.test.*
 
 object PluginScopedCompileSpec extends ZIOSpecDefault:
@@ -120,6 +119,117 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
         }
         .provide(Resolve.coursier, PluginProducts.live)
     },
+    test("actual coverage runs a generated JVM source/resource producer without broadening requested suites") {
+      for
+        calls    <- Ref.make(0)
+        observed <- Ref.make(List.empty[CellClasspath])
+        plugin      = CoverageProducer(calls, observed)
+        measured    = ScalaVersion("2.13.18")
+        unsupported = ScalaVersion("2.12.20")
+        host        = ProjectName("host")
+        graph <- ZIO.fromEither(
+          Projects(
+            module("host", Jvm)(version),
+            module("app", Jvm, Js, Native)(measured, unsupported).clang(ClangMajor(21)).test(TestMain("demo.Check")),
+          )
+        )
+        linked = graph.withPlugins(List(RegisteredPlugin(plugin.id, plugin.contribute)(plugin)))
+        result <- histos.testrun.TestExecutionFixtures.withGraph(linked): fixture =>
+          val effect =
+            for
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("host/src/demo/Host.scala"),
+                "package demo\nobject Host { def value: Int = 1 }\n",
+              )
+              _ <- Workspace.writeString(fixture.repo.resolve("host/test/demo/Broken.scala"), "this must never compile")
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("app/src/demo/Main.scala"),
+                "package demo\nobject Main { def value: Int = Generated.value }\n",
+              )
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("app/test/jvm/demo/Check.scala"),
+                """package demo
+                |object Check {
+                |  def main(args: Array[String]): Unit = {
+                |    val text = Option(getClass.getResourceAsStream("/generated.txt")).fold("missing") { input =>
+                |      try new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                |      finally input.close()
+                |    }
+                |    println("generated=" + Main.value + ":" + text)
+                |  }
+                |}
+                |""".stripMargin,
+              )
+              _ <- Workspace.writeString(fixture.repo.resolve("nonJvm-counter"), "0")
+              _ <- ZIO.foreachDiscard(List("js", "native")): platform =>
+                Workspace.writeString(
+                  fixture.repo.resolve(s"app/test/$platform/demo/Check.scala"),
+                  "package demo\nobject Check { def main(args: Array[String]): Unit = java.nio.file.Files.writeString(java.nio.file.Path.of(sys.env.getOrElse(\"HISTOS_REPO\", \".\"), \"nonJvm-counter\"), \"1\") }\n",
+                )
+              leases  <- GenerationLeases.make
+              threads <- PluginThreads.make(getClass.getClassLoader)
+              runtime <- PluginRuntime.loaded(
+                fixture.repo,
+                linked,
+                getClass.getClassLoader,
+                threads,
+                Nil,
+                ApiDigest.trusted("ab" * 32),
+                leases,
+                Nil,
+              )
+              heard   <- Ref.make(List.empty[String])
+              outcome <- histos.coverage.Run.execute(
+                histos.coverage.CoverageRequest(
+                  fixture.repo,
+                  linked,
+                  List(name),
+                  fixture.session.jdk,
+                  fixture.runtimes,
+                  CoverageFloors(statements = Some(100)),
+                  histos.coverage.Excludes(Nil, Nil),
+                  321L,
+                ),
+                histos.coverage.CoverageLines(line => heard.update(_ :+ line), _ => ZIO.unit),
+                Some(runtime),
+              )
+              inventory <- histos.coverage.Gather.read(
+                histos.coverage.Flags.classesDir(fixture.repo, name, measured, Jvm)
+              )
+              report = histos.coverage.Report.of(inventory._1, inventory._2)
+              counter <- Workspace.readString(fixture.repo.resolve("nonJvm-counter"))
+              solved  <- ResolutionService.open(fixture.repo, linked).flatMap(_.current)
+              count   <- calls.get
+              facts   <- observed.get
+              lines   <- heard.get
+              xml     <- Workspace.readString(fixture.repo.resolve(".histos/coverage/scoverage.xml"))
+            yield assertTrue(
+              outcome == histos.coverage.CoverageResult.Met(
+                histos.coverage.Render.show(
+                  report,
+                  CoverageFloors(statements = Some(100)),
+                  histos.coverage.Cell.skipped(linked.projects.collect {
+                    case module: Module if module.name == name => module
+                  }),
+                )
+              ),
+              report.statements.total > 0,
+              report.statements.hit == report.statements.total,
+              inventory._2.nonEmpty,
+              count == 1,
+              lines.exists(_.contains("generated=42:resource")),
+              counter == "0",
+              solved.tools.nonEmpty,
+              solved.tools.forall(_.id.variant == histos.resolve.ToolVariant.Jvm),
+              solved.tools.forall(_.id.scalaVersion != unsupported),
+              solved.cells.forall(_.platform == Jvm),
+              facts.map(_.stage) == List(CompilationStage(Cell(host, version, Jvm), SourceSet.Main)),
+              !solved.cells.exists(cell => cell.module == host && cell.scope == histos.resolve.ClasspathScope.Test),
+              xml.contains("timestamp=\"321\""),
+            )
+          effect.provideSomeLayer[histos.testrun.TestExecutionFixtures.Env & Scope](PluginProducts.live)
+      yield result
+    },
     test("selection merges Main into Test and emission metadata does not invent a product") {
       val selected = for
         graph   <- Projects(module("app", Jvm)(version))
@@ -163,61 +273,65 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
         )
       }
     },
-    test("the actual executor shares Main, retains Test, separates modes and orders the task body") {
-      ZIO.scoped {
-        for
-          repo       <- Workspace.work("plugin-step-modes").catchAll(error => ZIO.dieMessage(error.message))
-          graph      <- ZIO.fromEither(Projects(module("app", Js)(version).jsOptimize(JsOptimize.Full)))
-          calls      <- Ref.make(List.empty[Callback])
-          beforeBody <- Ref.make(Option.empty[List[Callback]])
-          id   = PluginTaskId(PluginId("probe"), TaskName("modes"))
-          task = declared(
-            id.name,
-            List(
-              TaskDep.CompileScoped(name, None, Some(Platform.Js), SourceSet.Test),
-              TaskDep.Link(name, None, Some(JsOptimize.Fast)),
-              TaskDep.Link(name, None, None),
-              TaskDep.Link(name, None, Some(JsOptimize.Full)),
-            ),
-          )
-          goal <- ZIO.fromEither(
-            PluginSteps.goal(
-              id,
-              asked => Option.when(asked == id)(task),
-              PluginCells.selected(graph, _),
-              PluginCells.links(graph, _),
-              cell => calls.update(_ :+ Callback.Compile(cell.scope)),
-              request => calls.update(_ :+ Callback.Link(request.optimize)).as(request.optimize.token),
-              (_, _, _) =>
-                calls.get.flatMap(found => beforeBody.set(Some(found))) *> calls.update(_ :+ Callback.Body).as("done"),
+    test("BuildExecution shares Main, retains Test, separates modes and orders the task body") {
+      val id   = PluginTaskId(PluginId("probe"), TaskName("modes"))
+      val task = declared(
+        id.name,
+        List(
+          TaskDep.CompileScoped(name, None, Some(Platform.Js), SourceSet.Test),
+          TaskDep.Link(name, None, Some(JsOptimize.Fast)),
+          TaskDep.Link(name, None, None),
+          TaskDep.Link(name, None, Some(JsOptimize.Full)),
+        ),
+      )
+      ZIO
+        .fromEither(Projects(module("app", Js)(version).jsOptimize(JsOptimize.Full)))
+        .flatMap: graph =>
+          val plugin = ProbePlugin(task)
+          val linked = graph.withPlugins(List(RegisteredPlugin(plugin.id, plugin.contribute)(plugin)))
+          histos.testrun.TestExecutionFixtures.withGraph(linked): fixture =>
+            for
+              calls      <- Ref.make(List.empty[Callback])
+              beforeBody <- Ref.make(Option.empty[List[Callback]])
+              digest  = histos.jdk.Sha256Digest.of(zio.Chunk.empty)
+              compile = compileLeaf(fixture.repo, calls, digest)
+              leaves  = histos.build
+                .ExecutionLeaves[histos.testrun.TestExecutionFixtures.Env, histos.build.ExecutionError](
+                  compile,
+                  compile,
+                  (_, _, _) =>
+                    calls.get.flatMap(found => beforeBody.set(Some(found))) *>
+                      calls
+                        .update(_ :+ Callback.Body)
+                        .as(histos.build.GeneratedTask(PluginOutput("done", Nil, Nil), ZIO.succeed(Nil))),
+                  (_, _, mode, _) =>
+                    calls
+                      .update(_ :+ Callback.Link(mode))
+                      .as(histos.js.JsLinked(fixture.repo.resolve(mode.token), digest)),
+                )
+              result <- new histos.build.BuildExecution(leaves, fixture.scheduler).ensure(
+                histos.build.ExecutionRequest(fixture.session, List(histos.build.BuildNode.Generate(id)))
+              )
+              output <- ZIO.fromEither(result.require(id))
+              all    <- calls.get
+              before <- beforeBody.get
+            yield assertTrue(
+              output.output.text == "done",
+              all.count(_ == Callback.Compile(SourceSet.Main)) == 1,
+              all.count(_ == Callback.Compile(SourceSet.Test)) == 1,
+              all.count(_ == Callback.Link(JsOptimize.Fast)) == 1,
+              all.count(_ == Callback.Link(JsOptimize.Full)) == 1,
+              all.count(_ == Callback.Body) == 1,
+              before.exists(found =>
+                found.size == 4 && found.toSet == Set(
+                  Callback.Compile(SourceSet.Main),
+                  Callback.Compile(SourceSet.Test),
+                  Callback.Link(JsOptimize.Fast),
+                  Callback.Link(JsOptimize.Full),
+                )
+              ),
+              all.lastOption.contains(Callback.Body),
             )
-          )
-          environment <- (Parallelism.live >>> Histos.live).build
-          result      <- environment
-            .get[Histos]
-            .start(goal)
-            .flatMap(_.outcome)
-            .provideSome[Scope](Resolve.coursier, ZLayer.succeed(ContentStore.in(repo.resolve("cas"))))
-          all    <- calls.get
-          before <- beforeBody.get
-        yield assertTrue(
-          result == Outcome.Done("done"),
-          all.count(_ == Callback.Compile(SourceSet.Main)) == 1,
-          all.count(_ == Callback.Compile(SourceSet.Test)) == 1,
-          all.count(_ == Callback.Link(JsOptimize.Fast)) == 1,
-          all.count(_ == Callback.Link(JsOptimize.Full)) == 1,
-          all.count(_ == Callback.Body) == 1,
-          before.exists(found =>
-            found.size == 4 && found.toSet == Set(
-              Callback.Compile(SourceSet.Main),
-              Callback.Compile(SourceSet.Test),
-              Callback.Link(JsOptimize.Fast),
-              Callback.Link(JsOptimize.Full),
-            )
-          ),
-          all.lastOption.contains(Callback.Body),
-        )
-      }
     },
     test("link selection resolves tool, module, and task mode before scheduling") {
       val selected = for
@@ -247,6 +361,86 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
   )
 
   def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+
+  private final case class CoverageProducer(count: Ref[Int], observed: Ref[List[CellClasspath]]) extends HistosPlugin:
+    val id                       = PluginId("coverage-producer")
+    private val source           = OutputName("source")
+    private val resource         = OutputName("resource")
+    def contribute: Contribution = Contribution(
+      List(
+        DeclaredTask(
+          TaskName("generate"),
+          Seal.Hermetic,
+          Set.empty,
+          Nil,
+          List(
+            DeclaredOutput.File(source, RepoPath("generated/Generated.scala")),
+            DeclaredOutput.File(resource, RepoPath("generated/resource.txt")),
+          ),
+          List(
+            TaskDep.CompileScoped(ProjectName("host"), Some(version), Some(Jvm), SourceSet.Main),
+            TaskDep.EmitScoped(
+              name,
+              SourceSet.Main,
+              PlatformSelection.only(Jvm),
+              EmittedContent.SourceFile(ArtifactPath("demo/Generated.scala")),
+              source,
+            ),
+            TaskDep.EmitScoped(
+              name,
+              SourceSet.Main,
+              PlatformSelection.only(Jvm),
+              EmittedContent.ResourceFile(ResourceName("generated.txt")),
+              resource,
+            ),
+          ),
+        )
+      ),
+      Nil,
+      Nil,
+    )
+    def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+      for
+        _            <- count.update(_ + 1)
+        _            <- observed.set(request.compiled)
+        sourcePath   <- ZIO.fromEither(request.destinations.file(source))
+        resourcePath <- ZIO.fromEither(request.destinations.file(resource))
+        _            <- Workspace
+          .writeString(sourcePath, "package demo\nobject Generated { def value: Int = 42 }\n")
+          .mapError(fault => PluginRunError.Failed(PluginDetail.trusted(fault.message)))
+        _ <- Workspace
+          .writeString(resourcePath, "resource")
+          .mapError(fault => PluginRunError.Failed(PluginDetail.trusted(fault.message)))
+      yield PluginOutput(
+        "generated",
+        List(
+          WrittenFile(source, RepoPath("generated/Generated.scala")),
+          WrittenFile(resource, RepoPath("generated/resource.txt")),
+        ),
+        Nil,
+      )
+
+  private def compileLeaf(
+      repo: Path,
+      calls: Ref[List[Callback]],
+      digest: histos.jdk.Sha256,
+  ): (histos.build.ExecutionRequest, CompilationStage, histos.build.ExecutionProducts) => UIO[
+    histos.build.StageProduct
+  ] =
+    (_, stage, _) =>
+      val classes  = repo.resolve(s"${stage.scope}")
+      val compiled = histos.zinc.CompiledCell(name, version, Js, classes, 0, None, false, None, None)
+      calls
+        .update(_ :+ Callback.Compile(stage.scope))
+        .as(
+          histos.build.StageProduct(stage, compiled, repo.resolve("analysis"), digest, digest, List(classes))
+        )
+
+  private final case class ProbePlugin(task: DeclaredTask) extends HistosPlugin:
+    val id                       = PluginId("probe")
+    def contribute: Contribution = Contribution(List(task), Nil, Nil)
+    def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+      ZIO.succeed(PluginOutput(request.id.name.value, Nil, Nil))
 
   private enum Callback:
     case Compile(scope: SourceSet)

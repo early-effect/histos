@@ -479,6 +479,7 @@ object Cli:
                               out = line => Console.printLine(line).ignore,
                               err = line => Console.printLineError(line).ignore,
                             ),
+                            Some(loaded.plugins),
                           )
                           .fold(
                             failure => Completed(coverageExit(failure), "", failure.message, Playback.Held),

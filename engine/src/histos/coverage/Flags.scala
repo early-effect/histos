@@ -15,9 +15,9 @@ object Flags:
       joined("-coverage-exclude-classlikes:", ",", excludes.classlikes) ++
       joined("-coverage-exclude-files:", ",", excludes.files)
 
-  def scala2(dataDir: Path, sourceRoot: Path, plugin: Path, excludes: Excludes): List[String] =
+  def scala2(dataDir: Path, sourceRoot: Path, plugins: List[Path], excludes: Excludes): List[String] =
     List(
-      s"-Xplugin:${plugin.toAbsolutePath.normalize}",
+      s"-Xplugin:${plugins.map(_.toAbsolutePath.normalize).mkString(java.io.File.pathSeparator)}",
       s"-P:scoverage:dataDir:${dataDir.toAbsolutePath.normalize}",
       s"-P:scoverage:sourceRoot:${sourceRoot.toAbsolutePath.normalize}",
     ) ++
