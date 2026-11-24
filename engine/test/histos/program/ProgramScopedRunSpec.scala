@@ -4,7 +4,8 @@ import histos.*
 import histos.server.RunLaunch
 import histos.testrun.TestExecutionFixtures
 import histos.workspace.Workspace
-import zio.{ZIO, durationInt}
+import java.nio.charset.StandardCharsets.UTF_8
+import zio.{Chunk, ZIO, durationInt}
 import zio.test.*
 
 object ProgramScopedRunSpec extends ZIOSpecDefault:
@@ -61,8 +62,8 @@ object ProgramScopedRunSpec extends ZIOSpecDefault:
             second            <- run(explicitGraph)
             explicitProducts  <- products
           yield assertTrue(
-            first.collect { case ProgramFeed.Out(line) => line }.mkString.contains("full-module-run"),
-            second.collect { case ProgramFeed.Out(line) => line }.mkString.contains("full-module-run"),
+            stdout(first).contains("full-module-run"),
+            stdout(second).contains("full-module-run"),
             first.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList == List(0),
             second.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList == List(0),
             inheritedProducts.nonEmpty,
@@ -112,7 +113,7 @@ object ProgramScopedRunSpec extends ZIOSpecDefault:
                   )
                   .runCollect
               yield (
-                events.collect { case ProgramFeed.Out(line) => line }.mkString("\n"),
+                stdout(events),
                 events.collect { case ProgramFeed.Exited(_, _, _, code) => code }.toList,
                 events.collect { case ProgramFeed.Begin(_, _, platform) => platform }.toList,
               )
@@ -130,5 +131,11 @@ object ProgramScopedRunSpec extends ZIOSpecDefault:
         )
     },
   )
+
+  /** Scoped runs publish stdout as bytes. Stderr stays text. */
+  private def stdout(events: Chunk[ProgramFeed]): String =
+    events.collect { case ProgramFeed.Bytes(data) => new String(data.toArray, UTF_8) }.mkString
+
   private val checked = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
   def spec            = checked
+end ProgramScopedRunSpec
