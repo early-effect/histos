@@ -13,7 +13,10 @@ object JsScopedTestSpec extends ZIOSpecDefault:
     test("a JS Test main imports an upstream Test fixture and runs only the requested target") {
       val version  = TestExecutionFixtures.version
       val fixtures = module("fixtures", Js)(version)
-      val consumer = module("consumer", Js)(version).testDependsOn(fixtures).test(TestMain("demo.Check"))
+      val consumer = module("consumer", Js)(version)
+        .testDependsOn(fixtures)
+        .testDependencies(dep"dev.zio::zio-test:2.1.27")
+        .test(TestMain("demo.Check"))
       ZIO
         .fromEither(Projects(fixtures, consumer))
         .flatMap: graph =>
@@ -34,7 +37,11 @@ object JsScopedTestSpec extends ZIOSpecDefault:
               )
               _ <- Workspace.writeString(
                 fixture.repo.resolve("consumer/test/demo/Check.scala"),
-                "package demo\nobject Check:\n  def main(args: Array[String]): Unit = println(lib.Fixture.text)\n",
+                """package demo
+                  |object Check:
+                  |  def main(args: Array[String]): Unit =
+                  |    println(lib.Fixture.text + ":" + 'a'.isLetterOrDigit + ":" + (0 until 2).size)
+                  |""".stripMargin,
               )
               plan     <- ZIO.fromEither(TestCells.plan(graph, asked.selection))
               products <- fixture.ensure(plan.compileStageRoots.map(BuildNode.Compile(_)))
@@ -48,11 +55,16 @@ object JsScopedTestSpec extends ZIOSpecDefault:
                 products.require(CompilationStage(Cell(ProjectName("consumer"), version, Js), SourceSet.Test))
               )
               feeds <- hostClasspath(ModuleTest.execute(asked, plan, products).runCollect)
+              tools <- ZIO.service[histos.resolve.LockedTools]
+              roots = histos.js.JsRequests.libraryRoots(version, tools.catalog.js.revision)
             yield assertTrue(
+              test.classpath.forall(path =>
+                roots.forall(root => !Option(path.getFileName).exists(_.toString.startsWith(root.name + "-")))
+              ),
               !main.classpath.contains(upstream.classes),
               test.classpath.contains(upstream.classes),
               feeds.collect { case TestFeed.Done(cell) => cell.module }.toList == List(ProjectName("consumer")),
-              feeds.exists { case TestFeed.Out(_, _, _, text) => text == "js-fixture"; case _ => false },
+              feeds.exists { case TestFeed.Out(_, _, _, text) => text == "js-fixture:true:2"; case _ => false },
               feeds.exists { case TestFeed.Done(cell) => cell.status == TestStatus.Passed; case _ => false },
             )
     }

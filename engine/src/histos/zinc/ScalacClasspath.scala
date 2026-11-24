@@ -63,7 +63,7 @@ object ScalacClasspath:
       Some(kept.map(_.sha256))
 
   /** Platform libraries come from the requested tool cell, never a dependency's transitive runtime. */
-  private[zinc] def toolLibrary(
+  private[histos] def toolLibrary(
       organization: String,
       name: String,
       version: ScalaVersion,

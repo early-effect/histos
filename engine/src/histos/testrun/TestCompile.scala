@@ -748,9 +748,12 @@ private[histos] object TestCompile:
     held(lock, cell).mapBoth(
       ModuleTestError.Lock(_),
       classpath =>
-        val artifacts =
+        val named =
           if pin then classpath.artifacts.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name))
           else classpath.artifacts
+        val artifacts = named.filterNot(artifact =>
+          histos.zinc.ScalacClasspath.toolLibrary(artifact.organization, artifact.name, version, platform)
+        )
         Fetched(artifacts.map(_.path), artifacts.map(_.sha256), pin),
     )
 
