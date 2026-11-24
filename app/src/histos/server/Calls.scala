@@ -579,7 +579,7 @@ object Calls:
         if args != PluginArgs.empty then reject(say, Rejection.TaskArguments(found.value))
         else
           histos.doc.DocTask
-            .fromRepo(graph, repo, machine)
+            .fromRepo(graph, repo, machine, plugins)
             .foldZIO(
               error => fault(say, BuildFault.Task(error)),
               result => told(say, result.render) *> ok(say),

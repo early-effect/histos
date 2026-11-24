@@ -1420,7 +1420,7 @@ object Workflow:
     else
       List(
         s"      - run: ${quote((List("./histos", "compile") ++ names.map(_.value) ++ List("--platform", "jvm")).mkString(" "))}",
-        "      - run: ./histos doctor release",
+        "      - run: ./histos doctor --area release",
       )
 
   def requiredJobs(graph: ProjectGraph): List[String] =

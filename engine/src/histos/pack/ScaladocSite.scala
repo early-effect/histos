@@ -1,6 +1,6 @@
 package histos.pack
 
-import histos.ToolchainIdentity
+import histos.{Platform, ToolchainIdentity}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -22,12 +22,26 @@ object ScaladocSite:
       output: Path,
       failOnWarning: Boolean,
   ): ZIO[Any, ScaladocFault, Unit] =
+    render(classes, classpath, project, scalaVersion, output, failOnWarning, Platform.Jvm)
+
+  def render(
+      classes: Path,
+      classpath: List[Path],
+      project: String,
+      scalaVersion: String,
+      output: Path,
+      failOnWarning: Boolean,
+      platform: Platform,
+  ): ZIO[Any, ScaladocFault, Unit] =
     val home = Option(System.getProperty("java.home")).filter(_.nonEmpty)
     home match
       case Some(javaHome) =>
         toolClasspath(scalaVersion).flatMap: running =>
           val separator = java.io.File.pathSeparator
-          val command   = List(
+          val backend   = platform match
+            case Platform.Jvm | Platform.Native => Nil
+            case Platform.Js                    => List("-scalajs")
+          val command = List(
             Path.of(javaHome, "bin", "java").toString,
             "-cp",
             running + separator + classpath.mkString(separator),
@@ -37,7 +51,7 @@ object ScaladocSite:
             "-project",
             project,
             classes.toString,
-          )
+          ) ++ backend
           ZIO
             .scoped {
               ZIO

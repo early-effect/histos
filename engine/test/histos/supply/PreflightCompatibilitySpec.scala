@@ -77,7 +77,7 @@ object PreflightCompatibilitySpec extends ZIOSpecDefault:
           ,
           SupplyYaml.preflight(graph, "workflow").exists(_.contains("doctor --preflight workflow")),
           Workflow.compatibilitySteps(graph).exists(_.contains("compile published --platform jvm")),
-          Workflow.compatibilitySteps(graph).exists(_.contains("doctor release")),
+          Workflow.compatibilitySteps(graph).contains("      - run: ./histos doctor --area release"),
         )
     }
   )

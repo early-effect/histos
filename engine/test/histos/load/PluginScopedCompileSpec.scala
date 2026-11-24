@@ -230,6 +230,74 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
           effect.provideSomeLayer[histos.testrun.TestExecutionFixtures.Env & Scope](PluginProducts.live)
       yield result
     },
+    test("Scaladoc executes the scoped Main producer without compiling Test sources or using declared output paths") {
+      for
+        calls    <- Ref.make(0)
+        observed <- Ref.make(List.empty[CellClasspath])
+        plugin = CoverageProducer(calls, observed)
+        host   = module("host", Jvm)(version)
+        app    = module("app", Jvm, Js)(version).artifact(artifact"app")
+        graph <- ZIO.fromEither(Projects(ships(Ship("docs").next(0, 1, 0)(app)), host, app))
+        linked = graph.withPlugins(List(RegisteredPlugin(plugin.id, plugin.contribute)(plugin)))
+        result <- histos.testrun.TestExecutionFixtures.withGraph(linked): fixture =>
+          val effect =
+            for
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("host/src/demo/Host.scala"),
+                "package demo\nobject Host { def value: Int = 1 }\n",
+              )
+              _ <- Workspace.writeString(fixture.repo.resolve("host/test/demo/Broken.scala"), "this must never compile")
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("app/src/jvm/demo/Main.scala"),
+                "package demo\nobject Main { def value: Int = Generated.value }\n",
+              )
+              _ <- Workspace.writeString(
+                fixture.repo.resolve("app/src/js/demo/Browser.scala"),
+                "package demo\nimport scala.scalajs.js\nimport scala.scalajs.js.annotation.JSGlobal\n@JSGlobal(\"demo\") @js.native object Browser extends js.Object\nobject Json { def encode: String = js.JSON.stringify(js.Dynamic.literal(value = 1)); def defined(value: js.UndefOr[String]): Boolean = value.isDefined }\n",
+              )
+              _ <- Workspace.writeString(fixture.repo.resolve("app/test/demo/Broken.scala"), "this must never compile")
+              leases  <- GenerationLeases.make
+              threads <- PluginThreads.make(getClass.getClassLoader)
+              runtime <- PluginRuntime.loaded(
+                fixture.repo,
+                linked,
+                getClass.getClassLoader,
+                threads,
+                Nil,
+                ApiDigest.trusted("ab" * 32),
+                leases,
+                Nil,
+              )
+              machine <- histos.jdk.Machine.load(fixture.repo)
+              outcome <- histos.doc.DocTask.fromRepo(linked, fixture.repo, machine, runtime)
+              count   <- calls.get
+              facts   <- observed.get
+              files   <- ZIO.attemptBlocking {
+                val classes = GraphCompile.classesDir(fixture.repo, name, version, Jvm)
+                (
+                  Files.isRegularFile(classes.resolve("demo/Generated.class")),
+                  Files.isRegularFile(fixture.repo.resolve(".histos/doc/app/3.10.1/jvm/index.html")),
+                  Files.isSymbolicLink(fixture.repo.resolve("generated/Generated.scala")),
+                  !Files.exists(histos.testrun.TestCompile.testClasses(fixture.repo, name, version, Jvm)),
+                  Files.isRegularFile(fixture.repo.resolve(".histos/doc/app/3.10.1/js/index.html")),
+                  !Files.exists(histos.testrun.TestCompile.testClasses(fixture.repo, name, version, Js)),
+                )
+              }
+            yield assertTrue(
+              outcome == histos.task.TaskResult.Doc,
+              count == 1,
+              facts.map(_.stage) == List(CompilationStage(Cell(ProjectName("host"), version, Jvm), SourceSet.Main)),
+              facts.forall(_.test.isEmpty),
+              files._1,
+              files._2,
+              files._3,
+              files._4,
+              files._5,
+              files._6,
+            )
+          effect.provideSomeLayer[histos.testrun.TestExecutionFixtures.Env & Scope](PluginProducts.live)
+      yield result
+    },
     test("selection merges Main into Test and emission metadata does not invent a product") {
       val selected = for
         graph   <- Projects(module("app", Jvm)(version))
