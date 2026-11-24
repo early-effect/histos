@@ -2,6 +2,8 @@ package histos.docs
 
 import specular.*
 
+import zio.test.*
+
 /** A plugin is a service the build turns on. A coordinate does not install it. */
 object Plugins extends DocSpec:
 
@@ -32,16 +34,47 @@ you do not want a later host to rebuild it.
     ),
     section("A task can write sources")(
       md"""
-`TaskDep.Emit` names a module. The task's output directories are source roots for
-that module, using the same `jvm`, `js`, and `native` filters as a directory you
-named with `sources`. `histos compile` and `histos test` run the task first, then
-compile what it wrote.
+`TaskDep.Emit` adds the task's declared directories as conventional Main source
+roots for a module. Use `TaskDep.EmitScoped` when only one output belongs to a
+particular Main or Test stage and platform selection. Compile and test order the
+producer before the stage consuming it. A producer cannot wait for that same
+stage to compile: that would be a cycle.
 
-The task must declare at least one output directory. It must not also wait for
-that module to compile: that would be a cycle. `TaskDep.Generate` only orders
-two tasks. It does not add sources.
+Every output declares ownership: `DeclaredOutput.File` owns one file, never its
+parent; `DeclaredOutput.Directory` owns that tree. The task writes to the staged
+paths supplied in its run request, not to the public repository aliases. Histos
+validates and commits the complete output set, then exposes it to readers. A
+failed task does not publish a partial replacement. Clean removes only the declared
+extent and refuses to remove a generation while readers hold it.
+
+`EmitScoped` pairs a File with `SourceFile(ArtifactPath(...))` or
+`ResourceFile(ResourceName(...))`. The source path is the entry inside the source
+JAR; the source text still declares its package. The resource name is its exact
+classpath location, independent of the generated repository path. Neither scans
+siblings. Directories pair with `SourceTree` or `ResourceTree`, with entries relative
+to the declared root.
+
+`TaskDep.CompileScoped` requests exactly Main or Test. Test necessarily includes
+Main. Legacy `TaskDep.Compile` supplies both classpaths. `TaskDep.Generate` only
+orders tasks; it does not add sources.
 """,
       cite[histos.plugin.TaskDep].signature,
+      exampleValue {
+        import histos.*
+        import histos.plugin.*
+
+        val output   = OutputName("fixture")
+        val declared = DeclaredOutput.File(output, RepoPath("generated/Fixture.scala"))
+        val content  = EmittedContent.SourceFile(ArtifactPath("fixtures/Fixture.scala"))
+        val emission = TaskDep.EmitScoped(
+          ProjectName("core"),
+          SourceSet.Test,
+          PlatformSelection.only(Platform.Jvm),
+          content,
+          output,
+        )
+        (declared, emission)
+      }.assert(result => assertTrue(result._1.kind == histos.plugin.OutputKind.File)),
     ),
     section("A task can wait for another task")(
       md"""
@@ -56,6 +89,24 @@ A file the build copies into the class directory after compile is a
 `GeneratedAsset`, which is a resource, not a source.
 """,
       cite[histos.GeneratedAsset].signature,
+    ),
+    section("Effects and restored products are different")(
+      md"""
+Use `Seal.Open` for tasks with effects that must happen on each invocation, including
+building or serving a docs site. Their effects rerun; a retained generation is not
+permission to skip the invocation. Hermetic tasks with no declared needs can store
+reusable results. Declared needs such as network or Docker keep work local.
+
+Explicit cache restoration is a separate operation: Histos restores stored bytes
+through the same staged ownership transaction as fresh production. It does not run
+the producer's effects. Read-only consumers and previews lease committed physical
+products. They do not run generators or infer ownership from a repository alias.
+After a cold load or clean, execute the producer (or explicitly restore its result)
+before asking a preview to read generated inputs.
+""",
+      cite[histos.plugin.Seal].signature,
+      cite[histos.plugin.DeclaredOutput].signature,
+      cite[histos.plugin.EmittedContent].signature,
     ),
     section("A task runs a program")(
       md"""

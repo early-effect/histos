@@ -29,8 +29,9 @@ two cells, and a change in one does not by itself rebuild the other.
     section("Platforms")(
       md"""
 There are three platforms. `Jvm` is a JVM program or library. `Js` is Scala.js. `Native`
-is Scala Native. On the command line the tokens are `jvm`, `js`, and `native`, so
-`histos run app js` is the Scala.js cell of the `app` module.
+is Scala Native. On the command line the tokens are `jvm`, `js`, and `native`.
+`histos run <module> --platform js` selects that module's Scala.js cell, if it
+supports Scala.js. Positional platform tokens are not run selectors.
 """,
       cite[histos.Platform](_.token),
     ),
@@ -62,6 +63,38 @@ val core   = module("core", Jvm, Js)(scala"3.8.1").sources(shared)
 ```
 """,
       cite[histos.Module](_.sources),
+    ),
+    section("Main, Test, and exact roots")(
+      md"""
+A cell has two compiler stages: `SourceSet.Main` and `SourceSet.Test`. Test includes
+its own Main classes. Conventional `<module>/src` and `<module>/test` trees remain
+available. Use `roots` for directories that do not follow that layout: each
+`ScopedRoot` names an exact directory, its scope, platforms, and whether it contains
+sources or resources. Histos does not expand a scoped root into layout subdirectories.
+`ScopedRoot.jvmNative` selects the combined JVM/Native tree, not Scala.js.
+
+`dependsOn(core)` supplies Main products. `testDependsOn(core)` additionally supplies
+core's Test classes and resources to the depender's Test stage. Use it for shared
+fixtures, not to request core's suites. Only selected modules' suites run. Test-only
+project edges and `testDependencies` do not enter Main classpaths or published POMs.
+Platform-specific fixture edges use `testDependsOn(Jvm)(core)`.
+""",
+      cite[histos.CompilationStage].signature,
+      cite[histos.ScopedRoot].signature,
+      exampleValue {
+        import histos.*
+        import histos.Platform.*
+        import histos.plugin.{RepoPath, SourceSet}
+
+        val fixtures = module("fixtures", Jvm)(scala"3.8.1")
+        val core     = module("core", Jvm, Js)(scala"3.8.1")
+          .roots(
+            ScopedRoot(RepoPath("shared/main"), SourceSet.Main, ScopedRoot.jvmNative, RootKind.Sources),
+            ScopedRoot(RepoPath("shared/test-data"), SourceSet.Test, PlatformSelection.All, RootKind.Resources),
+          )
+          .testDependsOn(Jvm)(fixtures)
+        core.name
+      }.assert(name => assertTrue(name == "core")),
     ),
     section("Native libraries")(
       md"""

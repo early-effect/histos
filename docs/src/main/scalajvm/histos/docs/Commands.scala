@@ -2,6 +2,8 @@ package histos.docs
 
 import specular.*
 
+import zio.test.*
+
 /** One help group. The usage line is the `Help.Entry`. The case is the parse. */
 object CommandsInfo extends DocSpec:
   def doc = page("Commands: information")(
@@ -68,19 +70,41 @@ it, or throw the outputs away.
     cite[histos.cli.Help.type](_.render),
     section("compile")(
       md"""
-`histos compile` compiles every module. Name one or more projects to compile only those.
-`--verbose` prints each compiler phase, which is useful when a compile is slow and you
-want to see where the time went.
+`histos compile` compiles every module. Name projects to compile those and their
+compilation prerequisites. `--platform jvm,js` or repeated `--platform` flags select
+platforms. Whole-build selection keeps matching cells; named modules refuse a
+platform they do not support. `--verbose` prints each compiler phase.
 """
     ),
     section("run")(
       md"""
-`histos run <name>` runs a module's main class. Add `jvm`, `js`, or `native` when the
-module has more than one platform. Everything after `--` is an argument to your program,
-not to Histos. `inspect`, `versions`, and `doc` are built-in names you can run the same
-way: `inspect` describes the graph, `versions` prints the catalog, and `doc` writes
-scaladoc.
-"""
+`histos run <name>` runs a module main. `--platform jvm`, `js`, or `native` selects
+exactly one supported platform. Without it, the module's `runPlatform` default wins,
+then its sole platform. An ambiguous module requires the flag. Positional platform
+tokens are not accepted. `--main <class>` chooses among multiple mains.
+
+Everything after `--` is passed to the program, including tokens that look like Histos
+flags: `histos run app --platform jvm --main demo.Main -- --port 8080`.
+The child inherits the caller's environment and working directory. `inspect`,
+`versions`, and `doc` are built-in run names: they describe the graph, print the
+catalog, and write scaladoc.
+
+A module's `jvmOptions(JvmOptions(...))` configures child JVM run and test processes,
+not the Histos daemon or program arguments. Use `JvmFlag` for VM flags and
+`SystemProperty` for properties; provider properties also reach test children.
+A second `jvmOptions` replaces the first.
+
+""",
+      exampleValue {
+        import histos.*
+
+        val options = JvmOptions(
+          flags = List(JvmFlag("-Xmx2g")),
+          properties = List(SystemProperty("demo.mode=local")),
+        )
+        val app = module("app", Platform.Jvm)(scala"3.8.1").jvmOptions(options)
+        (app.name, options.arguments)
+      }.assert(result => assertTrue(result == ("app", List("-Xmx2g", "-Ddemo.mode=local")))),
     ),
     section("clean")(
       md"""
@@ -99,8 +123,15 @@ does not shake mapped libraries. Each one fetches a pinned esbuild when it needs
 one. There is no npm and no `package.json`.
 
 `JsOptimize.Full` is `Splice.full` with no mapped libraries: one classic script.
-Name libraries when the linker still says `import "preact"`. Fast and full do not
-share a cached script. A module you run while editing stays on the fast link.
+Name libraries when the linker still says `import "preact"`.
+
+The effective optimization is task override, then module `jsOptimize`, then the
+locked tool default. An omitted `TaskDep.Link` mode inherits that cascade. Module
+run uses the same module/tool choice, so a module declared Full does not silently
+run Fast. Optimization and module kind are independent settings. Fast and Full
+use distinct link identities and output directories; a cached Fast script cannot
+satisfy a Full request. Linking may reuse matching products even when the enclosing
+Open task's effects must rerun.
 """,
       cite[histos.JsOptimize](_.token),
     ),
@@ -119,6 +150,7 @@ invent a jar for a library module.
 """
     ),
   )
+end CommandsBuild
 
 object CommandsTest extends DocSpec:
   def doc = page("Commands: test")(
@@ -134,13 +166,26 @@ have not changed. A full run does not. Watch reruns a command when you save a fi
 a suite whose stamp still matches, which is the run you want while editing. A full
 `histos test` runs every selected suite.
 
-`--only`, `--test`, `--tag`, and `--ignore-tag` filter which tests inside those suites
-run. A filter does not turn a skipped suite back on. If the stamp matches, `--quick`
-still skips it.
+`--only` selects suites by pattern. `--test` matches substrings of test labels,
+`--tag` keeps tests with any listed exact tag, and `--ignore-tag` drops tests with
+any listed tag. A filter does not turn a skipped suite back on under `--quick`.
 
-`--affected <json>` limits the run to modules a base commit says have changed. The JSON
-is the file `histos affected` can produce.
-"""
+These filters and `--platform` accept repeated flags and comma lists, before or
+after projects. Each flag consumes one value. Empty entries fail. Escape a literal
+comma as `\\,` and a backslash as `\\\\`, quoting for the shell:
+`histos test core --platform jvm --only '*Parser*,*Codec*' --tag 'db\\,local'`.
+
+`--affected <json>` intersects the original selection with changed modules. It stays
+a JSON list, not a comma list. `--suite <json>` supplies whole-suite CI eligibility;
+it cannot combine with named projects and does not turn a singleton into a focused
+request. Whole-suite requests exclude Verify modules and unsupported platforms.
+Explicitly named unsupported platforms still fail, even if the affected list is empty.
+Compilation prerequisites, including upstream Test fixtures, are built as needed,
+but their suites do not run unless selected.
+""",
+      exampleValue {
+        histos.TextList.parse(List("db\\,local,remote", "remote"))
+      }.assert(result => assertTrue(result == Right(List("db,local", "remote")))),
     ),
     section("coverage")(
       md"""
@@ -161,8 +206,12 @@ You use the list to decide what to test, or you pass it to `histos test --affect
       md"""
 Linking a Native test binary is the slow part of a native suite. When several native
 modules should run as one binary, give one module `testAggregate` and name the others.
-`histos test nativeTests native` compiles each member's tests, links once, and runs
-once. `histos test core native` still links `core` on its own.
+`histos test nativeTests --platform native` selects its members, compiles their
+tests, links once, and runs once. Whole-suite or multi-module requests also use that
+aggregate when every member is selected for the same Scala version. A focused
+`histos test core --platform native` stays direct, even for a one-member group.
+Partial groups and unmatched Scala versions stay direct too. An affected mask does
+not pull unselected suites back into a group.
 
 The aggregating module builds Native, it is not published, and it can have no sources
 of its own. A member that does not build Native is refused when the build file compiles.
@@ -319,7 +368,9 @@ neither changes the Histos pin. The CI page says what a generated workflow conta
 the run. `--area <area>` runs one group of checks. `--json` prints JSON for a script.
 `--preflight <job>` runs the checks that job needs. `--verbose` lists every check.
 `--fix` applies the edits Histos knows how to make, and `--yes` applies them without
-asking.
+asking. Job preflight checks configuration and other product-independent prerequisites;
+it is not a substitute for the post-compile JVM compatibility publication gate
+explained on the Publish page.
 """
     ),
     section("setup")(

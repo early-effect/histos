@@ -2,6 +2,9 @@ package histos.docs
 
 import specular.*
 
+import zio.ZIO
+import zio.test.*
+
 /** Ships, the pin, and the publish commands. */
 object Publishing extends DocSpec:
 
@@ -22,6 +25,41 @@ does not rewrite the pin.
 """,
     cite[histos.ShipDef].signature.elided(12),
     cite[histos.publish.LauncherPin.type](_.Key),
+    section("Publication metadata is not a network URL")(
+      md"""
+Use `MetadataUri("http://...")` or `MetadataUri("https://...")` for license,
+SCM, developer and organization homepages, and organization/ship publication URLs.
+Literals are checked at compilation. `MetadataUri.from(raw)` validates runtime input
+and returns `Either[MetadataUriError, MetadataUri]`; keep that typed error when
+lifting it into ZIO. `url"..."` still constructs `HttpUrl`, the HTTPS network
+capability. It no longer fits publication URL parameters. There is no implicit
+conversion between the two.
+
+POM descriptions prefer module, then ship, then organization. The POM name is the
+unsuffixed artifact base (or module name). Developer identity, email and homepage,
+organization display name/homepage, SCM connections, license and version scheme
+are publication facts, not runtime dependencies.
+
+A build using these APIs needs a matching Histos snapshot toolchain, including its
+API and daemon. Install that snapshot and pin it in `build.properties` before
+loading the migrated build; reboot any older daemon. An older installed shim is not
+a validated bootstrap for new build declarations. The repository README describes
+the handoff without relying on a temporary source-launcher script.
+""",
+      cite[histos.MetadataUri.type](_.from),
+      cite[histos.MetadataUriError].signature,
+      exampleValue {
+        import histos.*
+
+        License(license"Apache-2.0", MetadataUri("http://www.apache.org/licenses/LICENSE-2.0.txt")).url.value
+      }.assert(uri => assertTrue(uri == "http://www.apache.org/licenses/LICENSE-2.0.txt")),
+      exampleZIO {
+        import histos.*
+
+        val parsed = ZIO.fromEither(MetadataUri.from("https://example.org/project"))
+        parsed.map(_.value)
+      }.assert(uri => assertTrue(uri == "https://example.org/project")),
+    ),
     section("Which command to run")(
       md"""
 `histos publish local` writes the snapshot coordinate of your current commit into the
@@ -63,11 +101,17 @@ requires a minor bump. On stable lines a missing class requires a major bump and
 binary problems require a minor bump. A catalog number that already covers the required
 component passes.
 
-The existing doctor/preflight wiring fails closed on incomplete JVM evidence, including
-CI publish preflight. A cold preflight cannot claim compatibility before classes exist;
-CI must collect this evidence after compiling all published JVM members. Direct publish
-commands do not themselves invoke doctor, so run the check before publishing. Ordinary
-compile and test commands do not read release metadata or fetch compatibility baselines.
+Job preflight is product-independent: it checks prerequisites before compilation,
+not compatibility of classes that do not exist yet. Generated publication jobs compile
+all applicable published JVM members and Scala versions, then run the complete
+`ship.binary` check. Missing or incomplete evidence fails closed.
+
+Direct local, snapshot, and release publication also enforce the complete applicable
+JVM compatibility gate before staging artifacts: every JVM member and Scala version
+of each ship containing a selected publication. Selecting fewer publication tokens
+does not reduce a ship's gate to one representative member. Explicit first publication
+needs no invented baseline. Ordinary compile and test do not fetch release metadata
+or compatibility baselines; JS and Native linking and inventory are separate proof.
 
 `histos bump` rewrites `.next`. It does not decide the component. You pass
 `--minor` or `--major` when the doctor named one. The default is the next patch.

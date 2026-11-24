@@ -32,7 +32,9 @@ The missing-fields baseline executed against a written local Maven POM and faile
 
 The installed Histos API predates MetadataUri. Bootstrap compilation used the original root build declarations, then the final MetadataUri declarations were loaded by the source-built launcher. Verification ran the actual compiled API/wire/central/engine/app outputs with a dependencies-only copy of the existing installed runtime. No toolchain, dependency, version pin or remote changed.
 
-Commands use `sh /tmp/heddle-21153a27-pom-source-histos` as the source-built Histos launcher:
+For a fresh checkout, follow [the matching snapshot-toolchain handoff](../../README.md#builds-that-use-new-apis). The old installed shim was not validated against the final root build. Publication URL parameters now take `MetadataUri` literals or the typed `MetadataUri.from` parser; `url"..."` remains `HttpUrl` for networking. Do not reuse a temporary launcher path as an installation instruction.
+
+The following recorded commands used the matching source-built launcher, with compiled project classes ahead of its dependencies-only runtime:
 
 - `fmt`, `compile api wire central engine app`, `fmt --check`, and `git diff --check`: exit 0. The final compilation includes every publication consumer; formatting reports no faults or unformatted files.
 - `test api wire`: 65 JVM and 63 Native API tests, 46 JVM and 46 Native wire tests. Zero failed, ignored or cached tests.

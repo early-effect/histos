@@ -1787,7 +1787,9 @@ object Cli:
         _ => held("", CallResult.reported()),
       )
 
-  /** No names skip the graph. A live server still holds the compile permit. */
+  /** Adopt the graph for generated ownership; load-failure recovery cleans ordinary products only. A live server still
+    * holds the compile permit.
+    */
   private def clean(
       repo: Path,
       apiJar: Path,
