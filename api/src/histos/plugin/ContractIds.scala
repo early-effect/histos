@@ -287,7 +287,7 @@ enum RecipeInputError:
     case Bad(raw) => s"'$raw' is not a recipe input"
 end RecipeInputError
 
-/** One relative path inside a sealed archive. Not a repository path: class names may contain `$`. */
+/** One safe relative file path inside a sealed archive, including class names and resource filenames. */
 opaque type ArtifactPath = String
 
 object ArtifactPath:
@@ -296,7 +296,7 @@ object ArtifactPath:
   inline def apply(inline raw: String): ArtifactPath = ${ PluginMacros.artifactPath('raw) }
 
   def from(raw: String): Either[ArtifactPathError, ArtifactPath] =
-    if Tokens.artifactPath(raw) then Right(trusted(raw))
+    if Tokens.filePath(raw) then Right(trusted(raw))
     else if raw.isEmpty then Left(ArtifactPathError.Empty)
     else Left(ArtifactPathError.Escapes(raw))
 

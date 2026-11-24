@@ -13,6 +13,7 @@ import histos.plugin.{
   RepoPath,
   SealedArtifactManifest,
   SelectedInput,
+  RecipeError,
   SourceKind,
   SourceProvenance,
 }
@@ -158,11 +159,14 @@ object CellCapture:
     val module   = cell.module
     val version  = cell.version
     val platform = cell.platform
+    val root     = request.repo.toAbsolutePath.normalize
     ZIO.foreach(paths): path =>
-      val file = path.toAbsolutePath.normalize
-      val name = request.repo.toAbsolutePath.normalize.relativize(file).toString.replace('\\', '/')
+      val file   = path.toAbsolutePath.normalize
+      val parsed =
+        if !file.startsWith(root) then Left(CompileError.Outside(file, root))
+        else RepoPath.from(slash(root.relativize(file))).left.map(_ => CompileError.InvalidPath(file))
       for
-        relative <- ZIO.fromEither(RepoPath.from(name)).mapError(_ => unread(module, version, platform, file))
+        relative <- ZIO.fromEither(parsed).mapError(GraphCompileError.Failed(module, version, platform, _))
         bytes    <- read(module, version, platform, file)
       yield
         val provenance =
@@ -187,24 +191,24 @@ object CellCapture:
       .mapError(_ => unread(module, version, platform, classes))
       .flatMap: found =>
         found match
-          case Left(path)    => ZIO.fail(unread(module, version, platform, path))
+          case Left(error)   => ZIO.fail(GraphCompileError.Failed(module, version, platform, error))
           case Right(listed) =>
             ZIO
               .fromEither(SealedArtifactManifest.from(listed))
-              .mapError(_ => unread(module, version, platform, classes))
+              .mapError(error => GraphCompileError.Recipe(RecipeError.Seal(error)))
 
-  private def entries(classes: Path): Either[Path, List[ArtifactEntry]] =
-    if !Files.isDirectory(classes) then Left(classes)
+  private def entries(classes: Path): Either[CompileError, List[ArtifactEntry]] =
+    if !Files.isDirectory(classes) then Left(CompileError.Io(IoFailure(classes, IoFault.Read)))
     else
       val walk = Files.walk(classes)
       try
         val found = walk.iterator.asScala.filter(Files.isRegularFile(_)).toList.sortBy(_.toString)
-        found.foldLeft[Either[Path, List[ArtifactEntry]]](Right(Nil)):
-          case (Left(path), _)    => Left(path)
+        found.foldLeft[Either[CompileError, List[ArtifactEntry]]](Right(Nil)):
+          case (Left(error), _)   => Left(error)
           case (Right(acc), file) =>
-            val name = classes.relativize(file).toString.replace('\\', '/')
+            val name = slash(classes.relativize(file))
             ArtifactPath.from(name) match
-              case Left(_)     => Left(file)
+              case Left(_)     => Left(CompileError.InvalidPath(file))
               case Right(path) =>
                 val bytes = Files.readAllBytes(file)
                 Right(acc :+ ArtifactEntry(path, bytes.length.toLong, Digests.content(bytes)))
@@ -277,7 +281,7 @@ object CellCapture:
       case _                                     => fallback
 
   private def slash(path: Path): String =
-    path.toString.replace('\\', '/')
+    path.iterator.asScala.map(_.toString).mkString("/")
 
   private def unread(
       module: ProjectName,

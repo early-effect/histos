@@ -78,6 +78,7 @@ enum CompileError:
 
   /** `source` is not inside `checkout`, so it cannot take a repo-relative row. */
   case Outside(source: Path, checkout: Path)
+  case InvalidPath(path: Path)
   case Banned(path: Path, ban: ClasspathBan)
   case Failed(diagnostics: List[CompileDiagnostic])
   case Toolchain(miss: ToolchainMiss)
@@ -102,6 +103,7 @@ enum CompileError:
       s"compile supports Scala 3 and Scala 2.13, not ${version.value}"
     case NoSources                 => "compile has no sources"
     case Outside(source, checkout) => s"$source is outside $checkout"
+    case InvalidPath(path)         => s"$path is not a safe relative file path"
     case Banned(path, ban)         =>
       s"$path is ${ban.label} and is not a user dependency"
     case Failed(diagnostics) => diagnostics.map(_.text).mkString("\n")

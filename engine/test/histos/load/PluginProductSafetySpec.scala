@@ -127,7 +127,7 @@ object PluginProductSafetySpec extends ZIOSpecDefault:
               yield Right((client, page, empty, manifest == restoredManifest))
         yield assertTrue(
           observed == Right(("client", "page", true, true)),
-          ArtifactPath.from("assets/@scope/client+v1.js").isLeft,
+          ArtifactPath.from("assets/@scope/client+v1.js").map(_.value) == Right("assets/@scope/client+v1.js"),
         )
     },
   )
