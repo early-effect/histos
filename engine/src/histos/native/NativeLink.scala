@@ -402,7 +402,9 @@ object NativeLink:
       jars <- NativeClasspath
         .bridgeJars(toolchain)
         .mapError(NativeError.Fetch(_))
-      _ <- write(
+      os = Option(System.getProperty("os.name"))
+      opensslHome <- if NativeFlags.usesOpenssl(libraries) then HomebrewOpenssl.discover(os.getOrElse("")) else ZIO.none
+      _           <- write(
         source,
         NativeBridge.source(
           "hello",
@@ -412,8 +414,8 @@ object NativeLink:
           classpath,
           optimize,
           libraries,
-          Option(System.getProperty("os.name")),
-          Option.when(java.nio.file.Files.isDirectory(NativeFlags.HomebrewOpenssl))(NativeFlags.HomebrewOpenssl),
+          os,
+          opensslHome,
           resources,
         ),
       )

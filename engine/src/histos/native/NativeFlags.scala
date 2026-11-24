@@ -8,8 +8,6 @@ import java.nio.file.Path
   * machine.
   */
 object NativeFlags:
-  val HomebrewOpenssl: Path = Path.of("/opt/homebrew/opt/openssl@3")
-
   /** Compile flags, then link flags. An empty library set is empty flags. */
   def of(libraries: Set[NativeLibrary], os: String, opensslHome: Option[Path]): (List[String], List[String]) =
     val brew    = opensslHome.filter(_ => mac(os) && usesOpenssl(libraries))
@@ -19,10 +17,10 @@ object NativeFlags:
         libraries.toList.sortBy(_.token).flatMap(flag)
     (compile, link)
 
-  private def usesOpenssl(libraries: Set[NativeLibrary]): Boolean =
+  private[native] def usesOpenssl(libraries: Set[NativeLibrary]): Boolean =
     libraries.contains(NativeLibrary.Ssl) || libraries.contains(NativeLibrary.Crypto)
 
-  private def mac(os: String): Boolean =
+  private[native] def mac(os: String): Boolean =
     val name = os.toLowerCase
     name.contains("mac") || name.contains("darwin")
 
