@@ -57,10 +57,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight snapshots
-      - run: "./histos compile api wire splice central engine app --platform jvm"
-      - run: ./histos doctor --area release
       - id: authorized
         env:
           GH_TOKEN: ${{ github.token }}

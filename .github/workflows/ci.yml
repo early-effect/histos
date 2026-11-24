@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight affected
       - id: affected
         env:
@@ -50,7 +50,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight publish
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -84,10 +84,20 @@ jobs:
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
-      - run: "./histos compile api wire splice central engine app --platform jvm"
-      - run: ./histos doctor --area release
-      - run: "./histos publish local"
+      - run: |
+          base=all
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
+            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
+              base="$last"
+            fi
+          fi
+          ./histos publish local --base "$base"
         env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
           HISTOS_CACHE_MODE: "write"
       - run: |
@@ -291,25 +301,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight versions
       - run: "./histos run versions"
-  compatibility:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
-    needs: [affected]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: "~/.cache/coursier/v1"
-          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
-      - run: "./histos compile api wire splice central engine app --platform jvm"
-      - run: ./histos doctor --area release
   scaladoc:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected, publish]
@@ -502,7 +496,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight docs
       - run: "./histos run dev.earlyeffect.specular/site"
       - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
@@ -510,7 +504,7 @@ jobs:
         with:
           path: "target/site"
   pages:
-    needs: [docs, affected, workflow, supply-chain, test, versions, compatibility, scaladoc, format, client]
+    needs: [docs, affected, workflow, supply-chain, test, versions, publish, scaladoc, format, client]
     if: "(github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -538,7 +532,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight cache-seed
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -622,10 +616,8 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight workflow
-      - run: "./histos compile api wire splice central engine app --platform jvm"
-      - run: ./histos doctor --area release
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -655,7 +647,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
@@ -693,7 +685,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
         env:
