@@ -50,6 +50,7 @@ object CompletionSpec extends ZIOSpecDefault:
       for words <- offered(List("histos", "test", ""))
       yield assertTrue(
         words.contains("--quick"),
+        words.contains("--platform"),
         words.contains("--only"),
         words.contains("--affected"),
         words.contains("--test"),
@@ -74,7 +75,7 @@ object CompletionSpec extends ZIOSpecDefault:
       yield assertTrue(words.contains("sbt"), words.contains("zipx"))
     },
     test("run offers a module slot and then the platforms") {
-      for platforms <- offered(List("histos", "run", "app", ""))
+      for platforms <- offered(List("histos", "run", "app", "--platform", ""))
       yield assertTrue(
         platforms.contains("jvm"),
         platforms.contains("js"),

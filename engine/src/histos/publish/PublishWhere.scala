@@ -15,8 +15,10 @@ end PublishWhere
 /** Local and snapshots write the snapshot coordinate, or the release number when that session is already set. A
   * development session is not a release. A release with no release coordinate stops before selection. When another ship
   * is a release, the snapshot coordinate stays through selection so that ship is refused, and then it is not staged.
+  * Check compiles and compares, then returns. It writes no Ivy files and moves no pointer.
   */
 enum PublishWrite:
+  case Check
   case Local
   case Snapshots
   case Release

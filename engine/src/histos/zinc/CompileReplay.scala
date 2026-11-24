@@ -104,10 +104,14 @@ object CompileReplay:
         case None         => ZIO.none
         case Some(output) =>
           SourceStale
-            .current(request.checkout, request.analysis, request.sources)
+            .current(request)
             .flatMap:
               case false => dropMarker(request).as(None)
-              case true  => recalled(request, key, output)
+              case true  =>
+                ZIO.fromEither(TastyProducts.orphans(request.classes)).flatMap {
+                  case Nil => recalled(request, key, output)
+                  case _   => dropMarker(request).as(None)
+                }
 
   private def recalled(
       request: CompileRequest,
@@ -160,7 +164,7 @@ object CompileReplay:
     for
       id    <- keyed(key)
       bytes <- ZIO.fromEither(archive(request))
-      now   <- zio.Clock.ClockLive.instant
+      now   <- ZIO.clockWith(_.instant)
       _     <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
       _     <- stamp(request, key, runtime, compiler, bridge)
     yield ()
@@ -312,11 +316,13 @@ object CompileReplay:
       bridge: Path,
   ): IO[CompileError, Option[CompileOutput]] =
     for
-      _      <- ZIO.fromEither(install(request, decoded))
-      output <- ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
-      fresh  <- SourceStale.current(request.checkout, request.analysis, request.sources)
-      kept   <-
-        if !fresh then store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(None)
+      _        <- ZIO.fromEither(install(request, decoded))
+      output   <- ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
+      fresh    <- SourceStale.current(request)
+      orphaned <- ZIO.fromEither(TastyProducts.orphans(request.classes))
+      kept     <-
+        if !fresh || orphaned.nonEmpty then
+          store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(None)
         else
           withoutNir(store, id, request).flatMap:
             case true  => ZIO.none

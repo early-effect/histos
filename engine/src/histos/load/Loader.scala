@@ -31,14 +31,17 @@ end Loader
 
 object Loader:
   val live: zio.ZLayer[Resolve, Nothing, Loader] =
-    zio.ZLayer.fromZIO(zio.ZIO.serviceWith[Resolve](LoaderLive(_)))
+    zio.ZLayer.fromZIO(for
+      resolve  <- ZIO.service[Resolve]
+      products <- PluginProducts.make()
+    yield LoaderLive(resolve, products))
 
 /** Compiles `histos.scala`, reads the graph, compiles in-repo plugin modules, then ship pins. A locked graph fetches
   * those pins. A solve asks `Resolve`. A catalog load of a distribution jar checks its compiler payload. A classes
   * directory does not. `histos.wiring.scala` is not compiled. `loadLocked` solves even when the graph is locked:
   * `resolve update` writes the cells afterwards.
   */
-private final class LoaderLive(resolve: Resolve) extends Loader:
+private final class LoaderLive(resolve: Resolve, products: PluginProducts) extends Loader:
   def reportBuild(repo: Path, classpath: List[Path]): IO[LoadError, BuildNotes] =
     ZIO.scoped:
       for
@@ -71,7 +74,7 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       payloadOf.flatMap: payload =>
         BootstrapLoad
           .prepare(resolve, BootstrapLoad.Prepare(repo, apiJar, payload = payload, lockMode = mode))
-          .provideSomeLayer[Scope](BuildCache.ephemeral),
+          .provideSomeLayer[Scope](BuildCache.ephemeral ++ zio.ZLayer.succeed(products)),
       open(repo, apiJar, if mode.isDefined then ShipSource.Solve else ShipSource.Follow),
     )
 
@@ -113,16 +116,18 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
         threads <- PluginThreads.make(opened.build)
         builds  <- BuildFile.entries(out, opened.build)
         build   <- BuildFile.select(builds)
-        runtime <- PluginRuntime.loaded(
-          repo,
-          graph,
-          opened.build,
-          threads,
-          Nil,
-          launcher,
-          leases,
-          Nil,
-        )
+        runtime <- PluginRuntime
+          .loaded(
+            repo,
+            graph,
+            opened.build,
+            threads,
+            Nil,
+            launcher,
+            leases,
+            Nil,
+          )
+          .provideSomeLayer[Scope](zio.ZLayer.succeed(products))
       yield LoadedBuild(graph, runtime, build, buildFileClasspath = boundary)
 
   /** No published pin reads no lock and calls no resolver. */

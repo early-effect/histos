@@ -52,12 +52,16 @@ object Layout:
   def pom(artifact: Artifact): String =
     val document = artifact.document
     val body     = List(
-      Some(tag("name", artifact.name.value)),
+      Some(tag("name", document.name.fold(artifact.name.value)(_.value))),
       document.description.map(text => tag("description", text.value)),
       document.url.map(url => tag("url", url.value)),
       document.license.map(license),
       document.developer.map(developer),
       document.scm.map(scm),
+      organization(document),
+      document.versionScheme.map(value =>
+        s"  <properties>\n    <info.versionScheme>${xml(value.value)}</info.versionScheme>\n  </properties>"
+      ),
       dependencies(artifact.dependencies),
     ).flatten.mkString("\n")
     s"""<?xml version="1.0" encoding="UTF-8"?>
@@ -115,12 +119,20 @@ object Layout:
        |  </licenses>""".stripMargin
 
   private def developer(developer: Developer): String =
-    s"""  <developers>
-       |    <developer>
-       |      <id>${xml(developer.id.value)}</id>
-       |      <name>${xml(developer.name.value)}</name>
-       |    </developer>
-       |  </developers>""".stripMargin
+    val fields = List(
+      Some(s"      <id>${xml(developer.id.value)}</id>"),
+      Some(s"      <name>${xml(developer.name.value)}</name>"),
+      developer.email.map(value => s"      <email>${xml(value.value)}</email>"),
+      developer.url.map(value => s"      <url>${xml(value.value)}</url>"),
+    ).flatten.mkString("\n")
+    s"  <developers>\n    <developer>\n$fields\n    </developer>\n  </developers>"
+
+  private def organization(document: PomDocument): Option[String] =
+    val fields = List(
+      document.organizationName.map(value => s"    <name>${xml(value.value)}</name>"),
+      document.organizationHomepage.map(value => s"    <url>${xml(value.value)}</url>"),
+    ).flatten
+    Option.when(fields.nonEmpty)(s"  <organization>\n${fields.mkString("\n")}\n  </organization>")
 
   private def scm(scm: Scm): String =
     val connection = xml(scm.connection.value)

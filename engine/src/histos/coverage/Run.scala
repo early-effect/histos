@@ -1,17 +1,40 @@
 package histos.coverage
 
+import histos.build.{BuildDag, BuildNode, BuildRuntime, ExecutionError}
 import histos.jdk.JdkRuntime
-import histos.resolve.{BuildResolvers, Resolve, ResolveError}
+import histos.load.PluginRuntime
+import histos.schedule.CacheConfig
+import histos.resolve.{BuildResolvers, ResolutionService, Resolve, ResolveError}
 import histos.select.{SelectError, Selection}
-import histos.testrun.{ModuleTest, ModuleTestError, SessionFeed, TestFeed, TestRun, TestStatus}
+import histos.testrun.{
+  ModuleTestError,
+  SessionFeed,
+  TestCellPolicy,
+  TestCells,
+  TestFailures,
+  TestFeed,
+  TestRun,
+  TestStatus,
+}
 import histos.toolchain.Runtimes
 import histos.workspace.{IoFailure, Workspace}
 import histos.zinc.{CompileFeed, GraphCompileError, ScalaSeries}
-import histos.{CoverageFloors, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{
+  CoverageFloors,
+  Module,
+  Platform,
+  PlatformSelection,
+  ProjectGraph,
+  ProjectName,
+  ScalaVersion,
+  TestSelection,
+  TestTargets,
+}
 
 import java.nio.file.Path
 
-import zio.{UIO, ZIO}
+import zio.{UIO, ZIO, ZLayer}
+import zio.stream.ZStream
 
 /** Why `histos coverage` stopped before it could write the report. */
 enum CoverageFailure:
@@ -56,14 +79,28 @@ object Run:
   def execute(
       request: CoverageRequest,
       lines: CoverageLines,
+      plugins: Option[PluginRuntime] = None,
   ): ZIO[Resolve & histos.cache.ContentStore, CoverageFailure, CoverageResult] =
     val CoverageRequest(repo, graph, names, jdk, runtimes, floors, excludes, at) = request
     val modules = graph.projects.collect { case module: Module => module }
     for
       selected <- ZIO.fromEither(Selection.select(graph, names)).mapError(CoverageFailure.Selected(_))
-      closed = Module.closure(modules, selected.modules.map(_.name).toSet)
-      plugins <- fetch(graph, closed, BuildResolvers(graph.resolvers))
-      spec  = CoverageCompile(excludes, graph.tools.compilers.scoverage, plugins)
+      closed    = Module.closure(modules, selected.modules.map(_.name).toSet)
+      selection = TestSelection(
+        TestTargets.Filtered(selected.modules.map(_.name)),
+        PlatformSelection.only(Platform.Jvm),
+      )
+      tests <- ZIO
+        .fromEither(TestCells.plan(graph, selection, TestCellPolicy.MeasuredJvm))
+        .mapError(error => CoverageFailure.Test(TestFailures(error)))
+      dag <- ZIO
+        .fromEither(BuildDag.plan(graph, tests.compileStageRoots.map(BuildNode.Compile(_))))
+        .mapError(error => CoverageFailure.Test(TestFailures(ExecutionError.Graph(error))))
+      versions = dag.nodes.collect {
+        case BuildNode.Compile(stage) if Cell.measures(stage.cell.version, stage.cell.platform) => stage.cell.version
+      }
+      instruments <- fetch(graph, versions, BuildResolvers(graph.resolvers))
+      spec  = CoverageCompile(excludes, graph.tools.compilers.scoverage, instruments)
       asked = TestRun(
         repo,
         graph,
@@ -72,8 +109,10 @@ object Run:
         runtimes,
         histos.testrun.TestMode.Run,
         coverage = Some(spec),
+        requested = Some(selection),
+        cellPolicy = TestCellPolicy.MeasuredJvm,
       )
-      refused <- run(asked, lines)
+      refused <- run(asked, lines, plugins)
       parts   <- read(repo, closed)
       summed  = Report.sum(parts.map((rows, invoked) => Report.of(rows, invoked)))
       skipped = Cell.skipped(selected.modules)
@@ -87,9 +126,20 @@ object Run:
   private def run(
       asked: TestRun,
       lines: CoverageLines,
+      plugins: Option[PluginRuntime],
   ): ZIO[Resolve & histos.cache.ContentStore, CoverageFailure, Boolean] =
-    ModuleTest
-      .session(asked)
+    val session = ZStream.unwrapScoped:
+      for
+        process    <- CacheConfig.processEnv
+        remote     <- CacheConfig.open(process).mapError(ModuleTestError.Remote(_))
+        resolution <- ResolutionService.open(asked.repo, asked.graph).mapError(ModuleTestError.Lock(_))
+        runtime    <- BuildRuntime
+          .open(plugins)
+          .provideSomeLayer[Resolve & histos.cache.ContentStore & zio.Scope](
+            ZLayer.succeed(resolution) ++ ZLayer.succeed(remote)
+          )
+      yield runtime.tests(asked)
+    session
       .tap(feed => speak(feed, lines))
       .runFold(Heard(false, Nil))(note)
       .mapError(CoverageFailure.Test(_))
@@ -106,11 +156,10 @@ object Run:
 
   private def fetch(
       graph: ProjectGraph,
-      modules: List[Module],
+      planned: List[ScalaVersion],
       repositories: histos.resolve.Repositories,
   ): ZIO[Resolve, CoverageFailure, List[CoveragePlugin]] =
-    val versions = modules
-      .flatMap(_.versions.all)
+    val versions = planned
       .filter(version => ScalaSeries.of(version).contains(ScalaSeries.Scala2(13)))
       .foldLeft(List.empty[ScalaVersion]): (seen, version) =>
         if seen.contains(version) then seen else seen :+ version

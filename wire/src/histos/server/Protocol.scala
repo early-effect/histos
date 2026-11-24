@@ -11,7 +11,7 @@ import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
-import histos.{Platform, ProjectName}
+import histos.ProjectName
 
 import java.nio.file.Path
 
@@ -20,7 +20,9 @@ import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Path]
-import histos.report.WireJson.given JsonCodec[Platform]
+import histos.report.WireJson.given JsonCodec[histos.MainClass]
+import histos.report.WireJson.given JsonCodec[histos.PlatformSelection]
+import histos.report.WireJson.given JsonCodec[histos.TestSelection]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
 enum ServerError:
@@ -41,6 +43,9 @@ enum ServerError:
   /** A stop was not honored, and the process is still listening. The record stays with that process. */
   case DidNotStop(socket: Path)
   case NoServer
+
+  /** The socket closed before [[Message.Done]]. The client did not reject a payload. */
+  case Closed
   case Protocol
   case Address(path: Path)
   case Io(op: ServerIo)
@@ -58,6 +63,7 @@ enum ServerError:
       s"histos server at $socket did not record version $wanted; it has $got"
     case DidNotStop(socket) => s"histos server at $socket did not stop"
     case NoServer           => "no histos server is running"
+    case Closed             => "histos server closed the frame stream before the command finished"
     case Protocol           =>
       "histos server sent a frame this client does not understand"
     case Address(path) => s"histos server socket path is too long: $path"
@@ -188,6 +194,31 @@ object RunBytes:
     catch case _: IllegalArgumentException => None
 end RunBytes
 
+/** What a running command does with one daemon frame. `None` is a closed stream, not a payload. */
+object CommandFrame:
+  def read(frame: Option[String]): Either[ServerError, Feed] =
+    frame match
+      case None          => Left(ServerError.Closed)
+      case Some(payload) =>
+        payload.fromJson[Message] match
+          case Right(Message.Event(event))    => Right(Feed.Event(event))
+          case Right(Message.Output(encoded)) =>
+            RunBytes.decode(encoded) match
+              case Some(bytes) => Right(Feed.Output(bytes))
+              case None        => Left(ServerError.Protocol)
+          case Right(Message.Done(result)) => Right(Feed.Done(result))
+          case _                           => Left(ServerError.Protocol)
+
+  /** The first frame is [[Message.Ready]]. A closed stream is [[ServerError.Closed]]. */
+  def ready(frame: Option[String]): Either[ServerError, Unit] =
+    frame match
+      case None          => Left(ServerError.Closed)
+      case Some(payload) =>
+        payload.fromJson[Message] match
+          case Right(Message.Ready) => Right(())
+          case _                    => Left(ServerError.Protocol)
+end CommandFrame
+
 /** What the client does with the socket after Ready. */
 enum Attendance:
   /** The handler reads the socket. Closing it is not a cancel. */
@@ -201,14 +232,15 @@ enum Attendance:
 end Attendance
 
 enum Call derives JsonCodec:
-  case Compile(projects: List[ProjectName])
+  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case Test(
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
   )
-  case PublishLocal(tokens: List[PublishToken])
+  case PublishCheck(tokens: List[PublishToken], scope: histos.publish.ProofScope)
+  case PublishLocal(tokens: List[PublishToken], scope: histos.publish.ProofScope)
 
   /** Remove the local ivy revisions and toolchain directory for HEAD. The pin stays. */
   case PublishWithdraw
@@ -218,7 +250,13 @@ enum Call derives JsonCodec:
   case PublishDrop(id: DeploymentId)
   case PublishAssets(tokens: List[String])
   case Graph
-  case Run(id: String, platform: Option[Platform], launch: RunLaunch, args: List[String])
+  case Run(
+      id: String,
+      platform: Option[histos.PlatformSelection],
+      launch: RunLaunch,
+      args: List[String],
+      main: Option[histos.MainClass] = None,
+  )
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
   case Resolve(action: ResolveAction)
@@ -242,9 +280,9 @@ enum Call derives JsonCodec:
   case CacheVerify(projects: List[ProjectName])
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
-  case PreviewCompile(projects: List[ProjectName])
+  case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case PreviewTest(
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
@@ -252,7 +290,7 @@ enum Call derives JsonCodec:
   case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
-  case PreviewRun(id: String, platform: Option[Platform])
+  case PreviewRun(id: String, platform: Option[histos.PlatformSelection], main: Option[histos.MainClass] = None)
 
   /** Project names, module names, plugin commands, or one plugin command's flags. Nothing here compiles. */
   case Catalog(query: CatalogQuery)
@@ -260,9 +298,9 @@ enum Call derives JsonCodec:
   /** A nested watch is quiet. Only the program under one watch reads stdin. */
   def attendance: Attendance =
     this match
-      case Bsp | Reboot(_) | Stop                      => Attendance.Held
-      case Run(_, _, _, _) | Watch(Run(_, _, _, _), _) => Attendance.Program
-      case _                                           => Attendance.Quiet
+      case Bsp | Reboot(_) | Stop                            => Attendance.Held
+      case Run(_, _, _, _, _) | Watch(Run(_, _, _, _, _), _) => Attendance.Program
+      case _                                                 => Attendance.Quiet
 end Call
 
 object Call:

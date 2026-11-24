@@ -174,6 +174,8 @@ import histos.zinc.{
 }
 import histos.{
   BuildError,
+  JdkFloor,
+  JvmFlag,
   CiFault,
   PluginGraphFault,
   ToolchainClientFault,
@@ -280,8 +282,11 @@ private object WireLeaves extends WireSupport:
       list => list,
     )
 
-  given JsonCodec[ProjectName]     = parsed(ProjectName.from, _.message, _.value)
-  given JsonCodec[ScalaVersion]    = parsed(ScalaVersion.from, _.message, _.value)
+  given JsonCodec[ProjectName]  = parsed(ProjectName.from, _.message, _.value)
+  given JsonCodec[ScalaVersion] = parsed(ScalaVersion.from, _.message, _.value)
+  given JsonCodec[JvmFlag]      = parsed(JvmFlag.from, _.message, _.value)
+  given JsonCodec[JdkFloor]     =
+    JsonCodec.int.transformOrFail(raw => JdkFloor.from(raw).left.map(_.message), _.value)
   given JsonCodec[Sha256]          = parsed(Sha256.from, _.message, _.value)
   given JsonCodec[CompilerMessage] =
     JsonCodec.string.transform(CompilerMessage.fromCompiler, _.text)
@@ -438,6 +443,7 @@ end WireLeaves
 private object WireBuild extends WireSupport:
   import WireLeaves.given
   import WireContract.given
+  import WireStages.given
 
   given JsonCodec[ToolchainError]    = JsonCodec.derived
   given JsonCodec[CacheError]        = JsonCodec.derived
@@ -553,8 +559,11 @@ private object WireBuild extends WireSupport:
   given JsonCodec[SurveyError]     = JsonCodec.derived
 end WireBuild
 private object WireCall extends WireSupport:
+  import WireExecution.given
+  import WireProducts.given
   import WireLeaves.given
   import WireContract.given
+  import WireStages.given
   import WireBuild.given
 
   given JsonCodec[SuiteName]       = parsed(SuiteName.from, _.message, _.value)
@@ -572,45 +581,47 @@ private object WireCall extends WireSupport:
         .map(library => TestProvider.trusted(wire.framework, library)),
     provider => WireProvider(provider.framework, provider.library.organization, provider.library.name),
   )
-  given JsonCodec[PackMainError]                           = JsonCodec.derived
-  given JsonCodec[StampError]                              = JsonCodec.derived
-  given JsonCodec[QuickError]                              = JsonCodec.derived
-  given JsonCodec[LinkError]                               = JsonCodec.derived
-  given JsonCodec[ClassShapeError]                         = JsonCodec.derived
-  given JsonCodec[JsLinkError]                             = JsonCodec.derived
-  given JsonCodec[JsRunError]                              = JsonCodec.derived
-  given JsonCodec[JsSuiteError]                            = JsonCodec.derived
-  given JsonCodec[NativeError]                             = JsonCodec.derived
-  given JsonCodec[NativeSuiteError]                        = JsonCodec.derived
-  given JsonCodec[PlatformToolError]                       = JsonCodec.derived
-  given JsonCodec[ModuleTestError]                         = JsonCodec.derived
-  given JsonCodec[ProgramError]                            = JsonCodec.derived
-  given JsonCodec[JarIo]                                   = JsonCodec.derived
-  private val jarErrorCodec: JsonCodec[JarError]           = JsonCodec.derived
-  given JsonCodec[JarError]                                = jarErrorCodec
-  given JsonEncoder[JarError]                              = jarErrorCodec.encoder
-  given JsonDecoder[JarError]                              = jarErrorCodec.decoder
-  given JsonCodec[PublishFault]                            = JsonCodec.derived
-  given JsonCodec[TransportFault]                          = JsonCodec.derived
-  given JsonCodec[MetadataFault]                           = JsonCodec.derived
-  given JsonCodec[SnapshotRevisionError]                   = JsonCodec.derived
-  given JsonCodec[PublishError]                            = JsonCodec.derived
-  given JsonCodec[LazyValFrame]                            = JsonCodec.derived
-  given JsonCodec[LazyValError]                            = JsonCodec.derived
-  private val assemblyErrorCodec: JsonCodec[AssemblyError] = JsonCodec.derived
-  given JsonCodec[AssemblyError]                           = assemblyErrorCodec
-  given JsonEncoder[AssemblyError]                         = assemblyErrorCodec.encoder
-  given JsonDecoder[AssemblyError]                         = assemblyErrorCodec.decoder
-  given JsonCodec[LocalPublishError]                       = JsonCodec.derived
-  given JsonCodec[PreviewError]                            = JsonCodec.derived
-  given JsonCodec[WatchError]                              = JsonCodec.derived
-  given JsonCodec[histos.format.ScalafmtPackage]           = JsonCodec.derived
-  given JsonCodec[histos.format.FormatError]               = JsonCodec.derived
-  given JsonCodec[CommitShaError]                          = JsonCodec.derived
-  given JsonCodec[BranchError]                             = JsonCodec.derived
-  given JsonCodec[PullRequestError]                        = JsonCodec.derived
-  given JsonCodec[SessionError]                            = JsonCodec.derived
-  given JsonCodec[TagRelation]                             =
+  given JsonCodec[PackMainError]                                  = JsonCodec.derived
+  given JsonCodec[StampError]                                     = JsonCodec.derived
+  given JsonCodec[QuickError]                                     = JsonCodec.derived
+  given JsonCodec[LinkError]                                      = JsonCodec.derived
+  given JsonCodec[ClassShapeError]                                = JsonCodec.derived
+  given JsonCodec[JsLinkError]                                    = JsonCodec.derived
+  given JsonCodec[JsRunError]                                     = JsonCodec.derived
+  given JsonCodec[JsSuiteError]                                   = JsonCodec.derived
+  given JsonCodec[NativeError]                                    = JsonCodec.derived
+  given JsonCodec[NativeSuiteError]                               = JsonCodec.derived
+  given JsonCodec[PlatformToolError]                              = JsonCodec.derived
+  given JsonCodec[JarIo]                                          = JsonCodec.derived
+  private val jarErrorCodec: JsonCodec[JarError]                  = JsonCodec.derived
+  given JsonCodec[JarError]                                       = jarErrorCodec
+  given JsonEncoder[JarError]                                     = jarErrorCodec.encoder
+  given JsonDecoder[JarError]                                     = jarErrorCodec.decoder
+  given JsonCodec[PublishFault]                                   = JsonCodec.derived
+  given JsonCodec[TransportFault]                                 = JsonCodec.derived
+  given JsonCodec[MetadataFault]                                  = JsonCodec.derived
+  given JsonCodec[SnapshotRevisionError]                          = JsonCodec.derived
+  given JsonCodec[PublishError]                                   = JsonCodec.derived
+  given JsonCodec[LazyValFrame]                                   = JsonCodec.derived
+  given JsonCodec[LazyValError]                                   = JsonCodec.derived
+  private val assemblyErrorCodec: JsonCodec[AssemblyError]        = JsonCodec.derived
+  given JsonCodec[AssemblyError]                                  = assemblyErrorCodec
+  given JsonEncoder[AssemblyError]                                = assemblyErrorCodec.encoder
+  given JsonDecoder[AssemblyError]                                = assemblyErrorCodec.decoder
+  given JsonCodec[histos.publish.PublicationCoordinate]           = JsonCodec.derived
+  given JsonCodec[histos.version.BumpPart]                        = JsonCodec.derived
+  given JsonCodec[histos.publish.PublicationCompatibilityGap]     = JsonCodec.derived
+  given JsonCodec[histos.publish.PublicationCompatibilityOutcome] = JsonCodec.derived
+  given JsonCodec[histos.publish.PublicationCompatibilityFailure] = JsonCodec.derived
+  given JsonCodec[LocalPublishError]                              = JsonCodec.derived
+  given JsonCodec[WatchError]                                     = JsonCodec.derived
+  given JsonCodec[histos.format.ScalafmtPackage]                  = JsonCodec.derived
+  given JsonCodec[histos.format.FormatError]                      = JsonCodec.derived
+  given JsonCodec[CommitShaError]                                 = JsonCodec.derived
+  given JsonCodec[BranchError]                                    = JsonCodec.derived
+  given JsonCodec[PullRequestError]                               = JsonCodec.derived
+  given JsonCodec[SessionError]                                   = JsonCodec.derived
+  given JsonCodec[TagRelation]                                    =
     choose(
       "tag relation",
       List(
@@ -624,26 +635,23 @@ private object WireCall extends WireSupport:
         case TagRelation.Unknown => "unknown"
       },
     )
-  given JsonCodec[TagRelationError]           = JsonCodec.derived
-  given JsonCodec[RegistryError]              = JsonCodec.derived
-  given JsonCodec[Refusal]                    = JsonCodec.derived
-  given JsonCodec[VersionError]               = JsonCodec.derived
-  given JsonCodec[HostIo]                     = JsonCodec.derived
-  given JsonCodec[HostProof]                  = JsonCodec.derived
-  given JsonCodec[TaskError]                  = JsonCodec.derived
-  given JsonCodec[PluginTaskError]            = JsonCodec.derived
-  given JsonCodec[PluginRunError]             = JsonCodec.derived
-  given JsonCodec[CiError]                    = JsonCodec.derived
-  given JsonCodec[ScriptError]                = JsonCodec.derived
-  given JsonCodec[AssembleError]              = JsonCodec.derived
-  given JsonCodec[LauncherError]              = JsonCodec.derived
-  given JsonCodec[ScheduleError[PluginFault]] = JsonCodec.derived
-
-  given JsonCodec[PluginFault]   = JsonCodec.derived
-  given JsonCodec[WorkflowFault] = JsonCodec.derived
-  given JsonCodec[Rejection]     = JsonCodec.derived
-  given JsonCodec[BuildFault]    = JsonCodec.derived
-  given JsonCodec[CallResult]    = JsonCodec.derived
+  given JsonCodec[TagRelationError] = JsonCodec.derived
+  given JsonCodec[RegistryError]    = JsonCodec.derived
+  given JsonCodec[Refusal]          = JsonCodec.derived
+  given JsonCodec[VersionError]     = JsonCodec.derived
+  given JsonCodec[HostIo]           = JsonCodec.derived
+  given JsonCodec[HostProof]        = JsonCodec.derived
+  given JsonCodec[TaskError]        = JsonCodec.derived
+  given JsonCodec[PluginTaskError]  = JsonCodec.derived
+  given JsonCodec[PluginRunError]   = JsonCodec.derived
+  given JsonCodec[CiError]          = JsonCodec.derived
+  given JsonCodec[ScriptError]      = JsonCodec.derived
+  given JsonCodec[AssembleError]    = JsonCodec.derived
+  given JsonCodec[LauncherError]    = JsonCodec.derived
+  given JsonCodec[WorkflowFault]    = JsonCodec.derived
+  given JsonCodec[Rejection]        = JsonCodec.derived
+  given JsonCodec[BuildFault]       = JsonCodec.derived
+  given JsonCodec[CallResult]       = JsonCodec.derived
   private final case class WireLibrary(organization: String, name: String)
 
   private final case class WireProvider(framework: FrameworkClass, organization: String, name: String)
@@ -672,6 +680,9 @@ end WireEvent
 object WireJson:
   export WireLeaves.given
   export WireContract.given
+  export WireStages.given
+  export WireProducts.given
   export WireBuild.given
   export WireCall.given
+  export WireExecution.given
   export WireEvent.given

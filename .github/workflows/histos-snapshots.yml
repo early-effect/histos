@@ -1,22 +1,93 @@
 name: snapshots
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
 permissions:
   contents: read
 jobs:
+  eligibility:
+    outputs:
+      publish: ${{ steps.eligibility.outputs.publish }}
+    if: "github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - id: eligibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          publish=false
+          session=snapshot
+          pr=
+          if [ "$EVENT" = workflow_dispatch ] || [ "$CI_BRANCH" = "$DEFAULT_BRANCH" ]; then
+            current=$(gh api "repos/$GH_REPO/commits/$CI_BRANCH" --jq .sha)
+            [ "$current" = "$CI_SHA" ] && publish=true
+          else
+            owner=${GH_REPO%%/*}
+            pulls=$(gh api --method GET "repos/$GH_REPO/pulls" -f "head=$owner:$CI_BRANCH")
+            pr=$(printf '%s' "$pulls" | jq -r '[.[] | select(.head.sha == env.CI_SHA and .head.repo.full_name == env.GH_REPO and any(.labels[]; .name == "snapshots"))] | first | .number // empty')
+            if [ -n "$pr" ]; then publish=true; session=pr; fi
+          fi
+          printf 'publish=%s\nsession=%s\npr=%s\n' "$publish" "$session" "$pr" >> "$GITHUB_OUTPUT"
   snapshots:
+    needs: eligibility
+    if: needs.eligibility.outputs.publish == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: write
+      pull-requests: read
+    env:
+      SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+      SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
     steps:
+      - name: Require snapshot credentials
+        run: test -n "$SONATYPE_USERNAME" && test -n "$SONATYPE_PASSWORD"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
       - run: ./histos doctor --preflight snapshots
-      - run: "./histos publish snapshots"
+      - id: authorized
         env:
-          HISTOS_SESSION: snapshot
-          HISTOS_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          publish=false
+          session=snapshot
+          pr=
+          if [ "$EVENT" = workflow_dispatch ] || [ "$CI_BRANCH" = "$DEFAULT_BRANCH" ]; then
+            current=$(gh api "repos/$GH_REPO/commits/$CI_BRANCH" --jq .sha)
+            [ "$current" = "$CI_SHA" ] && publish=true
+          else
+            owner=${GH_REPO%%/*}
+            pulls=$(gh api --method GET "repos/$GH_REPO/pulls" -f "head=$owner:$CI_BRANCH")
+            pr=$(printf '%s' "$pulls" | jq -r '[.[] | select(.head.sha == env.CI_SHA and .head.repo.full_name == env.GH_REPO and any(.labels[]; .name == "snapshots"))] | first | .number // empty')
+            if [ -n "$pr" ]; then publish=true; session=pr; fi
+          fi
+          printf 'publish=%s\nsession=%s\npr=%s\n' "$publish" "$session" "$pr" >> "$GITHUB_OUTPUT"
+      - run: "./histos publish snapshots"
+        if: steps.authorized.outputs.publish == 'true'
+        env:
+          HISTOS_SESSION: ${{ steps.authorized.outputs.session }}
+          HISTOS_PR: ${{ steps.authorized.outputs.pr }}
+          HISTOS_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           HISTOS_BRANCH: default
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}

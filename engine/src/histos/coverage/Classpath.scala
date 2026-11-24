@@ -18,6 +18,6 @@ object Classpath:
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala2(13)) =>
         runtime match
-          case Some(jar) => Right(classes :+ jar)
+          case Some(jar) => Right((classes :+ jar).distinct)
           case None      => Left(ClasspathGap.MissingRuntime)
       case _ => Right(classes)

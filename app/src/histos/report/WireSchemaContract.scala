@@ -112,6 +112,8 @@ import histos.{HttpUrl, PluginPublication, PluginRef, Resolution, Resolver}
 /** Document schemas for the plugin contracts. JSON codecs stay in wire. */
 private object WireSchemaContract extends WireSchemaSupport:
   import WireSchemaLeaves.given
+  import WireSchemaStages.given Schema[histos.PlatformSelection]
+  import WireSchemaStages.given Schema[histos.TestSelection]
 
   given Schema[SourceId]          = text("SourceId")
   given Schema[ServiceKey]        = text("ServiceKey")

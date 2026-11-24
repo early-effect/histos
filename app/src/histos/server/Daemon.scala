@@ -270,10 +270,13 @@ object Client:
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
         input  = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _     <- Frame.write(output, envelope.toJson).mapError(written(socket))
-        first <- Frame.read(input).mapError(read(socket))
-        _     <- ZIO.fromEither(ready(first))
-        _     <- attachInput(terminal, envelope.call, output)
+        _        <- Frame.write(output, envelope.toJson).mapError(written(socket))
+        first    <- Frame.read(input).mapError(read(socket))
+        _        <- ZIO.fromEither(CommandFrame.ready(first))
+        attached <- ZIO.scopeWith(_.fork)
+        // Close before the input scope joins its readers and any blocked socket writer.
+        _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
+        _ <- attached.extend[Any](attachInput(terminal, envelope.call, output))
       yield frames(input, socket)
     }
 
@@ -290,7 +293,7 @@ object Client:
           .write(output, posted.toJson)
           .mapError(written(socket))
         first <- Frame.read(input).mapError(read(socket))
-        _     <- ZIO.fromEither(ready(first))
+        _     <- ZIO.fromEither(CommandFrame.ready(first))
         _     <- copyStdin(output, channel, socket).forkScoped
         code  <- copyToStdout(input, socket)
       yield code
@@ -305,7 +308,7 @@ object Client:
     StdinFeed.of(terminal, call.attendance) match
       case StdinFeed.Live =>
         for
-          queue <- Queue.unbounded[RelayCommand]
+          queue <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
           _     <- LiveInput.serve(queue)
           _     <- forward(output, queue).forkScoped
         yield ()
@@ -328,30 +331,17 @@ object Client:
       .attemptBlocking(SocketChannel.open(UnixDomainSocketAddress.of(socket)))
       .mapError(_ => ServerError.Unreachable(socket))
 
-  private def ready(frame: Option[String]): Either[ServerError, Unit] =
-    frame.flatMap(_.fromJson[Message].toOption) match
-      case Some(Message.Ready) => Right(())
-      case _                   => Left(ServerError.Protocol)
-
   private def frames(
       input: InputStream,
       socket: Path,
   ): ZStream[Any, ServerError, Feed] =
     ZStream
       .fromZIO(Frame.read(input).mapError(read(socket)))
-      .flatMap:
-        case None          => ZStream.fail(ServerError.Protocol)
-        case Some(payload) =>
-          payload.fromJson[Message] match
-            case Right(Message.Event(event)) =>
-              ZStream.succeed(Feed.Event(event)) ++ frames(input, socket)
-            case Right(Message.Output(encoded)) =>
-              histos.server.RunBytes.decode(encoded) match
-                case Some(bytes) => ZStream.succeed(Feed.Output(bytes)) ++ frames(input, socket)
-                case None        => ZStream.fail(ServerError.Protocol)
-            case Right(Message.Done(result)) =>
-              ZStream.succeed(Feed.Done(result))
-            case _ => ZStream.fail(ServerError.Protocol)
+      .flatMap: frame =>
+        CommandFrame.read(frame) match
+          case Left(error)            => ZStream.fail(error)
+          case Right(Feed.Done(done)) => ZStream.succeed(Feed.Done(done))
+          case Right(feed)            => ZStream.succeed(feed) ++ frames(input, socket)
 
   private def copyStdin(
       output: OutputStream,
@@ -509,6 +499,7 @@ object Daemon:
           fingerprint <- Fingerprint.read(repo, graph.resolution)
           _           <- Record.write(repo, version, fingerprint, socket, None)
           held        <- Scope.make
+          _           <- held.addFinalizer(plugins.retire)
           uses        <- Ref.make[Uses](Uses.Live(0))
           desk        <- InvocationDesk.make
           _           <- held.addFinalizer(desk.close)
@@ -1173,16 +1164,16 @@ object Daemon:
     */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _, _, _) | Call.Assembly(_) | Call.Clean(_, _) | Call.Format(_, _) |
-          Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _) | Call.Assembly(_) |
+          Call.Clean(_, _) | Call.Format(_, _) | Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishWithdraw | Call.PublishAssets(_) | Call.Graph |
           Call.Task(_, _) | Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
           Call.Stop | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) |
+          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_, _) |
           Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewClean(_, _) | Call.PreviewRun(_, _) | Call.Catalog(_) =>
+          Call.PreviewClean(_, _) | Call.PreviewRun(_, _, _) | Call.Catalog(_) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(
@@ -1199,7 +1190,7 @@ object Daemon:
       body: UIO[Unit] => ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     call match
-      case Call.Run(_, _, _, _) =>
+      case Call.Run(_, _, _, _, _) =>
         for
           held     <- Promise.make[Nothing, Unit]
           compiled <- Promise.make[Nothing, Unit]
@@ -1283,6 +1274,7 @@ object Daemon:
                 build,
                 effect => permit.withPermit(effect),
                 Some(warm.graphs),
+                Some(generation.plugins),
               )
               .mapError(ServerError.Resolve(_))
               .flatMap { session =>
@@ -1296,7 +1288,9 @@ object Daemon:
                         )
                     }
                     .flatMap { gen =>
-                      session.answer(gen.graph, gen.buildFileClasspath, payload).ensuring(release(gen))
+                      session
+                        .answer(gen.graph, gen.buildFileClasspath, payload, Some(gen.plugins))
+                        .ensuring(release(gen))
                     }
                 warm.spliced.update(_ + session) *>
                   session.follow *>

@@ -16,6 +16,7 @@ import histos.plugin.{
   ResolutionIntent,
   TaskDep,
   TaskName,
+  SourceSet,
 }
 import histos.supply.SupplyChain
 import histos.theme.Theme
@@ -34,6 +35,7 @@ sealed trait Project:
 final case class ProjectDep(
     name: ProjectName,
     platforms: Option[List[Platform]],
+    scope: SourceSet = SourceSet.Main,
 ):
   def applies(platform: Platform): Boolean =
     platforms match
@@ -71,6 +73,11 @@ final case class Module(
     libraries: Set[NativeLibrary] = Set.empty,
     testAggregates: List[ProjectName] = Nil,
     lane: TestLane = TestLane.Suite,
+    roots: List[ScopedRoot] = Nil,
+    runPlatform: Option[Platform] = None,
+    jsOptimize: Option[JsOptimize] = None,
+    jvmOptions: JvmOptions = JvmOptions.empty,
+    description: Option[PomText] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -82,7 +89,11 @@ final case class Module(
   /** Upstream names on `platform`. Empty when this module does not build that platform.
     */
   def upstream(platform: Platform): List[ProjectName] =
-    if platforms.all.contains(platform) then dependsOn.filter(_.applies(platform)).map(_.name)
+    upstream(platform, SourceSet.Main)
+
+  def upstream(platform: Platform, scope: SourceSet): List[ProjectName] =
+    if platforms.all.contains(platform) then
+      dependsOn.filter(dep => dep.applies(platform) && dep.scope == scope).map(_.name)
     else Nil
 
   /** Every upstream name, whichever platform the edge names. */
@@ -418,6 +429,7 @@ object Projects:
       _           <- directories(built)
       _           <- cycle(built)
       _           <- bindPlugins(registered, built)
+      _           <- GraphContracts.validate(built, registered)
       ships       <- ShipLink.catalog(catalog, built)
       coordinates <- pluginCoordinates(settings.pluginSources, built)
       _           <- uniqueResolvers(settings.resolvers)
@@ -450,6 +462,7 @@ object Projects:
             settings.suiteHost,
           )
         )
+      _ <- GraphContracts.verify(builtGraph)
       _ <- JobCheck.arrange(builtGraph)
     yield builtGraph
 
@@ -582,7 +595,12 @@ object Projects:
                       .DependsOnAggregate(n.name, target.name, m.position)
                   )
                 case upstream: ModuleBody[?] =>
-                  if deps.exists(_.name == target.name) then
+                  val wanted = edge.platforms.getOrElse(m.platforms.all)
+                  if deps.exists(dep =>
+                      dep.name == target.name && dep.scope == edge.scope &&
+                        dep.platforms.getOrElse(m.platforms.all).exists(wanted.contains)
+                    )
+                  then
                     Left(
                       BuildError
                         .DuplicateDependency(n.name, target.name, m.position)
@@ -658,6 +676,11 @@ object Projects:
             m.libraries,
             aggregates,
             m.lane,
+            m.roots,
+            m.runPlatform,
+            m.jsOptimize,
+            m.jvmOptions,
+            m.described,
           )
 
   private def publicationOf(
@@ -752,7 +775,7 @@ object Projects:
                 depender.position,
               )
             )
-          case None => Right(ProjectDep(target, edge.platforms))
+          case None => Right(ProjectDep(target, edge.platforms, edge.scope))
 
   private def cycle(projects: List[Project]): Either[BuildError, Unit] =
     val modules = projects.collect { case module: Module => module }
@@ -991,7 +1014,8 @@ object Projects:
         if !modules.contains(name) then
           Some(BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(plugin.id, name)))
         else if waits then Some(BuildError.PluginGraph(PluginGraphFault.EmitCycle(plugin.id, task.name, name)))
-        else if task.outputs.isEmpty then Some(BuildError.PluginGraph(PluginGraphFault.EmitEmpty(plugin.id, task.name)))
+        else if !task.outputs.exists(_.kind == histos.plugin.OutputKind.Directory) then
+          Some(BuildError.PluginGraph(PluginGraphFault.EmitEmpty(plugin.id, task.name)))
         else None
       case other => depOf(plugin, modules, other)
 
@@ -1004,12 +1028,18 @@ object Projects:
       case TaskDep.Same(_)                          => None
       case TaskDep.Compile(name, version, platform) =>
         cellOf(plugin, modules, name, version, platform)
-      case TaskDep.Link(name, version) =>
+      case TaskDep.Link(name, version, _) =>
         cellOf(plugin, modules, name, version, Some(Platform.Js))
       case TaskDep.Generate(name) =>
         if plugin.contribution.tasks.exists(_.name == name) then None
         else Some(BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, name)))
-      case TaskDep.Emit(_) => None
+      case TaskDep.Emit(_)                                   => None
+      case TaskDep.CompileScoped(name, version, platform, _) => cellOf(plugin, modules, name, version, platform)
+      case TaskDep.EmitScoped(name, _, platforms, _, _)      =>
+        platforms match
+          case PlatformSelection.All          => cellOf(plugin, modules, name, None, None)
+          case PlatformSelection.Only(chosen) =>
+            chosen.all.flatMap(platform => cellOf(plugin, modules, name, None, Some(platform))).headOption
 
   private def cellOf(
       plugin: RegisteredPlugin,
@@ -1099,13 +1129,22 @@ final class Organized private (settings: Organized.Settings):
   def scm(value: Scm): Organized =
     withFacts(settings.facts.copy(scm = Some(value)))
 
-  /** The description a ship may replace. */
+  /** The description a ship or module may replace. */
   def description(text: PomText): Organized =
     withFacts(settings.facts.copy(description = Some(text)))
 
   /** The url a ship may replace. */
-  def url(value: HttpUrl): Organized =
+  def url(value: MetadataUri): Organized =
     withFacts(settings.facts.copy(url = Some(value)))
+
+  def organizationName(value: PomText): Organized =
+    withFacts(settings.facts.copy(organizationName = Some(value)))
+
+  def organizationHomepage(value: MetadataUri): Organized =
+    withFacts(settings.facts.copy(organizationHomepage = Some(value)))
+
+  def versionScheme(value: VersionScheme): Organized =
+    withFacts(settings.facts.copy(versionScheme = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized = Organized(settings.copy(facts = value))
 

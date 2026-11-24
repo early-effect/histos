@@ -30,16 +30,19 @@ object Perform:
       compiled: UIO[Unit],
   )
 
-  /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
+  /** Clean adopts generated ownership. Graph-free recovery is a local launcher fallback. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
-          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
-          Call.Graph | Call.Run(_, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
-          Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+          Call.PublishWithdraw | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) |
+          Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) |
+          Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) |
+          Call.CacheVerify(_) | Call.Catalog(_) =>
         true
-      case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
+      case Call.Clean(Nil, _) =>
+        true
+      case Call.PreviewClean(Nil, _) =>
         false
       case Call.Clean(_, CleanExtent.Full) | Call.PreviewClean(_, CleanExtent.Full) =>
         false
@@ -55,8 +58,8 @@ object Perform:
     */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case _ => notCompiled(error)
 
@@ -115,9 +118,13 @@ object Perform:
                 )
 
             call match
-              case Call.Compile(projects) =>
+              case Call.Compile(projects, platforms) =>
                 held(build =>
-                  follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins)))
+                  follow(
+                    withJdk(jdk =>
+                      Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins, platforms)
+                    )
+                  )
                 )
               case Call.Test(projects, patterns, mode, filter) =>
                 held(build =>
@@ -129,7 +136,25 @@ object Perform:
                 )
               case Call.PublishWithdraw =>
                 held(build => follow(Calls.withdraw(repo, build.graph, machine, say)))
-              case Call.PublishLocal(tokens) =>
+              case Call.PublishCheck(tokens, scope) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.publishCheck(
+                        repo,
+                        build.graph,
+                        machine,
+                        jdk,
+                        tokens.map(_.value),
+                        scope,
+                        say,
+                        build.plugins.launcher,
+                        Some(build.plugins),
+                      )
+                    )
+                  )
+                )
+              case Call.PublishLocal(tokens, scope) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -140,8 +165,10 @@ object Perform:
                         machine,
                         jdk,
                         tokens.map(_.value),
+                        scope,
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -159,6 +186,7 @@ object Perform:
                         projects,
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -177,6 +205,7 @@ object Perform:
                         automatic,
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -189,7 +218,7 @@ object Perform:
                 held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
               case Call.Assembly(modules) =>
                 held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
-              case Call.Run(id, platform, launch, args) =>
+              case Call.Run(id, platform, launch, args, main) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -205,6 +234,8 @@ object Perform:
                         say,
                         edges.compiled,
                         relay,
+                        main,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -224,17 +255,19 @@ object Perform:
               case Call.Format(targets, mode) =>
                 held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
               case Call.Clean(Nil, CleanExtent.Products) =>
-                Calls.wipe(repo, say)
+                have match
+                  case Some(build) => Calls.clean(repo, build.graph, Nil, say, build.plugins)
+                  case None        => Calls.wipe(repo, say)
               case Call.Clean(Nil, CleanExtent.Full) =>
-                Calls.cleanFull(repo, say)
+                Calls.cleanFull(repo, say, have)
               case Call.Clean(projects, CleanExtent.Products) =>
-                held(build => Calls.clean(repo, build.graph, projects, say))
+                held(build => Calls.clean(repo, build.graph, projects, say, build.plugins))
               case Call.Clean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewCompile(projects) =>
-                held(build => Calls.previewCompile(repo, build.graph, projects, say))
+              case Call.PreviewCompile(projects, platforms) =>
+                held(build => Calls.previewCompile(repo, build.graph, projects, say, build.plugins, platforms))
               case Call.PreviewTest(projects, patterns, _, _) =>
-                held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
+                held(build => Calls.previewTest(repo, build.graph, projects, patterns, say, build.plugins))
               case Call.PreviewPublishLocal(tokens) =>
                 held(build => Calls.previewPublishLocal(repo, build.graph, tokens.map(_.value), machine.env, say))
               case Call.PreviewPublishSnapshots(projects) =>
@@ -247,8 +280,8 @@ object Perform:
                 held(build => Calls.previewClean(repo, build.graph, projects, say))
               case Call.PreviewClean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewRun(id, platform) =>
-                held(build => Calls.previewRun(build.graph, id, platform, say))
+              case Call.PreviewRun(id, platform, main) =>
+                held(build => Calls.previewRun(build.graph, id, platform, say, main))
               case Call.Version =>
                 Calls.version(repo, version, say)
               case Call.CachePath =>

@@ -1,8 +1,6 @@
 package histos.client
 
-import histos.server.{Feed, Message, RunBytes, ServerError}
-
-import zio.json.*
+import histos.server.{Feed, ServerError}
 
 /** One decoded daemon frame. The terminal frame is [[histos.server.Feed.Done]].
   */
@@ -12,12 +10,9 @@ object Remote:
     case Stop(feed: Feed)
 
   private[histos] def event(payload: String): Either[ServerError, Event] =
-    payload.fromJson[Message] match
-      case Right(Message.Event(event))    => Right(Event.More(Feed.Event(event)))
-      case Right(Message.Output(encoded)) =>
-        RunBytes.decode(encoded) match
-          case Some(bytes) => Right(Event.More(Feed.Output(bytes)))
-          case None        => Left(ServerError.Protocol)
-      case Right(Message.Done(result)) => Right(Event.Stop(Feed.Done(result)))
-      case _                           => Left(ServerError.Protocol)
+    histos.server.CommandFrame
+      .read(Some(payload))
+      .map:
+        case done @ Feed.Done(_) => Event.Stop(done)
+        case feed                => Event.More(feed)
 end Remote

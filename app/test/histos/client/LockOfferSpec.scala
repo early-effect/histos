@@ -111,7 +111,7 @@ object LockOfferSpec extends ZIOSpecDefault:
     },
     test("a lock flag after a run's -- stays a program argument") {
       parsed("run", "app", "--", "--lock=update").map:
-        case Right(InvocationLine(Command.Run(id, None, args), None)) =>
+        case Right(InvocationLine(Command.Run(id, None, args, None), None)) =>
           assertTrue(id.value == "app", args == List("--lock=update"))
         case other =>
           assertTrue(other == Right(InvocationLine(Command.Version, None)))

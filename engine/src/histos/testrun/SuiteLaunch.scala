@@ -1,1032 +1,592 @@
 package histos.testrun
 
-import histos.cache.LinkerStarts
+import histos.build.{ExecutionError, ExecutionProducts, StageProduct}
 import histos.jdk.{JdkRuntime, Sha256}
-import histos.js.{JsRun, JsRunRequest}
-
+import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest, JsSuite, JsSuiteRequest}
+import histos.native.{NativeLink, NativeLinkRequest, NativeRequests, NativeSuite, NativeSuiteRequest, NativeToolchain}
+import histos.pack.MainClass
+import histos.plugin.SourceSet
+import histos.process.{ChildEvent, ChildProcess, ChildRequest, ChildClasspath}
 import histos.resolve.LockedTools
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
-import histos.native.{
-  NativeCompile,
-  NativeLink,
-  NativeLinkRequest,
-  NativeOrigin,
-  NativeRequests,
-  NativeSuite,
-  NativeSuiteRequest,
-  NativeToolchain,
-}
-import histos.node.{NodeBinary, NodeMiss, NodeSource, NodeToolchain}
 import histos.toolchain.Runtimes
-import histos.resolve.{DependencyLock, Repositories, Resolve}
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
-import histos.workspace.Workspace
-import histos.zinc.{
-  CompileError,
-  CompileProblem,
-  CompilePulse,
-  CompileRequest,
-  CompileToolchain,
-  CompiledCell,
-  GraphCompile,
-  GraphCompileError,
-  JvmCompile,
+import histos.zinc.StageRoots
+import histos.{Cell, ClangPin, Dep, JsOptimize, JvmOptions, Module, Platform, SystemProperty, TestProvider, TestStore}
 
-  ScalacFlags,
-  SemanticDb,
-  Sources,
-}
-import histos.pack.{MainClass, MainClassError}
-import histos.{
-  ClangPin,
-  Dep,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion,
-  TestMain,
-  TestProvider,
-  TestStore,
-}
-
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Ref, UIO, ZIO}
+import zio.{IO, ZIO}
 import zio.stream.ZStream
 
 private[testrun] object SuiteLaunch:
-  private[testrun] def runJs(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      main: TestMain,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
+  private type Env = ModuleTest.RunEnv & ProviderInstall
+  private final case class Target(module: Module, main: StageProduct, tests: StageProduct):
+    def cell: Cell = tests.stage.cell
+
+  private final case class Suite(
+      target: Target,
+      provider: Option[TestProvider],
+      name: String,
+      id: SuiteName,
+      digest: Option[Sha256],
+  )
+
+  private enum Launch:
+    case Jvm(request: ChildRequest)
+    case Command(binary: Path, work: Path, environment: Map[String, String])
+
+  /** Discovery is restricted to requested Test outputs. Runtime dependencies are never discovery roots. */
+  def run(asked: TestRun, group: TestExecutionGroup, completed: ExecutionProducts): ZIO[
+    Env,
+    ModuleTestError | ExecutionError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
-    val linkDir =
-      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
+    val ownerCell = group match
+      case TestExecutionGroup.Direct(cell)              => cell
+      case TestExecutionGroup.NativeAggregate(owner, _) => owner
     for
-      binary <- ZIO.fromEither(
-        MainClass.from(main.value).left.map(ModuleTestError.Main(_))
-      )
-      linked <- TestCompile.compiledTests(
-        repo,
-        modules,
-        module,
-        cell,
-        sources,
-        jdk,
-        runtimes.native,
-        lock,
-        repositories,
-        hear,
-        onCompiled = noted,
-        onPulse = onPulse,
-      )
-      classes = TestCompile.testClasses(
-        repo,
-        module.name,
-        cell.version,
-        cell.platform,
-      )
-      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-      stream <- remember(
-        repo,
-        cell,
-        List(main.value),
-        classes :: linked.paths,
-        asked,
-        mode,
-        module.testStore,
-        _ =>
-          for
-            chosen <- node(cell, runtimes)
-            _      <- TestCompile.fresh(linkDir)
-            linked <- JsLink
-              .link(
-                JsLinkRequest(
-                  cell.version,
-                  binary,
-                  classes :: linked.paths,
-                  linkDir,
-                  jdk,
-                  kind = module.jsModule,
-                  revision = module.jsVersion,
-                )
-              )
-              .provideSomeLayer(LinkerStarts.live)
-              .mapError(error =>
-                ModuleTestError.Tool(
-                  cell.module,
-                  cell.version,
-                  histos.toolchain.PlatformToolError.JsLink(error),
-                )
-              )
-            asked <- JsRun
-              .start(
-                JsRunRequest(
-                  module.jsEnv,
-                  module.jsModule,
-                  linked.script,
-                  linkDir,
-                  jdk,
-                  TestCompile.suiteEnv(repo, runtimes.env),
-                  chosen,
-                )
-              )
-              .mapError(error =>
-                ModuleTestError.Tool(
-                  cell.module,
-                  cell.version,
-                  histos.toolchain.PlatformToolError.JsRun(error),
-                )
-              )
-          yield session(module.name, cell.version, None, asked, cell.platform),
-      )
-    yield stream
-
-  private[testrun] def runJsProvider(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      provider: TestProvider,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      patterns: List[SuitePattern],
-      filter: TestFilter,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    val linkDir =
-      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
-    val classes =
-      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
-    def launch(
-        selected: List[SuitePattern],
-        linked: TestCompile.Linked,
-    ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-        histos.schedule.RemoteCache,
-      ModuleTestError,
-      ZStream[Any, ModuleTestError, TestFeed],
-    ] =
-      for
-        keep   <- narrowed(classes, selected)
-        stream <-
-          if !keep then ZIO.succeed(ZStream.empty)
-          else
-            for
-              chosen <- node(cell, runtimes)
-              _      <- TestCompile.fresh(linkDir)
-              asked  <- JsSuite
-                .run(
-                  JsSuiteRequest(
-                    cell.version,
-                    module.jsEnv,
-                    module.jsModule,
-                    provider.framework.value,
-                    classes :: linked.paths,
-                    linkDir,
-                    jdk,
-                    TestCompile.suiteEnv(repo, runtimes.env) ++ TestFilter.environment(filter),
-                    chosen,
-                    selected,
-                    revision = module.jsVersion,
-                  )
-                )
-                .mapError(error =>
-                  ModuleTestError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.JsSuite(error),
-                  )
-                )
-            yield session(
-              module.name,
-              cell.version,
-              Some(provider),
-              asked,
-              cell.platform,
-            )
-      yield stream
-    for
-      _ <- ZIO.unless(satisfied(module, provider))(
-        ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider))
-      )
-      linked <- TestCompile.compiledTests(
-        repo,
-        modules,
-        module,
-        cell,
-        sources,
-        jdk,
-        runtimes.native,
-        lock,
-        repositories,
-        hear,
-        onCompiled = noted,
-        onPulse = onPulse,
-      )
-      stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-      stream <-
-        SuiteNames
-          .discover(classes, linked.paths, provider.framework.value)
-          .mapError(_ => ModuleTestError.Root(classes))
-          .flatMap:
-            case SuiteNames.Found.Unseen        => launch(patterns, linked)
-            case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuiteMatch.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked),
-                )
-    yield stream
-
-  private[testrun] def runNative(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      main: TestMain,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    val linkDir =
-      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
-    for
-      major  <- nativeMajor(module)
-      binary <- ZIO.fromEither(
-        MainClass.from(main.value).left.map(ModuleTestError.Main(_))
-      )
-      linked <- TestCompile.compiledTests(
-        repo,
-        modules,
-        module,
-        cell,
-        sources,
-        jdk,
-        runtimes.native,
-        lock,
-        repositories,
-        hear,
-        onCompiled = noted,
-        onPulse = onPulse,
-      )
-      classes = TestCompile.testClasses(
-        repo,
-        module.name,
-        cell.version,
-        cell.platform,
-      )
-      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-      stream <- remember(
-        repo,
-        cell,
-        List(main.value),
-        classes :: linked.paths,
-        asked,
-        mode,
-        module.testStore,
-        _ =>
-          for
-            _         <- TestCompile.fresh(linkDir)
-            toolchain <- nativeToolchain(module, cell, runtimes.native)
-            program   <- NativeLink
-              .linkClasspath(
-                NativeLinkRequest(
-                  major,
-                  toolchain,
-                  TestCompile.suiteEnv(repo, runtimes.env),
-                  linkDir,
-                  jdk,
-                  binary,
-                  cell.version,
-                  libraries = module.libraries,
-                ),
-                classes :: linked.paths,
-              )
-              .provideSomeLayer(LinkerStarts.live)
-              .mapError(error =>
-                ModuleTestError.Tool(
-                  cell.module,
-                  cell.version,
-                  histos.toolchain.PlatformToolError.Native(error),
-                )
-              )
-            work <- TestCompile.fresh(
-              TestCompile.testWork(
-                repo,
-                module.name,
-                cell.version,
-                cell.platform,
-              )
-            )
-          yield runCommand(
-            module.name,
-            cell.version,
-            cell.platform,
-            List(program.toString),
-            work,
-            TestCompile.suiteEnv(repo, runtimes.env),
-          ),
-      )
-    yield stream
-
-  /** Compiles each aggregated module's native tests before the one link. A module with no tests is skipped. */
-  private def compileAggregates(
-      repo: Path,
-      modules: List[Module],
-      owner: Module,
-      cell: CompiledCell,
-      jdk: JdkRuntime,
-      runtimes: histos.toolchain.Runtimes,
-      lock: histos.resolve.DependencyLock,
-      repositories: histos.resolve.Repositories,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit,
-  ): ZIO[
-    Resolve & histos.resolve.LockedTools & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    Unit,
-  ] =
-    ZIO.foreachDiscard(owner.testAggregates): name =>
-      modules.find(_.name == name) match
-        case None         => ZIO.unit
-        case Some(member) =>
-          val primary = repo.resolve(member.baseDirectory).resolve("src")
-          ZIO
-            .foreach(histos.zinc.Sources.roots(repo, primary, member)): root =>
-              histos.zinc.Sources.tests(root, cell.version, Platform.Native)
-            .mapBoth(
-              error => ModuleTestError.Sources(member.name, cell.version, error),
-              _.flatten.distinct,
-            )
-            .flatMap: sources =>
-              if sources.isEmpty then ZIO.unit
-              else
-                TestCompile
-                  .compiledTests(
-                    repo,
-                    modules,
-                    member,
-                    cell,
-                    sources,
-                    jdk,
-                    runtimes.native,
-                    lock,
-                    repositories,
-                    hear,
-                    onPulse = onPulse,
-                  )
-                  .unit
-
-  private def memberLibraries(modules: List[Module], owner: Module): Set[histos.NativeLibrary] =
-    owner.testAggregates.flatMap(name => modules.find(_.name == name).toList.flatMap(_.libraries)).toSet
-
-  /** Test class directories of the modules this native binary also runs. Empty when the module names none. */
-  private def aggregateClasses(
-      repo: Path,
-      modules: List[Module],
-      owner: Module,
-      cell: CompiledCell,
-  ): List[Path] =
-    owner.testAggregates.flatMap: name =>
-      modules
-        .find(_.name == name)
-        .map: member =>
-          TestCompile.testClasses(repo, member.name, cell.version, cell.platform)
-
-  private[testrun] def runNativeProvider(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      provider: TestProvider,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      patterns: List[SuitePattern],
-      filter: TestFilter,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    val linkDir =
-      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
-    val classes =
-      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
-    val entry = MainClass.trusted("scala.scalanative.testinterface.TestMain")
-    def launch(
-        selected: List[SuitePattern],
-        linked: TestCompile.Linked,
-        major: histos.ClangMajor,
-    ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-        histos.schedule.RemoteCache,
-      ModuleTestError,
-      ZStream[Any, ModuleTestError, TestFeed],
-    ] =
-      for
-        keep   <- narrowed(classes, selected)
-        stream <-
-          if !keep then ZIO.succeed(ZStream.empty)
-          else
-            for
-              _ <- compileAggregates(repo, modules, module, cell, jdk, runtimes, lock, repositories, hear, onPulse)
-              _ <- TestCompile.fresh(linkDir)
-              toolchain <- nativeToolchain(module, cell, runtimes.native)
-              iface     <- ZIO.serviceWithZIO[LockedTools](tools =>
-                tools
-                  .materialize(
-                    NativeRequests.testInterface(cell.version, toolchain, tools.repositories)
-                  )
-                  .mapBoth(
-                    ModuleTestError.Lock(_),
-                    _.artifacts.map(_.path),
-                  )
-              )
-              members   = aggregateClasses(repo, modules, module, cell)
-              classpath = (classes :: members) ++ linked.paths.filterNot(replacedInterface) ++ iface
-              binary <- NativeLink
-                .linkClasspath(
-                  NativeLinkRequest(
-                    major,
-                    toolchain,
-                    TestCompile.suiteEnv(repo, runtimes.env),
-                    linkDir,
-                    jdk,
-                    entry,
-                    cell.version,
-                    libraries = module.libraries ++ memberLibraries(modules, module),
-                  ),
-                  classpath,
-                )
-                .provideSomeLayer(LinkerStarts.live)
-                .mapError(error =>
-                  ModuleTestError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.Native(error),
-                  )
-                )
-              asked <- NativeSuite
-                .run(
-                  NativeSuiteRequest(
-                    toolchain,
-                    provider.framework.value,
-                    binary,
-                    classpath,
-                    linkDir,
-                    jdk,
-                    TestCompile.suiteEnv(repo, runtimes.env) ++ TestFilter.environment(filter),
-                    module.threadStack,
-                    selected,
-                  )
-                )
-                .mapError(error =>
-                  ModuleTestError.Tool(
-                    cell.module,
-                    cell.version,
-                    histos.toolchain.PlatformToolError.NativeSuite(error),
-                  )
-                )
-            yield session(
-              module.name,
-              cell.version,
-              Some(provider),
-              asked,
-              cell.platform,
-            )
-      yield stream
-    for
-      _ <- ZIO.unless(satisfied(module, provider))(
-        ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider))
-      )
-      major  <- nativeMajor(module)
-      linked <- TestCompile.compiledTests(
-        repo,
-        modules,
-        module,
-        cell,
-        sources,
-        jdk,
-        runtimes.native,
-        lock,
-        repositories,
-        hear,
-        onCompiled = noted,
-        onPulse = onPulse,
-      )
-      stamp  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-      stream <-
-        SuiteNames
-          .discover(classes, linked.paths, provider.framework.value)
-          .mapError(_ => ModuleTestError.Root(classes))
-          .flatMap:
-            case SuiteNames.Found.Unseen        => launch(patterns, linked, major)
-            case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuiteMatch.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked, major)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked, major),
-                )
-    yield stream
-
-  private[testrun] def nativeMajor(
-      module: Module
-  ): IO[ModuleTestError, histos.ClangMajor] =
-    module.clang match
-      case ClangPin.Major(major) => ZIO.succeed(major)
-      case ClangPin.Unused       =>
-        ZIO.fail(
-          ModuleTestError.LinkFailed(
-            module.name,
-            module.versions.first,
-            Platform.Native,
-            "the module does not name a clang major",
-          )
+      owner     <- module(asked, ownerCell)
+      ownerMain <- ZIO.fromEither(completed.require(histos.CompilationStage(ownerCell, SourceSet.Main)))
+      targets   <- ZIO.foreach(group.requestedCells): cell =>
+        for
+          selected <- module(asked, cell)
+          main     <- ZIO.fromEither(completed.require(histos.CompilationStage(cell, SourceSet.Main)))
+          tests    <- ZIO.fromEither(completed.require(histos.CompilationStage(cell, SourceSet.Test)))
+        yield Target(selected, main, tests)
+      paths = (targets.flatMap(_.tests.classpath) ++ ownerMain.classpath).distinct
+      identities <- NativeLink.inputDigests(paths).mapError(error => nativeFailure(ownerCell, error))
+      context    <- ZIO.service[LockedTools]
+      tools      <- ZIO
+        .foreach(targets)(target =>
+          context.compilation(target.module, target.cell.version, target.cell.platform, asked.runtimes.native)
         )
-
-  private[testrun] def linkFailed(
-      cell: CompiledCell,
-      detail: String,
-  ): ModuleTestError =
-    ModuleTestError.LinkFailed(cell.module, cell.version, cell.platform, detail)
-
-  private[testrun] def nativeToolchain(
-      module: Module,
-      cell: CompiledCell,
-      native: NativeOrigin,
-  ): ZIO[LockedTools, ModuleTestError, NativeToolchain] =
-    ZIO.serviceWithZIO[LockedTools]: tools =>
-      val revision =
-        module.nativeVersion.getOrElse(tools.catalog.native.revision)
-      ZIO
-        .fromEither(NativeToolchain.of(revision, native))
-        .mapError(error =>
-          ModuleTestError.Tool(
-            cell.module,
-            cell.version,
-            histos.toolchain.PlatformToolError.NativeOrigin(error),
-          )
-        )
-
-  private[testrun] def node(
-      cell: CompiledCell,
-      runtimes: Runtimes,
-  ): IO[ModuleTestError, NodeBinary] =
-    runtimes.node.mapError(miss => ModuleTestError.NoNode(cell.module, cell.version, miss))
-
-  private[testrun] def runCommand(
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      argv: List[String],
-      work: Path,
-      env: Map[String, String],
-  ): ZStream[Any, ModuleTestError, TestFeed] =
-    ZStream.succeed(TestFeed.Begin(module, version, platform)) ++
-      ChildProcess
-        .command(argv, work, env)
-        .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapZIO(hear(module, version, platform, None, _))
-
-  private[testrun] def finished(
-      cell: CompiledCell,
-      status: TestStatus,
-  ): ZStream[Any, Nothing, TestFeed] =
-    ZStream.succeed(
-      TestFeed.Done(
-        TestedCell(cell.module, cell.version, cell.platform, status)
+        .mapError(ModuleTestError.Lock(_))
+      cover = SuiteStamp.Cover(
+        (identities ++ tools.flatten.map(_.fingerprint)).map(_.value),
+        Nil,
+        Runtimes.identityToken(asked.jdk.identity),
+        asked.filter.argv ++ targets.flatMap(target =>
+          target.module.flags.argv ++ target.module.jvmOptions.arguments ++
+            target.module.provider.toList.flatMap(_.properties.map(_.argument))
+        ) ++
+          List(s"owner:${owner.name.value}", s"stack:${owner.threadStack.value}") ++ owner.libraries.toList
+            .map(_.token)
+            .sorted,
+        targets.map(target => s"${target.cell.module.value}:${target.cell.version.value}:${target.tests.api.value}"),
       )
-    )
-
-  private final case class Stamped(name: String, suite: SuiteName, digest: Option[Sha256])
-
-  /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] and [[TestStore.Local]] skip a suite whose
-    * stored fingerprint still matches. [[TestMode.Run]] on [[TestStore.Off]] or [[TestStore.Remote]] receives every
-    * suite. The class tree is walked once for every suite. The digest is [[SuiteCover.stored]].
-    */
-  private[testrun] def remember[R](
-      repo: Path,
-      cell: CompiledCell,
-      suites: List[String],
-      directories: List[Path],
-      ask: SuiteAsk,
-      mode: TestMode,
-      store: TestStore,
-      run: List[String] => ZIO[
-        R,
-        ModuleTestError,
-        ZStream[Any, ModuleTestError, TestFeed],
-      ],
-  ): ZIO[R, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    ZIO
-      .fromEither(SuiteCover.stored(ask))
-      .mapError(refused(cell, _))
-      .flatMap: cover =>
-        SuiteStamp
-          .digests(suites, directories, cover)
-          .mapError(ModuleTestError.Stamp(_))
-          .flatMap: found =>
-            ZIO
-              .foreach(suites): name =>
-                suiteOf(name).map(suite => Stamped(name, suite, found.get(name).flatten))
-              .flatMap: stamped =>
-                if mode == TestMode.Quick || store == TestStore.Local then
+      suites <- ZIO
+        .foreach(targets)(target =>
+          discover(asked, target).flatMap: discovered =>
+            SuiteStamp
+              .digests(discovered.map(_._2), paths, cover)
+              .mapError(ModuleTestError.Stamp(_))
+              .flatMap: digests =>
+                ZIO.foreach(discovered): (provider, name) =>
                   ZIO
-                    .foldLeft(stamped)(
-                      (List.empty[String], List.empty[Stamped])
-                    ):
-                      case ((cached, dirty), row @ Stamped(name, suite, Some(digest))) =>
-                        QuickRecord
-                          .hit(
-                            repo,
-                            cell.module,
-                            cell.version,
-                            cell.platform,
-                            suite,
-                            digest,
-                          )
-                          .mapError(ModuleTestError.Record(_))
-                          .map: hit =>
-                            if hit then (name :: cached, dirty)
-                            else (cached, row :: dirty)
-                      case ((cached, dirty), row) =>
-                        ZIO.succeed((cached, row :: dirty))
-                    .flatMap: (cached, dirty) =>
-                      val shown = ZStream.fromIterable(
-                        cached.sorted.map(name =>
-                          TestFeed.Cached(
-                            cell.module,
-                            cell.version,
-                            cell.platform,
-                            name,
-                          )
-                        )
-                      )
-                      if dirty.isEmpty then ZIO.succeed(shown)
-                      else
-                        run(dirty.map(_.name)).map: stream =>
-                          shown ++ stream.tap(keep(repo, cell, dirty, _))
-                else
-                  run(suites)
-                    .map(stream => stream.tap(keep(repo, cell, stamped, _)))
-
-  private def prepared(
-      module: Module,
-      upstream: List[histos.zinc.UpstreamCell],
-      cell: CompiledCell,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: histos.resolve.DependencyLock,
-      repositories: histos.resolve.Repositories,
-  ): ZIO[LockedTools & TestContext, Nothing, SuiteAsk] =
-    for
-      tools   <- ZIO.service[LockedTools]
-      context <- ZIO.service[TestContext]
-      seen    <- tools.service match
-        case Some(service) => service.current
-        case None          => ZIO.succeed(lock)
-    yield SuiteAsk(
-      module,
-      upstream,
-      cell.version,
-      cell.platform,
-      seen,
-      repositories,
-      tools.catalog,
-      runtimes.native,
-      jdk.identity,
-      nodeIdentity(context),
-    )
-
-  private def nodeIdentity(context: TestContext): Option[histos.toolchain.RuntimeIdentity] =
-    context.runtimes match
-      case _ :: identity :: Nil => Some(identity)
-      case _                    => None
-
-  private def refused(cell: CompiledCell, gap: CoverGap): ModuleTestError =
-    gap match
-      case CoverGap.Locked(error)                            => ModuleTestError.Lock(error)
-      case CoverGap.Absent(module, version, platform, scope) =>
-        ModuleTestError.Lock(histos.resolve.ResolveError.LockDrift(module, version, platform, scope))
-      case CoverGap.NoNode =>
-        ModuleTestError.NoNode(cell.module, cell.version, NodeMiss.Absent(NodeToolchain.Floor, NodeSource.Path))
-      case CoverGap.NoApi(module, version, platform) =>
-        ModuleTestError.Api(module, version, platform)
-
-  /** The fingerprint is the digest of the classes that ran. A pass stores it. A failure deletes it.
-    */
-  private def suiteOf(raw: String): IO[ModuleTestError, SuiteName] =
-    ZIO
-      .fromEither(SuiteName.from(raw))
-      .mapError(error => ModuleTestError.Record(QuickError.Suite(error)))
-
-  private def keep(
-      repo: Path,
-      cell: CompiledCell,
-      stamped: List[Stamped],
-      event: TestFeed,
-  ): IO[ModuleTestError, Unit] =
-    event match
-      case TestFeed.Done(done) =>
-        done.status match
-          case TestStatus.Passed =>
-            ZIO.foreachDiscard(stamped):
-              case Stamped(_, suite, Some(digest)) =>
-                QuickRecord
-                  .save(
-                    repo,
-                    cell.module,
-                    cell.version,
-                    cell.platform,
-                    suite,
-                    digest,
-                  )
-                  .mapError(ModuleTestError.Record(_))
-              case _ => ZIO.unit
-          case TestStatus.Failed(_) =>
-            ZIO.foreachDiscard(stamped): row =>
+                    .fromEither(SuiteName.from(name))
+                    .mapError(error => ModuleTestError.Record(QuickError.Suite(error)))
+                    .map(id => Suite(target, provider, name, id, digests.get(name).flatten))
+        )
+        .map(_.flatten)
+      duplicate = suites
+        .groupBy(_.id)
+        .toList
+        .flatMap: (name, found) =>
+          val modules = found.map(_.target.cell.module).distinct
+          if modules.size > 1 then
+            zio.NonEmptyChunk.fromIterableOption(modules).map(ScopedTestFailure.DuplicateSuite(name, _)).toList
+          else Nil
+      _ <- duplicate.headOption match
+        case Some(error) => ZIO.fail(ModuleTestError.Scoped(error))
+        case None        => ZIO.unit
+      cached <- ZIO.filter(suites): suite =>
+        if asked.mode == TestMode.Quick || suite.target.module.testStore == TestStore.Local then
+          suite.digest match
+            case Some(digest) =>
               QuickRecord
-                .clear(
-                  repo,
-                  cell.module,
-                  cell.version,
-                  cell.platform,
-                  row.suite,
+                .hit(
+                  asked.repo,
+                  suite.target.cell.module,
+                  suite.target.cell.version,
+                  suite.target.cell.platform,
+                  suite.id,
+                  digest,
                 )
                 .mapError(ModuleTestError.Record(_))
-          case _ => ZIO.unit
-      case _ => ZIO.unit
-
-  private[testrun] def exact(names: List[String]): List[SuitePattern] =
-    names.flatMap(name => SuitePattern.from(name).toOption)
-
-  private[testrun] def execute(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      main: TestMain,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      coverage: Option[histos.coverage.CoverageCompile] = None,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    for
-      binary <- ZIO.fromEither(
-        MainClass.from(main.value).left.map(ModuleTestError.Main(_))
-      )
-      linked <- TestCompile.compiledTests(
-        repo,
-        modules,
-        module,
-        cell,
-        sources,
-        jdk,
-        runtimes.native,
-        lock,
-        repositories,
-        hear,
-        onCompiled = noted,
-        onPulse = onPulse,
-        coverage = coverage,
-      )
-      classes = TestCompile.testClasses(
-        repo,
-        module.name,
-        cell.version,
-        cell.platform,
-      )
-      asked  <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-      stream <- remember(
-        repo,
-        cell,
-        List(main.value),
-        classes :: linked.paths,
-        asked,
-        mode,
-        module.testStore,
-        _ =>
-          TestCompile
-            .fresh(
-              TestCompile
-                .testWork(repo, module.name, cell.version, cell.platform)
-            )
-            .map { work =>
-              session(
-                module.name,
-                cell.version,
-                None,
-                request(
-                  repo,
-                  jdk,
-                  runtimes,
-                  classes,
-                  linked.paths,
-                  binary,
-                  work,
-                ),
-                cell.platform,
-              )
-            },
-      )
-    yield stream
-
-  private[testrun] def provide(
-      repo: Path,
-      modules: List[Module],
-      module: Module,
-      cell: CompiledCell,
-      sources: List[Path],
-      provider: TestProvider,
-      jdk: JdkRuntime,
-      runtimes: Runtimes,
-      lock: DependencyLock,
-      repositories: Repositories,
-      patterns: List[SuitePattern],
-      filter: TestFilter,
-      mode: TestMode,
-      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
-      coverage: Option[histos.coverage.CoverageCompile] = None,
-      hear: CompileProblem => Unit,
-      onPulse: CompilePulse => Unit = _ => (),
-  ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.schedule.RemoteCache,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    val classes =
-      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
-    def launch(
-        selected: List[SuitePattern],
-        linked: TestCompile.Linked,
-    ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers &
-        histos.schedule.RemoteCache,
-      ModuleTestError,
-      ZStream[Any, ModuleTestError, TestFeed],
-    ] =
-      for
-        runnerClasses <- ZIO.serviceWithZIO[ProviderInstall](
-          _.classes(repo, module.name, cell.version, jdk, linked.paths, linked.permitted)
+            case None => ZIO.succeed(false)
+        else ZIO.succeed(false)
+      dirty = suites.filterNot(cached.contains)
+      resources <- ZIO.foreach(completed.stages.values.toList.filter(product => paths.contains(product.classes))):
+        product =>
+          StageRoots
+            .of(asked.graph)
+            .read(asked.repo, product.stage, completed.generatedRoots)
+            .mapError(ExecutionError.Roots(_))
+            .map(_.resources.map(_._1))
+      launched <-
+        if dirty.isEmpty then ZIO.succeed(ZStream.empty)
+        else
+          group match
+            case TestExecutionGroup.Direct(_) => direct(asked, owner, ownerMain, dirty, resources.flatten.distinct)
+            case TestExecutionGroup.NativeAggregate(_, _) =>
+              aggregate(asked, owner, ownerMain, paths, targets, dirty, resources.flatten.distinct)
+      empty = if asked.patterns.nonEmpty then Nil else targets.filter(_.tests.compiled.classFiles == 0)
+      shown = ZStream.fromIterable(
+        cached.map(suite =>
+          TestFeed.Cached(suite.target.cell.module, suite.target.cell.version, suite.target.cell.platform, suite.name)
         )
-        keep   <- narrowed(classes, selected)
-        stream <-
-          if !keep then ZIO.succeed(ZStream.empty)
-          else
-            TestCompile
-              .fresh(
-                TestCompile
-                  .testWork(repo, module.name, cell.version, cell.platform)
-              )
-              .map: work =>
-                val note =
-                  ProviderNote(provider.framework.value, classes, selected, filter)
-                session(
-                  module.name,
-                  cell.version,
-                  Some(provider),
-                  request(
-                    repo,
-                    jdk,
-                    runtimes,
-                    runnerClasses,
-                    classes :: linked.paths,
-                    ProviderRunner.Main,
-                    work,
-                    note.environment,
-                    provider.properties,
-                  ),
-                  cell.platform,
-                )
-      yield stream
-    for
-      _ <- ZIO.unless(satisfied(module, provider))(
-        ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider))
       )
-      stream <-
-        for
-          linked <- TestCompile.compiledTests(
-            repo,
-            modules,
-            module,
-            cell,
-            sources,
-            jdk,
-            runtimes.native,
-            lock,
-            repositories,
-            hear,
-            onCompiled = noted,
-            onPulse = onPulse,
-            coverage = coverage,
-          )
-          stamp <- prepared(module, linked.cells, cell, jdk, runtimes, lock, repositories)
-          found <- SuiteNames
-            .discover(classes, linked.paths, provider.framework.value)
-            .mapError(_ => ModuleTestError.Root(classes))
-          ran <- found match
-            case SuiteNames.Found.Unseen        => launch(patterns, linked)
-            case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuiteMatch.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked),
+      noTests = ZStream.fromIterable(empty.map(target => done(target.cell, TestStatus.NoTests)))
+    yield shown ++ launched ++ noTests
+
+  private def module(asked: TestRun, cell: Cell): IO[ModuleTestError, Module] =
+    ZIO
+      .fromOption(asked.graph.projects.collectFirst { case module: Module if module.name == cell.module => module })
+      .orElseFail(ModuleTestError.Absent(cell.module))
+
+  private def discover(asked: TestRun, target: Target): IO[ModuleTestError, List[(Option[TestProvider], String)]] =
+    if target.tests.compiled.classFiles == 0 then
+      (target.module.test, target.module.provider) match
+        case (Some(_), Some(_)) => ZIO.fail(ModuleTestError.Mixed(target.cell.module))
+        case (Some(main), None) => ZIO.fail(ModuleTestError.MissingSources(target.cell.module, main))
+        case (None, Some(provider))
+            if target.module.testAggregates.isEmpty || target.cell.platform != Platform.Native =>
+          ZIO.fail(ModuleTestError.MissingProvider(target.cell.module, provider))
+        case (None, Some(_)) | (None, None) => ZIO.succeed(Nil)
+    else
+      (target.module.test, target.module.provider) match
+        case (Some(_), Some(_)) => ZIO.fail(ModuleTestError.Mixed(target.cell.module))
+        case (Some(main), None) =>
+          ZIO.succeed(if SuiteMatch.allows(asked.patterns, main.value) then List(None -> main.value) else Nil)
+        case (None, configured) =>
+          val provider = configured.getOrElse(TestProvider.Zio)
+          if !satisfied(target.module, provider, target.cell.platform) then
+            ZIO.fail(ModuleTestError.ProviderDependency(target.cell.module, provider))
+          else
+            SuiteNames
+              .discover(target.tests.classes, target.tests.classpath, provider.framework.value)
+              .mapError(_ => ModuleTestError.Root(target.tests.classes))
+              .flatMap:
+                case SuiteNames.Found.Suites(names) =>
+                  if names.isEmpty then ZIO.fail(ModuleTestError.NoneDiscovered(target.cell.module, provider))
+                  else ZIO.succeed(names.filter(SuiteMatch.allows(asked.patterns, _)).map(Some(provider) -> _))
+                case SuiteNames.Found.Unseen =>
+                  irNames(target.tests.classes).map(names =>
+                    names.filter(SuiteMatch.allows(asked.patterns, _)).map(Some(provider) -> _)
+                  )
+
+  private def direct(
+      asked: TestRun,
+      owner: Module,
+      main: StageProduct,
+      suites: List[Suite],
+      resources: List[histos.ResourceName],
+  ): ZIO[
+    Env,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed],
+  ] = suites match
+    case Nil        => ZIO.succeed(ZStream.empty)
+    case first :: _ =>
+      val target = first.target
+      val cell   = target.cell
+      val paths  = target.tests.classpath
+      val work   = TestCompile.testWork(asked.repo, cell.module, cell.version, cell.platform)
+      val link   = TestCompile.linkWork(asked.repo, cell.module, cell.version, cell.platform)
+      val launch: ZIO[Env, ModuleTestError, Launch] = first.provider match
+        case None =>
+          ZIO
+            .fromEither(MainClass.from(first.name))
+            .mapError(ModuleTestError.Main(_))
+            .flatMap: binary =>
+              cell.platform match
+                case Platform.Jvm =>
+                  TestCompile
+                    .fresh(work)
+                    .map: scratch =>
+                      Launch.Jvm(
+                        request(
+                          asked.repo,
+                          asked.jdk,
+                          asked.runtimes,
+                          target.tests.classes,
+                          paths.filterNot(_ == target.tests.classes),
+                          binary,
+                          scratch,
+                          jvmOptions = owner.jvmOptions,
+                        )
+                      )
+                case Platform.Js     => jsMain(asked, owner, cell, paths, binary, link).map(Launch.Jvm(_))
+                case Platform.Native => nativeMain(asked, owner, cell, paths, binary, link, work, resources)
+        case Some(provider) =>
+          cell.platform match
+            case Platform.Jvm =>
+              for
+                permitted <- histos.zinc.ScalacClasspath
+                  .substituted(asked.repo, target.module, histos.load.ApiDep.modules(asked.graph))
+                  .mapError(ModuleTestError.Compile(_))
+                runner <- ZIO.serviceWithZIO[ProviderInstall](
+                  _.classes(asked.repo, cell.module, cell.version, asked.jdk, paths, permitted)
                 )
-        yield ran
-    yield stream
+                scratch  <- TestCompile.fresh(work)
+                patterns <- exact(suites.map(_.name))
+              yield Launch.Jvm(
+                request(
+                  asked.repo,
+                  asked.jdk,
+                  asked.runtimes,
+                  runner,
+                  paths,
+                  ProviderRunner.Main,
+                  scratch,
+                  ProviderNote(provider.framework.value, target.tests.classes, patterns, asked.filter).environment,
+                  provider.properties,
+                  owner.jvmOptions,
+                )
+              )
+            case Platform.Js =>
+              for
+                node     <- asked.runtimes.node.mapError(ModuleTestError.NoNode(cell.module, cell.version, _))
+                _        <- TestCompile.fresh(link)
+                patterns <- exact(suites.map(_.name))
+                child    <- JsSuite
+                  .run(
+                    JsSuiteRequest(
+                      cell.version,
+                      owner.jsEnv,
+                      owner.jsModule,
+                      provider.framework.value,
+                      paths,
+                      link,
+                      asked.jdk,
+                      TestCompile.suiteEnv(asked.repo, asked.runtimes.env) ++ TestFilter.environment(asked.filter),
+                      node,
+                      patterns,
+                      owner.jsVersion,
+                    )
+                  )
+                  .mapError(error =>
+                    ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.JsSuite(error))
+                  )
+              yield Launch.Jvm(child.copy(jvmOptions = merge(owner.jvmOptions, provider.properties)))
+            case Platform.Native =>
+              nativeProvider(asked, owner, main, paths, List(owner), suites, provider, resources).map(Launch.Jvm(_))
+      launch.map(child => completed(asked, cell, suites, child))
+
+  private def aggregate(
+      asked: TestRun,
+      owner: Module,
+      main: StageProduct,
+      paths: List[Path],
+      targets: List[Target],
+      suites: List[Suite],
+      resources: List[histos.ResourceName],
+  ): ZIO[Env, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+    suites match
+      case Nil        => ZIO.succeed(ZStream.empty)
+      case first :: _ =>
+        first.provider match
+          case None =>
+            ZIO.fail(
+              ModuleTestError.LinkFailed(
+                owner.name,
+                main.stage.cell.version,
+                Platform.Native,
+                s"native aggregate member ${first.target.cell.module.value} names a test main",
+              )
+            )
+          case Some(provider) =>
+            val compatible = suites.forall(_.provider.exists(_.framework == provider.framework))
+            if !compatible then
+              ZIO.fail(
+                ModuleTestError.LinkFailed(
+                  owner.name,
+                  main.stage.cell.version,
+                  Platform.Native,
+                  "native aggregate members must use the same framework",
+                )
+              )
+            else
+              nativeProvider(asked, owner, main, paths, targets.map(_.module), suites, provider, resources)
+                .map(child => completed(asked, main.stage.cell, suites, Launch.Jvm(child)))
+
+  private def nativeProvider(
+      asked: TestRun,
+      owner: Module,
+      main: StageProduct,
+      paths: List[Path],
+      members: List[Module],
+      suites: List[Suite],
+      provider: TestProvider,
+      resources: List[histos.ResourceName],
+  ): ZIO[
+    Env,
+    ModuleTestError,
+    ChildRequest,
+  ] =
+    val cell = main.stage.cell
+    val work = TestCompile.linkWork(asked.repo, owner.name, cell.version, Platform.Native)
+    for
+      major     <- nativeMajor(owner)
+      toolchain <- nativeToolchain(owner, cell, asked)
+      view      <- ZIO.service[LockedTools]
+      iface     <- view
+        .materialize(NativeRequests.testInterface(cell.version, toolchain, view.repositories))
+        .mapError(ModuleTestError.Lock(_))
+        .map(_.artifacts.map(_.path))
+      classpath = (paths.filterNot(replacedInterface) ++ iface).distinct
+      _      <- TestCompile.fresh(work)
+      binary <- NativeLink
+        .linkClasspath(
+          NativeLinkRequest(
+            major,
+            toolchain,
+            TestCompile.suiteEnv(asked.repo, asked.runtimes.env),
+            work,
+            asked.jdk,
+            MainClass.trusted("scala.scalanative.testinterface.TestMain"),
+            cell.version,
+            libraries = owner.libraries ++ members.flatMap(_.libraries),
+            resources = resources,
+          ),
+          classpath,
+        )
+        .mapError(error => nativeFailure(cell, error))
+      patterns <- exact(suites.map(_.name))
+      child    <- NativeSuite
+        .run(
+          NativeSuiteRequest(
+            toolchain,
+            provider.framework.value,
+            binary,
+            classpath,
+            work,
+            asked.jdk,
+            TestCompile.suiteEnv(asked.repo, asked.runtimes.env) ++ TestFilter.environment(asked.filter),
+            owner.threadStack,
+            patterns,
+          )
+        )
+        .mapError(error =>
+          ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.NativeSuite(error))
+        )
+      properties = suites.flatMap(_.provider.toList.flatMap(_.properties)).distinct
+    yield child.copy(jvmOptions = merge(owner.jvmOptions, properties))
+
+  private def completed(
+      asked: TestRun,
+      owner: Cell,
+      suites: List[Suite],
+      child: Launch,
+  ): ZStream[Any, ModuleTestError, TestFeed] =
+    val cells   = suites.map(_.target.cell).distinct
+    val process = child match
+      case Launch.Jvm(request)                       => ChildProcess.events(request)
+      case Launch.Command(binary, work, environment) => ChildProcess.command(List(binary.toString), work, environment)
+    val events = process
+      .mapError(ModuleTestError.Process(owner.module, owner.version, _))
+      .flatMap:
+        case ChildEvent.Out(text)    => ZStream.succeed(TestFeed.Out(owner.module, owner.version, owner.platform, text))
+        case ChildEvent.Err(text)    => ZStream.succeed(TestFeed.Err(owner.module, owner.version, owner.platform, text))
+        case ChildEvent.Bytes(bytes) =>
+          ZStream.succeed(
+            TestFeed.Out(owner.module, owner.version, owner.platform, new String(bytes.toArray, StandardCharsets.UTF_8))
+          )
+        case ChildEvent.Exited(code) =>
+          val provider = suites.flatMap(_.provider).headOption
+          provider match
+            case Some(found) if code.value == ProviderRunner.NoneFound =>
+              ZStream.fail(ModuleTestError.NoneDiscovered(owner.module, found))
+            case Some(_) if code.value == ProviderRunner.NoneMatched =>
+              ZStream.fromIterable(cells.map(done(_, TestStatus.Unmatched)))
+            case Some(_) | None =>
+              val status = if code.value == 0 then TestStatus.Passed else TestStatus.Failed(code.value)
+              ZStream.fromZIO(record(asked, suites, status)).drain ++ ZStream.fromIterable(cells.map(done(_, status)))
+    ZStream.succeed(TestFeed.Begin(owner.module, owner.version, owner.platform)) ++ events
+
+  private def record(asked: TestRun, suites: List[Suite], status: TestStatus): IO[ModuleTestError, Unit] =
+    status match
+      case TestStatus.Passed =>
+        ZIO.foreachDiscard(suites): suite =>
+          suite.digest match
+            case None         => ZIO.unit
+            case Some(digest) =>
+              QuickRecord
+                .save(
+                  asked.repo,
+                  suite.target.cell.module,
+                  suite.target.cell.version,
+                  suite.target.cell.platform,
+                  suite.id,
+                  digest,
+                )
+                .mapError(ModuleTestError.Record(_))
+      case TestStatus.Failed(_) =>
+        ZIO.foreachDiscard(suites)(suite =>
+          QuickRecord
+            .clear(
+              asked.repo,
+              suite.target.cell.module,
+              suite.target.cell.version,
+              suite.target.cell.platform,
+              suite.id,
+            )
+            .mapError(ModuleTestError.Record(_))
+        )
+      case TestStatus.NoTests | TestStatus.Unmatched => ZIO.unit
+
+  private def done(cell: Cell, status: TestStatus): TestFeed =
+    TestFeed.Done(TestedCell(cell.module, cell.version, cell.platform, status))
+
+  private def jsMain(asked: TestRun, module: Module, cell: Cell, paths: List[Path], binary: MainClass, work: Path): ZIO[
+    Env,
+    ModuleTestError,
+    ChildRequest,
+  ] =
+    for
+      node   <- asked.runtimes.node.mapError(ModuleTestError.NoNode(cell.module, cell.version, _))
+      view   <- ZIO.service[LockedTools]
+      _      <- TestCompile.fresh(work)
+      linked <- JsLink
+        .link(
+          JsLinkRequest(
+            cell.version,
+            binary,
+            paths,
+            work,
+            asked.jdk,
+            kind = module.jsModule,
+            revision = module.jsVersion,
+            optimize = JsOptimize.effective(view.catalog.js.optimize, module.jsOptimize, None),
+          )
+        )
+        .mapError(error =>
+          ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.JsLink(error))
+        )
+      child <- JsRun
+        .start(
+          JsRunRequest(
+            module.jsEnv,
+            module.jsModule,
+            linked.script,
+            work,
+            asked.jdk,
+            TestCompile.suiteEnv(asked.repo, asked.runtimes.env),
+            node,
+          )
+        )
+        .mapError(error =>
+          ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.JsRun(error))
+        )
+    yield child
+
+  private def nativeMain(
+      asked: TestRun,
+      module: Module,
+      cell: Cell,
+      paths: List[Path],
+      binary: MainClass,
+      link: Path,
+      work: Path,
+      resources: List[histos.ResourceName],
+  ): ZIO[Env, ModuleTestError, Launch] =
+    for
+      major     <- nativeMajor(module)
+      toolchain <- nativeToolchain(module, cell, asked)
+      _         <- TestCompile.fresh(link)
+      program   <- NativeLink
+        .linkClasspath(
+          NativeLinkRequest(
+            major,
+            toolchain,
+            asked.runtimes.env,
+            link,
+            asked.jdk,
+            binary,
+            cell.version,
+            libraries = module.libraries,
+            resources = resources,
+          ),
+          paths,
+        )
+        .mapError(nativeFailure(cell, _))
+      scratch <- TestCompile.fresh(work)
+    yield Launch.Command(
+      program,
+      scratch,
+      TestCompile.suiteEnv(asked.repo, asked.runtimes.env) ++
+        histos.native.NativeStack.environment(module.threadStack),
+    )
+
+  private def nativeMajor(module: Module): IO[ModuleTestError, histos.ClangMajor] = module.clang match
+    case ClangPin.Major(major) => ZIO.succeed(major)
+    case ClangPin.Unused       =>
+      ZIO.fail(
+        ModuleTestError.LinkFailed(
+          module.name,
+          module.versions.first,
+          Platform.Native,
+          "the module does not name a clang major",
+        )
+      )
+
+  private def nativeToolchain(
+      module: Module,
+      cell: Cell,
+      asked: TestRun,
+  ): ZIO[LockedTools, ModuleTestError, NativeToolchain] =
+    ZIO.serviceWithZIO[LockedTools](view =>
+      ZIO
+        .fromEither(
+          NativeToolchain.of(module.nativeVersion.getOrElse(view.catalog.native.revision), asked.runtimes.native)
+        )
+        .mapError(error =>
+          ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.NativeOrigin(error))
+        )
+    )
+
+  private def nativeFailure(cell: Cell, error: histos.native.NativeError): ModuleTestError =
+    ModuleTestError.Tool(cell.module, cell.version, histos.toolchain.PlatformToolError.Native(error))
+
+  private def exact(names: List[String]): IO[ModuleTestError, List[SuitePattern]] =
+    ZIO.foreach(names.distinct)(name => ZIO.fromEither(SuitePattern.from(name)).mapError(ModuleTestError.Pattern(_)))
+
+  private def irNames(root: Path): IO[ModuleTestError, List[String]] =
+    ZIO
+      .attemptBlocking:
+        val walk = Files.walk(root)
+        try
+          walk.iterator.asScala
+            .filter(Files.isRegularFile(_))
+            .flatMap: path =>
+              val name = root.relativize(path).toString.replace('\\', '/')
+              if name.endsWith(".sjsir") then Some(name.stripSuffix(".sjsir").replace('/', '.').stripSuffix("$"))
+              else None
+            .toList
+            .distinct
+        finally walk.close()
+      .mapError(_ => ModuleTestError.Root(root))
+
+  private def replacedInterface(path: Path): Boolean =
+    Option(path.getFileName).exists(_.toString.startsWith("test-interface_native"))
+
+  private[testrun] def satisfied(module: Module, provider: TestProvider): Boolean =
+    module.testDependencies.exists(dep =>
+      dep.organization == provider.library.organization && dep.name == provider.library.name
+    )
+
+  private def satisfied(module: Module, provider: TestProvider, platform: Platform): Boolean =
+    Dep
+      .select(module.testDependencies, platform)
+      .exists(dep => dep.organization == provider.library.organization && dep.name == provider.library.name)
+
+  private[testrun] def merge(options: JvmOptions, properties: List[SystemProperty]): JvmOptions =
+    val supplied = properties.map(property => property.value.takeWhile(_ != '=')).toSet
+    options.copy(properties =
+      options.properties.filterNot(property => supplied.contains(property.value.takeWhile(_ != '='))) ++ properties
+    )
 
   private[testrun] def request(
       repo: Path,
@@ -1037,111 +597,16 @@ private[testrun] object SuiteLaunch:
       main: MainClass,
       work: Path,
       extra: Map[String, String] = Map.empty,
-      properties: List[histos.SystemProperty] = Nil,
+      properties: List[SystemProperty] = Nil,
+      jvmOptions: JvmOptions = JvmOptions.empty,
   ): ChildRequest =
     ChildRequest(
       Platform.Jvm,
-      jdk.home.resolve("bin").resolve("java"),
+      jdk.home.resolve("bin/java"),
       ChildClasspath(classes, classpath),
       main,
       work,
       TestCompile.suiteEnv(repo, runtimes.env) ++ extra,
-      arguments = properties.map(_.argument),
+      jvmOptions = merge(jvmOptions, properties),
     )
-
-  /** Header, then lines as the process writes them, then the cell. A child that holds the pipes after the process exits
-    * fails the stream. `NoneFound` fails the stream.
-    */
-  private[testrun] def session(
-      module: ProjectName,
-      version: ScalaVersion,
-      provider: Option[TestProvider],
-      asked: ChildRequest,
-      shown: Platform,
-  ): ZStream[Any, ModuleTestError, TestFeed] =
-    ZStream.succeed(TestFeed.Begin(module, version, shown)) ++
-      ChildProcess
-        .events(asked)
-        .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapZIO(hear(module, version, shown, provider, _))
-
-  private[testrun] def hear(
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      provider: Option[TestProvider],
-      event: ChildEvent,
-  ): ZIO[Any, ModuleTestError, TestFeed] =
-    event match
-      case ChildEvent.Out(text)   => ZIO.succeed(TestFeed.Out(module, version, platform, text))
-      case ChildEvent.Err(text)   => ZIO.succeed(TestFeed.Err(module, version, platform, text))
-      case ChildEvent.Bytes(data) =>
-        ZIO.succeed(
-          TestFeed.Out(
-            module,
-            version,
-            platform,
-            new String(data.toArray, java.nio.charset.StandardCharsets.UTF_8),
-          )
-        )
-      case ChildEvent.Exited(code) =>
-        provider match
-          case Some(_) if code.value == ProviderRunner.NoneMatched =>
-            ZIO.succeed(
-              TestFeed.Done(
-                TestedCell(module, version, platform, TestStatus.Unmatched)
-              )
-            )
-          case Some(found) if code.value == ProviderRunner.NoneFound =>
-            ZIO.fail(ModuleTestError.NoneDiscovered(module, found))
-          case _ =>
-            val status =
-              if code.value == 0 then TestStatus.Passed
-              else TestStatus.Failed(code.value)
-            ZIO.succeed(
-              TestFeed.Done(TestedCell(module, version, platform, status))
-            )
-
-  private[testrun] def satisfied(
-      module: Module,
-      provider: TestProvider,
-  ): Boolean =
-    val library = provider.library
-    library.organization.nonEmpty && library.name.nonEmpty &&
-    module.testDependencies.exists(dep => dep.organization == library.organization && dep.name == library.name)
-
-  /** JVM class files. No class files means the platform's child still filters.
-    */
-  /** A resolved `test-interface` jar. `test-interface-sbt-defs` is the framework contract and stays. */
-  private def replacedInterface(path: Path): Boolean =
-    Option(path.getFileName).exists(_.toString.startsWith("test-interface_native"))
-
-  private[testrun] def narrowed(
-      root: Path,
-      patterns: List[SuitePattern],
-  ): IO[ModuleTestError, Boolean] =
-    if patterns.isEmpty then ZIO.succeed(true)
-    else
-      ZIO
-        .attemptBlocking(classBinaries(root))
-        .mapError(_ => ModuleTestError.Root(root))
-        .map: names =>
-          names.isEmpty || names.exists(name => SuiteMatch.allows(patterns, name))
-
-  private[testrun] def classBinaries(root: Path): List[String] =
-    if !Files.isDirectory(root) then Nil
-    else
-      val walk = Files.walk(root)
-      try walk.iterator.asScala.flatMap(path => classBinary(root, path)).toList
-      finally walk.close()
-
-  private[testrun] def classBinary(root: Path, path: Path): Option[String] =
-    if !Files.isRegularFile(path) then None
-    else
-      val name = root.relativize(path).toString.replace('\\', '/')
-      if !name.endsWith(".class") then None
-      else
-        val binary = name.stripSuffix(".class").replace('/', '.')
-        if binary.isEmpty || binary.contains("$$") then None else Some(binary)
-
 end SuiteLaunch

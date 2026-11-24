@@ -187,7 +187,11 @@ object PluginTaskIdentitySpec extends ZIOSpecDefault:
 
   private final case class Ran(token: String, sealedBytes: String, entries: List[String])
 
-  private def run(root: Path, api: Path, cache: ActionCache): ZIO[BuildCache.Env & Scope, LoadError, Ran] =
+  private def run(
+      root: Path,
+      api: Path,
+      cache: ActionCache,
+  ): ZIO[BuildCache.Env & PluginProducts & Scope, LoadError, Ran] =
     for
       loaded <- BootstrapLoad.prepare(silent, BootstrapLoad.Prepare(root, api))
       _      <- hostFacts
@@ -359,11 +363,12 @@ object PluginTaskIdentitySpec extends ZIOSpecDefault:
     def get(digest: Digest): IO[CacheError, Option[String]]      = ZIO.fail(CacheError.Corrupt(digest))
     def put(digest: Digest, value: String): IO[CacheError, Unit] = ZIO.unit
 
-  private type Base = RemoteCache & Resolve & ContentStore & ResolutionService
+  private type Base = RemoteCache & Resolve & ContentStore & ResolutionService & PluginProducts
 
   private val driveLayer: ZLayer[Any, Nothing, Base] =
     ZLayer.make[Base](
       RemoteCache.off,
+      PluginProducts.live,
       ZLayer.succeed(silent),
       ResolutionService.pinned(DependencyLock(Nil)),
       ZLayer.scoped(work("histos-p7-store").map(root => ContentStore.in(root))),
@@ -446,7 +451,9 @@ object PluginTaskIdentitySpec extends ZIOSpecDefault:
     def run(request: RunRequest): zio.ZIO[zio.Scope & histos.plugin.PluginScopes, PluginRunError, PluginOutput] =
       ZIO.succeed(PluginOutput("compiled", Nil))
 
-  private def hosted[A](body: Path => ZIO[BuildCache.Env & Scope, LoadError, A]): ZIO[Any, LoadError, A] =
+  private def hosted[A](
+      body: Path => ZIO[BuildCache.Env & PluginProducts & Scope, LoadError, A]
+  ): ZIO[Any, LoadError, A] =
     ZIO.scoped {
       for
         root  <- work("histos-p7-task")
@@ -456,7 +463,7 @@ object PluginTaskIdentitySpec extends ZIOSpecDefault:
             CompilerStarts.live ++
             Compilers.live ++
             RemoteCache.off ++
-            PluginFlights.live
+            PluginFlights.live ++ PluginProducts.live
         )
       yield value
     }

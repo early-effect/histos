@@ -110,7 +110,9 @@ private[zinc] final class CompilerPool(
                       remembered.update(_.updated(dir, entry)).as(output)
                     case None => ZIO.succeed(output)
                 }
-            }).ensuring(checkin(id, ready))
+            })
+            .tapError(_ => remembered.update(_ - request.analysis.toAbsolutePath.normalize))
+            .ensuring(checkin(id, ready))
 
   /** An idle instance, or a new one while this key is still under `width`. The guard is not held across `open`.
     */

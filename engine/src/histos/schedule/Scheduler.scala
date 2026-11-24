@@ -11,8 +11,13 @@ import histos.step.{
 }
 
 import Histos.given
+import histos.cache.ContentStore
+import histos.load.{CommittedOutputs, PluginProducts, ProductRequest}
 
 import zio.*
+
+/** A stored record and the generation capability established by production or replay. */
+final class OwnedResult private[schedule] (val record: String, val outputs: CommittedOutputs)
 
 /** One executor and the caches for this run. The caches are the caller's, so a test passes its own.
   */
@@ -56,6 +61,42 @@ final case class Scheduler(
       verdict: Action => Verdict = Sendable.ofAction,
   ): IO[ScheduleError[E], String] =
     perform(action, digest, (_, _) => local, verdict, "")
+
+  /** Owned-output hits are restored through the same publication transaction as fresh production. */
+  def cached[E](
+      action: Action,
+      digest: Digest,
+      request: ProductRequest,
+      local: IO[E, CommittedOutputs],
+  ): ZIO[ContentStore & PluginProducts, ScheduleError[E], OwnedResult] =
+    for
+      products  <- ZIO.service[PluginProducts]
+      remoteHit <- ScheduleAspects.remoteProducts(remote, digest, request, products)
+      result    <- remoteHit match
+        case Some(value) => runner.note(Source.RemoteHit).as(value)
+        case None        =>
+          ScheduleAspects
+            .cachedProducts(cache, digest, request, products)
+            .flatMap:
+              case Some(value) => runner.note(Source.LocalHit).as(value)
+              case None        =>
+                local
+                  .mapError(ScheduleError.Failed(action.id, _))
+                  .flatMap: outputs =>
+                    val record  = PluginManifest.store(outputs.manifest)
+                    val result  = OwnedResult(record, outputs)
+                    val decided = Sendable.ofAction(action)
+                    val store   = action.policy match
+                      case Policy.Core               => true
+                      case Policy.Plugin(_, _, _, _) =>
+                        decided match
+                          case Verdict.Send    => true
+                          case Verdict.Stay(_) => false
+                    if store then
+                      cache.put(digest, record).mapError(ScheduleError.Cache(_)) *>
+                        ScheduleAspects.upload(remote, decided, digest, record).as(result)
+                    else ZIO.succeed(result)
+    yield result
 
   private final case class Ready(
       byId: Map[ActionId, Action],

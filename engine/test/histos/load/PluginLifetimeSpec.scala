@@ -1,22 +1,26 @@
 package histos.load
 
-import histos.plugin.PluginRunError
+import histos.plugin.{PluginEvents, PluginRunError, PluginScopes, Program, ProgramEvent, ResourceLife}
 import histos.resolve.{Repository, Resolve}
 import histos.workspace.Workspace
 import histos.Dep
 
+import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
 import zio.test.*
-import zio.{Promise, Ref, Scope, ZIO, ZLayer}
+import zio.{Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 
 /** A wiring file is not a load input. Generation leases still close with their last holder. */
 object PluginLifetimeSpec extends ZIOSpecDefault:
-  def spec = suite("plugin lifetime")(
+  def spec = lifetime @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
+
+  private val lifetime = suite("plugin lifetime")(
     test("a lone histos.wiring.scala is not compiled") {
       ZIO.scoped {
         for
@@ -49,6 +53,72 @@ object PluginLifetimeSpec extends ZIOSpecDefault:
         yield assertTrue(heldOpen == "open", released == "closed")
       }
     },
+    test("a generation without plugin resources does not hold a foreground host") {
+      ZIO.scoped:
+        for
+          leases <- GenerationLeases.make
+          _      <- ZIO.addFinalizer(leases.retire)
+          _      <- leases.use(ZIO.addFinalizer(ZIO.unit))
+          done   <- leases.awaitResources.as(true)
+        yield assertTrue(done)
+    },
+    test("retirement closes plugin resources before build resources and only once") {
+      for
+        leases <- GenerationLeases.make
+        closed <- Ref.make(Vector.empty[String])
+        _      <- leases.use(ZIO.addFinalizer(closed.update(_ :+ "build")))
+        _      <- leases.generation.extend(ZIO.addFinalizer(closed.update(_ :+ "plugin")))
+        _      <- leases.retire *> leases.retire
+        order  <- closed.get
+      yield assertTrue(order == Vector("plugin", "build"))
+    },
+    test("a foreground generation owns an actual preview child after its invocation ends") {
+      ZIO.scoped:
+        for
+          root <- Workspace
+            .work("histos-local-preview")
+            .foldZIO(failure => ZIO.dieMessage(failure.message), ZIO.succeed)
+          source = root.resolve("PreviewChild.java")
+          _      <- write(source, previewChild)
+          opened <- Promise.make[PluginRunError, (Long, Int)]
+          ended  <- Promise.make[Nothing, Unit]
+          owner  <- ZIO.scoped {
+            for
+              leases <- GenerationLeases.make
+              _      <- ZIO.addFinalizer(leases.retire)
+              _      <- ZIO.scoped {
+                leases.lease *> ZIO
+                  .serviceWithZIO[PluginScopes] { scopes =>
+                    scopes(ResourceLife.Generation).extend(
+                      Program.start(
+                        List(java, source.toString),
+                        root,
+                        PluginEvents.closedInvocation,
+                        event =>
+                          event match
+                            case ProgramEvent.Out(line) => opened.complete(ZIO.fromEither(address(line))).unit
+                            case ProgramEvent.Err(_)    => ZIO.unit,
+                      ) *> opened.await
+                    )
+                  }
+                  .provideSomeLayer[Scope](PluginScopes.live(leases.generation))
+              }
+              _ <- ended.succeed(())
+              _ <- leases.awaitResources
+            yield ()
+          }.forkScoped
+          endpoint <- opened.await
+          _        <- ended.await
+          (pid, port) = endpoint
+          alive   <- ZIO.attemptBlocking(ProcessHandle.of(pid).toScala.exists(_.isAlive)).orDie
+          waiting <- owner.poll
+          exit    <- owner.interrupt
+          gone    <- ZIO.attemptBlocking(ProcessHandle.of(pid).toScala.forall(!_.isAlive)).orDie
+          rebound <- ZIO.acquireRelease(ZIO.attemptBlocking(new ServerSocket(port)).orDie)(socket =>
+            ZIO.attemptBlocking(socket.close()).orDie
+          )
+        yield assertTrue(alive, waiting.isEmpty, exit.isInterrupted, gone, rebound.getLocalPort == port)
+    },
     test("a closed generation refuses a lease and does not run the task") {
       for
         leases <- GenerationLeases.make
@@ -58,7 +128,30 @@ object PluginLifetimeSpec extends ZIOSpecDefault:
         saw    <- ran.get
       yield assertTrue(exit == Left(PluginRunError.Closed), saw == false)
     },
-  ) @@ TestAspect.withLiveClock
+  )
+
+  private val java = Path.of(sys.props.getOrElse("java.home", "")).resolve("bin/java").toString
+
+  private def address(line: String): Either[PluginRunError, (Long, Int)] =
+    line.split(":").toList match
+      case rawPid :: rawPort :: Nil =>
+        for
+          pid  <- rawPid.toLongOption.toRight(PluginRunError.Defect("preview pid"))
+          port <- rawPort.toIntOption.toRight(PluginRunError.Defect("preview port"))
+        yield (pid, port)
+      case _ => Left(PluginRunError.Defect("preview address"))
+
+  private val previewChild =
+    """import java.net.ServerSocket;
+      |class PreviewChild {
+      |  public static void main(String[] args) throws Exception {
+      |    try (var socket = new ServerSocket(0)) {
+      |      System.out.println(ProcessHandle.current().pid() + ":" + socket.getLocalPort());
+      |      socket.accept().close();
+      |    }
+      |  }
+      |}
+      |""".stripMargin
 
   private val build: String =
     """|import histos.*

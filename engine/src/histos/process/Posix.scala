@@ -17,6 +17,14 @@ private[process] object Posix:
   def signalGroup(pid: Int, signal: Int): Either[GroupOp, Int] =
     call("kill", -pid, signal)
 
+  /** Signal 0 asks whether any member of the group is alive. It does not deliver a signal. */
+  def occupied(pid: Int): Boolean =
+    if pid <= 0 then false
+    else
+      signalGroup(pid, 0) match
+        case Right(0) => true
+        case _        => false
+
   private def call(name: String, a: Int, b: Int): Either[GroupOp, Int] =
     handle(name).flatMap: method =>
       try

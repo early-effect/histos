@@ -81,7 +81,7 @@ object Cell:
             case Some(plugin) =>
               Right(
                 Instrumented(
-                  Flags.scala2(classes, repo, plugin.jar, spec.excludes),
+                  Flags.scala2(classes, repo, plugin.tools.flatMap(_.artifacts.map(_.path)), spec.excludes),
                   text,
                   classes,
                   analysis,

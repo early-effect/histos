@@ -31,11 +31,6 @@ object ShipAdvice:
   def unreadable: String =
     s"could not read releases. $releasesFile"
 
-  /** The part a binary difference requires. On a `0.x` line any difference is a minor bump. */
-  def binaryBump(ship: ShipName, number: ShipNumber, word: String): String =
-    val line = if number.major == 0 then " On a 0.x line any binary difference is a minor bump." else ""
-    s"${ship.value} ${number.render} differs from the previous release. The next number is a $word.$line Run histos bump --$word."
-
   def shouldBump(ship: ShipName, number: ShipNumber, reason: BumpReason): String =
     val state = reason match
       case BumpReason.Tagged             => s"${ship.value} ${number.render} is already released"

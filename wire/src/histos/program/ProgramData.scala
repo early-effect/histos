@@ -42,6 +42,8 @@ enum ProgramError:
   case Directory(fault: RunDirectoryFault)
   case Root(path: Path)
   case Kit(detail: String)
+  case Selection(error: histos.SelectionError)
+  case Scoped(error: histos.testrun.ModuleTestError)
 
   def message: String = this match
     case Tool(_, _, error)       => error.message
@@ -71,6 +73,8 @@ enum ProgramError:
     case Directory(fault) => fault.message
     case Root(path)       => s"could not read $path"
     case Kit(detail)      => s"could not write the client kit\n$detail"
+    case Selection(error) => s"invalid run selection: $error"
+    case Scoped(error)    => error.message
 
   def diagnose: Diagnostic = this match
     case Absent(_, near) =>

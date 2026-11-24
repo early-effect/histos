@@ -9,6 +9,7 @@ enum ScheduleError[+E]:
   case Failed(action: ActionId, error: E)
   case Cache(error: CacheError)
   case Remote(error: RemoteError)
+  case Products(error: histos.load.ProductError)
 
   def message: String = this match
     case UnknownAction(id)                  => s"no action '${id.value}'"
@@ -21,4 +22,5 @@ enum ScheduleError[+E]:
     case Failed(action, error) => s"'${action.value}' failed: $error"
     case Cache(error)          => error.message
     case Remote(error)         => error.message
+    case Products(error)       => error.message
 end ScheduleError

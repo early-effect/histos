@@ -3,7 +3,6 @@ package histos.workflow
 import histos.doctor.Suggest
 import histos.plugin.{CiExtra, CiHeader}
 import histos.publish.DistLayout
-import histos.resolve.PlatformToken
 import histos.schedule.{CacheConfig, CacheNamespace}
 import histos.Promote
 import histos.version.{Catalog, Ship}
@@ -27,8 +26,6 @@ import histos.{
   Publishing,
   Resolution,
   RunnerTools,
-  ScalaVersion,
-  Splits,
   SuiteHost,
   ToolRevision,
   VerifyTask,
@@ -39,35 +36,15 @@ import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopy
 import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
+import zio.json.*
 
 /** A pull request names the projects that changed. Anything else runs the full graph. */
 enum CiEvent:
   case Other
   case PullRequest(changed: Set[ProjectName])
 
-/** The module axis of one cell. `All` is not a split on [[Axis.Module]]. */
-enum ModuleRef:
-  case All
-  case One(name: ProjectName)
-
-/** The platform axis of one cell. `All` is not a split on [[Axis.Platform]]. */
-enum PlatformRef:
-  case All
-  case One(platform: Platform)
-
-/** The Scala axis of one cell. `All` is not a split on [[Axis.ScalaVersion]]. */
-enum VersionRef:
-  case All
-  case One(version: ScalaVersion)
-
-/** What `./histos test` is asked to run. `Entire` is the full graph, not a list of every name. */
-enum TestTarget:
-  case Entire
-  case Named(first: ProjectName, rest: List[ProjectName])
-
-enum TestJob:
-  case Aggregate(target: TestTarget)
-  case Split(module: ModuleRef, platform: PlatformRef, version: VersionRef)
+/** Each rendered request retains the local planner's requested suites and execution groups. */
+final case class TestJob(selection: histos.TestSelection, cells: histos.testrun.TestCellPlan)
 
 /** One file `renderAll` emits. `name` is the file name under `.github/workflows`, not a path. */
 final case class RenderedWorkflow(name: String, body: String)
@@ -114,19 +91,91 @@ object Workflow:
         val added   = want.lift(found).getOrElse("")
         s"line ${found + 1}\n- $removed\n+ $added"
 
-  /** Test cells for this event. Pull requests keep changed modules and their dependents. */
-  def plan(graph: ProjectGraph, event: CiEvent): Either[CiError, List[TestJob]] =
-    val modules = graph.projects.collect { case module: Module => module }
-    event match
-      case CiEvent.Other                => Right(jobs(graph.splits, CiEvent.Other, modules, modules))
-      case CiEvent.PullRequest(changed) =>
-        affected(graph, changed).map: names =>
-          val chosen = modules.filter(module => names.contains(module.name))
-          jobs(graph.splits, event, modules, chosen)
+  /** Axes partition existing execution groups, never a newly focused subset of their members. */
+  def plan(graph: ProjectGraph, event: CiEvent): Either[CiError | histos.testrun.TestSelectionError, List[TestJob]] =
+    for
+      _         <- axes(graph)
+      selection <- event match
+        case CiEvent.Other                => Right(histos.TestSelection())
+        case CiEvent.PullRequest(changed) =>
+          affected(graph, changed).map(names => histos.TestSelection(affected = Some(names)))
+      initial <- histos.testrun.TestCells.plan(graph, selection)
+      rows    <-
+        if initial.requestedCells.isEmpty then Right(Nil)
+        else if graph.splits.axes.isEmpty then Right(List(TestJob(selection, initial)))
+        else partition(graph, selection, initial)
+    yield rows
+
+  private def axes(graph: ProjectGraph): Either[CiError, Unit] =
+    if graph.splits.axes.contains(Axis.ScalaVersion) then Left(CiError.UnsupportedAxis(Axis.ScalaVersion))
+    else Right(())
+
+  private def partition(
+      graph: ProjectGraph,
+      selection: histos.TestSelection,
+      initial: histos.testrun.TestCellPlan,
+  ): Either[CiError | histos.testrun.TestSelectionError, List[TestJob]] =
+    import histos.testrun.TestExecutionGroup
+    def platform(group: TestExecutionGroup): Platform = group match
+      case TestExecutionGroup.Direct(cell)              => cell.platform
+      case TestExecutionGroup.NativeAggregate(owner, _) => owner.platform
+    def names(groups: List[TestExecutionGroup]): List[ProjectName] =
+      groups.flatMap(_.requestedCells).map(_.module).distinct
+    val buckets = initial.executionGroups.foldLeft(List.empty[(Option[Platform], List[TestExecutionGroup])]):
+      (rows, group) =>
+        val key = Option.when(graph.splits.axes.contains(Axis.Platform))(platform(group))
+        rows.find(_._1 == key) match
+          case None    => rows :+ (key, List(group))
+          case Some(_) =>
+            rows.map((found, groups) => if found == key then (found, groups :+ group) else (found, groups))
+    val components = buckets.flatMap: (key, groups) =>
+      val rows = if !graph.splits.axes.contains(Axis.Module) then List(groups)
+      else
+        groups.foldLeft(List.empty[List[TestExecutionGroup]]): (rows, group) =>
+          def overlaps(row: List[TestExecutionGroup]): Boolean = names(row).exists(names(List(group)).contains)
+          val index                                            = rows.indexWhere(overlaps)
+          if index < 0 then rows :+ List(group)
+          else
+            val merged = rows.filter(overlaps).flatten :+ group
+            rows.take(index) ++ List(merged) ++ rows.drop(index).filterNot(overlaps)
+      rows.map(key -> _)
+    components.foldLeft[Either[CiError | histos.testrun.TestSelectionError, List[TestJob]]](Right(Nil)): (acc, row) =>
+      val (key, groups) = row
+      val targets       = if graph.splits.axes.contains(Axis.Module) then histos.TestTargets.Filtered(names(groups))
+      else selection.targets
+      val requested = histos.TestSelection(
+        targets,
+        key.fold(histos.PlatformSelection.All)(histos.PlatformSelection.only(_)),
+        selection.affected,
+      )
+      for
+        previous <- acc
+        planned  <- histos.testrun.TestCells.plan(graph, requested)
+        roots = initial.compileStageRoots.filter(stage =>
+          groups.exists(group =>
+            group.requestedCells.contains(stage.cell) || (group match
+              case TestExecutionGroup.Direct(_)                 => false
+              case TestExecutionGroup.NativeAggregate(owner, _) => owner == stage.cell)
+          )
+        )
+        _ <-
+          if planned.requestedCells.toSet == groups
+              .flatMap(_.requestedCells)
+              .toSet && planned.executionGroups.toSet == groups.toSet && planned.compileStageRoots.toSet == roots.toSet
+          then Right(())
+          else Left(CiError.InvalidPartition(requested))
+      yield previous :+ TestJob(requested, planned)
+
+  /** The same pure contract used by local execution and rendered argv verification. */
+  def cells(
+      graph: ProjectGraph,
+      selection: histos.TestSelection,
+  ): Either[histos.testrun.TestSelectionError, histos.testrun.TestCellPlan] =
+    histos.testrun.TestCells.plan(graph, selection)
 
   /** No names is the whole graph. Names are modules, in the order given, without adding dependents. */
-  def target(graph: ProjectGraph, raw: List[String]): Either[CiError, TestTarget] =
-    if raw.isEmpty then Right(TestTarget.Entire)
+  def target(graph: ProjectGraph, raw: List[String]): Either[CiError, histos.TestTargets] =
+    if raw.isEmpty then Right(histos.TestTargets.All)
     else
       raw
         .foldLeft[Either[CiError, List[ProjectName]]](Right(Nil)): (acc, item) =>
@@ -140,13 +189,13 @@ object Workflow:
                   case Some(_: Aggregate) => Left(CiError.NotModule(name))
                   case Some(_: Module)    => Right(seen :+ name)
         .flatMap:
-          case first :: rest => Right(TestTarget.Named(first, rest))
-          case Nil           => Right(TestTarget.Entire)
+          case first :: rest => Right(histos.TestTargets.Named(first, rest))
+          case Nil           => Right(histos.TestTargets.All)
 
   def render(graph: ProjectGraph, lock: NpmLock)(using
       CiBranch,
       RenderingShip,
-  ): Either[CiError | BuildError, String] =
+  ): Either[CiError | BuildError | histos.testrun.TestSelectionError, String] =
     prepared(graph, lock).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
@@ -157,7 +206,10 @@ object Workflow:
       graph: ProjectGraph,
       sona: Publishing,
       lock: NpmLock,
-  )(using CiBranch, RenderingShip): Either[CiError | BuildError, List[RenderedWorkflow]] =
+  )(using
+      CiBranch,
+      RenderingShip,
+  ): Either[CiError | BuildError | histos.testrun.TestSelectionError, List[RenderedWorkflow]] =
     for
       (body, files) <- prepared(graph, lock)
       release       <- releaseWorkflow(graph, sona)
@@ -173,13 +225,37 @@ object Workflow:
   private def prepared(
       graph: ProjectGraph,
       lock: NpmLock,
-  )(using branch: CiBranch)(using RenderingShip): Either[CiError | BuildError, (String, List[RenderedWorkflow])] =
+  )(using
+      branch: CiBranch
+  )(using
+      RenderingShip
+  ): Either[CiError | BuildError | histos.testrun.TestSelectionError, (String, List[RenderedWorkflow])] =
     for
+      _       <- axes(graph)
       _       <- limits(graph)
+      _       <- reserved(graph)
       _       <- llvmPinned(graph)
       planned <- JobYaml.render(graph, branch.name)
       jobs    <- plan(graph, CiEvent.Other)
-    yield (document(graph, jobs, planned, branch.name, lock), planned.files)
+      verify  <- graph.verify
+        .foldLeft[Either[histos.testrun.TestSelectionError, List[(VerifyTask, Option[histos.testrun.TestCellPlan])]]](
+          Right(Nil)
+        ): (acc, task) =>
+          for
+            previous <- acc
+            cells    <- task.run match
+              case histos.VerifyRun.Tests(selection) => histos.testrun.TestCells.plan(graph, selection).map(Some(_))
+              case histos.VerifyRun.BuiltIn(_) | histos.VerifyRun.Plugin(_) => Right(None)
+          yield previous :+ (task, cells)
+    yield (document(graph, jobs, planned, branch.name, lock, verify), planned.files)
+
+  private def reserved(graph: ProjectGraph): Either[CiError, Unit] =
+    val compatibility = histos.plugin.JobName("compatibility")
+    val taken         = graph.verify.exists(_.name == compatibility) || graph.plugins.exists(
+      _.contribution.jobs.exists(_.name == compatibility)
+    )
+    if emitsCompatibility(graph) && taken then Left(CiError.Fault(histos.CiFault.RenderedJob(compatibility)))
+    else Right(())
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
     graph.ci.timeout match
@@ -223,7 +299,7 @@ object Workflow:
   def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using
       CiBranch,
       RenderingShip,
-  ): IO[CiError | BuildError, Path] =
+  ): IO[CiError | BuildError | histos.testrun.TestSelectionError, Path] =
     for
       lock     <- npmLock(repo)
       rendered <- ZIO.fromEither(renderAll(graph, sona, lock))
@@ -237,7 +313,7 @@ object Workflow:
   def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using
       CiBranch,
       RenderingShip,
-  ): IO[CiError | BuildError, Path] =
+  ): IO[CiError | BuildError | histos.testrun.TestSelectionError, Path] =
     for
       lock     <- npmLock(repo)
       rendered <- ZIO.fromEither(renderAll(graph, sona, lock))
@@ -250,23 +326,21 @@ object Workflow:
     yield path(repo)
 
   /** The process boundary. The command is `./histos test` plus the cell, nothing else. */
-  def argv(job: TestJob): List[String] =
-    val head = List("./histos", "test")
-    job match
-      case TestJob.Aggregate(TestTarget.Entire)             => head
-      case TestJob.Aggregate(TestTarget.Named(first, rest)) =>
-        head ++ (first :: rest).map(_.value)
-      case TestJob.Split(module, platform, version) =>
-        val projects = module match
-          case ModuleRef.All       => Nil
-          case ModuleRef.One(name) => List(name.value)
-        val platforms = platform match
-          case PlatformRef.All           => Nil
-          case PlatformRef.One(selected) => List("--platform", PlatformToken.render(selected))
-        val versions = version match
-          case VersionRef.All           => Nil
-          case VersionRef.One(selected) => List("--scala", selected.value)
-        head ++ projects ++ platforms ++ versions
+  def argv(job: TestJob): List[String] = selectionArgv(job.selection)
+
+  def selectionArgv(selection: histos.TestSelection): List[String] =
+    val names = selection.targets match
+      case histos.TestTargets.All                => Nil
+      case histos.TestTargets.Named(first, rest) => (first :: rest).map(_.value).distinct
+      case histos.TestTargets.Filtered(modules)  => List("--suite", modules.map(_.value).distinct.toJson)
+    val platforms = selection.platforms match
+      case histos.PlatformSelection.All          => Nil
+      case histos.PlatformSelection.Only(chosen) => List("--platform", chosen.all.distinct.map(_.token).mkString(","))
+    val mask = selection.affected.toList.flatMap(names => List("--affected", names.map(_.value).distinct.toJson))
+    List("./histos", "test") ++ names ++ platforms ++ mask
+
+  private def shellArgv(args: List[String]): String =
+    args.map(token => if token.startsWith("[") then s"'$token'" else token).mkString(" ")
 
   private def affected(graph: ProjectGraph, changed: Set[ProjectName]): Either[CiError, List[ProjectName]] =
     val known = graph.projects.map(_.name).toSet
@@ -285,53 +359,13 @@ object Workflow:
     val grown = step(roots)
     modules.collect { case module if grown.contains(module.name) => module.name }
 
-  private def jobs(
-      splits: Splits,
-      event: CiEvent,
-      all: List[Module],
-      chosen: List[Module],
-  ): List[TestJob] =
-    if splits.axes.isEmpty then aggregate(event, all, chosen)
-    else if chosen.isEmpty then Nil
-    else matrix(splits, chosen)
-
-  private def aggregate(event: CiEvent, all: List[Module], chosen: List[Module]): List[TestJob] =
-    event match
-      case CiEvent.Other          => List(TestJob.Aggregate(TestTarget.Entire))
-      case CiEvent.PullRequest(_) =>
-        val names = all.collect { case module if chosen.exists(_.name == module.name) => module.name }
-        names match
-          case Nil           => Nil
-          case first :: rest => List(TestJob.Aggregate(TestTarget.Named(first, rest)))
-
-  private def matrix(splits: Splits, modules: List[Module]): List[TestJob] =
-    val splitModule   = splits.axes.contains(Axis.Module)
-    val splitPlatform = splits.axes.contains(Axis.Platform)
-    val splitVersion  = splits.axes.contains(Axis.ScalaVersion)
-    val groups        =
-      if splitModule then modules.map(module => (ModuleRef.One(module.name), List(module)))
-      else List((ModuleRef.All, modules))
-    groups.flatMap: (moduleRef, group) =>
-      val platforms =
-        if splitPlatform then distinct(group.flatMap(_.platforms.all)).map(PlatformRef.One(_))
-        else List(PlatformRef.All)
-      val versions =
-        if splitVersion then distinct(group.flatMap(_.versions.all)).map(VersionRef.One(_))
-        else List(VersionRef.All)
-      platforms.flatMap: platform =>
-        versions.map: version =>
-          TestJob.Split(moduleRef, platform, version)
-
-  private def distinct[A](values: List[A]): List[A] =
-    values.foldLeft(List.empty[A]): (seen, value) =>
-      if seen.contains(value) then seen else seen :+ value
-
   private def document(
       graph: ProjectGraph,
       jobs: List[TestJob],
       planned: JobYaml.Rendered,
       branch: String,
       lock: NpmLock,
+      verification: List[(VerifyTask, Option[histos.testrun.TestCellPlan])],
   )(using RenderingShip): String =
     val modules = graph.projects.collect { case module: Module => module }
     val test    = jobs match
@@ -339,7 +373,9 @@ object Workflow:
       case _   => testJob(jobs, graph, lock)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
-      case _             => List(versionsJob(graph))
+      case _             =>
+        val proof = if emitsCompatibility(graph) then List(compatibilityJob(graph)) else Nil
+        List(versionsJob(graph)) ++ proof
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
@@ -353,7 +389,7 @@ object Workflow:
     val publish = graph.suiteHost match
       case SuiteHost.Pin   => Nil
       case SuiteHost.Local => List(publishJob(graph))
-    val verify = graph.verify.map(task => verifyJob(graph, task))
+    val verify = verification.map((task, cells) => verifyJob(graph, task, cells))
     val body   =
       List(affectedJob(graph)) ++ publish ++ test ++ versions ++ doc ++ coverage ++ format ++ verify ++ planned.ci ++
         seed ++ List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
@@ -374,34 +410,91 @@ object Workflow:
   /** Every ship publishes snapshots. A graph with no ship emits nothing, so update deletes a stale copy. A toolchain
     * ship also publishes the jar and the link kit. Two toolchain ships fail the render.
     */
-  private def snapshotWorkflow(graph: ProjectGraph)(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
+  private[workflow] def snapshotWorkflow(
+      graph: ProjectGraph
+  )(using RenderingShip): Either[CiError, Option[RenderedWorkflow]] =
     toolchain(graph).map: _ =>
       if graph.catalog.ships.nonEmpty then Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
       else None
 
-  /** `HISTOS_BRANCH` is `default` so the pointer moves from any ref. `publish snapshots` compiles the link kit on this
-    * runner and uploads the manifest. It does not link a client and it does not upload a jar.
-    */
+  private val snapshotAuthorization: List[String] = List(
+    "        env:",
+    "          GH_TOKEN: ${{ github.token }}",
+    "          GH_REPO: ${{ github.repository }}",
+    "          CI_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}",
+    "          CI_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}",
+    "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+    "          EVENT: ${{ github.event_name }}",
+    "        run: |",
+    "          set -euo pipefail",
+    "          publish=false",
+    "          session=snapshot",
+    "          pr=",
+    "          if [ \"$EVENT\" = workflow_dispatch ] || [ \"$CI_BRANCH\" = \"$DEFAULT_BRANCH\" ]; then",
+    "            current=$(gh api \"repos/$GH_REPO/commits/$CI_BRANCH\" --jq .sha)",
+    "            [ \"$current\" = \"$CI_SHA\" ] && publish=true",
+    "          else",
+    "            owner=${GH_REPO%%/*}",
+    "            pulls=$(gh api --method GET \"repos/$GH_REPO/pulls\" -f \"head=$owner:$CI_BRANCH\")",
+    "            pr=$(printf '%s' \"$pulls\" | jq -r '[.[] | select(.head.sha == env.CI_SHA and .head.repo.full_name == env.GH_REPO and any(.labels[]; .name == \"snapshots\"))] | first | .number // empty')",
+    "            if [ -n \"$pr\" ]; then publish=true; session=pr; fi",
+    "          fi",
+    "          printf 'publish=%s\\nsession=%s\\npr=%s\\n' \"$publish\" \"$session\" \"$pr\" >> \"$GITHUB_OUTPUT\"",
+  )
+
+  /** Recheck the current head and PR label immediately before publication. */
   private def snapshotDocument(graph: ProjectGraph)(using RenderingShip): String =
-    val lines = List(
+    val verified =
+      "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository"
+    val eligible = s"github.event_name == 'workflow_dispatch' || ($verified)"
+    val lines    = List(
       "name: snapshots",
       "on:",
       "  workflow_dispatch:",
+      "  workflow_run:",
+      "    workflows: [ci]",
+      "    types: [completed]",
       "permissions:",
       "  contents: read",
       "jobs:",
+      "  eligibility:",
+      "    outputs:",
+      "      publish: ${{ steps.eligibility.outputs.publish }}",
+      s"    if: ${quote(eligible)}",
+      s"    runs-on: $Runner",
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:",
+      "      contents: read",
+      "      pull-requests: read",
+      "    steps:",
+      "      - id: eligibility",
+    ) ++ snapshotAuthorization ++ List(
       "  snapshots:",
+      "    needs: eligibility",
+      "    if: needs.eligibility.outputs.publish == 'true'",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
       "      contents: write",
+      "      pull-requests: read",
+      "    env:",
+      "      SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}",
+      "      SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}",
       "    steps:",
+      "      - name: Require snapshot credentials",
+      "        run: test -n \"$SONATYPE_USERNAME\" && test -n \"$SONATYPE_PASSWORD\"",
       s"      - uses: $Checkout",
+      "        with:",
+      "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}",
     ) ++ coursierCli(graph, "snapshots") ++ List(
+      "      - id: authorized"
+    ) ++ snapshotAuthorization ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
+      "        if: steps.authorized.outputs.publish == 'true'",
       "        env:",
-      "          HISTOS_SESSION: snapshot",
-      "          HISTOS_SHA: ${{ github.sha }}",
+      "          HISTOS_SESSION: ${{ steps.authorized.outputs.session }}",
+      "          HISTOS_PR: ${{ steps.authorized.outputs.pr }}",
+      "          HISTOS_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}",
       "          HISTOS_BRANCH: default",
       "          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}",
       "          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}",
@@ -502,12 +595,6 @@ object Workflow:
   private def shipVersion(ship: Ship): String =
     ship match
       case line: Ship.Line => line.number.render
-
-  private def assetMember(graph: ProjectGraph, ship: Ship): Boolean =
-    ship.members.toList.exists: name =>
-      graph.get(name) match
-        case Some(module: Module) => module.asset.isDefined
-        case _                    => false
 
   private def installJob(
       graph: ProjectGraph,
@@ -655,9 +742,9 @@ object Workflow:
   private val OnDefaultPush: String =
     s"github.event_name == 'push' && $OnDefaultBranch"
 
-  /** Verify runs on a pull request or a dispatch. A push does not run the suite. */
+  /** Required verification runs on pull requests, main pushes, and manual dispatch. */
   private val OnVerify: String =
-    "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
 
   private val NoneFailed: String =
     "!cancelled() && !contains(needs.*.result, 'failure')"
@@ -671,9 +758,9 @@ object Workflow:
   /** `on.push.branches` is a static glob. GitHub evaluates it before the `github` context exists, so `branch` is the
     * short name resolved when this file is written. `pull_request` still validates every other branch. A push to a
     * feature branch does not start this file, so one commit on an open pull request is one run. Verify jobs repeat
-    * [[OnVerify]], so a push to `branch` starts a run whose suite skips. `$default-branch` is a workflow-template token
-    * and is not written here. `workflow_dispatch` is on this file because verify accepts it. A label, a path, a cron,
-    * or `workflow_run` is not: those are their own files.
+    * [[OnVerify]] on PR, main push, and dispatch. `$default-branch` is a workflow-template token and is not written
+    * here. `workflow_dispatch` is on this file because verify accepts it. A label, a path, a cron, or `workflow_run` is
+    * not: those are their own files.
     */
   private def header(extra: CiHeader, graph: ProjectGraph, branch: String): List[String] =
     val tags =
@@ -685,6 +772,7 @@ object Workflow:
       "name: ci",
       "on:",
       "  pull_request:",
+      "    types: [opened, synchronize, reopened, labeled]",
       "  push:",
       "    branches:",
       s"      - ${quote(branch)}",
@@ -868,7 +956,7 @@ object Workflow:
     if !needed then Nil
     else
       val names = NativeCi.packages.mkString(" ")
-      val cell  = cellFlag(scope, "llvm")
+      val cell  = cellFlag(scope, "openssl")
       List(
         "      - name: Install native link libraries",
         "        run: |",
@@ -905,19 +993,24 @@ object Workflow:
           s"          timeout 180s node \"$$dir/node_modules/playwright/cli.js\" install-deps $named",
         ) ++ cell.toList.map(text => s"        if: $text")
 
+  /** PR base, else the last successful push on this branch, else `all`. A failed ancestor check keeps `all`. */
+  private val diffBase: String =
+    """base=all
+      |if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+      |  base="$PR_BASE"
+      |elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+      |  last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
+      |  if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
+      |    base="$last"
+      |  fi
+      |fi""".stripMargin
+
   private def affectedJob(graph: ProjectGraph)(using RenderingShip): String =
-    val script =
-      """          base=all
-          |          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-          |            base="$PR_BASE"
-          |          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
-          |            last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
-          |            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
-          |              base="$last"
-          |            fi
-          |          fi
-          |          modules=$(./histos affected --base "$base" || echo '["all"]')
-          |          echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
+    val script = runScript(
+      diffBase + "\n" +
+        """modules=$(./histos affected --base "$base" || echo '["all"]')
+          |echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
+    )
     (List(
       "  affected:"
     ) ++ List(
@@ -939,12 +1032,11 @@ object Workflow:
     )).mkString("\n")
 
   /** A push to the default branch fills `main` and saves the store. Rebuild compiles. CopyIndex copies the pull-request
-    * index. The suite does not run on that push.
+    * index alongside required main verification.
     */
   private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph)(using RenderingShip): String =
-    val modules = graph.projects.collect { case module: Module => module }
-    val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
-    val any     = needs.foldLeft(ToolNeed(false, false, false, false))(_ || _)
+    val needs   = jobs.map(job => toolNeed(graph, stagesOf(job), graph.runnerTools))
+    val any     = needs.foldLeft(ToolNeed(Set.empty))(_ || _)
     val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  cache-seed:"
@@ -963,15 +1055,11 @@ object Workflow:
     ) ++ storeSave).mkString("\n")
 
   private def testJob(jobs: List[TestJob], graph: ProjectGraph, lock: NpmLock)(using RenderingShip): List[String] =
-    val modules = graph.projects.collect { case module: Module => module }
-    val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
-    val any     = needs.foldLeft(ToolNeed(false, false, false, false))(_ || _)
-    val matrix  = jobs.exists {
-      case TestJob.Split(_, _, _) => true
-      case _                      => false
-    }
+    val needs   = jobs.map(job => toolNeed(graph, stagesOf(job), graph.runnerTools))
+    val any     = needs.foldLeft(ToolNeed(Set.empty))(_ || _)
+    val matrix  = jobs.size > 1
     val scope   = if matrix then MatrixScope.Cell else MatrixScope.Whole
-    val install = npmInstall(jobs, modules, graph, lock, scope)
+    val install = npmInstall(jobs, graph, lock, scope)
     val prepare = steps(graph.runnerTools, graph.resolution, any, scope, install)
     val columns = if matrix && any.any then ToolColumns.On else ToolColumns.Off
     val depends = graph.suiteHost match
@@ -980,7 +1068,7 @@ object Workflow:
     val installed = suiteCli(graph, "test")
     val proved    = suiteProof(graph)
     jobs match
-      case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
+      case aggregate :: Nil =>
         List(
           "  test:"
         ) ++ List(depends) ++ verifyNeeds ++ List(
@@ -992,7 +1080,7 @@ object Workflow:
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ installed ++ prepare ++ storeRestore ++ proved ++ testRun(
-          argv(aggregate).mkString(" ")
+          shellArgv(argv(aggregate))
         ) ++ storeSave
       case _ =>
         val actions = graph.suiteHost match
@@ -1010,113 +1098,110 @@ object Workflow:
           "      fail-fast: false",
           "      matrix:",
           "        include:",
-        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns, install)) ++ List(
+        ) ++ jobs.flatMap(job => include(job, graph, columns, install)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ installed ++ prepare ++ proved ++ testRun("${{ matrix.command }}")
 
   private def include(
       job: TestJob,
-      modules: List[Module],
-      tools: RunnerTools,
+      graph: ProjectGraph,
       columns: ToolColumns,
       install: NpmInstall,
   ): List[String] =
     val rows = List(
       s"          - name: ${quote(slug(job))}",
-      s"            command: ${quote(argv(job).mkString(" "))}",
+      s"            command: ${quote(shellArgv(argv(job)))}",
     )
     val flags = columns match
       case ToolColumns.Off => Nil
       case ToolColumns.On  =>
-        val need = toolNeed(modulesOf(job, modules), tools)
+        val need = toolNeed(graph, stagesOf(job), graph.runnerTools)
         List(
           s"            node: ${quote(need.node.toString)}",
           s"            llvm: ${quote(need.llvm.toString)}",
+          s"            openssl: ${quote(need.openssl.toString)}",
           s"            playwright: ${quote(need.playwright.toString)}",
         )
-    rows ++ flags ++ npmColumn(job, modules, install)
+    rows ++ flags ++ npmColumn(job, install)
 
   /** True only for a cell whose modules contain JavaScript. The column exists only when the job installs from the
     * lockfile, so the node floor and the lock are already decided.
     */
-  private def npmColumn(job: TestJob, modules: List[Module], install: NpmInstall): List[String] =
+  private def npmColumn(job: TestJob, install: NpmInstall): List[String] =
     install match
       case NpmInstall.On(MatrixScope.Cell) =>
-        val runsJs = modulesOf(job, modules).exists(_.platforms.all.contains(Platform.Js))
+        val runsJs = stagesOf(job).exists(_.cell.platform == Platform.Js)
         List(s"            npm: ${quote(runsJs.toString)}")
       case NpmInstall.On(MatrixScope.Whole) => Nil
       case NpmInstall.Off                   => Nil
 
   private def npmInstall(
       jobs: List[TestJob],
-      modules: List[Module],
       graph: ProjectGraph,
       lock: NpmLock,
       scope: MatrixScope,
   ): NpmInstall =
-    val runsJs = jobs.exists(job => modulesOf(job, modules).exists(_.platforms.all.contains(Platform.Js)))
+    val runsJs = jobs.exists(job => stagesOf(job).exists(_.cell.platform == Platform.Js))
     if lock == NpmLock.Present && graph.runnerTools.node.isDefined && runsJs then NpmInstall.On(scope)
     else NpmInstall.Off
 
-  private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean, openssl: Boolean):
-    def ||(other: ToolNeed): ToolNeed =
-      ToolNeed(
-        node || other.node,
-        llvm || other.llvm,
-        playwright || other.playwright,
-        openssl || other.openssl,
+  enum Tool:
+    case Node, Llvm, Playwright, OpenSsl
+
+  final case class ToolNeed(required: Set[Tool]):
+    def ||(other: ToolNeed): ToolNeed = ToolNeed(required ++ other.required)
+    def node: Boolean                 = required.contains(Tool.Node)
+    def llvm: Boolean                 = required.contains(Tool.Llvm)
+    def playwright: Boolean           = required.contains(Tool.Playwright)
+    def openssl: Boolean              = required.contains(Tool.OpenSsl)
+    def any: Boolean                  = required.nonEmpty
+
+  /** `stages` is the planned stage closure, including producer inputs when supplied by BuildDag. */
+  def toolNeed(graph: ProjectGraph, stages: List[histos.CompilationStage], tools: RunnerTools): ToolNeed =
+    val cells         = stages.map(_.cell).distinct
+    val native        = cells.exists(_.platform == Platform.Native)
+    val javascript    = cells.exists(_.platform == Platform.Js)
+    val browser       = tools.playwright.isDefined && stages.exists(_.scope == histos.plugin.SourceSet.Test)
+    val nativeModules = cells
+      .filter(_.platform == Platform.Native)
+      .flatMap(cell =>
+        graph
+          .get(cell.module)
+          .collect:
+            case module: Module => module
       )
-
-    def any: Boolean = node || llvm || playwright || openssl
-  end ToolNeed
-
-  private def toolNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
-    val native     = modules.exists(_.platforms.all.contains(Platform.Native))
-    val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
-    val browser    = tools.playwright.isDefined
     ToolNeed(
-      tools.node.isDefined && (javascript || browser),
-      tools.llvm.isDefined && native,
-      browser,
-      NativeCi.openssl(modules),
+      List(
+        Option.when(tools.node.isDefined && (javascript || browser))(Tool.Node),
+        Option.when(tools.llvm.isDefined && native)(Tool.Llvm),
+        Option.when(browser)(Tool.Playwright),
+        Option.when(NativeCi.openssl(nativeModules))(Tool.OpenSsl),
+      ).flatten.toSet
     )
 
-  private def modulesOf(job: TestJob, modules: List[Module]): List[Module] =
-    job match
-      case TestJob.Aggregate(TestTarget.Entire)             => modules
-      case TestJob.Aggregate(TestTarget.Named(first, rest)) =>
-        val names = first :: rest
-        modules.filter(module => names.contains(module.name))
-      case TestJob.Split(module, platform, _) =>
-        val named = module match
-          case ModuleRef.All       => modules
-          case ModuleRef.One(name) => modules.filter(_.name == name)
-        platform match
-          case PlatformRef.All           => named
-          case PlatformRef.One(selected) => named.filter(_.platforms.all.contains(selected))
+  def toolSteps(graph: ProjectGraph, stages: List[histos.CompilationStage]): List[String] =
+    steps(
+      graph.runnerTools,
+      graph.resolution,
+      toolNeed(graph, stages, graph.runnerTools),
+      MatrixScope.Whole,
+      NpmInstall.Off,
+    )
+
+  private def stagesOf(job: TestJob): List[histos.CompilationStage] = job.cells.compileStageRoots
 
   private def slug(job: TestJob): String =
-    job match
-      case TestJob.Aggregate(_)                     => "all"
-      case TestJob.Split(module, platform, version) =>
-        val parts = List(modulePart(module), platformPart(platform), versionPart(version)).flatten
-        if parts.isEmpty then "all" else parts.mkString("-")
-
-  private def modulePart(module: ModuleRef): Option[String] =
-    module match
-      case ModuleRef.All       => None
-      case ModuleRef.One(name) => Some(name.value)
-
-  private def platformPart(platform: PlatformRef): Option[String] =
-    platform match
-      case PlatformRef.All           => None
-      case PlatformRef.One(selected) => Some(PlatformToken.render(selected))
-
-  private def versionPart(version: VersionRef): Option[String] =
-    version match
-      case VersionRef.All           => None
-      case VersionRef.One(selected) => Some(selected.value)
+    val names = job.selection.targets match
+      case histos.TestTargets.All                => Nil
+      case histos.TestTargets.Named(first, rest) => (first :: rest).map(_.value).distinct
+      case histos.TestTargets.Filtered(modules)  => modules.map(_.value).distinct
+    val platforms = job.selection.platforms match
+      case histos.PlatformSelection.All          => Nil
+      case histos.PlatformSelection.Only(chosen) => chosen.all.map(_.token).distinct
+    (names ++ platforms).mkString("-") match
+      case ""   => "all"
+      case name => name
 
   /** Restore, then the work, then save. The work writes new products into the restored store. A taken key is deleted
     * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
@@ -1180,6 +1265,21 @@ object Workflow:
   /** A writing step. The namespace is the caller's. The mode is write, and a laptop that copies this file still opens
     * as read.
     */
+  /** The same base script as `affected`, then one publish command. Cache write stays on the local publish job. */
+  private def proofStep(command: String, writeCache: Boolean): List[String] =
+    val cache =
+      if writeCache then
+        List(
+          s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
+          s"          ${CacheConfig.ModeKey}: ${quote("write")}",
+        )
+      else Nil
+    script(diffBase + "\n" + command) ++ List(
+      "        env:",
+      "          GH_TOKEN: ${{ github.token }}",
+      "          PR_BASE: ${{ github.event.pull_request.base.sha }}",
+    ) ++ cache
+
   private def cacheWrite(namespace: String, command: String): List[String] =
     List(
       s"      - run: ${quote(command)}",
@@ -1233,7 +1333,17 @@ object Workflow:
     val prepare   = steps(
       graph.runnerTools,
       graph.resolution,
-      docNeed(chosen, graph.runnerTools),
+      toolNeed(
+        graph,
+        chosen.flatMap(module =>
+          module.versions.all.flatMap(version =>
+            module.platforms.all.map(platform =>
+              histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)
+            )
+          )
+        ),
+        graph.runnerTools,
+      ),
       MatrixScope.Whole,
       NpmInstall.Off,
     )
@@ -1258,7 +1368,7 @@ object Workflow:
       steps(
         graph.runnerTools,
         graph.resolution,
-        ToolNeed(false, false, false, false),
+        ToolNeed(Set.empty),
         MatrixScope.Whole,
         NpmInstall.Off,
       )
@@ -1283,7 +1393,7 @@ object Workflow:
       steps(
         graph.runnerTools,
         graph.resolution,
-        ToolNeed(false, false, false, false),
+        ToolNeed(Set.empty),
         MatrixScope.Whole,
         NpmInstall.Off,
       )
@@ -1297,11 +1407,6 @@ object Workflow:
     ) ++ suiteCli(graph, "format") ++ prepare ++ List(
       s"      - run: ${quote("./histos fmt --check")}"
     )).mkString("\n")
-
-  private def docNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
-    val native     = modules.exists(_.platforms.all.contains(Platform.Native))
-    val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
-    ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false, NativeCi.openssl(modules))
 
   /** The required check. It runs on a pull request and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph)(using RenderingShip): String =
@@ -1323,6 +1428,47 @@ object Workflow:
       "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
+  /** Pin with a catalog renders `compatibility`. Local renders `publish` instead. */
+  private def emitsCompatibility(graph: ProjectGraph): Boolean =
+    graph.suiteHost == SuiteHost.Pin && graph.catalog.ships.nonEmpty
+
+  def requiredJobs(graph: ProjectGraph): List[String] =
+    val suite = if graph.projects.exists:
+        case module: Module => module.lane == histos.TestLane.Suite
+        case _: Aggregate   => false
+    then List("test")
+    else Nil
+    val catalog =
+      if graph.catalog.ships.isEmpty then Nil
+      else if emitsCompatibility(graph) then List("versions", "compatibility")
+      else List("versions")
+    val publish = if graph.suiteHost == SuiteHost.Local then List("publish") else Nil
+    val doc     = if graph.docCheck == DocCheck.On then List("scaladoc") else Nil
+    val format  = graph.formatting match
+      case Formatting.Off         => Nil
+      case Formatting.Scalafmt(_) => List("format")
+    val coverage = graph.coverage match
+      case CoverageJob.Off    => Nil
+      case CoverageJob.Ask(_) => List("coverage")
+    List(
+      "affected",
+      "workflow",
+      graph.supply.checkName.value,
+    ) ++ suite ++ catalog ++ publish ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
+
+  private def compatibilityJob(graph: ProjectGraph)(using RenderingShip): String =
+    (List("  compatibility:") ++ verifyIf ++ afterAffected(Nil) ++ List(
+      s"    runs-on: $Runner"
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:",
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ proofStep(
+      """./histos publish check --base "$base"""",
+      writeCache = false,
+    )).mkString("\n")
+
   private def versionsJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
       "  versions:"
@@ -1342,7 +1488,8 @@ object Workflow:
   private def suiteCli(graph: ProjectGraph, job: String)(using RenderingShip): List[String] =
     graph.suiteHost match
       case SuiteHost.Pin   => coursierCli(graph, job)
-      case SuiteHost.Local => hostedInstall(ClientLink.Skip) ++ SupplyYaml.preflight(graph, job)
+      case SuiteHost.Local =>
+        CiInstall.jdk(graph.runnerTools.jdk) ++ hostedInstall(ClientLink.Skip) ++ SupplyYaml.preflight(graph, job)
 
   /** The published jar is not the `histos.version` pin. The first line is the toolchain. A server adds a second line.
     */
@@ -1351,7 +1498,7 @@ object Workflow:
       case SuiteHost.Pin   => Nil
       case SuiteHost.Local =>
         script(proofBody) ++ List(
-          s"      - run: ${quote("./histos test app --only '*LockInvocationSpec*' '*InstalledCompilerPayloadSpec*'")}"
+          s"      - run: ${quote("./histos test app --only '*LockInvocationSpec*,*InstalledCompilerPayloadSpec*'")}"
         )
 
   /** `affected` installs the toolchain. Every later job in this workflow waits for that install. */
@@ -1382,13 +1529,15 @@ object Workflow:
       s"      - uses: $Checkout",
     ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "publish") ++
       coursierStep(graph.resolution) ++
-      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ cacheWrite(
-        cacheNamespace,
-        "./histos publish local",
+      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ proofStep(
+        """./histos publish local --base "$base"""",
+        writeCache = true,
       ) ++ script(stageBody) ++ uploadHost ++ storeSave
     lines.mkString("\n")
 
-  private def verifyJob(graph: ProjectGraph, task: VerifyTask)(using RenderingShip): String =
+  private def verifyJob(graph: ProjectGraph, task: VerifyTask, cells: Option[histos.testrun.TestCellPlan])(using
+      RenderingShip
+  ): String =
     val lines = List(
       s"  ${task.name.value}:"
     ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
@@ -1399,21 +1548,31 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ verifySteps(graph, task)
+    ) ++ verifySteps(graph, task, cells)
     lines.mkString("\n")
 
   /** Native puts clang on `PATH` before `toolchain install --client`. Skip does not add LLVM: a verify task names no
     * other tool.
     */
-  private def verifySteps(graph: ProjectGraph, task: VerifyTask)(using RenderingShip): List[String] =
-    val clang = task.link match
-      case ClientLink.Native => llvmStep(graph.runnerTools.llvm, MatrixScope.Whole)
-      case ClientLink.Skip   => Nil
-    val run = List(s"      - run: ${quote(s"./histos run ${task.run.command}")}")
+  private def verifySteps(graph: ProjectGraph, task: VerifyTask, cells: Option[histos.testrun.TestCellPlan])(using
+      RenderingShip
+  ): List[String] =
+    val need     = toolNeed(graph, cells.toList.flatMap(_.compileStageRoots), graph.runnerTools)
+    val selected = steps(graph.runnerTools, graph.resolution, need, MatrixScope.Whole, NpmInstall.Off)
+    val clang    = task.link match
+      case ClientLink.Native if !need.llvm     => llvmStep(graph.runnerTools.llvm, MatrixScope.Whole)
+      case ClientLink.Native | ClientLink.Skip => Nil
+    val command = task.run match
+      case histos.VerifyRun.Tests(selection) => shellArgv(selectionArgv(selection))
+      case histos.VerifyRun.BuiltIn(name)    => s"./histos run ${name.value}"
+      case histos.VerifyRun.Plugin(id)       => s"./histos run ${id.render}"
+    val run = List(s"      - run: ${quote(command)}")
     graph.suiteHost match
-      case SuiteHost.Pin   => CiInstall.steps(graph) ++ clang ++ run
+      case SuiteHost.Pin   => CiInstall.steps(graph) ++ selected ++ clang ++ run
       case SuiteHost.Local =>
-        clang ++ hostedInstall(task.link) ++ coursierStep(graph.resolution) ++ run
+        CiInstall.jdk(graph.runnerTools.jdk) ++ selected ++ clang ++ hostedInstall(task.link) ++ coursierStep(
+          graph.resolution
+        ) ++ run
 
   private def hostedInstall(link: ClientLink): List[String] =
     val flag = link match
@@ -1510,6 +1669,9 @@ object Workflow:
 
   private def script(body: String): List[String] =
     List("      - run: |") ++ body.linesIterator.map(line => "          " + line).toList
+
+  private def runScript(body: String): String =
+    body.linesIterator.map(line => "          " + line).mkString("\n")
 
   private def quote(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""

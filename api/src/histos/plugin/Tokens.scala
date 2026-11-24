@@ -63,23 +63,18 @@ private[histos] object Tokens:
         body.forall(char => char.isLetterOrDigit || char == '.' || char == '_' || char == '-')
       case _ => false
 
+  /** A relative file path. Filename punctuation, spaces and Unicode are not identifiers. */
+  def filePath(raw: String): Boolean =
+    raw.nonEmpty &&
+      !raw.startsWith("/") &&
+      !raw.contains('\\') &&
+      !raw.contains(':') &&
+      !raw.exists(_.isControl) &&
+      raw.split("/", -1).forall(part => part.nonEmpty && part != "." && part != "..")
+
   /** A runtime service or command token. No whitespace and no control characters. */
   def serviceKey(raw: String): Boolean =
     raw.nonEmpty && !raw.exists(char => char.isWhitespace || char.isControl)
-
-  /** One relative archive entry. `$` is a Scala class suffix. `..` and a leading slash are escapes. */
-  def artifactPath(raw: String): Boolean =
-    val parts = raw.split("/", -1)
-    raw.nonEmpty &&
-    !raw.startsWith("/") &&
-    !raw.endsWith("/") &&
-    !raw.contains('\\') &&
-    !raw.contains("//") &&
-    parts.forall(part =>
-      part.nonEmpty && part != "." && part != ".." && part.forall(char =>
-        char.isLetterOrDigit || char == '.' || char == '_' || char == '-' || char == '$'
-      )
-    )
 
   /** Lowercase sha256, or None when the text is not 64 hex digits. */
   def sha256(raw: String): Option[String] =

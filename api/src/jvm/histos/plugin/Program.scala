@@ -32,7 +32,7 @@ object Program:
       events: PluginEvents.Invocation,
       watch: ProgramEvent => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[Scope, PluginRunError, Fiber[PluginRunError, Int]] =
-    body(argv, directory, events, watch).forkScoped
+    ZIO.scoped(body(argv, directory, events, watch)).forkScoped
 
   private def body(
       argv: List[String],
@@ -48,9 +48,12 @@ object Program:
           process <- ZIO.acquireRelease(launch(argv, directory))(destroy)
           outDone <- Promise.make[Nothing, Unit]
           errDone <- Promise.make[Nothing, Unit]
-          _    <- readers.extend(read(process.getInputStream, outDone, ProgramEvent.Out(_), events, watch).forkScoped)
-          _    <- readers.extend(read(process.getErrorStream, errDone, ProgramEvent.Err(_), events, watch).forkScoped)
-          code <- ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => refuse(s"$command was interrupted"))
+          _ <- readers.extend(read(process.getInputStream, outDone, ProgramEvent.Out(_), events, watch).forkScoped)
+          _ <- readers.extend(read(process.getErrorStream, errDone, ProgramEvent.Err(_), events, watch).forkScoped)
+          // waitFor ignores Thread.interrupt, so cancellation has to kill the process before the scope can close.
+          code <- ZIO
+            .attemptBlockingCancelable(process.waitFor())(destroy(process))
+            .mapError(_ => refuse(s"$command was interrupted"))
           drained <- (outDone.await *> errDone.await).timeout(1.second)
           _       <- ZIO.when(drained.isEmpty)(
             destroy(process) *> ZIO.fail(refuse(s"$command exited $code and left a pipe open"))
@@ -104,7 +107,11 @@ object Program:
       .mapError(thrown => refuse(s"could not start ${argv.mkString(" ")}: ${thrown.getClass.getName}"))
 
   private def destroy(process: Process): UIO[Unit] =
-    ZIO.attemptBlocking(process.destroyForcibly()).ignore
+    ZIO.attemptBlocking {
+      process.destroyForcibly()
+      process.waitFor()
+      ()
+    }.orDie
 
   private def refuse(message: String): PluginRunError =
     PluginDetail.from(message) match

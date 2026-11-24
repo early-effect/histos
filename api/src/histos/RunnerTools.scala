@@ -38,6 +38,7 @@ final case class RunnerTools(
     playwright: Option[ToolRevision],
     nodePath: Option[NodePath] = None,
     browsers: Set[Browser] = Set(Browser.Firefox),
+    jdk: Option[JdkFloor] = None,
 )
 
 object RunnerTools:

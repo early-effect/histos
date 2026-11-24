@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{IO, NonEmptyChunk, ZIO}
 
 /** The binary series of a full Scala version. `3.10.0` is Scala 3. `2.13.18` is Scala 2.13. */
 enum ScalaSeries:
@@ -35,7 +35,7 @@ end ScalaSeries
 
 /** A directory name that filters sources. A package directory with the same name does not. */
 enum SourceFilter:
-  case PlatformDir(platform: Platform)
+  case PlatformDir(required: NonEmptyChunk[Platform])
   case SeriesDir(series: ScalaSeries)
   case ExactDir(version: ScalaVersion)
 
@@ -45,9 +45,10 @@ object SourceFilter:
 
   private def platform(name: String): Option[SourceFilter] =
     name match
-      case "jvm" | "scalajvm"       => Some(SourceFilter.PlatformDir(Platform.Jvm))
-      case "js" | "scalajs"         => Some(SourceFilter.PlatformDir(Platform.Js))
-      case "native" | "scalanative" => Some(SourceFilter.PlatformDir(Platform.Native))
+      case "jvm" | "scalajvm"       => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Jvm)))
+      case "js" | "scalajs"         => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Js)))
+      case "native" | "scalanative" => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Native)))
+      case "scalajvmnative"         => Some(SourceFilter.PlatformDir(NonEmptyChunk(Platform.Jvm, Platform.Native)))
       case _                        => None
 
   private def scalaDir(name: String): Option[SourceFilter] =
@@ -60,7 +61,7 @@ object SourceFilter:
 
   def allows(filter: SourceFilter, version: ScalaVersion, platform: Platform): Boolean =
     filter match
-      case PlatformDir(required) => required == platform
+      case PlatformDir(required) => required.contains(platform)
       case ExactDir(required)    => required == version
       case SeriesDir(required)   => ScalaSeries.of(version).contains(required)
 end SourceFilter
@@ -83,6 +84,46 @@ object Sources:
     select(root, version, platform).map: paths =>
       paths.map: path =>
         PackagedSource(entryName(root, path), path)
+
+  /** Exact roots are package trees, not conventional layouts. */
+  def exact(root: Path, platform: Platform): IO[CompileError, List[PackagedSource]] =
+    ZIO
+      .attemptBlocking {
+        if !Files.isDirectory(root) then Nil
+        else
+          val walk = Files.walk(root)
+          try
+            walk.iterator.asScala
+              .filter(path => Files.isRegularFile(path) && source(path, platform))
+              .toList
+              .sortBy(_.toString)
+              .map(path => PackagedSource(root.relativize(path).iterator.asScala.map(_.toString).mkString("/"), path))
+          finally walk.close()
+      }
+      .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Walk)))
+
+  private[histos] def resourceEntry(
+      root: Path,
+      path: Path,
+      version: ScalaVersion,
+      platform: Platform,
+      scope: histos.plugin.SourceSet,
+  ): Option[String] =
+    val parts           = root.relativize(path).iterator.asScala.map(_.toString).toList
+    val (before, after) = parts.span(_ != "resources")
+    val tree            = scope match
+      case histos.plugin.SourceSet.Main => Tree.Main
+      case histos.plugin.SourceSet.Test => Tree.Test
+    val conventional =
+      before.forall(name => layout.contains(name) || name == "test" || SourceFilter.parse(name).isDefined)
+    if !conventional then None
+    else
+      after match
+        case "resources" :: entries if entries.nonEmpty =>
+          prefix(before, tree, seenTest = false)
+            .filter(_.forall(filter => SourceFilter.allows(filter, version, platform)))
+            .map(_ => entries.mkString("/"))
+        case _ => None
 
   /** Committed main sources, with [[prefer]] applied to unmanaged generated replacements. */
   def published(
@@ -156,6 +197,17 @@ object Sources:
   private def under(root: Path, path: Path): Boolean =
     path.toAbsolutePath.normalize.startsWith(root.toAbsolutePath.normalize)
 
+  private[histos] def testEntry(root: Path, path: Path): String =
+    val parts  = root.relativize(path).iterator.asScala.map(_.toString).toList
+    val before = parts.takeWhile(name => layout.contains(name) || SourceFilter.parse(name).isDefined)
+    val rest   = parts.drop(before.size)
+    rest match
+      case "test" :: entries =>
+        splitLast(entries) match
+          case Some((dirs, file)) => (dropPrefix(dirs, seenLayout = true, seenLanguage = false) :+ file).mkString("/")
+          case None               => entryName(root, path)
+      case _ => entryName(root, path)
+
   private def entryName(root: Path, path: Path): String =
     val parts = root.relativize(path).iterator.asScala.map(_.toString).toList
     splitLast(parts) match
@@ -192,6 +244,7 @@ object Sources:
         tree match
           case Tree.Main => Some(Nil)
           case Tree.Test => if seenTest then Some(Nil) else None
+      case "resources" :: _            => None
       case "test" :: rest if !seenTest =>
         tree match
           case Tree.Main => None

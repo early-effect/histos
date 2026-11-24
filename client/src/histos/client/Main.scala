@@ -8,8 +8,8 @@ import histos.server.{
   Attendance,
   Call,
   CatalogQuery,
-  Message,
-  RunBytes,
+  CommandFrame,
+  Feed,
   RunLaunch,
   ServerError,
   ServerFile,
@@ -93,7 +93,7 @@ object Main extends ZIOAppDefault:
         case None                                           => jvm(raw)
         case Some(Batch.Parsed.Ready(call))                 => batch(call, seen(peeled))
         case Some(Batch.Parsed.Program(id, platform, argv)) =>
-          batch(Call.Run(id, platform, shell, argv), seen(peeled))
+          batch(Call.Run(id, platform.map(value => histos.PlatformSelection.only(value)), shell, argv), seen(peeled))
         case Some(Batch.Parsed.Names(query)) =>
           query match
             case None        => ZIO.succeed(halt(0))
@@ -205,10 +205,17 @@ object Main extends ZIOAppDefault:
           ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
             case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
             case Right(head) =>
-              ready(head) match
+              CommandFrame.ready(head) match
                 case Left(error) => ZIO.succeed(Left(error))
                 case Right(_)    =>
-                  copyInput(call, session.output) *> frames(repo, socket, session.input, Show.start, appearance)
+                  copyInput(call, session.output) *> frames(
+                    repo,
+                    socket,
+                    session.input,
+                    Show.start,
+                    appearance,
+                    call.attendance,
+                  )
           }
       }
     }
@@ -219,44 +226,49 @@ object Main extends ZIOAppDefault:
       case Attendance.Program                 => StdinRelay.attach(output)
       case Attendance.Held | Attendance.Quiet => ZIO.unit
 
-  private def ready(frame: Option[String]): Either[ServerError, Unit] =
-    frame.flatMap(_.fromJson[Message].toOption) match
-      case Some(Message.Ready) => Right(())
-      case _                   => Left(ServerError.Protocol)
-
   private def frames(
       repo: Path,
       socket: Path,
       input: java.io.InputStream,
       shown: Show.Shown,
       appearance: Appearance,
+      attendance: Attendance,
   ): ZIO[Any, Nothing, Either[ServerError, Int]] =
     ZIO.attemptBlocking(Frame.take(input)).orDie.flatMap {
-      case Left(_)              => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
-      case Right(None)          => ZIO.succeed(Left(ServerError.Protocol))
-      case Right(Some(payload)) =>
-        payload.fromJson[Message] match
-          case Right(Message.Event(BuildEvent.Layout(width))) =>
-            frames(repo, socket, input, shown.copy(column = width), appearance)
-          case Right(Message.Event(BuildEvent.Theme(value))) =>
-            frames(repo, socket, input, shown.copy(theme = value.orElse(histos.theme.Theme.standard)), appearance)
-          case Right(Message.Event(event)) =>
-            ZIO.succeed(show(repo, event, shown, appearance)) *>
-              frames(repo, socket, input, shown, appearance)
-          case Right(Message.Output(encoded)) =>
-            RunBytes.decode(encoded) match
-              case Some(bytes) =>
-                ZIO.succeed {
-                  System.out.write(bytes.toArray)
-                  System.out.flush()
-                } *> frames(repo, socket, input, shown, appearance)
-              case None => ZIO.succeed(Left(ServerError.Protocol))
-          case Right(Message.Done(result)) => ZIO.succeed(Right(finish(result)))
-          case _                           => ZIO.succeed(Left(ServerError.Protocol))
+      case Left(_)      => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
+      case Right(taken) =>
+        CommandFrame.read(taken) match
+          case Left(error)                                 => ZIO.succeed(Left(error))
+          case Right(Feed.Event(BuildEvent.Layout(width))) =>
+            frames(repo, socket, input, shown.copy(column = width), appearance, attendance)
+          case Right(Feed.Event(BuildEvent.Theme(value))) =>
+            frames(
+              repo,
+              socket,
+              input,
+              shown.copy(theme = value.orElse(histos.theme.Theme.standard)),
+              appearance,
+              attendance,
+            )
+          case Right(Feed.Event(event)) =>
+            ZIO.succeed(show(repo, event, shown, appearance, attendance)) *>
+              frames(repo, socket, input, shown, appearance, attendance)
+          case Right(Feed.Output(bytes)) =>
+            ZIO.succeed {
+              System.out.write(bytes.toArray)
+              System.out.flush()
+            } *> frames(repo, socket, input, shown, appearance, attendance)
+          case Right(Feed.Done(result)) => ZIO.succeed(Right(finish(result)))
     }
 
-  private def show(repo: Path, event: BuildEvent, shown: Show.Shown, appearance: Appearance): Unit =
-    Show(repo, event, shown.column, appearance.log).foreach:
+  private[client] def show(
+      repo: Path,
+      event: BuildEvent,
+      shown: Show.Shown,
+      appearance: Appearance,
+      attendance: Attendance,
+  ): Unit =
+    Show(repo, event, shown.column, appearance.log, attendance).foreach:
       case line: CompileConsole.Line.Out =>
         System.out.println(Paint.paint(line.spans, shown.theme, appearance))
       case line: CompileConsole.Line.Err =>

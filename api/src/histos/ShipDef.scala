@@ -14,14 +14,14 @@ final case class ShipDef private (
     members: ::[ProjectDef],
     position: SourcePos,
     description: Option[PomText] = None,
-    url: Option[HttpUrl] = None,
+    url: Option[MetadataUri] = None,
     private[histos] val toolchainAsk: Option[ToolchainAsk] = None,
 ):
-  /** Replaces the organization's description for every member of this ship. */
+  /** Replaces the organization description for members without their own description. */
   def description(text: PomText): ShipDef = copy(description = Some(text))
 
   /** Replaces the organization's url for every member of this ship. */
-  def url(value: HttpUrl): ShipDef = copy(url = Some(value))
+  def url(value: MetadataUri): ShipDef = copy(url = Some(value))
 
   /** Publish this launcher and link `client` on every dist platform, on every publish. `client` builds Native. */
   def toolchain[C](

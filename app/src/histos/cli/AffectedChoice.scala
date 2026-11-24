@@ -1,20 +1,30 @@
 package histos.cli
 
-import histos.ProjectName
+import histos.{PlatformSelection, ProjectName, TestSelection, TestTargets}
 
-/** What `test --affected` asked to run. An empty list runs nothing. `all` is the whole suite. */
+/** An affected filter never changes an explicit request into a whole-suite or focused request. */
 enum AffectedChoice:
   case Unset
   case NoneSelected
   case Everything
   case Only(modules: List[ProjectName])
+  case Within(eligible: List[ProjectName], affected: AffectedChoice)
 
 object AffectedChoice:
-  def select(projects: List[ProjectName], choice: AffectedChoice): Option[List[ProjectName]] =
-    choice match
-      case AffectedChoice.Unset         => Some(projects)
-      case AffectedChoice.NoneSelected  => None
-      case AffectedChoice.Everything    => Some(projects)
-      case AffectedChoice.Only(modules) =>
-        val wanted = if projects.isEmpty then modules else projects.filter(modules.contains)
-        if wanted.isEmpty then None else Some(wanted)
+  def selection(projects: List[ProjectName], choice: AffectedChoice, platforms: PlatformSelection): TestSelection =
+    val targets = projects match
+      case Nil           => TestTargets.All
+      case first :: rest => TestTargets.Named(first, rest)
+    def applyChoice(base: TestTargets, choice: AffectedChoice): TestSelection = choice match
+      case AffectedChoice.Unset | AffectedChoice.Everything => TestSelection(base, platforms)
+      case AffectedChoice.NoneSelected                      => TestSelection(base, platforms, Some(Nil))
+      case AffectedChoice.Only(modules)                     => TestSelection(base, platforms, Some(modules))
+      case AffectedChoice.Within(eligible, affected)        =>
+        base match
+          case TestTargets.All               => applyChoice(TestTargets.Filtered(eligible), affected)
+          case TestTargets.Filtered(modules) =>
+            applyChoice(TestTargets.Filtered(modules.filter(eligible.contains)), affected)
+          case TestTargets.Named(_, _) =>
+            val selected = applyChoice(base, affected)
+            selected.copy(affected = Some(eligible.filter(name => selected.affected.forall(_.contains(name)))))
+    applyChoice(targets, choice)

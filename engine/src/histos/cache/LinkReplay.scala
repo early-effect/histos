@@ -7,7 +7,7 @@ import histos.workspace.{IoFailure, IoFault}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream, IOException}
 import java.nio.charset.StandardCharsets
 import java.nio.file.attribute.{PosixFilePermission, PosixFilePermissions}
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
 
 import zio.{Chunk, IO, ZIO}
 
@@ -17,6 +17,14 @@ object LinkReplay:
   private val Magic = "LK1\n".getBytes(StandardCharsets.US_ASCII)
 
   def load(store: ContentStore, key: Sha256, work: Path): IO[CacheError, Option[Path]] =
+    load(store, key, work, _ => ZIO.unit)
+
+  private[cache] def load(
+      store: ContentStore,
+      key: Sha256,
+      work: Path,
+      beforePublish: Path => IO[CacheError, Unit],
+  ): IO[CacheError, Option[Path]] =
     id(key).flatMap: digest =>
       store
         .read(digest)
@@ -25,13 +33,13 @@ object LinkReplay:
           case Some(bytes) =>
             decode(digest, bytes) match
               case Left(error) => ZIO.fail(error)
-              case Right(file) => place(work, file).asSome
+              case Right(file) => place(work, file, beforePublish).asSome
 
   def save(store: ContentStore, key: Sha256, binary: Path): IO[CacheError, Unit] =
     for
       digest <- id(key)
       file   <- ZIO.attemptBlocking(captured(binary)).mapError(io(binary, IoFault.Read)).flatMap(ZIO.fromEither)
-      now    <- zio.Clock.ClockLive.instant
+      now    <- ZIO.clockWith(_.instant)
       _      <- store.put(digest, Chunk.fromArray(encode(file)), now)
     yield ()
 
@@ -52,22 +60,55 @@ object LinkReplay:
       case None       => Left(CacheError.Io(IoFailure(path, IoFault.Read)))
 
   private def safe(name: String): Boolean =
-    name.nonEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\\")
+    name.nonEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\\") && !name.contains(
+      '\u0000'
+    )
 
   private def canExecute(path: Path): Boolean =
     try Files.getPosixFilePermissions(path).contains(PosixFilePermission.OWNER_EXECUTE)
     catch case _: UnsupportedOperationException => true
 
-  private def place(work: Path, file: Stored): IO[CacheError, Path] =
-    val dest = work.resolve("linked").resolve(file.name)
-    ZIO
-      .attemptBlocking {
-        Option(dest.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.write(dest, file.bytes)
-        if file.executable then Files.setPosixFilePermissions(dest, PosixFilePermissions.fromString("rwxr-xr-x"))
-        dest
-      }
-      .mapError(io(dest, IoFault.Write))
+  private def place(work: Path, file: Stored, beforePublish: Path => IO[CacheError, Unit]): IO[CacheError, Path] =
+    val parent                         = work.resolve("linked")
+    val dest                           = parent.resolve(file.name)
+    def valid: IO[CacheError, Boolean] =
+      ZIO
+        .attemptBlocking(
+          Files.isRegularFile(dest, LinkOption.NOFOLLOW_LINKS) &&
+            Files.readAllBytes(dest).sameElements(file.bytes) && (!file.executable || canExecute(dest))
+        )
+        .mapError(io(dest, IoFault.Read))
+    for
+      existing <- valid
+      result   <-
+        if existing then ZIO.succeed(dest)
+        else
+          ZIO.scoped:
+            for
+              _    <- ZIO.attemptBlocking(Files.createDirectories(parent)).mapError(io(parent, IoFault.Create))
+              temp <- ZIO.acquireRelease(
+                ZIO.attemptBlocking(Files.createTempFile(parent, ".replay-", ".tmp")).mapError(io(parent, IoFault.Temp))
+              )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).orDie.unit)
+              _ <- ZIO
+                .attemptBlocking {
+                  Files.write(temp, file.bytes)
+                  val permissions = if file.executable then "rwxr-xr-x" else "rw-r--r--"
+                  Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString(permissions))
+                }
+                .mapError(io(temp, IoFault.Write))
+              present <- valid
+              _       <- ZIO.unless(present)(
+                beforePublish(temp) *>
+                  ZIO
+                    .attemptBlocking(
+                      Files.move(temp, dest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                    )
+                    .mapError(io(dest, IoFault.Write))
+                    .unit
+                    .uninterruptible
+              )
+            yield dest
+    yield result
 
   private def encode(file: Stored): Array[Byte] =
     val out  = new ByteArrayOutputStream

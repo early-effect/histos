@@ -1,18 +1,91 @@
 package histos.schedule
 
 import histos.jdk.{Sha256, Sha256Digest}
-import histos.plugin.RepoPath
+import histos.plugin.*
+import histos.load.{NamedProduct, OutputManifest, ProductEntry, ProductEntryPath, ProductError}
+import zio.json.*
 
 import java.nio.file.{Files, LinkOption, Path}
 
 import zio.{Chunk, UIO, ZIO}
 
-/** What a plugin task stores. No declared outputs stores `PluginOutput.text` unchanged, and that text is a legal hit.
-  * Declared outputs store a header a task's own text does not have to avoid, then one sha256 line per file. The output
-  * bytes stay in the work tree. The blob is this text.
+/** Version 2 records exact ownership and complete relative trees. Bytes live in ContentStore. Version 1 is readable for
+  * legacy file validation, but is not a replayable product manifest.
   */
 object PluginManifest:
-  val Header: String = "histos-manifest v1"
+  val Header: String         = "histos-manifest v1"
+  private val ProductsHeader = "histos-products v2\n"
+
+  private enum EntryData derives JsonCodec:
+    case RootDirectory
+    case RootFile(hash: String)
+    case Directory(path: String)
+    case File(path: String, hash: String)
+
+  private enum OutputData derives JsonCodec:
+    case File(name: String, path: String, entries: List[EntryData])
+    case Directory(name: String, path: String, entries: List[EntryData])
+
+  private final case class ManifestData(text: String, outputs: List[OutputData]) derives JsonCodec
+
+  def store(manifest: OutputManifest): String =
+    val outputs = manifest.products.map: product =>
+      val entries = product.entries.map:
+        case ProductEntry.RootDirectory    => EntryData.RootDirectory
+        case ProductEntry.RootFile(hash)   => EntryData.RootFile(hash.value)
+        case ProductEntry.Directory(path)  => EntryData.Directory(path.value)
+        case ProductEntry.File(path, hash) => EntryData.File(path.value, hash.value)
+      product.output match
+        case DeclaredOutput.File(name, path)      => OutputData.File(name.value, path.value, entries)
+        case DeclaredOutput.Directory(name, path) => OutputData.Directory(name.value, path.value, entries)
+    ProductsHeader + ManifestData(manifest.text, outputs).toJson
+
+  def output(manifest: OutputManifest): PluginOutput =
+    val files = manifest.products.collect:
+      case NamedProduct(DeclaredOutput.File(name, path), _) => WrittenFile(name, path)
+    val directories = manifest.products.collect:
+      case NamedProduct(DeclaredOutput.Directory(name, path), _) => WrittenDirectory(name, path)
+    PluginOutput(manifest.text, files, directories)
+
+  def products(stored: String): Either[ProductError, Option[OutputManifest]] =
+    if !stored.startsWith(ProductsHeader) then Right(None)
+    else
+      for
+        data    <- stored.stripPrefix(ProductsHeader).fromJson[ManifestData].left.map(_ => ProductError.InvalidManifest)
+        outputs <- sequence(data.outputs.map:
+          case OutputData.File(name, path, entries)      => named(name, path, OutputKind.File, entries)
+          case OutputData.Directory(name, path, entries) => named(name, path, OutputKind.Directory, entries))
+      yield Some(OutputManifest(data.text, outputs))
+
+  private def named(
+      name: String,
+      path: String,
+      kind: OutputKind,
+      entries: List[EntryData],
+  ): Either[ProductError, NamedProduct] =
+    for
+      parsedName    <- OutputName.from(name).left.map(_ => ProductError.InvalidManifest)
+      parsedPath    <- RepoPath.from(path).left.map(_ => ProductError.InvalidManifest)
+      parsedEntries <- sequence(entries.map:
+        case EntryData.RootDirectory  => Right(ProductEntry.RootDirectory)
+        case EntryData.RootFile(hash) =>
+          Sha256.from(hash).left.map(_ => ProductError.InvalidManifest).map(ProductEntry.RootFile(_))
+        case EntryData.Directory(path) =>
+          ProductEntryPath.from(path).map(ProductEntry.Directory(_))
+        case EntryData.File(path, hash) =>
+          for
+            p <- ProductEntryPath.from(path)
+            h <- Sha256.from(hash).left.map(_ => ProductError.InvalidManifest)
+          yield ProductEntry.File(p, h))
+      output = kind match
+        case OutputKind.File      => DeclaredOutput.File(parsedName, parsedPath)
+        case OutputKind.Directory => DeclaredOutput.Directory(parsedName, parsedPath)
+    yield NamedProduct(output, parsedEntries)
+
+  private def sequence[A](values: List[Either[ProductError, A]]): Either[ProductError, List[A]] =
+    values.foldRight[Either[ProductError, List[A]]](Right(Nil))((value, rest) =>
+      for a <- value; as <- rest yield a :: as
+    )
 
   def store(text: String, files: List[(RepoPath, Sha256)]): String =
     if files.isEmpty then text
@@ -23,9 +96,10 @@ object PluginManifest:
   /** The task text under a file manifest. A text hit returns the stored string.
     */
   def text(stored: String): String =
-    read(stored) match
-      case Some(listed) => listed.text
-      case None         => stored
+    products(stored) match
+      case Right(Some(manifest)) => manifest.text
+      case Right(None)           => read(stored).fold(stored)(_.text)
+      case Left(_)               => stored
 
   /** A plugin hit still has to have every declared file, with the sha256 the manifest recorded. No declared outputs
     * skips the check. A manifest that does not parse is a miss.

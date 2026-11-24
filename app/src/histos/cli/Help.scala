@@ -46,14 +46,14 @@ object Help:
     Entry(
       "compile",
       "build",
-      "histos compile [project ...]",
-      "Compile the named projects, or every module. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos compile [project ...] [--platform <jvm,js,native>]",
+      "Compile the named projects, or every module. Repeat --platform or use a comma list to select platforms. Named modules refuse unsupported platforms; whole-build selection keeps matching cells. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "run",
       "build",
-      "histos run <name> [jvm|js|native] [-- arg ...]",
-      "Run a module main, inspect, versions, or doc. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program.",
+      "histos run <name> [--platform <jvm|js|native>] [--main <class>] [-- arg ...]",
+      "Run a module main, inspect, versions, or doc. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. An ambiguous module requires --platform. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program. Program stdout stays byte-for-byte stdout; build and status diagnostics use stderr.",
     ),
     Entry(
       "clean",
@@ -76,8 +76,8 @@ object Help:
     Entry(
       "test",
       "test",
-      "histos test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] [--test <term> ...] [--tag <name> ...] [--ignore-tag <name> ...]",
-      "Run the selected suites. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
+      "Run the selected suites, not their compilation dependencies. --platform, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list and intersects the original selection. Whole-suite filters exclude Verify and unsupported platforms; explicitly named invalid platforms still fail even under an empty affected filter. --suite is a JSON eligibility list for whole-suite CI rows, cannot combine with named projects, and never changes a singleton into a focused named request. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "coverage",
@@ -100,10 +100,16 @@ object Help:
       "Write a project in the current directory. --from drafts histos.scala from sbt or zipx.",
     ),
     Entry(
+      "publish check",
+      "publish",
+      "histos publish check [--base <sha|all>] [token ...]",
+      "Compile the published JVM members the diff selects and compare them. Writes no Ivy files and moves no snapshot pointer. No base, --base all, a build file, or a failed diff compares every member. A member that was not selected is named and is not reported as compatible.",
+    ),
+    Entry(
       "publish local",
       "publish",
-      "histos publish local [token ...]",
-      "Publish to the local Ivy repository. The three publish commands link the client.",
+      "histos publish local [--base <sha|all>] [token ...]",
+      "Publish to the local Ivy repository. The comparison follows the same selection as publish check. The three writing publish commands link the client.",
     ),
     Entry(
       "publish withdraw",
@@ -115,13 +121,13 @@ object Help:
       "publish",
       "publish",
       "histos publish snapshots [token ...]",
-      "Publish the snapshot coordinate at HEAD. A snapshot or pull-request session already set is kept. The pointer moves from any checkout.",
+      "Publish the snapshot coordinate at HEAD. Every published JVM member is compared before upload. --base is accepted and does not narrow that comparison. A snapshot or pull-request session already set is kept. The pointer moves from any checkout.",
     ),
     Entry(
       "publish release",
       "publish",
       "histos publish release [token ...] [--automatic]",
-      "Publish the ship number. Requires HISTOS_SESSION=release. --automatic closes the portal deployment.",
+      "Publish the ship number. Every published JVM member is compared before upload. --base is accepted and does not narrow that comparison. Requires HISTOS_SESSION=release. --automatic closes the portal deployment.",
     ),
     Entry(
       "publish assets",
@@ -145,7 +151,12 @@ object Help:
       "Check the lock, or write it. --refresh revalidates retained snapshot locators: offer by default, --lock=update commits, no selector means every retained locator, no fetch, and a dependency lock is not rewritten.",
     ),
     Entry("deps", "dependencies", "histos deps check", "Check, update, audit, or snapshot dependencies."),
-    Entry("workflow", "ci", "histos workflow [--check | --update]", "Check generated workflows, or write them."),
+    Entry(
+      "workflow",
+      "ci",
+      "histos workflow [--check | --update]",
+      "Check generated workflows, or write them. CI honors Module and Platform axes while keeping Native groups indivisible. ScalaVersion axes are refused with a typed error until test selection supports version filtering.",
+    ),
     Entry(
       "doctor",
       "ci",

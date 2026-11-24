@@ -24,6 +24,8 @@ enum CiError:
   case Pins(text: String)
   case NoDefaultBranch
   case JobTimeout(count: Int)
+  case UnsupportedAxis(axis: histos.Axis)
+  case InvalidPartition(selection: histos.TestSelection)
   case LlvmChecksum(archive: String)
   case SnapshotClients(ship: ShipName)
 
@@ -44,7 +46,9 @@ enum CiError:
     case Pins(text)      => text
     case NoDefaultBranch =>
       "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD"
-    case JobTimeout(count) =>
+    case InvalidPartition(selection) => s"CI rows cannot preserve the test plan for $selection"
+    case UnsupportedAxis(axis)       => s"CI axis $axis has no supported test selection syntax"
+    case JobTimeout(count)           =>
       s"a job timeout is between 1 and 360 minutes, not $count"
     case LlvmChecksum(archive) =>
       s"no sha256 is pinned for $archive"

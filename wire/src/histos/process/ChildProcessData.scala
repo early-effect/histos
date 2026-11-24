@@ -4,6 +4,23 @@ import histos.Platform
 import histos.workspace.IoFailure
 import java.nio.file.Path
 
+/** Compiled classes precede resolved artifacts. */
+final case class ChildClasspath(classes: Path, artifacts: List[Path]):
+  def entries: List[Path] = classes :: artifacts
+
+final case class ChildRequest(
+    platform: Platform,
+    java: Path,
+    classpath: ChildClasspath,
+    main: histos.pack.MainClass,
+    work: Path,
+    environment: Map[String, String] = Map.empty,
+    directory: Option[Path] = None,
+    arguments: List[String] = Nil,
+    jvmOptions: histos.JvmOptions = histos.JvmOptions.empty,
+):
+  def cwd: Path = directory.getOrElse(work)
+
 /** Text a process wrote. It is text because the process speaks text. */
 opaque type ProcessOutput = String
 

@@ -41,7 +41,6 @@ import histos.program.ProgramError
 import histos.publish.{IvyRoot, LauncherError, LauncherPin, UpgradeNotice}
 import histos.scaffold.{ImportSource, Provision, ProvisionError, ScaffoldKind, Skeleton}
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
-import histos.select.SelectError
 import histos.toolchain.Runtimes
 import histos.mcp.HistosMcp
 import histos.resolve.{Resolve, ResolveError}
@@ -70,7 +69,12 @@ enum Command:
   case Version
   case ToolchainClient
   case Graph
-  case Run(id: TaskId, platform: Option[Platform], args: List[String])
+  case Run(
+      id: TaskId,
+      platform: Option[histos.PlatformSelection],
+      args: List[String],
+      main: Option[histos.MainClass] = None,
+  )
   case Plugin(id: PluginTaskId, args: PluginArgs)
   case Test(
       projects: List[ProjectName],
@@ -78,6 +82,7 @@ enum Command:
       mode: TestMode,
       patterns: List[SuitePattern],
       filter: TestFilter,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case Coverage(
       projects: List[ProjectName],
@@ -86,10 +91,11 @@ enum Command:
   )
   case Affected(base: String)
   case Watch(command: Command, args: List[String])
-  case Compile(projects: List[ProjectName])
+  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case Clean(projects: List[ProjectName], extent: histos.server.CleanExtent)
   case Assembly(modules: List[String])
-  case PublishLocal(tokens: List[histos.publish.PublishToken])
+  case PublishCheck(tokens: List[histos.publish.PublishToken], base: Option[String])
+  case PublishLocal(tokens: List[histos.publish.PublishToken], base: Option[String])
   case PublishWithdraw
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(automatic: Boolean, tokens: List[String])
@@ -113,18 +119,19 @@ enum Command:
   case Reboot
   case Stop
   case Cancel(id: RunId)
-  case PreviewCompile(projects: List[ProjectName])
+  case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
   case PreviewTest(
       projects: List[ProjectName],
       affected: AffectedChoice,
       mode: TestMode,
       patterns: List[SuitePattern],
       filter: TestFilter,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )
   case PreviewPublishLocal(tokens: List[histos.publish.PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: histos.server.CleanExtent)
-  case PreviewRun(id: TaskId, platform: Option[Platform])
+  case PreviewRun(id: TaskId, platform: Option[histos.PlatformSelection], main: Option[histos.MainClass] = None)
   case PreviewPlugin(id: PluginTaskId)
   case Observe
   case New(name: String, choice: ScaffoldChoice, branch: Option[String])
@@ -184,6 +191,9 @@ enum CliParseError:
   case BadTaskId
   case BadPluginTask(error: PluginTaskError)
   case BadPlatform(error: PlatformError)
+  case Selection(error: histos.SelectionError)
+  case TextList(error: histos.TextListError)
+  case MainClass(error: histos.MainClassError)
   case TaskPlatform(name: String)
   case Retired(word: String, use: String)
   case Pattern(detail: String)
@@ -210,6 +220,9 @@ enum CliParseError:
     case BadTaskId            => "a task id is not empty"
     case BadPluginTask(error) => error.message
     case BadPlatform(error)   => error.message
+    case Selection(error)     => SelectionText.message(error)
+    case TextList(error)      => SelectionText.text(error)
+    case MainClass(error)     => error.message
     case TaskPlatform(name)   => s"run $name does not take a platform"
     case Retired(word, use)   => s"$word was removed\nuse $use"
     case Pattern(detail)      => detail
@@ -222,7 +235,7 @@ enum CliParseError:
     case Namespace(error)     => error.message
     case WatchCommand(detail) => detail
     case PublishForm          =>
-      "publish is local, snapshots, release, assets, promote, or drop"
+      "publish is check, local, snapshots, release, assets, promote, or drop"
     case Rejected    => "usage: histos help"
     case Fmt(usage)  => usage.message
     case Lock(fault) => fault.message
@@ -294,7 +307,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] [--test <term> ...] [--tag <name> ...] [--ignore-tag <name> ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] | clean [project ...] [--full] | assembly <module> ... | publish local [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] [--affected <json>] [--quick] [--only <pattern> ...] [--test <term> ...] [--tag <name> ...] [--ignore-tag <name> ...] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [jvm|js|native] | completion [install] [zsh|bash])"
+    "usage: histos (version | graph | run <name> [--platform <jvm|js|native>] [--main <class>] | test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] [--platform <jvm,js,native>] | clean [project ...] [--full] | assembly <module> ... | publish check [--base <sha|all>] [token ...] | publish local [--base <sha|all>] [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] [--platform <jvm,js,native>] | preview test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [--platform <jvm|js|native>] [--main <class>] | completion [install] [zsh|bash])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -467,6 +480,7 @@ object Cli:
                               out = line => Console.printLine(line).ignore,
                               err = line => Console.printLineError(line).ignore,
                             ),
+                            Some(loaded.plugins),
                           )
                           .fold(
                             failure => Completed(coverageExit(failure), "", failure.message, Playback.Held),
@@ -774,27 +788,25 @@ object Cli:
         )
       case Command.ToolchainClient =>
         toolchainClient
-      case Command.Graph                   => graph(repo, apiJar)
-      case Command.Run(id, platform, args) => run(repo, apiJar, id, platform, args)
-      case Command.Plugin(id, pluginArgs)  =>
+      case Command.Graph                         => graph(repo, apiJar)
+      case Command.Run(id, platform, args, main) => run(repo, apiJar, id, platform, args, main)
+      case Command.Plugin(id, pluginArgs)        =>
         plugin(repo, apiJar, id, pluginArgs)
-      case Command.Test(projects, affected, mode, patterns, filter) =>
-        AffectedChoice.select(projects, affected) match
-          case None =>
-            ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
-          case Some(names) =>
-            test(repo, apiJar, names, patterns, mode, filter)
+      case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
+        test(repo, apiJar, AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
       case asked: Command.Coverage =>
         ZIO.serviceWithZIO[Machine]: machine =>
           stamped.flatMap(at => cover(repo, apiJar, machine, asked, at))
-      case Command.Affected(base)          => affected(repo, apiJar, base)
-      case Command.Watch(inner, _)         => watch(repo, apiJar, inner)
-      case Command.Compile(projects)       => compile(repo, apiJar, projects)
-      case Command.Clean(projects, extent) =>
+      case Command.Affected(base)               => affected(repo, apiJar, base)
+      case Command.Watch(inner, _)              => watch(repo, apiJar, inner)
+      case Command.Compile(projects, platforms) => compile(repo, apiJar, projects, platforms)
+      case Command.Clean(projects, extent)      =>
         clean(repo, apiJar, projects, extent)
-      case Command.Assembly(modules)    => assembly(repo, apiJar, modules)
-      case Command.PublishLocal(tokens) =>
-        publishLocal(repo, apiJar, tokens)
+      case Command.Assembly(modules)          => assembly(repo, apiJar, modules)
+      case Command.PublishCheck(tokens, base) =>
+        publishCheck(repo, apiJar, tokens, base)
+      case Command.PublishLocal(tokens, base) =>
+        publishLocal(repo, apiJar, tokens, base)
       case Command.PublishWithdraw =>
         publishWithdraw(repo, apiJar)
       case Command.PublishSnapshots(tokens) =>
@@ -828,24 +840,25 @@ object Cli:
       case Command.Fmt(targets, mode) =>
         val call = Call.Format(targets, mode)
         attach(repo, call, locally(repo, apiJar, call))
-      case Command.Reload                   => reload(repo)
-      case Command.Reboot                   => reboot(repo)
-      case Command.Stop                     => stop(repo)
-      case Command.Cancel(id)               => cancel(repo, id)
-      case Command.PreviewCompile(projects) =>
-        preview(repo, apiJar, projects)
-      case Command.PreviewTest(projects, affected, mode, patterns, filter) =>
-        previewTest(repo, apiJar, projects, affected, mode, patterns, filter)
+      case Command.Reload                              => reload(repo)
+      case Command.Reboot                              => reboot(repo)
+      case Command.Stop                                => stop(repo)
+      case Command.Cancel(id)                          => cancel(repo, id)
+      case Command.PreviewCompile(projects, platforms) =>
+        val call = Call.PreviewCompile(projects, platforms)
+        attach(repo, call, locally(repo, apiJar, call))
+      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
+        previewTest(repo, apiJar, projects, affected, mode, patterns, filter, platforms)
       case Command.PreviewPublishLocal(tokens) =>
         previewPublishLocal(repo, apiJar, tokens)
       case Command.PreviewPublishSnapshots(tokens) =>
         previewPublishSnapshots(repo, apiJar, tokens)
       case Command.PreviewClean(projects, extent) =>
         previewClean(repo, apiJar, projects, extent)
-      case Command.PreviewRun(id, platform) =>
-        previewRun(repo, apiJar, id.value, platform)
+      case Command.PreviewRun(id, platform, main) =>
+        previewRun(repo, apiJar, id.value, platform, main)
       case Command.PreviewPlugin(id) =>
-        previewRun(repo, apiJar, id.render, None)
+        previewRun(repo, apiJar, id.render, None, None)
       case Command.Observe                   => observe(repo)
       case Command.New(name, choice, branch) =>
         fresh(repo, apiJar, Some(name), choice, None, branch)
@@ -969,6 +982,7 @@ object Cli:
       case Right(pending) =>
         Operation
           .seal(pending)
+          .flatMap(sealedCall => retarget(repo, apiJar, inner, sealedCall))
           .flatMap: call =>
             attach(repo, Call.Watch(call, WatchPolicy.After), watchLocal(repo, apiJar, call, WatchPolicy.After))
 
@@ -988,7 +1002,7 @@ object Cli:
           ZIO.environment[Stdio].flatMap { io =>
             val printing = new Say({
               case Message.Event(event) =>
-                Show.follow(repo, shown, event, appearance, say, sayError).provideEnvironment(io)
+                Show.follow(repo, shown, event, appearance, say, sayError, inner.attendance).provideEnvironment(io)
               case Message.Output(encoded) =>
                 histos.server.RunBytes.decode(encoded) match
                   case Some(bytes) => histos.build.Build.write(bytes)
@@ -1059,7 +1073,7 @@ object Cli:
                 shown,
                 adopted(repo, apiJar, _),
                 cliEdges(repo, _),
-                heard(repo, frame, _).provideEnvironment(services),
+                heard(repo, frame, _, call.attendance).provideEnvironment(services),
                 histos.process.Terminal.Owned,
                 call => CallerFacts.cli(call, choice.mode, services.get[Stdio].prompts),
               )
@@ -1175,10 +1189,15 @@ object Cli:
       compiled = ZIO.unit,
     )
 
-  private def heard(repo: Path, shown: Ref[Show.Shown], beat: Beat)(using appearance: Appearance): URIO[Stdio, Unit] =
+  private[cli] def heard(
+      repo: Path,
+      shown: Ref[Show.Shown],
+      beat: Beat,
+      attendance: histos.server.Attendance = histos.server.Attendance.Quiet,
+  )(using appearance: Appearance): URIO[Stdio, Unit] =
     beat match
       case Beat.Heard(event) =>
-        Show.follow(repo, shown, event, appearance, say, sayError)
+        Show.follow(repo, shown, event, appearance, say, sayError, attendance)
       case Beat.Bytes(data) =>
         histos.build.Build.write(data)
       case Beat.Finished(CallResult.Fault(fault)) =>
@@ -1224,28 +1243,31 @@ object Cli:
       repo: Path,
       apiJar: Path,
       id: TaskId,
-      platform: Option[Platform],
+      platform: Option[histos.PlatformSelection],
       args: List[String],
+      main: Option[histos.MainClass],
   )(using Appearance, LockChoice): URIO[Local, Completed] =
     val built =
       if id.builtIn then ZIO.succeed(Call.Task(id.value, PluginArgs.empty))
-      else histos.process.Shells.capture.map(launch => Call.Run(id.value, platform, launch, args))
+      else histos.process.Shells.capture.map(launch => Call.Run(id.value, platform, launch, args, main))
     built.flatMap(call => attach(repo, call, locally(repo, apiJar, call)))
 
   private def compile(
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
+      platforms: histos.PlatformSelection,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects)))
+    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects, platforms)), platforms)
 
   /** `miss` is forced only when the socket is missing or dead, so a hit never builds [[compileServices]]. */
   private[histos] def compileAt[R](
       repo: Path,
       projects: List[ProjectName],
       miss: => URIO[R, Completed],
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    val call = Call.Compile(projects)
+    val call = Call.Compile(projects, platforms)
     LockDisposition.unapplied(call, summon[LockChoice].mode) match
       case Some(mode) =>
         ZIO.succeed(held("", CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode)))))
@@ -1455,29 +1477,6 @@ object Cli:
         use,
       )
 
-  private def preview(
-      repo: Path,
-      apiJar: Path,
-      projects: List[ProjectName],
-  )(using Appearance, LockChoice): URIO[Local, Completed] =
-    attach(
-      repo,
-      Call.PreviewCompile(projects),
-      loaded(repo, apiJar)(build => previewLocal(repo, build, projects)),
-    )
-
-  private def previewLocal(
-      repo: Path,
-      loaded: histos.load.LoadedBuild,
-      projects: List[ProjectName],
-  ): UIO[Completed] =
-    Plan
-      .show(repo, loaded.graph, projects)
-      .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
-        text => held(text, CallResult.reported()),
-      )
-
   private def previewTest(
       repo: Path,
       apiJar: Path,
@@ -1486,30 +1485,10 @@ object Cli:
       mode: TestMode,
       patterns: List[SuitePattern],
       filter: TestFilter,
+      platforms: histos.PlatformSelection,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    AffectedChoice.select(projects, affected) match
-      case None =>
-        ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
-      case Some(names) =>
-        attach(
-          repo,
-          Call.PreviewTest(names, patterns, mode, filter),
-          loaded(repo, apiJar)(build => previewTestLocal(repo, build, names, patterns)),
-        )
-
-  private def previewTestLocal(
-      repo: Path,
-      loaded: histos.load.LoadedBuild,
-      projects: List[ProjectName],
-      patterns: List[SuitePattern],
-  ): UIO[Completed] =
-    Plan
-      .test(repo, loaded.graph, projects)
-      .map(plan => Plan.narrow(plan, patterns))
-      .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
-        plan => held(Plan.renderTest(repo, plan), CallResult.reported()),
-      )
+    val call = Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
+    attach(repo, call, locally(repo, apiJar, call))
 
   private def previewPublishLocal(
       repo: Path,
@@ -1547,7 +1526,7 @@ object Cli:
     Plan
       .publishLocal(repo, loaded.graph, tokens, env)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderPublish(plan), CallResult.reported()),
       )
 
@@ -1560,7 +1539,7 @@ object Cli:
     Plan
       .publishSnapshots(repo, loaded.graph, tokens, env)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderPublish(plan), CallResult.reported()),
       )
 
@@ -1595,7 +1574,7 @@ object Cli:
     Plan
       .clean(repo, loaded.graph, projects)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderClean(repo, plan), CallResult.reported()),
       )
 
@@ -1607,12 +1586,13 @@ object Cli:
       repo: Path,
       apiJar: Path,
       id: String,
-      platform: Option[Platform],
+      platform: Option[histos.PlatformSelection],
+      main: Option[histos.MainClass],
   )(using Appearance, LockChoice): URIO[Local, Completed] =
     attach(
       repo,
-      Call.PreviewRun(id, platform),
-      loaded(repo, apiJar)(previewRunLocal(_, id, platform)),
+      Call.PreviewRun(id, platform, main),
+      locally(repo, apiJar, Call.PreviewRun(id, platform, main)),
     )
 
   private def previewRunLocal(
@@ -1623,7 +1603,7 @@ object Cli:
     ZIO.succeed:
       Plan.run(loaded.graph, id, platform) match
         case Left(error) =>
-          held("", CallResult.Fault(BuildFault.Preview(error)))
+          held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error))))
         case Right(plan) =>
           held(Plan.renderRun(plan), CallResult.reported())
 
@@ -1650,13 +1630,25 @@ object Cli:
         else s"$count cells failed to compile"
       case other => other.message
 
+  private def publishCheck(
+      repo: Path,
+      apiJar: Path,
+      tokens: List[histos.publish.PublishToken],
+      base: Option[String],
+  )(using Appearance, LockChoice): URIO[Local, Completed] =
+    proofScope(repo, apiJar, base).flatMap: scope =>
+      val call = Call.PublishCheck(tokens, scope)
+      attach(repo, call, locally(repo, apiJar, call))
+
   private def publishLocal(
       repo: Path,
       apiJar: Path,
       tokens: List[histos.publish.PublishToken],
+      base: Option[String],
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    val call = Call.PublishLocal(tokens)
-    attach(repo, call, locally(repo, apiJar, call))
+    proofScope(repo, apiJar, base).flatMap: scope =>
+      val call = Call.PublishLocal(tokens, scope)
+      attach(repo, call, locally(repo, apiJar, call))
 
   private def publishWithdraw(repo: Path, apiJar: Path)(using Appearance, LockChoice): URIO[Local, Completed] =
     val call = Call.PublishWithdraw
@@ -1708,12 +1700,12 @@ object Cli:
   private def test(
       repo: Path,
       apiJar: Path,
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    val call = Call.Test(projects, patterns, mode, filter)
+    val call = Call.Test(selection, patterns, mode, filter)
     attach(repo, call, locally(repo, apiJar, call))
 
   /** Pack this checkout and run the command again on the jar that pack prints. The pack runs in this process. The
@@ -1730,7 +1722,7 @@ object Cli:
       (histos.publish.PublishToken.from("histos") match
         case Left(_)      => ZIO.dieMessage("the histos publish token is one word")
         case Right(found) =>
-          locally(repo, apiJar, Call.PublishLocal(List(found))).flatMap: packed =>
+          locally(repo, apiJar, Call.PublishLocal(List(found), histos.publish.ProofScope.All)).flatMap: packed =>
             val pin = packed.out.linesIterator.map(histos.ToolchainSkew.pin).collectFirst { case Some(id) => id }
             (packed.exit, pin) match
               case (CliExit.Success, Some(id)) =>
@@ -1817,7 +1809,9 @@ object Cli:
         _ => held("", CallResult.reported()),
       )
 
-  /** No names skip the graph. A live server still holds the compile permit. */
+  /** Adopt the graph for generated ownership; load-failure recovery cleans ordinary products only. A live server still
+    * holds the compile permit.
+    */
   private def clean(
       repo: Path,
       apiJar: Path,
@@ -1827,16 +1821,22 @@ object Cli:
     val call = Call.Clean(projects, extent)
     extent match
       case histos.server.CleanExtent.Full =>
-        attach(repo, call, cleanFullLocal(repo))
+        attach(repo, call, cleanLoaded(repo, apiJar)(build => cleanFullLocal(repo, Some(build)))(cleanFullLocal(repo)))
       case histos.server.CleanExtent.Products =>
         attach(
           repo,
           call,
-          if projects.isEmpty then cleanLocal(repo)
+          if projects.isEmpty then cleanLoaded(repo, apiJar)(cleanNamed(repo, _, Nil))(cleanLocal(repo))
           else loaded(repo, apiJar)(cleanNamed(repo, _, projects)),
         )
 
-  private def cleanLocal(repo: Path): UIO[Completed] =
+  /** Recovery without a graph deletes ordinary products only, never generated aliases or storage. */
+  private[histos] def cleanLoaded[R](repo: Path, apiJar: Path)(
+      use: histos.load.LoadedBuild => URIO[R, Completed]
+  )(fallback: => URIO[R, Completed]): URIO[R & Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(_ => fallback, use)
+
+  private[histos] def cleanLocal(repo: Path): UIO[Completed] =
     histos.clean.Products
       .wipe(repo)
       .fold(
@@ -1844,39 +1844,38 @@ object Cli:
         _ => held(histos.clean.Products.line(Nil), CallResult.reported()),
       )
 
-  private def cleanNamed(
+  private[histos] def cleanNamed(
       repo: Path,
       build: histos.load.LoadedBuild,
       projects: List[ProjectName],
   ): UIO[Completed] =
-    histos.clean.Products
-      .named(repo, build.graph, projects)
+    histos.server.Calls
+      .cleanProducts(repo, build.graph, build.plugins, projects)
       .fold(
-        error => held("", CallResult.Fault(cleanFault(error))),
+        error => held("", CallResult.Fault(error)),
         names => held(histos.clean.Products.line(names), CallResult.reported()),
       )
 
-  private def cleanFault(error: SelectError | IoFailure): BuildFault =
-    error match
-      case found: SelectError => BuildFault.Select(found)
-      case found: IoFailure   => BuildFault.Io(found)
-
   /** Products go first. A store failure is exit 3 and does not claim success.
     */
-  private def cleanFullLocal(repo: Path): URIO[ContentStore, Completed] =
-    histos.clean.Products
-      .wipe(repo)
-      .foldZIO(
-        error => ZIO.succeed(held("", CallResult.Fault(BuildFault.Io(error)))),
-        _ =>
-          ZIO
-            .serviceWithZIO[ContentStore]: store =>
-              Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
-            .fold(
-              error => held("", CallResult.Fault(BuildFault.Cache(error))),
-              entries => held(histos.clean.Products.forgotten(entries), CallResult.reported()),
-            ),
-      )
+  private[histos] def cleanFullLocal(
+      repo: Path,
+      build: Option[histos.load.LoadedBuild] = None,
+  ): URIO[ContentStore, Completed] =
+    val removed = build match
+      case Some(build) => histos.server.Calls.cleanProducts(repo, build.graph, build.plugins, Nil).unit
+      case None        => histos.clean.Products.wipe(repo).mapError(BuildFault.Io(_))
+    removed.foldZIO(
+      error => ZIO.succeed(held("", CallResult.Fault(error))),
+      _ =>
+        ZIO
+          .serviceWithZIO[ContentStore]: store =>
+            Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
+          .fold(
+            error => held("", CallResult.Fault(BuildFault.Cache(error))),
+            entries => held(histos.clean.Products.forgotten(entries), CallResult.reported()),
+          ),
+    )
 
   private def resolve(
       repo: Path,
@@ -1972,6 +1971,58 @@ object Cli:
         case (0, text)   => ZIO.succeed(text.split('\n').toList.filter(_.nonEmpty))
         case (status, _) => ZIO.fail(DiffFault.Status(status))
     yield names
+
+  /** No base and `--base all` compare every published JVM member. A diff is resolved here. The engine does not run git.
+    */
+  private def proofScope(
+      repo: Path,
+      apiJar: Path,
+      base: Option[String],
+  ): URIO[Loader & Scope & ContentStore & Resolve, histos.publish.ProofScope] =
+    base match
+      case None | Some("all") => ZIO.succeed(histos.publish.ProofScope.All)
+      case Some(sha)          =>
+        ZIO
+          .serviceWithZIO[Loader](_.load(repo, apiJar))
+          .either
+          .flatMap:
+            case Left(_)       => ZIO.succeed(histos.publish.ProofScope.All)
+            case Right(loaded) =>
+              changed(repo, sha).either.map:
+                case Left(_)      => histos.publish.ProofScope.All
+                case Right(paths) =>
+                  Affected.decide(loaded.graph, paths) match
+                    case Affected.Selection.Everything     => histos.publish.ProofScope.All
+                    case Affected.Selection.Modules(names) =>
+                      histos.publish.ProofScope.Selected(names.toSet)
+
+  /** A sealed publish call carries `All`. Replace it when this command named a base. */
+  private def retarget(
+      repo: Path,
+      apiJar: Path,
+      command: Command,
+      call: Call,
+  ): URIO[Loader & Scope & ContentStore & Resolve, Call] =
+    val base = command match
+      case Command.PublishCheck(_, asked) => asked
+      case Command.PublishLocal(_, asked) => asked
+      case _                              => None
+    (call, base) match
+      case (Call.PublishCheck(tokens, _), Some(_)) =>
+        proofScope(repo, apiJar, base).map(scope => Call.PublishCheck(tokens, scope))
+      case (Call.PublishLocal(tokens, _), Some(_)) =>
+        proofScope(repo, apiJar, base).map(scope => Call.PublishLocal(tokens, scope))
+      case _ => ZIO.succeed(call)
+
+  /** `--base <sha>` loads the graph in this process. Anything else keeps `All` and does not run git. */
+  private def dispatchScope(
+      repo: Path,
+      base: Option[String],
+  )(use: histos.publish.ProofScope => URIO[Launched, Completed]): URIO[Launched, Completed] =
+    base match
+      case None | Some("all") => use(histos.publish.ProofScope.All)
+      case Some(_)            =>
+        inProcessReady(repo)((api, machine) => withLoader(machine)(proofScope(repo, api, base).flatMap(use)))
 
   private def workflowLocal(
       repo: Path,
@@ -2401,20 +2452,21 @@ object Cli:
       done => ZIO.succeed(done),
     )
 
-  private def remote(
+  private[cli] def remote(
       repo: Path,
       socket: java.nio.file.Path,
       call: Call,
+      terminal: histos.process.Terminal = histos.process.Terminal.Owned,
   )(using appearance: Appearance, choice: LockChoice): ZIO[Stdio, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(Ref.make(Show.start)).flatMap {
       (result, shown) =>
         ZIO.service[Stdio].flatMap { stdio =>
           Build
-            .attached(socket, histos.process.Terminal.Owned, call => CallerFacts.cli(call, choice.mode, stdio.prompts))
+            .attached(socket, terminal, call => CallerFacts.cli(call, choice.mode, stdio.prompts))
             .perform(call)
             .foreach {
               case Beat.Heard(event) =>
-                Show.follow(repo, shown, event, appearance, say, sayError)
+                Show.follow(repo, shown, event, appearance, say, sayError, call.attendance)
               case Beat.Bytes(data) =>
                 histos.build.Build.write(data)
               case Beat.Finished(done) =>
@@ -2472,6 +2524,7 @@ object Cli:
                           classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
                           compile => compile,
                           None,
+                          Some(loaded.plugins),
                         )
                         .either
                         .flatMap:
@@ -2573,7 +2626,7 @@ object Cli:
       tokens: List[String],
       repo: Path,
       apiJar: Path,
-  ): ZIO[Loader & Scope, BuildFault, Call] =
+  ): ZIO[Loader & Scope & ContentStore & Resolve, BuildFault, Call] =
     tokens match
       case Nil =>
         ZIO.fail(
@@ -2603,7 +2656,12 @@ object Cli:
                     .left
                     .map(error => BuildFault.Rejected(Rejection.Watch(error.message)))
                 )
-                .flatMap(pending => Operation.seal(pending).map(call => Call.Watch(call, WatchPolicy.After)))
+                .flatMap(pending =>
+                  Operation
+                    .seal(pending)
+                    .flatMap(sealedCall => retarget(repo, apiJar, command, sealedCall))
+                    .map(call => Call.Watch(call, WatchPolicy.After))
+                )
 
   private def taskFrom(
       loaded: histos.load.LoadedBuild,
@@ -2633,12 +2691,12 @@ object Cli:
   /** The call a batch command sends. Other commands stay on the JVM route. */
   private[histos] def callOf(command: Command): UIO[Option[Call]] =
     command match
-      case Command.Compile(projects)                                => ZIO.succeed(Some(Call.Compile(projects)))
-      case Command.Test(projects, affected, mode, patterns, filter) =>
-        ZIO.succeed(AffectedChoice.select(projects, affected).map(names => Call.Test(names, patterns, mode, filter)))
-      case Command.Run(id, platform, args) =>
+      case Command.Compile(projects, platforms) => ZIO.succeed(Some(Call.Compile(projects, platforms)))
+      case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
+        ZIO.succeed(Some(Call.Test(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)))
+      case Command.Run(id, platform, args, main) =>
         if id.builtIn then ZIO.succeed(Some(Call.Task(id.value, PluginArgs.empty)))
-        else histos.process.Shells.capture.map(launch => Some(Call.Run(id.value, platform, launch, args)))
+        else histos.process.Shells.capture.map(launch => Some(Call.Run(id.value, platform, launch, args, main)))
       case Command.Clean(projects, extent) => ZIO.succeed(Some(Call.Clean(projects, extent)))
       case Command.Fmt(targets @ (histos.format.FormatTargets.Build | histos.format.FormatTargets.Projects(_)), mode) =>
         ZIO.succeed(Some(Call.Format(targets, mode)))
@@ -2678,16 +2736,12 @@ object Cli:
         toolchainClient
       case Command.Graph =>
         attach(repo, Call.Graph, inProcessReady(repo)((api, machine) => withLoader(machine)(graphLocal(repo, api))))
-      case Command.Run(_, _, _) =>
+      case Command.Run(_, _, _, _) =>
         dispatched(line.command)(call => served(repo, call))
       case Command.Plugin(id, pluginArgs) =>
         served(repo, Call.Task(id.render, pluginArgs))
-      case Command.Test(projects, affected, mode, patterns, filter) =>
-        AffectedChoice.select(projects, affected) match
-          case None =>
-            ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
-          case Some(names) =>
-            dispatched(Command.Test(names, AffectedChoice.Unset, mode, patterns, filter))(call => served(repo, call))
+      case _: Command.Test =>
+        dispatched(line.command)(call => served(repo, call))
       case asked: Command.Coverage =>
         stamped.flatMap: at =>
           inProcessReady(repo)((api, machine) => withLoader(machine)(cover(repo, api, machine, asked, at)))
@@ -2699,38 +2753,59 @@ object Cli:
           case Right(pending) =>
             Operation
               .seal(pending)
-              .flatMap: call =>
-                attach(
-                  repo,
-                  Call.Watch(call, policyOf(args)),
-                  inProcessReady(repo)((api, machine) =>
-                    withLocal(machine)(watchLocal(repo, api, call, policyOf(args)))
-                  ),
-                )
-      case Command.Compile(projects) =>
-        dispatched(line.command)(call => compileAt(repo, projects, compileServices(repo, call)))
+              .flatMap: sealedCall =>
+                val policy = policyOf(args)
+                val run    = (call: Call) =>
+                  attach(
+                    repo,
+                    Call.Watch(call, policy),
+                    inProcessReady(repo)((api, machine) => withLocal(machine)(watchLocal(repo, api, call, policy))),
+                  )
+                inner match
+                  case Command.PublishCheck(_, Some(base)) if base != "all" =>
+                    inProcessReady(repo)((api, machine) =>
+                      withLocal(machine)(retarget(repo, api, inner, sealedCall).flatMap(run))
+                    )
+                  case Command.PublishLocal(_, Some(base)) if base != "all" =>
+                    inProcessReady(repo)((api, machine) =>
+                      withLocal(machine)(retarget(repo, api, inner, sealedCall).flatMap(run))
+                    )
+                  case _ => run(sealedCall)
+      case Command.Compile(projects, platforms) =>
+        dispatched(line.command)(call => compileAt(repo, projects, compileServices(repo, call), platforms))
       case Command.Fmt(targets, mode) =>
         served(repo, Call.Format(targets, mode))
       case Command.Clean(projects, extent) =>
         dispatched(line.command)(call =>
           extent match
             case histos.server.CleanExtent.Full =>
-              attach(repo, call, machineOf(repo)(machine => storeOf(machine)(cleanFullLocal(repo))))
+              attach(
+                repo,
+                call,
+                inProcess(repo)((api, machine) =>
+                  withLoader(machine)(
+                    cleanLoaded(repo, api)(build => cleanFullLocal(repo, Some(build)))(cleanFullLocal(repo))
+                  )
+                ),
+              )
             case histos.server.CleanExtent.Products =>
               attach(
                 repo,
                 call,
-                if projects.isEmpty then cleanLocal(repo)
-                else
-                  inProcess(repo)((api, machine) =>
-                    withLoader(machine)(loaded(repo, api)(cleanNamed(repo, _, projects)))
-                  ),
+                inProcess(repo)((api, machine) =>
+                  withLoader(machine)(
+                    if projects.isEmpty then cleanLoaded(repo, api)(cleanNamed(repo, _, Nil))(cleanLocal(repo))
+                    else loaded(repo, api)(cleanNamed(repo, _, projects))
+                  )
+                ),
               )
         )
       case Command.Assembly(modules) =>
         served(repo, Call.Assembly(modules))
-      case Command.PublishLocal(tokens) =>
-        served(repo, Call.PublishLocal(tokens))
+      case Command.PublishCheck(tokens, base) =>
+        dispatchScope(repo, base)(scope => served(repo, Call.PublishCheck(tokens, scope)))
+      case Command.PublishLocal(tokens, base) =>
+        dispatchScope(repo, base)(scope => served(repo, Call.PublishLocal(tokens, scope)))
       case Command.PublishWithdraw =>
         served(repo, Call.PublishWithdraw)
       case Command.PublishSnapshots(tokens) =>
@@ -2783,22 +2858,15 @@ object Cli:
         stop(repo)
       case Command.Cancel(id) =>
         cancel(repo, id)
-      case Command.PreviewCompile(projects) =>
+      case Command.PreviewCompile(projects, platforms) =>
         attach(
           repo,
-          Call.PreviewCompile(projects),
-          loadedMiss(repo)(previewLocal(repo, _, projects)),
+          Call.PreviewCompile(projects, platforms),
+          compileServices(repo, Call.PreviewCompile(projects, platforms)),
         )
-      case Command.PreviewTest(projects, affected, mode, patterns, filter) =>
-        AffectedChoice.select(projects, affected) match
-          case None =>
-            ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
-          case Some(names) =>
-            attach(
-              repo,
-              Call.PreviewTest(names, patterns, mode, filter),
-              loadedMiss(repo)(previewTestLocal(repo, _, names, patterns)),
-            )
+      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
+        val call = Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
+        attach(repo, call, compileServices(repo, call))
       case Command.PreviewPublishLocal(tokens) =>
         val call  = Call.PreviewPublishLocal(tokens)
         val named = tokens.map(_.value)
@@ -2832,11 +2900,11 @@ object Cli:
               if projects.isEmpty then previewCleanAll(repo)
               else loadedMiss(repo)(previewCleanLocal(repo, _, projects)),
             )
-      case Command.PreviewRun(id, platform) =>
+      case Command.PreviewRun(id, platform, main) =>
         attach(
           repo,
-          Call.PreviewRun(id.value, platform),
-          loadedMiss(repo)(previewRunLocal(_, id.value, platform)),
+          Call.PreviewRun(id.value, platform, main),
+          compileServices(repo, Call.PreviewRun(id.value, platform, main)),
         )
       case Command.PreviewPlugin(id) =>
         attach(repo, Call.PreviewRun(id.render, None), loadedMiss(repo)(previewRunLocal(_, id.render, None)))
@@ -2979,10 +3047,12 @@ object Main extends ZIOAppDefault:
   def run =
     for
       args <- getArgs.map(_.toList)
-      _    <- Cli
-        .launch(args, Path.of("").toAbsolutePath)
-        .flatMap(finish)
-        .provideSomeLayer[Scope](ReleaseFeed.live ++ Resolve.coursier ++ Stdio.probed)
+      done <- ZIO.scoped(
+        Cli
+          .launch(args, Path.of("").toAbsolutePath)
+          .provideSomeLayer[Scope](ReleaseFeed.live ++ Resolve.coursier ++ Stdio.probed)
+      )
+      _ <- finish(done)
     yield ()
 
   /** A successful `run` is process status 0. `exit` is the status the operating system sees.

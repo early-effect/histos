@@ -56,19 +56,23 @@ object JobYaml:
           CiError.DuplicateSite(first, second)
         case graphFault => graphFault
       .map: placed =>
+        val checks = placed.collect:
+          case Placed(WorkflowFile.Ci, _, JobRender.Task(job))    => job.name.value
+          case Placed(WorkflowFile.Ci, _, JobRender.Fan(job, _))  => job.name.value
+          case Placed(WorkflowFile.Ci, _, JobRender.Site(job, _)) => job.name.value
         val ci = placed.collect:
-          case item @ Placed(WorkflowFile.Ci, _, _) => jobBlock(graph, item)
+          case item @ Placed(WorkflowFile.Ci, _, _) => jobBlock(graph, item, checks)
         val pages = placed.collect:
           case Placed(WorkflowFile.Pages, plugin, JobRender.Site(job, SiteShape.Dispatch)) =>
             RenderedWorkflow(Workflow.pagesName, dispatch(graph, plugin, job))
         val owned = ownedFiles(graph, placed, defaultBranch)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
 
-  private def jobBlock(graph: ProjectGraph, item: Placed)(using RenderingShip): List[String] =
+  private def jobBlock(graph: ProjectGraph, item: Placed, checks: List[String])(using RenderingShip): List[String] =
     val body = item.render match
       case JobRender.Task(job)        => List(task(graph, item.plugin, job, None))
       case JobRender.Fan(job, rows)   => List(fan(graph, item.plugin, job, rows))
-      case JobRender.Site(job, shape) => site(graph, item.plugin, job, shape)
+      case JobRender.Site(job, shape) => site(graph, item.plugin, job, shape, checks)
       case JobRender.Schedule(_, _)   => Nil
     body.map(_.mkString("\n"))
 
@@ -122,17 +126,18 @@ object JobYaml:
   private def runOf(plugin: PluginId, task: TaskName): String =
     s"./histos run ${PluginTaskId(plugin, task).render}"
 
-  private def site(
+  private[workflow] def site(
       graph: ProjectGraph,
       plugin: PluginId,
       job: SiteArrange,
       shape: SiteShape,
+      checks: List[String] = Nil,
   )(using RenderingShip): List[List[String]] =
     shape match
       case SiteShape.Dispatch     => Nil
       case SiteShape.Build        => List(taskLike(graph, plugin, job, upload = false))
       case SiteShape.DeployOnPush =>
-        List(taskLike(graph, plugin, job, upload = true), pages(graph, job.name))
+        List(taskLike(graph, plugin, job, upload = true), pages(graph, job.name, checks))
 
   private def task(
       graph: ProjectGraph,
@@ -203,7 +208,7 @@ object JobYaml:
       job.task,
       grants,
       job.needs,
-      job.cond,
+      Cond.AnyOf(List(Cond.Event(EventKind.PullRequest), Cond.DefaultBranchPush, Cond.Event(EventKind.Dispatch))),
       job.needsPolicy,
       job.runner,
       job.env,
@@ -255,11 +260,11 @@ object JobYaml:
       List(s"      - run: ${quote(runOf(plugin, task))}") ++
       upload.toList.flatMap(uploadStep)
 
-  private def pages(graph: ProjectGraph, name: JobName): List[String] =
+  private def pages(graph: ProjectGraph, name: JobName, checks: List[String]): List[String] =
     List(
       "  pages:",
-      s"    needs: ${name.value}",
-      s"    if: ${quote(OnDefaultPush)}",
+      s"    needs: [${(name.value :: (Workflow.requiredJobs(graph) ++ checks)).distinct.mkString(", ")}]",
+      s"    if: ${quote(s"($OnDefaultPush) && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')")}",
       "    runs-on: ubuntu-26.04",
     ) ++ Workflow.jobLimit(graph) ++ List(
       "    environment:",
@@ -278,7 +283,7 @@ object JobYaml:
       s"        uses: ${ActionPins.deployPages.line}",
     )
 
-  private def dispatch(graph: ProjectGraph, plugin: PluginId, job: SiteArrange)(using RenderingShip): String =
+  private[workflow] def dispatch(graph: ProjectGraph, plugin: PluginId, job: SiteArrange)(using RenderingShip): String =
     val run   = quote(runOf(plugin, job.task))
     val lines = List(
       "name: pages",

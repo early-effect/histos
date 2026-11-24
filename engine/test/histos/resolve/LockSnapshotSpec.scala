@@ -45,6 +45,21 @@ object LockSnapshotSpec extends ZIOSpecDefault:
         ),
       )
     },
+    test("persisted commands retain platform, filtered versus named intent, affected mask and run main") {
+      val name      = ProjectName("app")
+      val platforms = histos.PlatformSelection.only(histos.Platform.Jvm, histos.Platform.Js)
+      val commands  = List(
+        CommandIdentity.Compile(List(name), platforms),
+        CommandIdentity.Test(histos.TestSelection(histos.TestTargets.Filtered(List(name)), platforms, Some(Nil))),
+        CommandIdentity.Test(histos.TestSelection(histos.TestTargets.Named(name, Nil), platforms, None)),
+        CommandIdentity.Run(
+          histos.plugin.CommandToken("app"),
+          Some(histos.PlatformSelection.only(histos.Platform.Jvm)),
+          Some(histos.MainClass("demo.Main")),
+        ),
+      )
+      assertTrue(commands.forall(command => LockCodec.parseCommand(LockCodec.renderCommand(command)) == Right(command)))
+    },
     test("added and removed closure pins are rows and an unrelated pin is not") {
       val extra  = PluginCoordinate.Module(ProjectName("extra"))
       val before = LockDocument(List(pin(app, "app-1"), pin(extra, "extra-1")), Nil)

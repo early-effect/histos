@@ -7,10 +7,9 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
-import zio.{Chunk, Exit, Queue, System, ZIO}
-import zio.durationInt
-import zio.stream.ZSink
+import zio.{Chunk, Promise, Queue, Scope, ZIO, durationInt}
 import zio.test.*
 
 object RunPipeSpec extends ZIOSpecDefault:
@@ -34,18 +33,7 @@ object RunPipeSpec extends ZIOSpecDefault:
       |}
       |""".stripMargin
 
-  private val Hold: String =
-    """package demo;
-      |
-      |public final class Hold {
-      |  public static void main(String[] args) throws Exception {
-      |    new ProcessBuilder("sleep", "30").inheritIO().start();
-      |    System.exit(0);
-      |  }
-      |}
-      |""".stripMargin
-
-  def spec = suite("a program child")(
+  private val tests = suite("a program child")(
     test("the child sees the requested variable, the launch directory, and the arguments") {
       prepared: fixture =>
         val Fixture(java, classes, scratch, launch) = fixture
@@ -87,7 +75,7 @@ object RunPipeSpec extends ZIOSpecDefault:
         val Fixture(java, classes, scratch, launch) = fixture
         for
           main   <- echo
-          queue  <- Queue.unbounded[RelayCommand]
+          queue  <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
           _      <- queue.offer(RelayCommand.Stdin(Chunk.fromArray("hello".getBytes(StandardCharsets.UTF_8))))
           _      <- queue.offer(RelayCommand.End)
           events <- ChildProcess
@@ -111,72 +99,49 @@ object RunPipeSpec extends ZIOSpecDefault:
     test("a native command uses the launch directory") {
       prepared: fixture =>
         val Fixture(_, _, _, launch) = fixture
-        ZIO.withSystem(System.SystemLive):
-          for
-            events <- ChildProcess
-              .command(List("/bin/pwd"), launch, Map("PATH" -> "/usr/bin:/bin"))
-              .runCollect
-            lines  = events.collect { case ChildEvent.Out(text) => text }.toList
-            exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
-            dirOk <- matches(lines.find(_.nonEmpty), launch)
-          yield assertTrue(exited == List(0), dirOk)
-    },
-    test("a consumer that pauses past the drain still records a clean exit") {
-      prepared: fixture =>
-        val Fixture(java, classes, scratch, launch) = fixture
-        ZIO.scoped:
-          for
-            main               <- echo
-            (first, remainder) <- ChildProcess
-              .events(
-                ChildRequest(
-                  Platform.Jvm,
-                  java,
-                  ChildClasspath(classes, Nil),
-                  main,
-                  scratch,
-                  directory = Some(launch),
-                  arguments = List("hello", "world"),
-                )
-              )
-              .peel(ZSink.take(1))
-            _    <- ZIO.sleep(ChildProcess.Drain) *> ZIO.sleep(500.millis)
-            more <- remainder.runCollect
-            events = first ++ more
-            lines  = events.collect { case ChildEvent.Out(text) => text }.toList
-            exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
-          yield assertTrue(
-            exited == List(0),
-            lines.contains("argc=2"),
-            lines.contains("arg=hello"),
-            lines.contains("arg=world"),
-          )
-    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds),
-    test("a descendant that keeps stdout is an orphan") {
-      prepared: fixture =>
-        val Fixture(java, classes, scratch, launch) = fixture
         for
-          main    <- hold
-          outcome <- ChildProcess
-            .events(
-              ChildRequest(
-                Platform.Jvm,
-                java,
-                ChildClasspath(classes, Nil),
-                main,
-                scratch,
-                directory = Some(launch),
-              )
-            )
+          events <- ChildProcess
+            .command(List("/bin/pwd"), launch, Map("PATH" -> "/usr/bin:/bin"))
             .runCollect
-            .exit
-        yield assertTrue(outcome == Exit.fail(ChildError.Orphan(0)))
-    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds),
+          lines  = events.collect { case ChildEvent.Out(text) => text }.toList
+          exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
+          dirOk <- matches(lines.find(_.nonEmpty), launch)
+        yield assertTrue(exited == List(0), dirOk)
+    },
+    test("interrupting the stream ends the process") {
+      ZIO.scoped:
+        for
+          root <- ZIO.acquireRelease(
+            ZIO.attemptBlocking(Files.createTempDirectory("histos-interrupt")).orDie
+          )(root => ZIO.attemptBlocking(remove(root)).orDie)
+          seen  <- Promise.make[Nothing, Long]
+          fiber <- ChildProcess
+            .command(
+              List("/bin/sh", "-c", "echo $$; exec sleep 30"),
+              root,
+              Map("PATH" -> "/usr/bin:/bin"),
+            )
+            .mapError(_.message)
+            .foreach:
+              case ChildEvent.Out(text) =>
+                text.toLongOption match
+                  case Some(pid) => seen.succeed(pid).unit
+                  case None      => ZIO.unit
+              case _ => ZIO.unit
+            .forkScoped
+          reported <- seen.await.timeout(10.seconds)
+          pid      <- ZIO.fromOption(reported).orElseFail("child did not report its pid")
+          _        <- fiber.interrupt
+          alive    <- ZIO.attemptBlocking(ProcessHandle.of(pid).toScala.fold(false)(_.isAlive)).orDie
+        yield assertTrue(!alive)
+    },
   )
+
+  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem
 
   private final case class Fixture(java: Path, classes: Path, scratch: Path, launch: Path)
 
-  private def prepared[A](use: Fixture => ZIO[Any, Any, A]): ZIO[Any, Any, A] =
+  private def prepared[A](use: Fixture => ZIO[Scope, Any, A]): ZIO[Any, Any, A] =
     ZIO.scoped:
       ZIO
         .acquireRelease(ZIO.attemptBlocking(Files.createTempDirectory("histos-child")).orDie)(root =>
@@ -187,7 +152,6 @@ object RunPipeSpec extends ZIOSpecDefault:
           val scratch = root.resolve("scratch")
           val launch  = root.resolve("launch")
           val source  = classes.resolve("demo").resolve("Echo.java")
-          val held    = classes.resolve("demo").resolve("Hold.java")
           val home    = _root_.java.lang.System.getProperty("java.home")
           val java    = Path.of(home, "bin", "java")
           val javac   = Path.of(home, "bin", "javac")
@@ -197,26 +161,27 @@ object RunPipeSpec extends ZIOSpecDefault:
               Files.createDirectories(scratch)
               Files.createDirectories(launch)
               Files.writeString(source, Echo)
-              Files.writeString(held, Hold)
               ()
             }.orDie
-            compiled <- ZIO.attemptBlocking {
-              val process =
-                new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString, held.toString).start()
-              val err  = new String(process.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
-              val code = process.waitFor()
-              (code, err)
-            }.orDie
-            (code, err) = compiled
-            _   <- ZIO.unless(code == 0)(ZIO.fail(err))
+            env   <- ZIO.systemWith(_.envs).orDie
+            heard <- ChildProcess
+              .command(
+                List(javac.toString, "-d", classes.toString, source.toString),
+                classes,
+                env,
+              )
+              .runCollect
+              .mapError(_.message)
+            code = heard.collect { case ChildEvent.Exited(exit) => exit.value }.toList
+            err  = heard.collect { case ChildEvent.Err(line) => line }.mkString("\n")
+            _ <- ZIO.unless(code == List(0))(
+              ZIO.fail(if err.isEmpty then s"javac exited $code" else err)
+            )
             ran <- use(Fixture(java, classes, scratch, launch))
           yield ran
 
   private def echo: ZIO[Any, Nothing, MainClass] =
     ZIO.fromEither(MainClass.from("demo.Echo")).orDieWith(error => new IllegalArgumentException(error.message))
-
-  private def hold: ZIO[Any, Nothing, MainClass] =
-    ZIO.fromEither(MainClass.from("demo.Hold")).orDieWith(error => new IllegalArgumentException(error.message))
 
   private def matches(printed: Option[String], launch: Path): ZIO[Any, Nothing, Boolean] =
     ZIO

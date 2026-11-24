@@ -408,6 +408,7 @@ end WireSchemaLeaves
 private object WireSchemaBuild extends WireSchemaSupport:
   import WireSchemaLeaves.given
   import WireSchemaContract.given
+  import WireSchemaStages.given
 
   given Schema[ToolchainError] = Schema.derived
 
@@ -553,8 +554,11 @@ private object WireSchemaReport extends WireSchemaSupport:
 end WireSchemaReport
 
 private object WireSchemaCall extends WireSchemaSupport:
+  import WireSchemaScoped.given
+  import WireSchemaProducts.given
   import WireSchemaLeaves.given
   import WireSchemaContract.given
+  import WireSchemaStages.given
   import WireSchemaBuild.given
   import WireSchemaReport.given
 
@@ -615,6 +619,12 @@ private object WireSchemaCall extends WireSchemaSupport:
 
   private val assemblyErrorSchema: Schema[AssemblyError] = Schema.derived
   given Schema[AssemblyError]                            = assemblyErrorSchema
+
+  given Schema[histos.publish.PublicationCoordinate]           = Schema.derived
+  given Schema[histos.version.BumpPart]                        = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityGap]     = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityOutcome] = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityFailure] = Schema.derived
 
   given Schema[LocalPublishError] = Schema.derived
 
@@ -732,6 +742,9 @@ end WireSchemaEvent
 object WireSchema:
   export WireSchemaLeaves.given
   export WireSchemaContract.given
+  export WireSchemaStages.given
+  export WireSchemaScoped.given
+  export WireSchemaProducts.given
   export WireSchemaBuild.given
   export WireSchemaReport.given
   export WireSchemaCall.given

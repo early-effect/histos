@@ -63,6 +63,7 @@ enum BuildError:
       platform: Platform,
       position: SourcePos,
   )
+  case Contract(fault: ContractFault)
   case Cycle(platform: Platform, path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
   case EmptyShipName(position: SourcePos)
@@ -116,6 +117,7 @@ enum BuildError:
   )
 
   def message: String = this match
+    case Contract(fault)     => fault.message
     case EmptyName(position) =>
       s"a project name is not empty (${position.line}:${position.column})"
     case BadName(raw, position) =>

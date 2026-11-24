@@ -19,7 +19,9 @@ import histos.plugin.{
   ResolveVerb,
   Tokens,
 }
-import histos.{Dep, ProjectName, Resolution}
+import histos.{Dep, ProjectName, Resolution, PlatformSelection, TestSelection, TestTargets}
+import histos.report.WireJson.given
+import zio.json.*
 
 import java.nio.charset.StandardCharsets
 
@@ -386,8 +388,13 @@ private[histos] object LockCodec:
 
   def renderCommand(command: CommandIdentity): String =
     command match
-      case CommandIdentity.Compile(projects)  => withNames("compile", projects)
-      case CommandIdentity.Test(projects)     => withNames("test", projects)
+      case CommandIdentity.Compile(projects, PlatformSelection.All) => withNames("compile", projects)
+      case command: CommandIdentity.Compile                         => s"json ${commandJson(command)}"
+      case CommandIdentity.Test(TestSelection(TestTargets.All, PlatformSelection.All, None))                => "test"
+      case CommandIdentity.Test(TestSelection(TestTargets.Named(first, rest), PlatformSelection.All, None)) =>
+        withNames("test", first :: rest)
+      case command: CommandIdentity.Test      => s"json ${commandJson(command)}"
+      case command: CommandIdentity.Run       => s"json ${commandJson(command)}"
       case CommandIdentity.Resolve(action)    => s"resolve ${verb(action)}"
       case CommandIdentity.Refresh(selectors) => withNames("refresh", selectors)
       case CommandIdentity.Task(id)           => s"task ${id.render}"
@@ -395,16 +402,19 @@ private[histos] object LockCodec:
       case CommandIdentity.Publish            => "publish"
       case CommandIdentity.Other(token)       => s"other ${token.value}"
 
+  private def commandJson(command: CommandIdentity): String = command.toJson
+
   def parseCommand(raw: String): Either[LockTextError, CommandIdentity] =
     raw.split(" ", 2).toList match
-      case "format" :: Nil            => Right(CommandIdentity.Format)
-      case "publish" :: Nil           => Right(CommandIdentity.Publish)
-      case "compile" :: Nil           => Right(CommandIdentity.Compile(Nil))
-      case "compile" :: names :: Nil  => parseNames(names).map(CommandIdentity.Compile(_))
-      case "test" :: Nil              => Right(CommandIdentity.Test(Nil))
-      case "test" :: names :: Nil     => parseNames(names).map(CommandIdentity.Test(_))
-      case "refresh" :: Nil           => Right(CommandIdentity.Refresh(Nil))
-      case "refresh" :: names :: Nil  => parseNames(names).map(CommandIdentity.Refresh(_))
+      case "format" :: Nil           => Right(CommandIdentity.Format)
+      case "publish" :: Nil          => Right(CommandIdentity.Publish)
+      case "compile" :: Nil          => Right(CommandIdentity.Compile(Nil))
+      case "compile" :: names :: Nil => parseNames(names).map(CommandIdentity.Compile(_))
+      case "json" :: encoded :: Nil  => encoded.fromJson[CommandIdentity].left.map(_ => bad("bad command"))
+      case "test" :: Nil             => Right(CommandIdentity.Test(TestSelection()))
+      case "test" :: names :: Nil    => parseNames(names).map(names => CommandIdentity.Test(TestSelection.named(names)))
+      case "refresh" :: Nil          => Right(CommandIdentity.Refresh(Nil))
+      case "refresh" :: names :: Nil => parseNames(names).map(CommandIdentity.Refresh(_))
       case "resolve" :: action :: Nil => parseVerb(action).map(CommandIdentity.Resolve(_))
       case "task" :: id :: Nil        =>
         PluginTaskId.parse(id).left.map(_ => bad("bad plugin task")).map(CommandIdentity.Task(_))

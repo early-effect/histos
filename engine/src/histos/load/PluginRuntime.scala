@@ -22,47 +22,51 @@ import histos.plugin.{
   PluginScopes,
   PluginTaskId,
   RunRequest,
-  WrittenFile,
+  OutputDestinations,
+  OutputName,
 }
-import histos.schedule.Histos.given
 import histos.schedule.{
   Action,
   ActionCache,
   ActionDigest,
   ActionId,
-  Digest,
   Histos,
   Input,
   InputName,
   InputValue,
-  Outcome,
   Parallelism,
   PluginManifest,
   Policy,
   RemoteCache,
   ScheduleError,
   Scheduler,
-  Sendable,
-  StepFailure,
 }
 import histos.step.{Need, Step, StepId, StepInfo}
 import histos.task.{TaskError, TaskId, TaskResult}
-import histos.resolve.{Resolve, DependencyLock}
+import histos.resolve.Resolve
 import histos.zinc.GraphCompile
 import histos.{Module, ProjectGraph}
 
 import java.net.URL
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, LinkOption, Path}
+import java.nio.file.Path
+import histos.cache.{CacheProject, ContentStore}
 
 import scala.util.Try
 
-import zio.{Chunk, IO, NonEmptyChunk, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, IO, Ref, Scope, UIO, ZIO, ZLayer}
 
 final case class PluginLink(
     id: PluginId,
     linked: PluginLinked,
     artifacts: List[String],
+)
+
+final case class TaskInvocation(
+    id: PluginTaskId,
+    args: PluginArgs,
+    caller: InvocationContext,
+    events: PluginEvents.Invocation,
 )
 
 /** Loaded plugin classes. The load `Scope` only retires the generation. That generation scope owns the build loader,
@@ -72,6 +76,20 @@ final case class PluginLink(
   * generation scope, and a task extends the one an acquire should die with.
   */
 trait PluginRuntime:
+  private[histos] def awaitResources: UIO[Unit]
+  private[histos] def retire: UIO[Unit]
+
+  def generate(
+      request: histos.build.ExecutionRequest,
+      id: PluginTaskId,
+      completed: histos.build.ExecutionProducts,
+      invocation: TaskInvocation,
+  ): ZIO[
+    ActionCache & RemoteCache & Resolve & ContentStore & histos.resolve.ResolutionService,
+    histos.build.ExecutionError,
+    histos.build.GeneratedTask[histos.build.ExecutionError],
+  ]
+
   /** Sha256 of the api jar this process loaded. Publish stamps a plugin coordinate with it. */
   def launcher: ApiDigest
   def run(
@@ -101,9 +119,31 @@ trait PluginRuntime:
     Map[TaskId, IO[TaskError, TaskResult]],
   ]
   def links: List[PluginLink]
+  def committed(id: PluginTaskId): IO[PluginFault, CommittedOutputs]
+  def generated(id: PluginTaskId): ZIO[Scope, PluginFault, ProductLocations]
+  def previewDirectory(id: PluginTaskId, name: OutputName): ZIO[Scope, PluginFault, Path]
+  def cleanProducts(id: PluginTaskId): IO[PluginFault, Unit]
 end PluginRuntime
 
 object PluginRuntime:
+  private[histos] def failure(error: histos.build.ExecutionError): PluginFault =
+    import histos.build.ExecutionError
+    import histos.testrun.{ScopedTestFailure, TestFailures, TestNodeFailure}
+    error match
+      case ExecutionError.Compile(error)       => PluginFault.Compiled(error)
+      case ExecutionError.Test(error)          => PluginFault.Tested(error)
+      case ExecutionError.Plugin(error)        => error
+      case ExecutionError.Link(error)          => PluginFault.Linked(error)
+      case ExecutionError.Graph(error)         => PluginFault.Scoped(TestFailures.graph(error))
+      case ExecutionError.Roots(error)         => PluginFault.Scoped(TestFailures.root(error))
+      case ExecutionError.MissingProduct(node) =>
+        PluginFault.Scoped(ScopedTestFailure.Node(TestNodeFailure.Missing, TestFailures.node(node)))
+      case ExecutionError.WrongProduct(node) =>
+        PluginFault.Scoped(ScopedTestFailure.Node(TestNodeFailure.Wrong, TestFailures.node(node)))
+      case ExecutionError.Dependency(node) =>
+        PluginFault.Scoped(ScopedTestFailure.Node(TestNodeFailure.Dependency, TestFailures.node(node)))
+      case ExecutionError.Skipped(steps) => PluginFault.Scoped(ScopedTestFailure.Skipped(steps))
+
   /** First line of a cache hit. The stored body is the rest of the text. */
   val CacheHit: String = "histos-cache hit"
 
@@ -130,8 +170,12 @@ object PluginRuntime:
       launcher: ApiDigest,
       leases: GenerationLeases,
       provenance: List[ProvenanceResult],
-  ): ZIO[Scope, Nothing, PluginRuntime] =
-    for environment <- (Parallelism.live >>> Histos.live).build
+  ): ZIO[Scope & PluginProducts, Nothing, PluginRuntime] =
+    for
+      environment <- (Parallelism.live >>> Histos.live).build
+      products    <- ZIO.service[PluginProducts]
+      retained    <- Ref.make(Map.empty[PluginTaskId, CommittedOutputs])
+      inputReads  <- Ref.Synchronized.make(Set.empty[PluginTaskId])
     yield Running(
       repo,
       graph,
@@ -142,6 +186,9 @@ object PluginRuntime:
       environment.get[Histos],
       leases,
       provenance,
+      products,
+      retained,
+      inputReads,
     )
 
   private final class Running(
@@ -154,7 +201,34 @@ object PluginRuntime:
       runner: Histos,
       leases: GenerationLeases,
       provenance: List[ProvenanceResult],
+      products: PluginProducts,
+      retained: Ref[Map[PluginTaskId, CommittedOutputs]],
+      inputReads: Ref.Synchronized[Set[PluginTaskId]],
   ) extends PluginRuntime:
+    private[histos] def awaitResources: UIO[Unit] = leases.awaitResources
+    private[histos] def retire: UIO[Unit]         = leases.retire
+
+    def committed(id: PluginTaskId): IO[PluginFault, CommittedOutputs] =
+      retained.get.flatMap(found => ZIO.fromOption(found.get(id)).orElseFail(PluginFault.MissingProduct(id)))
+
+    def generated(id: PluginTaskId): ZIO[Scope, PluginFault, ProductLocations] =
+      committed(id).flatMap(_.read.mapError(PluginFault.Products(_)))
+
+    def previewDirectory(id: PluginTaskId, name: OutputName): ZIO[Scope, PluginFault, Path] =
+      for
+        output  <- committed(id)
+        _       <- output.read.mapError(PluginFault.Products(_))
+        logical <- ZIO.fromEither(output.locations.directory(name)).mapError(PluginFault.Products(_))
+      yield logical
+
+    def cleanProducts(id: PluginTaskId): IO[PluginFault, Unit] =
+      taskOf(id) match
+        case None       => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
+        case Some(task) =>
+          products
+            .clean(ProductRequest(repo, task, PluginRuntime.standIn(id).id))
+            .mapError(PluginFault.Products(_)) *> retained.update(_ - id)
+
     def run(
         id: PluginTaskId,
         args: PluginArgs,
@@ -165,86 +239,155 @@ object PluginRuntime:
       PluginFault,
       PluginOutput,
     ] =
-      taskOf(id) match
-        case None    => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
-        case Some(_) =>
-          for
-            made    <- Ref.make(Map.empty[String, PluginOutput])
-            kept    <- ZIO.service[ActionCache]
-            remote  <- ZIO.service[RemoteCache]
-            machine <- Machine
-              .load(repo)
-              .mapError(error =>
-                PluginFault.Compiled(
-                  histos.zinc.GraphCompileError.Runtime(error)
-                )
-              )
-            env = machine.env
-            report <- ZIO.service[histos.resolve.ResolutionService]
-            lock = report.current
-            jdk <- GraphCompile
-              .jdk(machine)
-              .mapError(PluginFault.Compiled(_))
-              .memoize
-            session = jdk
-              .zip(lock)
-              .map((runtime, captured) =>
-                histos.zinc.CompileSession(
-                  repo,
-                  graph,
-                  runtime,
-                  machine.native,
-                  captured,
-                )
-              )
-            scheduler = Scheduler(runner, kept, remote)
-            step <- ZIO.fromEither(
-              PluginSteps.goal(
-                id,
-                taskOf,
-                task => PluginCells.selected(graph, task),
-                task => PluginCells.links(graph, task),
-                cell =>
-                  session.flatMap: compiled =>
-                    PluginCells
-                      .compile(compiled, cell, events)
-                      .provideSome[Resolve & histos.cache.ContentStore](
-                        zio.ZLayer.succeed(report) ++ zio.ZLayer.succeed(remote)
-                      ),
-                cell =>
-                  session.flatMap: compiled =>
-                    PluginCells
-                      .link(compiled, cell)
-                      .provideSome[Resolve & histos.cache.ContentStore](
-                        zio.ZLayer.succeed(report) ++ zio.ZLayer.succeed(remote)
-                      ),
-                (taskId, task, upstream) =>
-                  remembered(
-                    id,
-                    taskId,
-                    task,
-                    args,
-                    made,
-                    upstream,
-                    env,
-                    scheduler,
-                    report,
-                    lock,
-                    caller,
-                    events,
-                  ),
+      ZIO.scoped {
+        for
+          machine <- Machine
+            .load(repo)
+            .mapError(error => PluginFault.Compiled(histos.zinc.GraphCompileError.Runtime(error)))
+          jdk     <- GraphCompile.jdk(machine).mapError(PluginFault.Compiled(_))
+          lock    <- ZIO.serviceWithZIO[histos.resolve.ResolutionService](_.current)
+          cache   <- ZIO.service[ActionCache]
+          runtime <- histos.build.BuildRuntime.open(
+            Some(this),
+            Some(TaskInvocation(id, args, caller, events)),
+            Some(cache),
+          )
+          completed <- runtime
+            .ensure(
+              histos.build.ExecutionRequest(
+                histos.zinc.CompileSession(repo, graph, jdk, machine.native, lock),
+                List(histos.build.BuildNode.Generate(id)),
               )
             )
-            outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
-            output  <- outcome match
-              case Outcome.Done(text) =>
-                made.get
-                  .map(_.get(id.render))
-                  .map:
-                    case Some(found) => found
-                    case None        => cached(id, text)
-              case Outcome.Failed(failures) => failed(failures)
-          yield output
+            .mapError(PluginRuntime.failure)
+          product <- ZIO.fromEither(completed.require(id)).mapError(PluginRuntime.failure)
+        yield product.output
+      }
+
+    def generate(
+        request: histos.build.ExecutionRequest,
+        id: PluginTaskId,
+        completed: histos.build.ExecutionProducts,
+        invocation: TaskInvocation,
+    ): ZIO[
+      ActionCache & RemoteCache & Resolve & ContentStore & histos.resolve.ResolutionService,
+      histos.build.ExecutionError,
+      histos.build.GeneratedTask[histos.build.ExecutionError],
+    ] =
+      import histos.build.{ExecutionError, GeneratedTask}
+      val graph = request.session.graph
+      for
+        task <- ZIO
+          .fromOption(taskOf(id))
+          .orElseFail(ExecutionError.Plugin(PluginFault.Task(PluginRunError.Unknown(id))))
+        cells <- ZIO
+          .fromEither(PluginCells.selected(graph, task))
+          .mapError(error => ExecutionError.Plugin(PluginFault.Task(error)))
+        compiled <- ZIO.foreach(cells) { cell =>
+          val identity = histos.Cell(cell.module.name, cell.version, cell.platform)
+          for
+            main  <- ZIO.fromEither(completed.require(histos.CompilationStage(identity, histos.plugin.SourceSet.Main)))
+            paths <- cell.scope match
+              case histos.plugin.SourceSet.Main =>
+                ZIO.succeed(
+                  histos.plugin.CellClasspath
+                    .mainOnly(identity.module, identity.version, identity.platform, main.classpath)
+                )
+              case histos.plugin.SourceSet.Test =>
+                ZIO
+                  .fromEither(completed.require(histos.CompilationStage(identity, histos.plugin.SourceSet.Test)))
+                  .map(test =>
+                    histos.plugin.CellClasspath.testComplete(
+                      identity.module,
+                      identity.version,
+                      identity.platform,
+                      main.classpath,
+                      test.classpath,
+                    )
+                  )
+          yield paths
+        }
+        links <- ZIO
+          .fromEither(PluginCells.links(graph, task).map(_.distinct))
+          .mapError(error => ExecutionError.Plugin(PluginFault.Task(error)))
+        linked <- ZIO.foreach(links) { link =>
+          val cell = histos.Cell(link.cell.module.name, link.cell.version, link.cell.platform)
+          ZIO
+            .fromEither(completed.require(cell, link.optimize))
+            .map(product => histos.plugin.LinkedScript(cell.module, cell.version, product.script, link.optimize))
+        }
+        generated <- ZIO.foreach(
+          completed.nodes.toList.collect { case histos.build.BuildNode.Generate(task) => task }.sortBy(_.render)
+        ) { task =>
+          ZIO
+            .fromEither(completed.require(task))
+            .flatMap(product =>
+              ZIO.foreach(product.locations)(location =>
+                histos.zinc.CellCapture
+                  .implementation(location.path)
+                  .mapError(error =>
+                    ExecutionError.Plugin(
+                      PluginFault
+                        .Tested(histos.testrun.ModuleTestError.Scoped(histos.testrun.ScopedTestFailure.Source(error)))
+                    )
+                  )
+              )
+            )
+            .map(hashes => s"${task.render}:${hashes.map(_.value).mkString(",")}")
+        }
+        linkKeys <- ZIO.foreach(links)(link =>
+          ZIO
+            .fromEither(
+              completed
+                .require(histos.Cell(link.cell.module.name, link.cell.version, link.cell.platform), link.optimize)
+            )
+            .map(_.key.value)
+        )
+        upstream = (completed.stages.toList.sortBy(_._1.toString).map { (stage, value) =>
+          s"$stage:${value.api.value}:${value.implementation.value}"
+        } ++ generated ++ linkKeys).mkString("\n")
+        made    <- Ref.make(Map.empty[String, PluginOutput])
+        cache   <- ZIO.service[ActionCache]
+        remote  <- ZIO.service[RemoteCache]
+        machine <- Machine
+          .load(repo)
+          .mapError(error => ExecutionError.Plugin(PluginFault.Compiled(histos.zinc.GraphCompileError.Runtime(error))))
+        _ <- retainInputs(
+          completed.nodes.toList.collect { case histos.build.BuildNode.Generate(task) => task }
+        ).mapError(ExecutionError.Plugin(_))
+        _ <- remembered(
+          id,
+          id,
+          task,
+          invocation.args,
+          made,
+          upstream,
+          machine.env,
+          Scheduler(runner, cache, remote),
+          compiled,
+          linked,
+          invocation.caller,
+          invocation.events,
+        )
+          .mapError(ExecutionError.Plugin(_))
+        outputs <- committed(id).mapError(ExecutionError.Plugin(_))
+        output  <- made.get.flatMap(found =>
+          ZIO.fromOption(found.get(id.render)).orElseFail(ExecutionError.Plugin(PluginFault.MissingProduct(id)))
+        )
+      yield GeneratedTask(
+        output,
+        outputs.read
+          .mapError(error => ExecutionError.Plugin(PluginFault.Products(error)))
+          .map(locations =>
+            locations.values.map(location =>
+              histos.zinc.GeneratedLocation(
+                histos.zinc.GeneratedRootId(id, location.output.name),
+                location.output.kind,
+                location.path,
+              )
+            )
+          ),
+      )
 
     def bind: ZIO[
       ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
@@ -284,11 +427,11 @@ object PluginRuntime:
         upstream: String,
         env: Map[String, String],
         scheduler: Scheduler,
-        report: histos.resolve.ResolutionService,
-        lock: IO[PluginFault, DependencyLock],
+        compiled: List[histos.plugin.CellClasspath],
+        linked: List[histos.plugin.LinkedScript],
         caller: InvocationContext,
         events: PluginEvents.Invocation,
-    ): ZIO[Resolve, PluginFault, String] =
+    ): ZIO[Resolve & ContentStore, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
         case None         => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
@@ -297,34 +440,35 @@ object PluginRuntime:
             hashed <- PluginInputs
               .hash(hashRequest(id, task, env, passed))
               .mapError(error => PluginFault.Task(error))
-            inputs   <- withUpstream(hashed.inputs, upstream)
-            compiled <- PluginCells
-              .classpath(repo, graph, task, lock)
-              .provideSome[Resolve](zio.ZLayer.succeed(report))
-            linked <- PluginCells.scripts(repo, graph, task).mapError(PluginFault.Task(_))
+            inputs <- withUpstream(hashed.inputs, upstream)
             action <- ZIO.fromEither(
               actionOf(id, task, inputs).left.map(error => PluginFault.Task(error))
             )
-            held <- Ref.make[Option[PluginOutput]](None)
-            info  = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
-            local = Step.run(
-              Step.hermetic[String](info)(
-                produce(id, task, plugin, passed, made, compiled, linked, held, env, caller, events)
-                  .mapError(error => PluginFault.Task(error))
-              ) @@ PluginAspects.loader(threads) @@ PluginAspects
-                .declaredOutputs(repo, task, held)
+            store <- ZIO.service[ContentStore]
+            request = ProductRequest(repo, task, caller.id)
+            info    = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
+            local   = Step.run(
+              Step.local[CommittedOutputs](info)(
+                produce(id, task, plugin, passed, made, compiled, linked, env, caller, events)
+                  .provide(ZLayer.succeed(store))
+              ) @@ PluginAspects.loader(threads)
             )
-            text <- scheduler
-              .cached(
-                action,
-                ActionDigest.of(action, Map.empty),
-                local,
-                Sendable.ofAction,
-              )
+            result <- scheduler
+              .cached(action, ActionDigest.of(action, Map.empty), request, local)
+              .provide(ZLayer.succeed(store), ZLayer.succeed(products))
               .mapError:
                 case ScheduleError.Failed(_, error) => error
+                case ScheduleError.Products(error)  => PluginFault.Products(error)
                 case other                          => PluginFault.Scheduled(other)
-          yield text
+            _ <- keep(result.outputs.manifest)
+            _ <- retained.update(_ + (id -> result.outputs))
+            _ <- made.update(found =>
+              found + (id.render -> found.getOrElse(
+                id.render,
+                PluginManifest.output(result.outputs.manifest).copy(text = cacheHit(result.outputs.manifest.text)),
+              ))
+            )
+          yield result.record
 
     private def withUpstream(
         inputs: List[Input],
@@ -341,18 +485,6 @@ object PluginRuntime:
             name => inputs :+ Input(name, InputValue.Hash(sha)),
           )
 
-    private def failed(
-        failures: NonEmptyChunk[StepFailure[PluginFault]]
-    ): IO[PluginFault, Nothing] =
-      failures.head match
-        case StepFailure.Failed(_, cause) =>
-          cause.failureOption match
-            case Some(error) => ZIO.fail(error)
-            case None        =>
-              ZIO.dieMessage("plugin step failed without a typed error")
-        case StepFailure.Skipped(_, _) =>
-          ZIO.fail(PluginFault.Task(PluginRunError.Defect("skipped")))
-
     private def produce(
         id: PluginTaskId,
         task: DeclaredTask,
@@ -361,32 +493,62 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         compiled: List[histos.plugin.CellClasspath],
         linked: List[histos.plugin.LinkedScript],
-        held: Ref[Option[PluginOutput]],
         env: Map[String, String],
         caller: InvocationContext,
         events: PluginEvents.Invocation,
-    ): IO[PluginRunError, String] =
-      for
-        hashed <- PluginInputs.hash(hashRequest(id, task, env, args))
-        output <- invoke(
-          plugin,
-          RunRequest(
-            id,
-            repo,
-            views(id.plugin),
-            args,
-            hashed.material,
-            caller,
-            events,
-            compiled,
-            linked,
-          ),
-        )
-        _    <- check(task, output)
-        _    <- held.set(Some(output))
-        text <- record(task, output)
-        _    <- made.update(_ + (id.render -> output))
-      yield text
+    ): ZIO[ContentStore, PluginFault, CommittedOutputs] =
+      def call(destinations: OutputDestinations): ZIO[Any, PluginFault, PluginOutput] =
+        for
+          hashed <- PluginInputs.hash(hashRequest(id, task, env, args)).mapError(PluginFault.Task(_))
+          output <- invoke(
+            plugin,
+            RunRequest(
+              id,
+              repo,
+              views(id.plugin),
+              args,
+              hashed.material,
+              caller,
+              events,
+              compiled,
+              linked,
+              destinations,
+            ),
+          )
+            .mapError(PluginFault.Task(_))
+        yield output
+      ZIO.scoped:
+        for
+          staged    <- products.stage(ProductRequest(repo, task, caller.id)).mapError(PluginFault.Products(_))
+          output    <- call(staged.destinations)
+          manifest  <- products.seal(staged, output).mapError(PluginFault.Products(_))
+          committed <- ZIO.uninterruptibleMask: restore =>
+            for
+              committed <- restore(products.commit(staged, manifest).mapError(PluginFault.Products(_)))
+              _         <- keep(manifest)
+              _         <- made.update(_ + (id.render -> PluginManifest.output(manifest)))
+            yield committed
+        yield committed
+
+    private def keep(manifest: OutputManifest): ZIO[ContentStore, PluginFault, Unit] =
+      ZIO
+        .serviceWithZIO[ContentStore](_.retain(CacheProject.of(repo), manifest.contentDigests))
+        .mapError(error => PluginFault.Products(ProductError.Cache(error)))
+
+    /** Plugins can extend input-consuming effects into Generation. One reader per producer protects its retained trees
+      * across promotions without accumulating readers on every invocation. Logical request paths stay unchanged.
+      */
+    private def retainInputs(ids: List[PluginTaskId]): IO[PluginFault, Unit] =
+      ZIO.scoped {
+        leases.lease.mapError(PluginFault.Task(_)) *>
+          ZIO.foreachDiscard(ids.distinct.sortBy(_.render)) { id =>
+            inputReads.updateZIO { held =>
+              if held.contains(id) then ZIO.succeed(held)
+              else
+                committed(id).flatMap(output => leases.use(output.read).mapError(PluginFault.Products(_)).as(held + id))
+            }
+          }
+      }
 
     private def invoke(
         plugin: HistosPlugin,
@@ -409,44 +571,6 @@ object PluginRuntime:
       refused match
         case Some(binary) => ZIO.fail(PluginRunError.EngineLeak(binary))
         case None         => ZIO.fail(err)
-
-    private def check(
-        task: DeclaredTask,
-        output: PluginOutput,
-    ): IO[PluginRunError, Unit] =
-      val declared = task.outputs.map(_.path.value).toSet
-      output.files.find(file => !declared.contains(file.path.value)) match
-        case Some(extra) =>
-          ZIO.fail(PluginRunError.ExtraOutput(extra.path.value))
-        case None =>
-          ZIO.foreachDiscard(task.outputs): declaredOutput =>
-            val file = repo.resolve(declaredOutput.path.value)
-            ZIO
-              .attemptBlocking(
-                Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
-              )
-              .orElseFail(PluginRunError.MissingOutput(declaredOutput.name, declaredOutput.path))
-              .flatMap:
-                case true  => ZIO.unit
-                case false =>
-                  ZIO.fail(PluginRunError.MissingOutput(declaredOutput.name, declaredOutput.path))
-
-    private def record(
-        task: DeclaredTask,
-        output: PluginOutput,
-    ): IO[PluginRunError, String] =
-      if task.outputs.isEmpty then ZIO.succeed(output.text)
-      else
-        ZIO
-          .attemptBlocking {
-            val files = task.outputs.map: declaredOutput =>
-              val file = repo.resolve(declaredOutput.path.value)
-              declaredOutput.path -> Sha256Digest.of(
-                Chunk.fromArray(Files.readAllBytes(file))
-              )
-            PluginManifest.store(output.text, files)
-          }
-          .orElseFail(PluginRunError.Defect("PluginManifest"))
 
     private def actionOf(
         id: PluginTaskId,
@@ -478,26 +602,19 @@ object PluginRuntime:
       task.dependsOn.foldLeft[Either[PluginRunError, List[ActionId]]](
         Right(Nil)
       ):
-        case (Left(err), _)                                       => Left(err)
-        case (Right(acc), histos.plugin.TaskDep.Compile(_, _, _)) => Right(acc)
-        case (Right(acc), histos.plugin.TaskDep.Link(_, _))       => Right(acc)
-        case (Right(acc), histos.plugin.TaskDep.Generate(_))      => Right(acc)
-        case (Right(acc), histos.plugin.TaskDep.Emit(_))          => Right(acc)
-        case (Right(acc), histos.plugin.TaskDep.Same(name))       =>
+        case (Left(err), _)                                                => Left(err)
+        case (Right(acc), histos.plugin.TaskDep.Compile(_, _, _))          => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Link(_, _, _))             => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.CompileScoped(_, _, _, _)) => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.EmitScoped(_, _, _, _, _)) => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Generate(_))               => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Emit(_))                   => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Same(name))                =>
           ActionId
             .from(PluginTaskId(plugin, name).render)
             .left
             .map(_ => PluginRunError.Defect("ActionId"))
             .map(dep => acc :+ dep)
-
-    private def cached(id: PluginTaskId, stored: String): PluginOutput =
-      taskOf(id) match
-        case Some(task) if task.outputs.nonEmpty =>
-          PluginOutput(
-            cacheHit(PluginManifest.text(stored)),
-            task.outputs.map(output => WrittenFile(output.name, output.path)),
-          )
-        case _ => PluginOutput(cacheHit(stored), Nil)
 
     private def tasks: List[(PluginTaskId, DeclaredTask)] =
       graph.plugins.flatMap: plugin =>
@@ -530,6 +647,7 @@ object PluginRuntime:
         binding(id.plugin),
         provenance,
         classpath,
+        dependencyInputs = Some(Nil),
       )
 
     private val classpath: List[Path] =

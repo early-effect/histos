@@ -13,6 +13,7 @@ import histos.{Platform, PomFact, ProjectName, ScalaVersion}
 import java.nio.file.Path
 
 enum LocalPublishError:
+  case Compatibility(failures: ::[PublicationCompatibilityFailure])
   case Version(error: VersionError)
   case Target(error: SelectError)
   case Compile(error: GraphCompileError)
@@ -57,8 +58,11 @@ enum LocalPublishError:
   case Remote(error: RemoteError)
   case Recipe(error: RecipeError)
   case InputsChanged(path: RepoPath)
+  case Scoped(error: histos.testrun.ScopedTestFailure)
+  case Build(error: histos.testrun.ModuleTestError)
 
   def message: String = this match
+    case Compatibility(failures)               => failures.map(_.message).mkString("\n")
     case Version(error)                        => error.message
     case Target(error)                         => error.message
     case Compile(error)                        => error.message
@@ -100,6 +104,8 @@ enum LocalPublishError:
     case Remote(error)       => error.message
     case Recipe(error)       => error.message
     case InputsChanged(path) => s"${path.value} changed after it was recorded"
+    case Scoped(error)       => error.message
+    case Build(error)        => error.message
 
   def diagnose: Diagnostic = this match
     case Publish(error)   => error.diagnose

@@ -13,7 +13,12 @@ import zio.{UIO, ZIO}
 object Operation:
   enum Pending:
     case Ready(call: Call)
-    case Program(id: String, platform: Option[histos.Platform], args: List[String])
+    case Program(
+        id: String,
+        platform: Option[histos.PlatformSelection],
+        args: List[String],
+        main: Option[histos.MainClass],
+    )
 
   def call(command: Command): ZIO[Any, CliParseError, Call] =
     command match
@@ -27,18 +32,18 @@ object Operation:
   /** Fill a program call from this process. A parsed call is already complete. */
   def seal(pending: Pending): UIO[Call] =
     pending match
-      case Pending.Ready(call)                 => ZIO.succeed(call)
-      case Pending.Program(id, platform, args) =>
-        Shells.capture.map(launch => Call.Run(id, platform, launch, args))
+      case Pending.Ready(call)                       => ZIO.succeed(call)
+      case Pending.Program(id, platform, args, main) =>
+        Shells.capture.map(launch => Call.Run(id, platform, launch, args, main))
 
   /** A watch payload is already a call. A nested watch or `bsp` is usage. `--restart` repeats a program. */
   def underWatch(inner: Call, policy: WatchPolicy): Either[CliParseError, Call] =
     (inner, policy) match
       case (Call.Watch(_, _), _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case (Call.Bsp, _)                               => Left(CliParseError.Rejected)
-      case (Call.Run(_, _, _, _), WatchPolicy.Restart) => Right(inner)
-      case (_, WatchPolicy.Restart)                    =>
+      case (Call.Bsp, _)                                  => Left(CliParseError.Rejected)
+      case (Call.Run(_, _, _, _, _), WatchPolicy.Restart) => Right(inner)
+      case (_, WatchPolicy.Restart)                       =>
         Left(CliParseError.WatchCommand("--restart watches a program"))
       case (other, WatchPolicy.After) => Right(other)
 
@@ -48,11 +53,11 @@ object Operation:
   /** The command under `~`. A nested watch is not an operation. */
   def operation(command: Command): Either[CliParseError, Pending] =
     command match
-      case Command.Run(id, platform, args) =>
+      case Command.Run(id, platform, args, main) =>
         if id.builtIn && args.nonEmpty then
           Left(CliParseError.Pattern(s"'${id.value}' does not take program arguments"))
         else if id.builtIn then Right(Pending.Ready(Call.Task(id.value, PluginArgs.empty)))
-        else Right(Pending.Program(id.value, platform, args))
+        else Right(Pending.Program(id.value, platform, args, main))
       case other => plain(other).map(Pending.Ready.apply)
 
   /** Every command except a module run. A module run is [[Pending.Program]] so the caller fills the shell. */
@@ -60,33 +65,31 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Run(_, _, _) =>
+      case Command.Run(_, _, _, _) =>
         Left(CliParseError.Rejected)
       case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.Reboot |
           Command.Stop | Command.New(_, _, _) | Command.Init(_, _, _) | Command.Doctor(_, _, _, _, _, _) |
           Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) | Command.Bump(_, _) | Command.Help(_) |
           Command.Coverage(_, _, _) | Command.ToolchainClient | Command.Completion(_) | Command.Complete(_) =>
         Left(CliParseError.Rejected)
-      case Command.Version                                          => Right(Call.Version)
-      case Command.Graph                                            => Right(Call.Graph)
-      case Command.Plugin(id, args)                                 => Right(Call.Task(id.render, args))
-      case Command.Test(projects, affected, mode, patterns, filter) =>
-        AffectedChoice.select(projects, affected) match
-          case None =>
-            Left(CliParseError.Pattern("nothing is affected"))
-          case Some(names) =>
-            Right(Call.Test(names, patterns, mode, filter))
+      case Command.Version                                                     => Right(Call.Version)
+      case Command.Graph                                                       => Right(Call.Graph)
+      case Command.Plugin(id, args)                                            => Right(Call.Task(id.render, args))
+      case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
+        Right(Call.Test(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter))
       case Command.Affected(_) =>
         Left(CliParseError.Rejected)
-      case Command.Compile(projects)       => Right(Call.Compile(projects))
-      case Command.Clean(projects, extent) =>
+      case Command.Compile(projects, platforms) => Right(Call.Compile(projects, platforms))
+      case Command.Clean(projects, extent)      =>
         if extent == CleanExtent.Full && projects.nonEmpty then
           Left(CliParseError.Pattern("clean --full does not take a project"))
         else Right(Call.Clean(projects, extent))
       case Command.Assembly(modules) =>
         Right(Call.Assembly(modules))
-      case Command.PublishLocal(tokens) =>
-        Right(Call.PublishLocal(tokens))
+      case Command.PublishCheck(tokens, _) =>
+        Right(Call.PublishCheck(tokens, histos.publish.ProofScope.All))
+      case Command.PublishLocal(tokens, _) =>
+        Right(Call.PublishLocal(tokens, histos.publish.ProofScope.All))
       case Command.PublishWithdraw =>
         Right(Call.PublishWithdraw)
       case Command.PublishSnapshots(tokens) =>
@@ -99,23 +102,21 @@ object Operation:
         Right(Call.PublishDrop(id))
       case Command.PublishAssets(tokens) =>
         Right(Call.PublishAssets(tokens))
-      case Command.CachePath                => Right(Call.CachePath)
-      case Command.CacheList                => Right(Call.CacheList)
-      case Command.CacheClean(mode)         => Right(Call.CacheClean(mode))
-      case Command.CachePromote(from, to)   => Right(Call.CachePromote(from, to))
-      case Command.CacheForget(target)      => Right(Call.CacheForget(target))
-      case Command.CacheVerify(projects)    => Right(Call.CacheVerify(projects))
-      case Command.Resolve(action)          => Right(Call.Resolve(action))
-      case Command.Workflow(action)         => Right(Call.Workflow(action))
-      case Command.Fmt(targets, mode)       => Right(Call.Format(targets, mode))
-      case Command.Reload                   => Right(Call.Reload)
-      case Command.Cancel(id)               => Right(Call.Cancel(id))
-      case Command.PreviewCompile(projects) =>
-        Right(Call.PreviewCompile(projects))
-      case Command.PreviewTest(projects, affected, mode, patterns, filter) =>
-        AffectedChoice.select(projects, affected) match
-          case None        => Left(CliParseError.Pattern("nothing is affected"))
-          case Some(names) => Right(Call.PreviewTest(names, patterns, mode, filter))
+      case Command.CachePath                           => Right(Call.CachePath)
+      case Command.CacheList                           => Right(Call.CacheList)
+      case Command.CacheClean(mode)                    => Right(Call.CacheClean(mode))
+      case Command.CachePromote(from, to)              => Right(Call.CachePromote(from, to))
+      case Command.CacheForget(target)                 => Right(Call.CacheForget(target))
+      case Command.CacheVerify(projects)               => Right(Call.CacheVerify(projects))
+      case Command.Resolve(action)                     => Right(Call.Resolve(action))
+      case Command.Workflow(action)                    => Right(Call.Workflow(action))
+      case Command.Fmt(targets, mode)                  => Right(Call.Format(targets, mode))
+      case Command.Reload                              => Right(Call.Reload)
+      case Command.Cancel(id)                          => Right(Call.Cancel(id))
+      case Command.PreviewCompile(projects, platforms) =>
+        Right(Call.PreviewCompile(projects, platforms))
+      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
+        Right(Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter))
       case Command.PreviewPublishLocal(tokens) =>
         Right(Call.PreviewPublishLocal(tokens))
       case Command.PreviewPublishSnapshots(tokens) =>
@@ -124,8 +125,8 @@ object Operation:
         if extent == CleanExtent.Full && projects.nonEmpty then
           Left(CliParseError.Pattern("preview clean --full does not take a project"))
         else Right(Call.PreviewClean(projects, extent))
-      case Command.PreviewRun(id, platform) =>
-        Right(Call.PreviewRun(id.value, platform))
+      case Command.PreviewRun(id, platform, main) =>
+        Right(Call.PreviewRun(id.value, platform, main))
       case Command.PreviewPlugin(id) =>
         Right(Call.PreviewRun(id.render, None))
 end Operation

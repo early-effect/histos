@@ -51,6 +51,9 @@ enum ModuleTestError:
   case Pattern(error: SuitePatternError)
   case Api(module: ProjectName, version: ScalaVersion, platform: Platform)
   case Remote(error: RemoteError)
+  case Scoped(error: ScopedTestFailure)
+  case Plugin(error: histos.load.PluginFault)
+  case Link(error: histos.js.JsLinkError)
 
   def message: String = this match
     case Tool(_, _, error)               => error.message
@@ -97,6 +100,9 @@ enum ModuleTestError:
     case Api(module, version, platform) =>
       s"'${module.value}' ${version.value} ${platform.token} has no readable API digest"
     case Remote(error) => error.message
+    case Scoped(error) => error.message
+    case Plugin(error) => error.message
+    case Link(error)   => error.message
 
   def diagnose: Diagnostic = this match
     case Target(error)  => error.diagnose

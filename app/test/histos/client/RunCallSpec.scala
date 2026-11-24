@@ -24,7 +24,7 @@ object RunCallSpec extends ZIOSpecDefault:
         call == Right(
           Call.Run(
             "app",
-            Some(Platform.Jvm),
+            Some(histos.PlatformSelection.only(Platform.Jvm)),
             RunLaunch.Tool(Map("TERRET_POLICY" -> "Clamp"), None),
             List("hello"),
           )

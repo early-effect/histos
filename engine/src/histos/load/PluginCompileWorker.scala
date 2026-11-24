@@ -5,12 +5,12 @@ import histos.jdk.{JdkVersion, Sha256}
 import histos.schedule.RemoteCache
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileReplay, CompileRequest, CompileToolchain, CompilerStarts, Compilers}
-import histos.{Platform, ProjectName, ScalaVersion, ScalacFlags}
+import histos.{Platform, ProjectName, ScalaVersion, ScalacFlag, ScalacFlags}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import zio.{ExitCode, Scope, ZIO, ZIOAppDefault, ZLayer}
+import zio.{Scope, ZIO, ZIOAppDefault, ZLayer}
 
 /** Child compiler. The parent owns the cache, the clock, and the cleared environment. */
 object PluginCompileWorker extends ZIOAppDefault:
@@ -38,6 +38,7 @@ object PluginCompileWorker extends ZIOAppDefault:
         field("checkout", job.checkout.toString),
         field("classes", job.classes.toString),
         field("analysis", job.analysis.toString),
+        field("flags", job.flags.canonical),
         field("bridge", bridge.toString),
       ) ++ compiler.map(path => field("compiler", path.toString))
         ++ support.map(path => field("support", path.toString))
@@ -56,17 +57,15 @@ object PluginCompileWorker extends ZIOAppDefault:
       .mapError(_ => PluginCompileError.Io(IoFailure(path, IoFault.Write)))
 
   def run =
-    for
-      args <- getArgs
-      code <- args.toList match
+    getArgs.flatMap: args =>
+      args.toList match
         case path :: Nil => serve(Path.of(path))
-        case _           => ZIO.succeed(ExitCode.failure)
-    yield code
+        case _           => ZIO.fail(PluginCompileError.Worker(2, "compiler worker needs one request path"))
 
-  private def serve(path: Path): ZIO[Any, Nothing, ExitCode] =
+  private def serve(path: Path): ZIO[Any, PluginCompileError, Unit] =
     compile(path).foldZIO(
-      error => writeResult(path, s"failed\n${error.message}\n").as(ExitCode.failure),
-      _ => writeResult(path, "ok\n").as(ExitCode.success),
+      error => writeResult(path, s"failed\n${error.message}\n") *> ZIO.fail(error),
+      _ => writeResult(path, "ok\n"),
     )
 
   private def compile(path: Path): ZIO[Any, PluginCompileError, Unit] =
@@ -85,7 +84,7 @@ object PluginCompileWorker extends ZIOAppDefault:
   ): ZIO[Scope & ContentStore & CompilerStarts & Compilers & RemoteCache, PluginCompileError, Unit] =
     val _       = request.module
     val compile = CompileRequest(
-      CompileToolchain(request.scala, Platform.Jvm, request.runtime, ScalacFlags.empty),
+      CompileToolchain(request.scala, Platform.Jvm, request.runtime, request.flags),
       request.sources,
       request.classpath ++ request.api,
       request.classes,
@@ -134,6 +133,7 @@ object PluginCompileWorker extends ZIOAppDefault:
       classes  <- one("classes")
       analysis <- one("analysis")
       bridge   <- one("bridge")
+      flags    <- one("flags").flatMap(flagsOf)
       hashes   <- many("apiHash").foldLeft[Either[PluginCompileError, List[Sha256]]](Right(Nil)):
         case (Left(error), _)  => Left(error)
         case (Right(acc), raw) =>
@@ -159,7 +159,21 @@ object PluginCompileWorker extends ZIOAppDefault:
       many("classpath").map(Path.of(_)),
       many("api").map(Path.of(_)),
       hashes,
+      flags,
     )
+
+  private def flagsOf(raw: String): Either[PluginCompileError, ScalacFlags] =
+    val tokens = if raw.isEmpty then Nil else raw.split(",", -1).toList
+    tokens
+      .foldLeft[Either[PluginCompileError, List[ScalacFlag]]](Right(Nil)) { (acc, token) =>
+        acc.flatMap: flags =>
+          ScalacFlag.values.find(flag => ScalacFlags.of(flag).canonical == token) match
+            case Some(flag) => Right(flags :+ flag)
+            case None       => Left(PluginCompileError.Worker(2, s"unknown compiler flag: $token"))
+      }
+      .map:
+        case Nil           => ScalacFlags.empty
+        case first :: rest => ScalacFlags.of(first, rest*)
 
   private def placeholder: Sha256 =
     histos.jdk.Sha256Digest.of(zio.Chunk.fromArray("jdk".getBytes(StandardCharsets.UTF_8)))
@@ -188,6 +202,7 @@ object PluginCompileWorker extends ZIOAppDefault:
       classpath: List[Path],
       api: List[Path],
       apiHashes: List[Sha256],
+      flags: ScalacFlags,
   )
 
 end PluginCompileWorker

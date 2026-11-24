@@ -22,7 +22,8 @@ import zio.Chunk
 
 /** Versioned compile identity. Absolute checkout and temp paths are not inputs. */
 object PluginCompileKey:
-  val Format: Int = 3
+  // Format 3 workers could cache classes without applying the hashed compiler flags.
+  val Format: Int = 4
 
   val Bootstrap: String = "HISTOS_WORKER=1"
 

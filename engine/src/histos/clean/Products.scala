@@ -3,14 +3,75 @@ package histos.clean
 import histos.cache.CacheEntry
 import histos.select.{SelectError, Selection}
 import histos.workspace.{IoFailure, Workspace}
-import histos.{Module, ProjectGraph, ProjectName}
+import histos.{Cell, CompilationStage, Module, ProjectGraph, ProjectName}
+import histos.build.{BuildDag, BuildDagError, BuildNode}
+import histos.plugin.{OutputKind, PluginTaskId, SourceSet}
 
 import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** Build products under `.histos/`. The pin and the launcher file live at the repo root. The server stays. */
+final case class GeneratedCleaner[R, E](clean: PluginTaskId => ZIO[R, E, Unit])
+final case class OwnedProduct(path: Path, extent: OutputKind)
+final case class CleanProjection(modules: List[Module], roots: List[OwnedProduct], tasks: List[PluginTaskId])
+
+/** Build products under `.histos/` and declared generated ownership. The server and launcher pins stay. */
 object Products:
+  def project(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[ProjectName],
+  ): Either[SelectError | BuildDagError, CleanProjection] =
+    val tasks = graph.plugins
+      .flatMap(plugin => plugin.contribution.tasks.map(task => PluginTaskId(plugin.id, task.name) -> task))
+      .toMap
+    for
+      selected <- Selection.select(graph, names)
+      dag      <- BuildDag.plan(
+        graph,
+        selected.modules.flatMap(module =>
+          for
+            version  <- module.versions.all
+            platform <- module.platforms.all
+            scope    <- List(SourceSet.Main, SourceSet.Test)
+          yield BuildNode.Compile(CompilationStage(Cell(module.name, version, platform), scope))
+        ),
+      )
+    yield
+      val generators = if names.isEmpty then tasks.keys.toList.sortBy(_.render)
+      else dag.nodes.collect { case BuildNode.Generate(id) => id }
+      val ordinary = if names.isEmpty then
+        (moduleRoots ++ sharedRoots).map(name => OwnedProduct(dot(repo).resolve(name), OutputKind.Directory))
+      else
+        selected.modules.flatMap(module =>
+          moduleRoots.map(name =>
+            OwnedProduct(dot(repo).resolve(name).resolve(module.name.value), OutputKind.Directory)
+          )
+        )
+      val generated = generators.flatMap(id =>
+        tasks
+          .get(id)
+          .toList
+          .flatMap(_.outputs.map(output => OwnedProduct(repo.resolve(output.path.value), output.kind)))
+      )
+      CleanProjection(
+        selected.modules,
+        (ordinary ++ generated :+ OwnedProduct(observation(repo), OutputKind.File)).distinct,
+        generators,
+      )
+
+  /** The capability must retain the product store's ownership validation and active-reader gate. */
+  def namedUsing[R, E](generated: GeneratedCleaner[R, E])(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[ProjectName],
+  ): ZIO[R, E | SelectError | BuildDagError | IoFailure, List[ProjectName]] =
+    for
+      projection <- ZIO.fromEither(project(repo, graph, names))
+      _          <- ZIO.foreachDiscard(projection.tasks)(generated.clean)
+      _          <- if names.isEmpty then wipe(repo) else wipe(repo, projection.modules)
+    yield if names.isEmpty then Nil else projection.modules.map(_.name)
+
   val moduleRoots: List[String] = List(
     "classes",
     "analysis",

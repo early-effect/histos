@@ -9,15 +9,23 @@ import histos.zinc.GraphCompileError
 /** A plugin run failed. The inner error stays the error that happened. */
 enum PluginFault:
   case Task(error: PluginRunError)
+  case Products(error: ProductError)
+  case MissingProduct(id: histos.plugin.PluginTaskId)
   case Compiled(error: GraphCompileError)
   case Resolved(error: ResolveError)
   case Tested(error: ModuleTestError)
   case Scheduled(error: ScheduleError[PluginFault])
+  case Scoped(error: histos.testrun.ScopedTestFailure)
+  case Linked(error: histos.js.JsLinkError)
 
   def message: String = this match
-    case Task(error)      => error.message
-    case Compiled(error)  => error.message
-    case Resolved(error)  => error.message
-    case Tested(error)    => error.message
-    case Scheduled(error) => error.message
+    case Task(error)        => error.message
+    case Products(error)    => error.message
+    case MissingProduct(id) => s"no committed products for ${id.render}"
+    case Compiled(error)    => error.message
+    case Resolved(error)    => error.message
+    case Tested(error)      => error.message
+    case Scheduled(error)   => error.message
+    case Scoped(error)      => error.message
+    case Linked(error)      => error.message
 end PluginFault

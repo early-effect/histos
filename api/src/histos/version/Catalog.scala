@@ -3,7 +3,7 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.{BuildError, HttpUrl, PomText, ProjectName, SourcePos}
+import histos.{BuildError, MetadataUri, PomText, ProjectName, SourcePos}
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
 opaque type ShipName = String
@@ -64,7 +64,7 @@ enum Ship:
       number: ShipNumber,
       modules: ::[ProjectName],
       described: Option[PomText] = None,
-      located: Option[HttpUrl] = None,
+      located: Option[MetadataUri] = None,
       linked: Option[ShipToolchain] = None,
   )
 
@@ -77,7 +77,7 @@ enum Ship:
   def description: Option[PomText] = this match
     case line: Line => line.described
 
-  def url: Option[HttpUrl] = this match
+  def url: Option[MetadataUri] = this match
     case line: Line => line.located
 
   def toolchain: Option[ShipToolchain] = this match

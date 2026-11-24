@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.{DepExclusion, Developer, HttpUrl, License, MavenScope, Organization, PomText, Scm}
+import histos.{DepExclusion, Developer, MetadataUri, License, MavenScope, Organization, PomText, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -37,13 +37,17 @@ final case class MavenDependency(
     scope: MavenScope = MavenScope.Compile,
 )
 
-/** The pom fields beyond the coordinate. `name` is the artifact id and is not stored here. */
+/** The pom fields beyond the coordinate. An omitted name falls back to the artifact id. */
 final case class PomDocument(
     description: Option[PomText] = None,
-    url: Option[HttpUrl] = None,
+    url: Option[MetadataUri] = None,
     license: Option[License] = None,
     developer: Option[Developer] = None,
     scm: Option[Scm] = None,
+    organizationName: Option[PomText] = None,
+    organizationHomepage: Option[MetadataUri] = None,
+    versionScheme: Option[histos.VersionScheme] = None,
+    name: Option[PomText] = None,
 )
 
 /** Bytes of one publication. A library also carries a sources jar and a javadoc jar. */

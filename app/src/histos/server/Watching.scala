@@ -1,7 +1,7 @@
 package histos.server
 
 import histos.cli.{CliExit, Lines}
-import histos.plugin.{DeclaredInput, PluginTaskId}
+import histos.plugin.PluginTaskId
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.watch.SourceWatch
 import histos.publish.PublishSelect
@@ -57,7 +57,7 @@ object Watching:
                     next <- remember(child, keep)
                     _    <- roots.flatMap: watched =>
                       SourceWatch
-                        .take(watched.paths, watched.excluded)
+                        .take(watched.view)
                         .foldZIO(
                           error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
                           now => cycle(Some(now), next),
@@ -86,7 +86,7 @@ object Watching:
       case Some(taken) => ZIO.succeed(taken)
       case None        =>
         SourceWatch
-          .take(watched.paths, watched.excluded)
+          .take(watched.view)
           .foldZIO(
             error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))).as(SourceWatch.Snapshot(Nil)),
             taken => Calls.tell(say, "watching").as(taken),
@@ -98,7 +98,7 @@ object Watching:
       origin: SourceWatch.Snapshot,
   ): ZIO[R, ServerError, List[Path]] =
     SourceWatch
-      .since(watched.paths, origin, watched.excluded)
+      .since(watched.view, origin)
       .foldZIO(
         error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))).as(List.empty[Path]),
         paths => ZIO.succeed(paths),
@@ -133,13 +133,13 @@ object Watching:
           running.set(false) *>
           roots.flatMap { watched =>
             SourceWatch
-              .take(watched.paths, watched.excluded)
+              .take(watched.view)
               .foldZIO(
                 error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
                 start =>
                   Calls.tell(say, "watching") *>
                     SourceWatch
-                      .since(watched.paths, start, watched.excluded)
+                      .since(watched.view, start)
                       .foldZIO(
                         error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
                         woke =>
@@ -174,9 +174,9 @@ object Watching:
   /** The compile a restart runs before it touches the program: the program's module, or the build. */
   def compileFor(call: Call): Call =
     call match
-      case Call.Run(id, _, _, _) =>
+      case Call.Run(id, platforms, _, _, _) =>
         ProjectName.from(id) match
-          case Right(name) => Call.Compile(List(name))
+          case Right(name) => Call.Compile(List(name), platforms.getOrElse(histos.PlatformSelection.All))
           case Left(_)     => Call.Compile(Nil)
       case _ => Call.Compile(Nil)
 
@@ -185,7 +185,7 @@ object Watching:
     */
   def restarts(result: Option[CallResult], changed: List[Path], watched: Watched): Boolean =
     result.exists(found => CliExit.from(found) == CliExit.Success) &&
-      changed.exists(path => watched.paths.exists(root => covers(root, path)))
+      changed.exists(path => watched.view.inputs.exists(_.contains(path)))
 
   /** `path` is the root or a file the root walk would see. */
   def covers(root: Path, path: Path): Boolean =
@@ -193,7 +193,13 @@ object Watching:
     val file = path.toAbsolutePath.normalize
     file == base || file.startsWith(base)
 
-  final case class Watched(paths: List[Path], excluded: Set[Path])
+  final case class Watched(paths: List[Path], excluded: Set[Path], projection: Option[SourceWatch.Projection] = None):
+    def view: SourceWatch.Projection = projection.getOrElse(
+      SourceWatch.Projection(
+        paths.map(path => SourceWatch.Root(path, histos.plugin.OutputKind.Directory)),
+        excluded.toList.map(path => SourceWatch.Root(path, histos.plugin.OutputKind.Directory)),
+      )
+    )
 
   def roots(repo: Path, call: Call, graph: ProjectGraph): List[Path] =
     watched(repo, call, graph).paths
@@ -202,40 +208,63 @@ object Watching:
     * build file. Declared outputs are excluded, including one that sits inside a watched directory.
     */
   def watched(repo: Path, call: Call, graph: ProjectGraph): Watched =
-    call match
-      case Call.Task(id, _) =>
-        PluginTaskId.parse(id) match
-          case Left(_)       => Watched(List(repo.resolve("histos.scala")), Set.empty)
-          case Right(taskId) =>
-            graph.plugins
-              .find(_.id == taskId.plugin)
-              .flatMap(_.contribution.tasks.find(_.name == taskId.name)) match
-              case None       => Watched(List(repo.resolve("histos.scala")), Set.empty)
-              case Some(task) =>
-                val declared = task.inputs.flatMap(inputPath(repo, graph, _))
-                val outputs  = task.outputs.map(output => repo.resolve(output.path.value)).toSet
-                val paths    = if declared.isEmpty then List(repo.resolve("histos.scala")) else declared.distinct
-                Watched(paths, outputs)
-      case other =>
-        val modules = graph.projects.collect { case module: Module => module }
-        val chosen  = projects(graph, other) match
-          case WatchNames.Every       => modules
-          case WatchNames.Only(names) => modules.filter(module => names.contains(module.name))
-        Watched(SourceWatch.roots(repo, chosen), Set.empty)
+    project(repo, call, graph) match
+      case Right(projection) =>
+        Watched(projection.inputs.map(_.path), projection.excluded.map(_.path).toSet, Some(projection))
+      case Left(_) => Watched(List(repo.resolve("histos.scala")), Set(repo.resolve(".histos")))
 
-  private def inputPath(repo: Path, graph: ProjectGraph, input: DeclaredInput): List[Path] =
-    input match
-      case DeclaredInput.File(path)         => List(repo.resolve(path.value))
-      case DeclaredInput.Directory(path)    => List(repo.resolve(path.value))
-      case DeclaredInput.Module(name, _, _) =>
-        graph.get(name) match
-          case Some(module: Module) =>
-            val base = repo.resolve(module.baseDirectory)
-            List(base.resolve("src"), base.resolve("test"))
-          case _ => Nil
-      case DeclaredInput.Note(_, _) => Nil
-      case DeclaredInput.Text(_, _) => Nil
-      case DeclaredInput.Env(_)     => Nil
+  def project(repo: Path, call: Call, graph: ProjectGraph): Either[BuildFault, SourceWatch.Projection] =
+    nodes(graph, call).flatMap { roots =>
+      SourceWatch.project(repo, graph, roots).left.map {
+        case error: histos.build.BuildDagError =>
+          BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.graph(error)))
+        case error: histos.zinc.StageRootError =>
+          BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.root(error)))
+      }
+    }
+
+  private def nodes(graph: ProjectGraph, call: Call): Either[BuildFault, List[histos.build.BuildNode]] =
+    import histos.build.{BuildNode, BuildRuntime}
+    def compile(names: List[ProjectName], platforms: histos.PlatformSelection) =
+      BuildRuntime.compileRoots(graph, names, platforms).left.map(BuildFault.Test(_))
+    def tests(selection: histos.TestSelection) =
+      histos.testrun.TestCells
+        .plan(graph, selection)
+        .left
+        .map(error =>
+          BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.ScopedTestFailure.Selection(error)))
+        )
+        .map(_.compileStageRoots.map(BuildNode.Compile(_)))
+    def run(id: String, platforms: Option[histos.PlatformSelection], main: Option[histos.MainClass]) =
+      histos.preview.Plan.runSelected(graph, id, platforms, main).left.map(BuildFault.Preview(_)).flatMap { plan =>
+        plan.unit match
+          case histos.preview.RunUnit.Module(name, platform, _) =>
+            compile(List(name), histos.PlatformSelection.only(platform))
+          case histos.preview.RunUnit.Task(id) => task(id)
+      }
+    def task(id: String): Either[BuildFault, List[BuildNode]] =
+      if id.contains("/") then
+        PluginTaskId.parse(id).left.map(BuildFault.PluginTask(_)).map(id => List(BuildNode.Generate(id)))
+      else compile(Nil, histos.PlatformSelection.All)
+    call match
+      case Call.Compile(names, platforms)        => compile(names, platforms)
+      case Call.PreviewCompile(names, platforms) => compile(names, platforms)
+      case Call.Test(selection, _, _, _)         => tests(selection)
+      case Call.PreviewTest(selection, _, _, _)  => tests(selection)
+      case Call.Run(id, platforms, _, _, main)   => run(id, platforms, main)
+      case Call.PreviewRun(id, platforms, main)  => run(id, platforms, main)
+      case Call.Task(id, _)                      => task(id)
+      case Call.Watch(inner, _)                  => nodes(graph, inner)
+      case other @ (Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
+          Call.PublishWithdraw | Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) |
+          Call.Assembly(_) | Call.Clean(_, _) | Call.PreviewClean(_, _) | Call.Format(_, _) | Call.Resolve(_) |
+          Call.Workflow(_) | Call.Graph | Call.Cancel(_) | Call.Reload | Call.Reboot(_) | Call.Stop | Call.Version |
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.CacheForget(_) |
+          Call.CacheVerify(_) | Call.Bsp | Call.Catalog(_)) =>
+        projects(graph, other) match
+          case WatchNames.Every       => compile(Nil, histos.PlatformSelection.All)
+          case WatchNames.Only(names) => compile(names, histos.PlatformSelection.All)
 
   private enum WatchNames:
     case Every
@@ -249,22 +278,27 @@ object Watching:
   private def projects(graph: ProjectGraph, call: Call): WatchNames =
     def listed(names: List[ProjectName]): WatchNames =
       if names.isEmpty then WatchNames.Every else WatchNames.Only(names)
+    def testNames(graph: ProjectGraph, selection: histos.TestSelection): WatchNames =
+      histos.testrun.TestCells.plan(graph, selection) match
+        case Right(plan) => WatchNames.Only(plan.requestedCells.map(_.module).distinct)
+        case Left(_)     => WatchNames.Every
     def one(id: String): WatchNames =
       ProjectName.from(id) match
         case Right(name) => WatchNames.Only(List(name))
         case Left(_)     => WatchNames.Only(Nil)
     call match
-      case Call.Test(names, _, _, _)            => listed(names)
-      case Call.Compile(names)                  => listed(names)
-      case Call.PreviewCompile(names)           => listed(names)
-      case Call.PreviewTest(names, _, _, _)     => listed(names)
-      case Call.PublishLocal(tokens)            => publish(graph, tokens.map(_.value))
+      case Call.Test(selection, _, _, _)        => testNames(graph, selection)
+      case Call.Compile(names, _)               => listed(names)
+      case Call.PreviewCompile(names, _)        => listed(names)
+      case Call.PreviewTest(selection, _, _, _) => testNames(graph, selection)
+      case Call.PublishCheck(tokens, _)         => publish(graph, tokens.map(_.value))
+      case Call.PublishLocal(tokens, _)         => publish(graph, tokens.map(_.value))
       case Call.PublishSnapshots(tokens)        => publish(graph, tokens)
       case Call.PreviewPublishLocal(tokens)     => publish(graph, tokens.map(_.value))
       case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)
       case Call.PreviewClean(names, _)          => listed(names)
       case Call.Clean(names, _)                 => listed(names)
-      case Call.PreviewRun(id, _)               => one(id)
-      case Call.Run(id, _, _, _)                => one(id)
+      case Call.PreviewRun(id, _, _)            => one(id)
+      case Call.Run(id, _, _, _, _)             => one(id)
       case _                                    => WatchNames.Every
 end Watching

@@ -227,6 +227,38 @@ object Calls:
         report => told(say, report.lines.mkString("\n")) *> ok(say),
       )
 
+  def publishCheck(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      jdk: JdkRuntime,
+      tokens: List[String],
+      scope: histos.publish.ProofScope,
+      say: Say,
+      launcher: ApiDigest,
+      plugins: Option[histos.load.PluginRuntime] = None,
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+    layout(say, graph) *>
+      CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        reported(
+          repo,
+          say,
+          console,
+          histos.publish.PublishRun.check(
+            repo,
+            graph,
+            tokens,
+            jdk,
+            machine.env,
+            launcher,
+            scope,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+            plugins,
+          ),
+        )
+      }
+
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
@@ -234,8 +266,10 @@ object Calls:
       machine: Machine,
       jdk: JdkRuntime,
       tokens: List[String],
+      scope: histos.publish.ProofScope,
       say: Say,
       launcher: ApiDigest,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[Resolve & ContentStore & IvyRoot, ServerError, Unit] =
     layout(say, graph) *>
       CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
@@ -251,8 +285,10 @@ object Calls:
             jdk,
             machine.env,
             launcher,
+            scope,
             feed => speak(say, console, feed).ignore,
             hear(say),
+            plugins,
           ),
         )
       }
@@ -266,6 +302,7 @@ object Calls:
       tokens: List[String],
       say: Say,
       launcher: ApiDigest,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     layout(say, graph) *>
       CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
@@ -283,6 +320,7 @@ object Calls:
             launcher,
             feed => speak(say, console, feed).ignore,
             hear(say),
+            plugins,
           ),
         )
       }
@@ -297,6 +335,7 @@ object Calls:
       automatic: Boolean,
       say: Say,
       launcher: ApiDigest,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     layout(say, graph) *>
       CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
@@ -315,6 +354,7 @@ object Calls:
             launcher,
             feed => speak(say, console, feed).ignore,
             hear(say),
+            plugins,
           ),
         )
       }
@@ -350,7 +390,7 @@ object Calls:
           told(say, shown.mkString("\n")) *> finish(say, result),
       )
 
-  private def released[R](
+  private[histos] def released[R](
       repo: Path,
       say: Say,
       console: histos.cli.CompileConsole.Session,
@@ -364,7 +404,7 @@ object Calls:
             say,
             console,
             List(console.observation),
-            CallResult.Fault(BuildFault.Release(failure.message)),
+            CallResult.Fault(releaseFault(failure)),
           ),
       report =>
         val shown =
@@ -418,12 +458,14 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       id: String,
-      platform: Option[Platform],
+      platform: Option[histos.PlatformSelection],
       launch: histos.server.RunLaunch,
       args: List[String],
       say: Say,
       compiled: UIO[Unit],
       relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
+      main: Option[histos.MainClass] = None,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     opened(say) { remote =>
       CompileConsole
@@ -446,6 +488,8 @@ object Calls:
                   relay,
                   feed => speak(say, console, feed).ignore,
                   console.announce((text, role) => status(say, text, role).ignore) *> compiled,
+                  main,
+                  plugins,
                 )
                 .provideSomeLayer(ZLayer.succeed(remote))
                 .foreach:
@@ -569,7 +613,7 @@ object Calls:
         if args != PluginArgs.empty then reject(say, Rejection.TaskArguments(found.value))
         else
           histos.doc.DocTask
-            .fromRepo(graph, repo, machine)
+            .fromRepo(graph, repo, machine, plugins)
             .foldZIO(
               error => fault(say, BuildFault.Task(error)),
               result => told(say, result.render) *> ok(say),
@@ -930,10 +974,12 @@ object Calls:
     BuildFault.Workflow(WorkflowFault.Files(error))
 
   /** A graph fault from the wiring's jobs is the broken graph the loader would have named. */
-  private def refused(error: CiError | BuildError): BuildFault =
+  private def refused(error: CiError | BuildError | histos.testrun.TestSelectionError): BuildFault =
     error match
-      case ci: CiError       => files(ci)
-      case graph: BuildError => BuildFault.Load(LoadError.BrokenGraph(graph))
+      case ci: CiError                                  => files(ci)
+      case graph: BuildError                            => BuildFault.Load(LoadError.BrokenGraph(graph))
+      case selection: histos.testrun.TestSelectionError =>
+        BuildFault.Test(ModuleTestError.Scoped(histos.testrun.ScopedTestFailure.Selection(selection)))
 
   def version(repo: Path, text: String, say: Say): IO[ServerError, Unit] =
     ZIO.succeed(histos.ApiClock.versionLines(text)).flatMap(shown => told(say, shown) *> ok(say))
@@ -1128,45 +1174,77 @@ object Calls:
       machine: Machine,
       say: Say,
       plugins: histos.load.PluginRuntime,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   ): ZIO[
     Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =
     opened(say) { remote =>
-      emitted(repo, graph, plugins, projects, remote) *>
-        layout(say, graph) *>
-        CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
-          GraphCompile
-            .strict(
-              GraphCompile
-                .resident(
-                  repo,
-                  graph,
-                  projects,
-                  jdk,
-                  NativeOrigin.read(machine.env),
-                  None,
+      layout(say, graph) *> CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        val compile = ZIO
+          .scoped {
+            for
+              roots   <- ZIO.fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+              lock    <- ZIO.serviceWithZIO[histos.resolve.ResolutionService](_.current)
+              runtime <- histos.build.BuildRuntime.open(Some(plugins))
+              _       <- runtime
+                .ensure(
+                  histos.build.ExecutionRequest(
+                    histos.zinc.CompileSession(repo, graph, jdk, NativeOrigin.read(machine.env), lock),
+                    roots,
+                    feed => speak(say, console, feed).ignore,
+                  )
                 )
-            )
-            .provideSomeLayer(ZLayer.succeed(remote))
-            .mapZIO(feed => speak(say, console, feed))
-            .runDrain
-            .foldZIO(
-              {
-                case error: GraphCompileError =>
-                  val result = Faults.compileStopped(error) match
-                    case Some(why) => CallResult.Fault(why)
-                    case None      => CallResult.reported(Cli.compileFailure(error))
-                  console.announce((text, role) => status(say, text, role)) *>
-                    finishNoted(repo, say, console, List(console.observation), result)
-                case error: ServerError => ZIO.fail(error)
-              },
-              _ =>
-                console.announce((text, role) => status(say, text, role)) *>
-                  finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
-            )
+                .mapError(histos.testrun.TestFailures(_))
+            yield ()
+          }
+          .provideSomeLayer(ZLayer.succeed(remote))
+        compile.foldZIO(
+          error =>
+            val result = error match
+              case ModuleTestError.Compile(error) => Perform.notCompiled(error)
+              case other                          => CallResult.Fault(BuildFault.Test(other))
+            console.announce((text, role) => status(say, text, role)) *>
+              finishNoted(repo, say, console, List(console.observation), result)
+          ,
+          _ =>
+            console.announce((text, role) => status(say, text, role)) *>
+              finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
+        )
+      }
+    }
+
+  private def releaseFault(error: ReleaseError): BuildFault = error match
+    case ReleaseError.Stage(error) => BuildFault.Publish(error)
+    case other                     => BuildFault.Release(other.message)
+
+  /** Missing committed products refuse preview. Producers are never invoked by this read-only projection. */
+  private[histos] def previewUsing[A](
+      graph: ProjectGraph,
+      plugins: histos.load.PluginRuntime,
+      roots: List[histos.build.BuildNode],
+  )(use: histos.zinc.GeneratedRoots => IO[Plan.ProjectionError, A]): IO[BuildFault, A] =
+    ZIO.scoped {
+      for
+        dag <- ZIO
+          .fromEither(histos.build.BuildDag.plan(graph, roots))
+          .mapError(error => BuildFault.Preview(Plan.failure(error)))
+        views <- ZIO.foreach(dag.nodes.collect { case histos.build.BuildNode.Generate(id) => id }) { id =>
+          plugins
+            .generated(id)
+            .mapError(BuildFault.Plugin(_))
+            .map(_.values.map { location =>
+              histos.zinc.GeneratedLocation(
+                histos.zinc.GeneratedRootId(id, location.output.name),
+                location.output.kind,
+                location.path,
+              )
+            })
         }
+        result <- use(histos.zinc.GeneratedRoots.Provided(views.flatten))
+          .mapError(error => BuildFault.Preview(Plan.failure(error)))
+      yield result
     }
 
   def previewCompile(
@@ -1174,26 +1252,39 @@ object Calls:
       graph: ProjectGraph,
       projects: List[ProjectName],
       say: Say,
+      plugins: histos.load.PluginRuntime,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   ): IO[ServerError, Unit] =
-    Plan
-      .show(repo, graph, projects)
-      .foldZIO(
-        error => fault(say, BuildFault.Preview(error)),
-        text => told(say, text) *> ok(say),
-      )
+    ZIO
+      .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+      .mapError(error => BuildFault.Preview(histos.preview.PreviewError.Test(error)))
+      .flatMap { roots =>
+        previewUsing(graph, plugins, roots)(generated => Plan.show(repo, graph, projects, generated, platforms))
+      }
+      .foldZIO(error => fault(say, error), text => told(say, text) *> ok(say))
 
   def previewTest(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[histos.testrun.SuitePattern],
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): IO[ServerError, Unit] =
-    Plan
-      .test(repo, graph, projects)
-      .map(plan => Plan.narrow(plan, patterns))
+    ZIO
+      .fromEither(histos.testrun.TestCells.plan(graph, selection))
+      .mapError(error =>
+        BuildFault.Preview(
+          Plan.failure(histos.preview.PreviewError.Scoped(histos.testrun.ScopedTestFailure.Selection(error)))
+        )
+      )
+      .flatMap { selected =>
+        previewUsing(graph, plugins, selected.compileStageRoots.map(histos.build.BuildNode.Compile(_))) { generated =>
+          Plan.testSelection(repo, graph, selection, generated).map(plan => Plan.narrow(plan, patterns))
+        }
+      }
       .foldZIO(
-        error => fault(say, BuildFault.Preview(error)),
+        error => fault(say, error),
         plan => told(say, Plan.renderTest(repo, plan)) *> ok(say),
       )
 
@@ -1207,7 +1298,7 @@ object Calls:
     Plan
       .publishLocal(repo, graph, tokens, env)
       .foldZIO(
-        error => fault(say, BuildFault.Preview(error)),
+        error => fault(say, BuildFault.Preview(Plan.failure(error))),
         plan => told(say, Plan.renderPublish(plan)) *> ok(say),
       )
 
@@ -1221,11 +1312,11 @@ object Calls:
     Plan
       .publishSnapshots(repo, graph, tokens, env)
       .foldZIO(
-        error => fault(say, BuildFault.Preview(error)),
+        error => fault(say, BuildFault.Preview(Plan.failure(error))),
         plan => told(say, Plan.renderPublish(plan)) *> ok(say),
       )
 
-  /** Empty names do not read `graph`. */
+  /** Named and whole graph-backed previews include declared generated ownership. */
   def previewClean(
       repo: Path,
       graph: ProjectGraph,
@@ -1235,7 +1326,7 @@ object Calls:
     Plan
       .clean(repo, graph, projects)
       .foldZIO(
-        error => fault(say, BuildFault.Preview(error)),
+        error => fault(say, BuildFault.Preview(Plan.failure(error))),
         plan => told(say, Plan.renderClean(repo, plan)) *> ok(say),
       )
 
@@ -1250,32 +1341,41 @@ object Calls:
   def previewRun(
       graph: ProjectGraph,
       id: String,
-      platform: Option[Platform],
+      platform: Option[histos.PlatformSelection],
       say: Say,
+      main: Option[histos.MainClass] = None,
   ): IO[ServerError, Unit] =
-    Plan.run(graph, id, platform) match
-      case Left(error) => fault(say, BuildFault.Preview(error))
+    Plan.runSelected(graph, id, platform, main) match
+      case Left(error) => fault(say, BuildFault.Preview(Plan.failure(error)))
       case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
-  /** No names wipe every product root and do not read `graph`. The resident memo and compiler go with the products. A
-    * deleted source is not still a hit.
-    */
+  /** Generated readers must retire before any ordinary class products are deleted. */
   def clean(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
       say: Say,
+      plugins: histos.load.PluginRuntime,
   ): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
-    val removed =
-      if projects.isEmpty then histos.clean.Products.wipe(repo).as(histos.clean.Products.line(Nil))
-      else
-        histos.clean.Products
-          .named(repo, graph, projects)
-          .map(histos.clean.Products.line)
+    val removed = cleanProducts(repo, graph, plugins, projects).map(histos.clean.Products.line)
     removed.foldZIO(
-      error => fault(say, cleanFault(error)),
+      error => fault(say, error),
       line => release *> told(say, line) *> ok(say),
     )
+
+  private[histos] def cleanProducts(
+      repo: Path,
+      graph: ProjectGraph,
+      plugins: histos.load.PluginRuntime,
+      projects: List[ProjectName],
+  ): IO[BuildFault, List[ProjectName]] =
+    histos.clean.Products
+      .namedUsing(histos.clean.GeneratedCleaner(plugins.cleanProducts))(
+        repo,
+        graph,
+        projects,
+      )
+      .mapError(cleanFault)
 
   def wipe(repo: Path, say: Say): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
     histos.clean.Products
@@ -1287,25 +1387,26 @@ object Calls:
 
   /** Products go first. A store failure is exit 3 and does not claim success.
     */
-  def cleanFull(repo: Path, say: Say): ZIO[
+  def cleanFull(repo: Path, say: Say, build: Option[histos.load.LoadedBuild] = None): ZIO[
     ContentStore & histos.zinc.CompileMemo & histos.zinc.Compilers,
     ServerError,
     Unit,
   ] =
-    histos.clean.Products
-      .wipe(repo)
-      .foldZIO(
-        error => fault(say, BuildFault.Io(error)),
-        _ =>
-          release *>
-            ZIO
-              .serviceWithZIO[ContentStore]: store =>
-                zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
-              .foldZIO(
-                error => fault(say, BuildFault.Cache(error)),
-                entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
-              ),
-      )
+    val removed = build match
+      case Some(build) => cleanProducts(repo, build.graph, build.plugins, Nil).unit
+      case None        => histos.clean.Products.wipe(repo).mapError(BuildFault.Io(_))
+    removed.foldZIO(
+      error => fault(say, error),
+      _ =>
+        release *>
+          ZIO
+            .serviceWithZIO[ContentStore]: store =>
+              zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
+            .foldZIO(
+              error => fault(say, BuildFault.Cache(error)),
+              entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
+            ),
+    )
 
   /** Products are gone, or the build was reloaded. Drop remembered inputs and the resident compiler. */
   def release: zio.URIO[histos.zinc.CompileMemo & histos.zinc.Compilers, Unit] =
@@ -1314,7 +1415,7 @@ object Calls:
   def test(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[ProjectName],
+      selection: histos.TestSelection,
       patterns: List[SuitePattern],
       mode: TestMode,
       filter: TestFilter,
@@ -1328,8 +1429,7 @@ object Calls:
     Unit,
   ] =
     opened(say) { remote =>
-      emitted(repo, graph, plugins, projects, remote) *>
-        layout(say, graph) *>
+      layout(say, graph) *>
         CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
           CompileConsole.notes(graph.moduleColumn).flatMap { notes =>
             Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
@@ -1346,28 +1446,32 @@ object Calls:
                   val ran =
                     for
                       runtimes <- Runtimes.read(machine, graph.runnerTools.nodePath)
-                      _        <- ZIO
-                        .fromEither(histos.select.Selection.select(graph, projects))
-                        .mapError(ModuleTestError.Target(_))
-                      _ <- ModuleTest
-                        .sessionOn(
-                          TestRun(
-                            repo,
-                            graph,
-                            projects,
-                            jdk,
-                            runtimes,
-                            mode,
-                            patterns,
-                            filter,
-                            (module, version, platform, facts) =>
-                              notes(module, version, platform, facts).flatMap { line =>
-                                val spoken =
-                                  if facts.changed then told(say, line)
-                                  else status(say, line, Role.Unchanged)
-                                spoken.ignore
-                              },
-                          )
+                      _        <- zio.stream.ZStream
+                        .unwrapScoped(
+                          histos.build.BuildRuntime
+                            .open(Some(plugins))
+                            .map(runtime =>
+                              runtime.tests(
+                                TestRun(
+                                  repo,
+                                  graph,
+                                  Nil,
+                                  jdk,
+                                  runtimes,
+                                  mode,
+                                  patterns,
+                                  filter,
+                                  (module, version, platform, facts) =>
+                                    notes(module, version, platform, facts).flatMap { line =>
+                                      val spoken =
+                                        if facts.changed then told(say, line)
+                                        else status(say, line, Role.Unchanged)
+                                      spoken.ignore
+                                    },
+                                  requested = Some(selection),
+                                )
+                              )
+                            )
                         )
                         .provideSomeLayer(ZLayer.succeed(remote))
                         .foreach {
@@ -1469,26 +1573,6 @@ object Calls:
       )
     yield ()
 
-  /** Run plugin tasks that emit sources for the modules about to compile. */
-  private def emitted(
-      repo: Path,
-      graph: ProjectGraph,
-      plugins: histos.load.PluginRuntime,
-      projects: List[ProjectName],
-      remote: histos.schedule.RemoteCache,
-  ): ZIO[ContentStore & Resolve & histos.resolve.ResolutionService, ServerError, Unit] =
-    val _ = repo
-    ZIO.serviceWithZIO[ContentStore]: store =>
-      ZIO.foreachDiscard(histos.zinc.Emitted.tasks(graph, projects)): id =>
-        plugins
-          .run(id, histos.plugin.PluginArgs.empty)
-          .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
-            ZLayer.succeed(ContentStore.actions(store)),
-            ZLayer.succeed(remote),
-          )
-          .mapError(error => ServerError.Exited(error.message))
-          .unit
-
   /** Open the process cache for this call. A bad URI fails the call. An unset URI is off. */
   private def opened[R](say: Say)(body: RemoteCache => ZIO[R, ServerError, Unit]): ZIO[R, ServerError, Unit] =
     ZIO.scoped:
@@ -1530,11 +1614,15 @@ object Calls:
     }
 
   private def cleanFault(
-      error: histos.select.SelectError | histos.workspace.IoFailure
+      error: histos.select.SelectError | histos.workspace.IoFailure | histos.build.BuildDagError |
+        histos.load.PluginFault
   ): BuildFault =
     error match
       case found: histos.select.SelectError  => BuildFault.Select(found)
       case found: histos.workspace.IoFailure => BuildFault.Io(found)
+      case found: histos.load.PluginFault    => BuildFault.Plugin(found)
+      case found: histos.build.BuildDagError =>
+        BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.graph(found)))
 
   private def relative(repo: Path, path: Path): String =
     val base = repo.toAbsolutePath.normalize

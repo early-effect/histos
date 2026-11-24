@@ -16,6 +16,7 @@ import histos.plugin.{
   PluginRunError,
   PluginTaskId,
   RepoPath,
+  SourceSet,
   VerifiedPluginManifest,
 }
 import histos.schedule.{Input, InputName, InputValue}
@@ -48,14 +49,29 @@ private[load] object PluginInputs:
       binding: Option[PluginLinked],
       provenance: List[ProvenanceResult],
       locations: List[Path],
+      dependencyInputs: Option[List[Input]] = None,
   )
 
   def hash(request: HashRequest): IO[PluginRunError, Hashed] =
-    val HashRequest(repo, graph, plugin, task, id, jars, launcher, env, args, binding, provenance, locations) =
+    val HashRequest(
+      repo,
+      graph,
+      plugin,
+      task,
+      id,
+      jars,
+      launcher,
+      env,
+      args,
+      binding,
+      provenance,
+      locations,
+      dependencyInputs,
+    ) =
       request
     for
       declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, env, _))
-      deps     <- compileInputs(repo, graph, task)
+      deps     <- dependencyInputs.fold(compileInputs(repo, graph, task))(ZIO.succeed(_))
       jarsIn   <- ZIO.foreach(jars.sorted)(jarInput)
       places   <- ZIO.foreach(locations.distinct.sortBy(_.toString))(path => jarInput(path.toString))
       closed   <- provenanceInputs(provenance)
@@ -63,9 +79,11 @@ private[load] object PluginInputs:
       bound    <- named("plugin.binding", InputValue.Text(bindingLine(binding)))
       api      <- named("plugin.api", InputValue.Hash(digest(launcher.value)))
       taskIn   <- named("plugin.task", InputValue.Text(id.render))
+      outputs  <- named("plugin.outputs.v2", InputValue.Text(outputIdentity(task)))
+      emitted  <- named("plugin.emissions", InputValue.Text(emissionIdentity(task)))
       bytes = (jarsIn ::: places).distinctBy(_.name.value)
     yield Hashed(
-      declared.map(_._1) ::: deps ::: bytes ::: closed ::: List(argsIn, bound, api, taskIn),
+      declared.map(_._1) ::: deps ::: bytes ::: closed ::: List(argsIn, bound, api, taskIn, outputs, emitted),
       declared.map(_._2),
     )
 
@@ -135,29 +153,36 @@ private[load] object PluginInputs:
             MaterialInput.Module(name, content(sha)),
           )
 
-  /** Class directories of `TaskDep.Compile`. The compiler has already written them. The hash is the plugin cache key.
+  /** Completed stage products and effective link modes contribute to the plugin cache key.
     */
   def compileInputs(
       repo: Path,
       graph: ProjectGraph,
       task: DeclaredTask,
   ): IO[PluginRunError, List[Input]] =
-    val chosen = ZIO.foreach(task.dependsOn):
-      case histos.plugin.TaskDep.Same(_)             => ZIO.none
-      case histos.plugin.TaskDep.Link(name, version) =>
+    for
+      compiled <- ZIO.fromEither(PluginCells.selected(graph, task))
+      linked   <- ZIO.fromEither(PluginCells.links(graph, task))
+      stages   <- ZIO.foreach(compiled): cell =>
+        val name  = cell.module.name
+        val label = s"${name.value}:${cell.version.value}:${cell.platform.token}:${PluginCells.scopeToken(cell.scope)}"
+        for
+          main   <- dirHash(GraphCompile.classesDir(repo, name, cell.version, cell.platform), label)
+          hashes <- cell.scope match
+            case SourceSet.Main => ZIO.succeed(List(main))
+            case SourceSet.Test =>
+              dirHash(histos.testrun.TestCompile.testClasses(repo, name, cell.version, cell.platform), label)
+                .map(test => List(main, test))
+          sha = Sha256Digest.of(Chunk.fromArray(hashes.map(_.value).mkString("\n").getBytes(StandardCharsets.UTF_8)))
+          input <- named(s"in:dep:$label", InputValue.Hash(sha))
+        yield input
+      scripts <- ZIO.foreach(linked.distinct): request =>
+        val PluginCells.Link(cell, optimize) = request
         PluginCells
-          .scriptDigest(repo, graph, name, version)
+          .scriptDigest(repo, request)
           .flatMap: sha =>
-            named(s"in:link:${name.value}:${star(version)}", InputValue.Hash(sha)).map(Some(_))
-      case histos.plugin.TaskDep.Generate(_)                      => ZIO.none
-      case histos.plugin.TaskDep.Emit(_)                          => ZIO.none
-      case histos.plugin.TaskDep.Compile(name, version, platform) =>
-        cells(repo, graph, name, version, platform).flatMap: sha =>
-          named(
-            s"in:dep:${name.value}:${star(version)}:${starPlatform(platform)}",
-            InputValue.Hash(sha),
-          ).map(Some(_))
-    chosen.map(_.flatten)
+            named(s"in:link:${cell.module.name.value}:${cell.version.value}:${optimize.token}", InputValue.Hash(sha))
+    yield stages ++ scripts
 
   private def note(
       graph: ProjectGraph,
@@ -350,6 +375,34 @@ private[load] object PluginInputs:
       case ArtifactFormat.Jar       => "jar"
       case ArtifactFormat.Directory => "directory"
     s"$format ${identity.digest.value}"
+
+  private def framed(values: List[String]): String = values.map(value => s"${value.length}:$value").mkString
+
+  private def outputIdentity(task: DeclaredTask): String =
+    framed(
+      task.outputs
+        .sortBy(_.name.value)
+        .flatMap(output => List(output.name.value, output.path.value, output.kind.toString))
+    )
+
+  private def emissionIdentity(task: DeclaredTask): String =
+    import histos.plugin.{EmittedContent, TaskDep}
+    val entries = task.dependsOn.flatMap:
+      case TaskDep.Compile(_, _, _) | TaskDep.CompileScoped(_, _, _, _) | TaskDep.Link(_, _, _) | TaskDep.Same(_) |
+          TaskDep.Generate(_) =>
+        Nil
+      case TaskDep.Emit(module) => List(framed(List(module.value, "main", "all", "source-tree")))
+      case TaskDep.EmitScoped(module, scope, platforms, content, output) =>
+        val selected = platforms match
+          case histos.PlatformSelection.All          => "all"
+          case histos.PlatformSelection.Only(values) => framed(values.all.map(_.token).distinct.sorted)
+        val contents = content match
+          case EmittedContent.SourceFile(entry)  => List("source-file", entry.value)
+          case EmittedContent.SourceTree         => List("source-tree")
+          case EmittedContent.ResourceFile(name) => List("resource-file", name.value)
+          case EmittedContent.ResourceTree       => List("resource-tree")
+        List(framed(List(module.value, PluginCells.scopeToken(scope), selected, output.value) ++ contents))
+    framed(entries.distinct.sorted)
 
   private def argsLine(args: PluginArgs): String =
     val texts = args.texts.map(item => s"${item.name.value}=${item.value}").sorted.mkString("\n")

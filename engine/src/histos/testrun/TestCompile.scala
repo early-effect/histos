@@ -3,19 +3,8 @@ package histos.testrun
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.jdk.Sha256
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
-import histos.native.{
-  NativeCompile,
-  NativeLink,
-  NativeLinkRequest,
-  NativeOrigin,
-  NativeSuite,
-  NativeSuiteRequest,
-  NativeToolchain,
-}
-import histos.node.{NodeBinary, NodeMiss}
-
-import histos.toolchain.Runtimes
+import histos.js.ScalaJs
+import histos.native.{NativeCompile, NativeOrigin}
 import histos.resolve.{
   BuildResolvers,
   Classpath,
@@ -27,7 +16,6 @@ import histos.resolve.{
   ResolveError,
   ResolvedArtifact,
 }
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{
   ApiDigest,
@@ -43,24 +31,272 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ScalacFlags,
   SemanticDb,
   Sources,
   ToolchainMiss,
   UpstreamCell,
   UpstreamCells,
 }
-import histos.pack.{AssetSync, MainClass, MainClassError, Resources}
-import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
+import histos.pack.{AssetSync, Resources}
+import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestProvider}
 
 import java.nio.file.{Files, Path}
-
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Ref, UIO, ZIO}
-import zio.stream.ZStream
+import zio.{IO, UIO, ZIO}
 
 private[histos] object TestCompile:
+  /** Compile-only Test leaf. All scoped dependencies and generated products are already completed. */
+  def stage(
+      execution: histos.build.ExecutionRequest,
+      stage: histos.CompilationStage,
+      completed: histos.build.ExecutionProducts,
+  ): ZIO[GraphCompile.Fed, histos.build.ExecutionError, histos.build.StageProduct] =
+    import histos.build.{BuildNode, ExecutionError, StageProduct}
+    import histos.plugin.SourceSet
+    import histos.zinc.{
+      CaptureProduct,
+      CaptureRequest,
+      CaptureTools,
+      CellCapture,
+      ProductDigest,
+      StageRootError,
+      StageRoots,
+    }
+    val session = execution.session
+    val cell    = stage.cell
+    val failed = (error: CompileError) => ExecutionError.Test(ModuleTestError.Sources(cell.module, cell.version, error))
+    if stage.scope != SourceSet.Test then ZIO.fail(ExecutionError.WrongProduct(BuildNode.Compile(stage)))
+    else
+      for
+        module <- ZIO
+          .fromOption(session.graph.projects.collectFirst {
+            case module: Module if module.name == cell.module => module
+          })
+          .orElseFail(ExecutionError.Test(ModuleTestError.Absent(cell.module)))
+        main  <- ZIO.fromEither(completed.require(stage.copy(scope = SourceSet.Main)))
+        files <- StageRoots
+          .of(session.graph)
+          .read(session.repo, stage, completed.generatedRoots)
+          .mapError(ExecutionError.Roots(_))
+        sourceInputs <- ZIO.fromEither(files.compileInputs(session.repo)).mapError(ExecutionError.Roots(_))
+        resolution   <- ZIO.service[histos.resolve.ResolutionService]
+        lock         <- resolution.current
+        tools        <- LockedTools.make(lock, session.graph, resolution)
+        selected     <- scopedUpstream(session.graph, module, stage, completed)
+          .provideSomeLayer(zio.ZLayer.succeed(tools))
+        fetched <- classpath(
+          module,
+          cell.version,
+          cell.platform,
+          lock,
+          BuildResolvers(session.graph.resolvers),
+          histos.load.ApiDep.modules(session.graph),
+        ).mapError(ExecutionError.Test(_))
+          .provideSomeLayer(zio.ZLayer.succeed(tools))
+        library <- standardLibrary(main.compiled)
+          .mapError(ExecutionError.Test(_))
+          .provideSomeLayer(zio.ZLayer.succeed(tools))
+        host <- histos.zinc.ScalacClasspath
+          .substituted(session.repo, module, histos.load.ApiDep.modules(session.graph))
+          .mapError(error => ExecutionError.Test(ModuleTestError.Compile(error)))
+        inherited = (main.classpath ++ selected.flatMap(_.classpath)).distinct
+        resolved  = inherited ++ library ++ fetched.paths.filterNot(path =>
+          cell.platform != Platform.Js && JvmCompile.isStandardLibrary(path)
+        )
+        kept =
+          if host.isEmpty then resolved
+          else resolved.filterNot(path => histos.load.ApiDep.resolvedJar(path) && !host.contains(path))
+        basePaths = (kept ++ host).distinct
+        paths <- extendRuntime(
+          session.coverage.filter(_ => histos.coverage.Cell.measures(cell.version, cell.platform)),
+          main.compiled,
+          basePaths,
+        )
+          .mapError(ExecutionError.Test(_))
+        identities <- ZIO.foreach(paths)(CellCapture.implementation(_).mapError(failed))
+        jars       <- ZIO.filter(paths)(path =>
+          ZIO
+            .attemptBlocking(Files.isRegularFile(path))
+            .mapError(_ => failed(CompileError.Io(IoFailure(path, IoFault.Stat))))
+        )
+        hashes     <- CompileInputs.jarBytes(jars).mapError(failed)
+        signatures <- ZIO.foreach((main :: selected).distinct): product =>
+          ZIO
+            .attemptBlocking(histos.zinc.UpstreamApis.readAnalysis(product.analysis))
+            .mapError(_ => failed(CompileError.Io(IoFailure(product.analysis, IoFault.Read))))
+            .flatMap:
+              case Some(found)                              => ZIO.succeed(found)
+              case None if product.compiled.classFiles == 0 => ZIO.succeed(Nil)
+              case None => ZIO.fail(failed(CompileError.Io(IoFailure(product.analysis, IoFault.Read))))
+        classes  = testClasses(session.repo, cell.module, cell.version, cell.platform)
+        analysis = testAnalysis(session.repo, cell.module, cell.version, cell.platform)
+        _      <- execution.report(histos.zinc.CompileFeed.Began(cell.module, cell.version, cell.platform))
+        _      <- CellCapture.refreshCompileTime(analysis, classes, identities).mapError(failed)
+        result <-
+          if files.sources.isEmpty then
+            for
+              _ <- Workspace.recreate(classes).mapError(error => failed(CompileError.Io(error)))
+              _ <- Workspace.recreate(analysis).mapError(error => failed(CompileError.Io(error)))
+              _ <- ZIO.fromEither(ApiDigest.writeEmpty(analysis)).mapError(failed)
+              _ <- ZIO.fromEither(ProductDigest.write(analysis, classes, session.repo)).mapError(failed)
+            yield (
+              CompiledCell(
+                cell.module,
+                cell.version,
+                cell.platform,
+                classes,
+                0,
+                None,
+                false,
+                Some(histos.zinc.SourceCount(0, 0)),
+                Some(0),
+              ),
+              Option.empty[histos.zinc.CompileOutput],
+            )
+          else
+            val compile = CompileRequest(
+              CompileToolchain(cell.version, cell.platform, session.jdk, module.flags),
+              sourceInputs.map(_.path),
+              paths,
+              classes,
+              analysis,
+              hashes,
+              (main :: selected).map(_.api) ++ identities,
+              permitted = host,
+              checkout = session.repo,
+              upstream = signatures.flatten,
+              sourceInputs = sourceInputs,
+            )
+            for
+              problems <- ZIO.succeed(new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]())
+              output   <- scopedOutput(
+                module,
+                compile,
+                session.native,
+                SemanticDb.argv(session.repo, cell.version),
+                problem =>
+                  val _ = problems.add(problem)
+                  (),
+              )
+                .tapBoth(
+                  _ =>
+                    ZIO.foreachDiscard(problems.iterator.asScala.toList)(problem =>
+                      execution.report(
+                        histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
+                      )
+                    ),
+                  _ =>
+                    ZIO.foreachDiscard(problems.iterator.asScala.toList)(problem =>
+                      execution.report(
+                        histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
+                      )
+                    ),
+                )
+                .mapError(failed)
+                .provideSomeLayer(zio.ZLayer.succeed(tools))
+            yield (
+              CompiledCell(
+                cell.module,
+                cell.version,
+                cell.platform,
+                classes,
+                output.classFiles,
+                Some(output.key),
+                output.changed,
+                output.sources,
+                output.classesWritten,
+              ),
+              Some(output),
+            )
+        _ <- CellCapture.recordCompileTime(analysis, identities).mapError(failed)
+        _ <- AssetSync
+          .sync(classes, Some(analysis.resolve(AssetSync.Manifest)), files.resources, files.assets, session.repo)
+          .mapError(error => ExecutionError.Roots(StageRootError.Resource(error)))
+        (cellProduct, output) = result
+        compiled <- output match
+          case None         => ZIO.succeed(cellProduct)
+          case Some(output) =>
+            CellCapture
+              .record(
+                CaptureRequest(
+                  session.repo,
+                  stage,
+                  files,
+                  CaptureProduct(classes, paths),
+                  CaptureTools(session.jdk.version, output.runtime, output.compiler, output.bridge),
+                )
+              )
+              .mapError(ExecutionError.Compile(_))
+              .map(capture => cellProduct.copy(capture = capture))
+        api            <- ZIO.fromEither(ApiDigest.read(analysis)).mapError(failed)
+        implementation <- CellCapture.implementation(classes).mapError(failed)
+        _              <- execution.report(histos.zinc.CompileFeed.Done(compiled))
+      yield StageProduct(stage, compiled, analysis, api, implementation, (classes :: paths).distinct)
+
+  private def scopedUpstream(
+      graph: ProjectGraph,
+      module: Module,
+      stage: histos.CompilationStage,
+      completed: histos.build.ExecutionProducts,
+  ): ZIO[LockedTools, histos.build.ExecutionError, List[histos.build.StageProduct]] =
+    import histos.build.ExecutionError
+    import histos.plugin.SourceSet
+    val modules = graph.projects.collect { case module: Module => module }
+    def grow(
+        pending: List[ProjectName],
+        seen: Set[ProjectName],
+        chain: List[Module],
+    ): Either[ExecutionError, List[Module]] = pending match
+      case Nil                                 => Right(chain)
+      case name :: rest if seen.contains(name) => grow(rest, seen, chain)
+      case name :: rest                        =>
+        modules.find(_.name == name) match
+          case Some(dependency) =>
+            grow(dependency.upstream(stage.cell.platform, SourceSet.Test) ++ rest, seen + name, chain :+ dependency)
+          case None =>
+            Left(
+              ExecutionError.Compile(
+                GraphCompileError.MissingUpstream(module.name, name, stage.cell.version, stage.cell.platform)
+              )
+            )
+    val chain = grow(module.upstream(stage.cell.platform, SourceSet.Test), Set(module.name), Nil)
+    val paths = completed.stages.toList.collect {
+      case (upstream, product) if upstream.scope == SourceSet.Test =>
+        (upstream.cell.module, upstream.cell.version, upstream.cell.platform) -> product.classes
+    }.toMap
+    ZIO
+      .fromEither(chain)
+      .flatMap(found =>
+        UpstreamCells
+          .read(module, found, stage.cell.version, stage.cell.platform, paths)
+          .mapError(ExecutionError.Compile(_))
+      )
+      .flatMap(cells =>
+        ZIO.foreach(cells)(cell =>
+          ZIO.fromEither(
+            completed.require(
+              histos.CompilationStage(histos.Cell(cell.module.name, cell.version, stage.cell.platform), SourceSet.Test)
+            )
+          )
+        )
+      )
+
+  private def scopedOutput(
+      module: Module,
+      request: CompileRequest,
+      native: NativeOrigin,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): ZIO[GraphCompile.Fed & LockedTools, CompileError, histos.zinc.CompileOutput] =
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      ZIO
+        .fromEither(CellPlatform.of(module, request.toolchain.platform, tools.catalog, native))
+        .flatMap:
+          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, ZIO.unit, _ => ())
+          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear)
+          case placed: CellPlatform.Native => NativeCompile.compile(request, placed, extra, hear)
+
   /** The framework a test target launches, or a refusal when that library is not a test dependency. A named test main
     * opts out of the framework.
     */
@@ -75,15 +311,26 @@ private[histos] object TestCompile:
         else Left(ModuleTestError.ProviderDependency(module.name, provider))
 
   /** The work directory stays empty. `HISTOS_REPO` finds project files. `HISTOS_JAR` is the toolchain jar that launched
-    * the suite. `PATH` finds clang. `HOME` finds the Playwright cache. `CI` and `GITHUB_ACTIONS` are copied when they
-    * are set. `env` is the machine's.
+    * the suite. `PATH` finds clang. `HOME` finds the Playwright cache. `LANG`, `LC_ALL`, and `LC_CTYPE` keep the
+    * filesystem encoding, so a Unicode path still resolves in the suite JVM. `CI` and `GITHUB_ACTIONS` are copied when
+    * they are set. `env` is the machine's.
     */
   private[histos] def suiteEnv(
       repo: Path,
       env: Map[String, String],
   ): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
-    val kept = List("PATH", "HOME", "XDG_CACHE_HOME", "HISTOS_JAR", "CI", "GITHUB_ACTIONS").flatMap: key =>
+    val kept = List(
+      "PATH",
+      "HOME",
+      "XDG_CACHE_HOME",
+      "HISTOS_JAR",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+      "CI",
+      "GITHUB_ACTIONS",
+    ).flatMap: key =>
       env.get(key).filter(_.nonEmpty).map(key -> _)
     root ++ kept
 
@@ -512,9 +759,12 @@ private[histos] object TestCompile:
     held(lock, cell).mapBoth(
       ModuleTestError.Lock(_),
       classpath =>
-        val artifacts =
+        val named =
           if pin then classpath.artifacts.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name))
           else classpath.artifacts
+        val artifacts = named.filterNot(artifact =>
+          histos.zinc.ScalacClasspath.toolLibrary(artifact.organization, artifact.name, version, platform)
+        )
         Fetched(artifacts.map(_.path), artifacts.map(_.sha256), pin),
     )
 

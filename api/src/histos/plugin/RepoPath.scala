@@ -2,8 +2,8 @@ package histos.plugin
 
 import _root_.scala.annotation.publicInBinary
 
-/** A file or directory relative to the repository. A segment matches `[A-Za-z][A-Za-z0-9._-]*`, so `docs/index.html` is
-  * a path. `ProjectPath` stays the module-directory grammar and rejects that dot.
+/** A safe file or directory relative to the repository. Filename punctuation, spaces and Unicode are allowed.
+  * `ProjectPath` retains its separate module-directory grammar.
   */
 opaque type RepoPath = String
 
@@ -14,11 +14,8 @@ object RepoPath:
 
   def from(raw: String): Either[RepoPathError, RepoPath] =
     if raw.isEmpty then Left(RepoPathError.Empty)
-    else if raw.startsWith("/") || raw.contains('\\') || raw.contains(':') then Left(RepoPathError.Escapes(raw))
-    else
-      val parts = raw.split("/", -1).toList
-      if parts.forall(Tokens.repoSegment) then Right(trusted(raw))
-      else Left(RepoPathError.Escapes(raw))
+    else if Tokens.filePath(raw) then Right(trusted(raw))
+    else Left(RepoPathError.Escapes(raw))
 
   extension (path: RepoPath) def value: String = path
 

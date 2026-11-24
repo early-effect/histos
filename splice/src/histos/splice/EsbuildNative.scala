@@ -55,11 +55,18 @@ object EsbuildNative:
         )
       )
 
+  private[histos] final case class Started(temporary: Path, pid: Long)
+
   def optimize(js: String, cacheDir: Path, localOnly: Boolean): IO[SpliceError, String] =
+    optimizeObserved[SpliceError](js, cacheDir, localOnly)(_ => ZIO.unit)
+
+  private[histos] def optimizeObserved[E](js: String, cacheDir: Path, localOnly: Boolean)(
+      onStarted: Started => IO[E, Unit]
+  ): IO[SpliceError | E, String] =
     for
       pin     <- ZIO.fromEither(currentPin)
       bin     <- binary(pin, cacheDir, localOnly)
-      outcome <- exec(bin, js, List("--minify", "--target=es2015"))
+      outcome <- execObserved(bin, js, List("--minify", "--target=es2015"), None, None, false)(onStarted)
       out     <- outcome match
         case Outcome.Wrote(out, _, _)    => ZIO.succeed(out)
         case Outcome.Failed(code, error) => ZIO.fail(SpliceError.Minify(s"esbuild exit $code\n$error"))
@@ -375,61 +382,81 @@ object EsbuildNative:
       sourceMapAt: Option[Path] = None,
       metafile: Boolean = false,
   ): IO[SpliceError, Outcome] =
-    ZIO.acquireReleaseWith(
-      ZIO.attemptBlocking(Files.createTempDirectory("sbt-splice-esbuild-")).mapError(e => SpliceError.Io(e.getMessage))
-    )(dir => ZIO.attemptBlocking(deleteRecursively(dir)).ignore) { dir =>
-      ZIO
-        .attemptBlockingInterrupt(execIn(bin, dir, js, args, entryPath, sourceMapAt, metafile))
-        .mapError(e => SpliceError.Io(s"esbuild: ${e.getMessage}"))
-    }
+    execObserved[SpliceError](bin, js, args, entryPath, sourceMapAt, metafile)(_ => ZIO.unit)
 
-  private def execIn(
+  private def execObserved[E](
       bin: Path,
-      dir: Path,
       js: String,
       args: List[String],
       entryPath: Option[Path],
       sourceMapAt: Option[Path],
       metafile: Boolean,
-  ): Outcome =
-    val entryAbs = entryPath.map(_.toAbsolutePath.normalize)
-    val hidden   = entryAbs.flatMap(hideSourceMappingComment)
-    val entry    = entryAbs match
-      case Some(path) => path.toString
-      case None       =>
-        Files.writeString(dir.resolve("in.js"), js, StandardCharsets.UTF_8)
-        "in.js"
-    val flags =
-      (if sourceMapAt.isDefined then List("--sourcemap=external") else Nil) ++
-        (if metafile then List("--metafile=meta.json") else Nil)
-    val out = dir.resolve("out.js")
-    val pb  = new ProcessBuilder((bin.toAbsolutePath.toString :: entry :: (args ++ flags)) :+ "--outfile=out.js"*)
-    pb.directory(dir.toFile)
-    pb.redirectInput(ProcessBuilder.Redirect.INHERIT)
-    try
-      val proc = pb.start()
-      try
-        val err  = String(proc.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
-        val code = proc.waitFor()
-        if code != 0 then Outcome.Failed(code, err)
-        else if !Files.isRegularFile(out) then Outcome.Failed(code, s"esbuild wrote no out.js\n$err")
-        else
-          val written = Files.readString(out, StandardCharsets.UTF_8)
-          val map     = sourceMapAt.map { dest =>
-            SourceMaps.retarget(Files.readString(dir.resolve("out.js.map"), StandardCharsets.UTF_8), dir, dest)
+  )(onStarted: Started => IO[E, Unit]): IO[SpliceError | E, Outcome] =
+    ZIO.scoped:
+      val entryAbs = entryPath.map(_.toAbsolutePath.normalize)
+      for
+        dir <- ZIO.acquireRelease(attempt(Files.createTempDirectory("sbt-splice-esbuild-")))(dir =>
+          ZIO.attemptBlocking(deleteRecursively(dir)).ignore
+        )
+        hidden <- ZIO.acquireRelease(attempt(entryAbs.flatMap(hideSourceMappingComment)))(hidden =>
+          ZIO.attemptBlocking(restoreSourceMappingComment(entryAbs, hidden)).ignore
+        )
+        builder <- attempt {
+          val entry = entryAbs match
+            case Some(path) => path.toString
+            case None       =>
+              Files.writeString(dir.resolve("in.js"), js, StandardCharsets.UTF_8)
+              "in.js"
+          val flags = (if sourceMapAt.isDefined then List("--sourcemap=external") else Nil) ++
+            (if metafile then List("--metafile=meta.json") else Nil)
+          val builder =
+            new ProcessBuilder((bin.toAbsolutePath.toString :: entry :: (args ++ flags)) :+ "--outfile=out.js"*)
+          builder.directory(dir.toFile)
+          builder.redirectInput(ProcessBuilder.Redirect.INHERIT)
+          builder
+        }
+        outcome <- ZIO.scoped {
+          for
+            process <- ZIO.acquireRelease(attempt(builder.start()))(process =>
+              ZIO.attemptBlockingInterrupt {
+                process.destroyForcibly()
+                process.waitFor()
+                ()
+              }.ignore
+            )
+            started <- attempt(Started(dir, process.pid()))
+            _       <- onStarted(started)
+            result  <- attempt(collected(process, dir, sourceMapAt, metafile))
+          yield result
+        }.exit
+        _      <- attempt(restoreSourceMappingComment(entryAbs, hidden))
+        result <- outcome
+      yield result
+
+  private def attempt[A](body: => A): IO[SpliceError, A] =
+    ZIO
+      .attemptBlockingInterrupt(body)
+      .mapError(error => SpliceError.Io(s"esbuild: ${Option(error.getMessage).getOrElse(error.getClass.getName)}"))
+
+  private def collected(process: Process, dir: Path, sourceMapAt: Option[Path], metafile: Boolean): Outcome =
+    val out  = dir.resolve("out.js")
+    val err  = String(process.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
+    val code = process.waitFor()
+    if code != 0 then Outcome.Failed(code, err)
+    else if !Files.isRegularFile(out) then Outcome.Failed(code, s"esbuild wrote no out.js\n$err")
+    else
+      val written = Files.readString(out, StandardCharsets.UTF_8)
+      val map     = sourceMapAt.map { dest =>
+        SourceMaps.retarget(Files.readString(dir.resolve("out.js.map"), StandardCharsets.UTF_8), dir, dest)
+      }
+      val inputs =
+        if metafile then
+          JsonText.objectKeys(Files.readString(dir.resolve("meta.json"), StandardCharsets.UTF_8), "inputs").map { key =>
+            val path = Path.of(key)
+            if path.isAbsolute then path.normalize else dir.resolve(key).normalize
           }
-          val inputs =
-            if metafile then
-              JsonText
-                .objectKeys(Files.readString(dir.resolve("meta.json"), StandardCharsets.UTF_8), "inputs")
-                .map { key =>
-                  val path = Path.of(key)
-                  if path.isAbsolute then path.normalize else dir.resolve(key).normalize
-                }
-            else Nil
-          Outcome.Wrote(written, map, inputs)
-      finally proc.destroyForcibly()
-    finally restoreSourceMappingComment(entryAbs, hidden)
+        else Nil
+      Outcome.Wrote(written, map, inputs)
 
   /** Text to put back when `path` carried a source-map comment. esbuild follows that comment and records its sources.
     * With the comment gone, the bundle map names this file.

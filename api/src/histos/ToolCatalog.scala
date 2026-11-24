@@ -11,6 +11,7 @@ final case class JsTools(
     node: ToolRevision,
     jsdom: ToolRevision,
     chekhov: ToolRevision,
+    optimize: JsOptimize = JsOptimize.Fast,
 )
 final case class NativeTools(revision: NativeVersion, bridgeScala: ScalaVersion)
 

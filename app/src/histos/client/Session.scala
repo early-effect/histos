@@ -208,7 +208,7 @@ object Session:
             case Some(raw) =>
               Platform.from(raw) match
                 case Left(error)  => Left(BuildFault.Platform(error))
-                case Right(found) => Right(Call.Run(id, Some(found), launch, argv))
+                case Right(found) => Right(Call.Run(id, Some(histos.PlatformSelection.only(found)), launch, argv))
             case None if task => Right(Call.Task(id, args))
             case None         => Right(Call.Run(id, None, launch, argv))
 

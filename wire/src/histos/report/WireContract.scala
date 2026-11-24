@@ -120,25 +120,40 @@ import zio.json.*
   */
 private[histos] object WireContract extends WireSupport:
   import WireLeaves.given
+  import WireStages.given JsonCodec[histos.PlatformSelection]
+  import WireStages.given JsonCodec[histos.TestSelection]
 
-  given JsonCodec[SourceId]      = parsed(SourceId.from, _.message, _.value)
-  given JsonCodec[ServiceKey]    = parsed(ServiceKey.from, _.message, _.value)
-  given JsonCodec[LockRevision]  = parsed(LockRevision.from, _.message, _.value)
-  given JsonCodec[ProposalId]    = parsed(ProposalId.from, _.message, _.value)
-  given JsonCodec[GenerationId]  = parsed(GenerationId.from, _.message, _.value)
-  given JsonCodec[InvocationId]  = parsed(InvocationId.from, _.message, _.value)
-  given JsonCodec[RecipeNodeId]  = parsed(RecipeNodeId.from, _.message, _.value)
-  given JsonCodec[ClientId]      = parsed(ClientId.from, _.message, _.value)
-  given JsonCodec[CommandToken]  = parsed(CommandToken.from, _.message, _.value)
-  given JsonCodec[RecipeFeature] = parsed(RecipeFeature.from, _.message, _.value)
-  given JsonCodec[RecipeInput]   = parsed(RecipeInput.from, _.message, _.value)
-  given JsonCodec[ArtifactPath]  = parsed(ArtifactPath.from, _.message, _.value)
-  given JsonCodec[InputKey]      = parsed(InputKey.from, _.message, _.value)
-  given JsonCodec[EnvName]       = parsed(EnvName.from, _.message, _.value)
-  given JsonCodec[CheckId]       = parsed(CheckId.from, _.message, _.value)
-  given JsonCodec[ShellLine]     = parsed(ShellLine.from, _.message, _.value)
-  given JsonCodec[HttpUrl]       = parsed(HttpUrl.from, _.message, _.value)
-  given JsonCodec[Resolution]    =
+  given JsonCodec[SourceId]                = parsed(SourceId.from, _.message, _.value)
+  given JsonCodec[ServiceKey]              = parsed(ServiceKey.from, _.message, _.value)
+  given JsonCodec[LockRevision]            = parsed(LockRevision.from, _.message, _.value)
+  given JsonCodec[ProposalId]              = parsed(ProposalId.from, _.message, _.value)
+  given JsonCodec[GenerationId]            = parsed(GenerationId.from, _.message, _.value)
+  given JsonCodec[InvocationId]            = parsed(InvocationId.from, _.message, _.value)
+  given JsonCodec[RecipeNodeId]            = parsed(RecipeNodeId.from, _.message, _.value)
+  given JsonCodec[ClientId]                = parsed(ClientId.from, _.message, _.value)
+  given JsonCodec[CommandToken]            = parsed(CommandToken.from, _.message, _.value)
+  given JsonCodec[RecipeFeature]           = parsed(RecipeFeature.from, _.message, _.value)
+  given JsonCodec[RecipeInput]             = parsed(RecipeInput.from, _.message, _.value)
+  given JsonCodec[ArtifactPath]            = parsed(ArtifactPath.from, _.message, _.value)
+  given JsonCodec[InputKey]                = parsed(InputKey.from, _.message, _.value)
+  given JsonCodec[EnvName]                 = parsed(EnvName.from, _.message, _.value)
+  given JsonCodec[CheckId]                 = parsed(CheckId.from, _.message, _.value)
+  given JsonCodec[ShellLine]               = parsed(ShellLine.from, _.message, _.value)
+  given JsonCodec[HttpUrl]                 = parsed(HttpUrl.from, _.message, _.value)
+  given JsonCodec[histos.MetadataUri]      = parsed(histos.MetadataUri.from, _.message, _.value)
+  given JsonCodec[histos.MetadataUriError] = JsonCodec.derived
+  given JsonCodec[histos.PomText]          = parsed(histos.PomText.from, _.message, _.value)
+  given JsonCodec[histos.LicenseName]      = parsed(histos.LicenseName.from, _.message, _.value)
+  given JsonCodec[histos.DeveloperId]      = parsed(histos.DeveloperId.from, _.message, _.value)
+  given JsonCodec[histos.ScmConnection]    = parsed(histos.ScmConnection.from, _.message, _.value)
+  given JsonCodec[histos.supply.Email]     = parsed(histos.supply.Email.from, _.message, _.value)
+  given JsonCodec[histos.VersionScheme]    =
+    choose("version scheme", List("early-semver" -> histos.VersionScheme.EarlySemver), _.value)
+  given JsonCodec[histos.License]           = JsonCodec.derived
+  given JsonCodec[histos.Developer]         = JsonCodec.derived
+  given JsonCodec[histos.Scm]               = JsonCodec.derived
+  given JsonCodec[histos.OrganizationFacts] = JsonCodec.derived
+  given JsonCodec[Resolution]               =
     choose(
       "resolution",
       List("solve" -> Resolution.Solve, "lock" -> Resolution.Lock),

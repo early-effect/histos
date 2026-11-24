@@ -72,7 +72,7 @@ object LockInvocationSpec extends ZIOSpecDefault:
     )
 
   private val compile = context(ExecutionKind.Local, CommandIdentity.Compile(Nil))
-  private val testCmd = context(ExecutionKind.Ci, CommandIdentity.Test(Nil))
+  private val testCmd = context(ExecutionKind.Ci, CommandIdentity.Test(histos.TestSelection()))
 
   private def proposal(seed: String): ProposalId =
     ProposalId.trusted(Digests.sha256(seed.getBytes(utf8)))
@@ -200,7 +200,7 @@ object LockInvocationSpec extends ZIOSpecDefault:
     test("an explicit lock runs only when that call applies it") {
       val app              = ProjectName("app")
       val compile          = Call.Compile(Nil)
-      val testCall         = Call.Test(Nil, Nil, TestMode.Quick, histos.testrun.TestFilter.empty)
+      val testCall         = Call.Test(histos.TestSelection(), Nil, TestMode.Quick, histos.testrun.TestFilter.empty)
       val run              = Call.Run("app", None, RunLaunch.Tool(Map.empty, None), Nil)
       val update           = Call.Resolve(ResolveAction.Update)
       val refresh          = Call.Resolve(ResolveAction.Refresh(List(app)))

@@ -1,7 +1,7 @@
 package histos
 
 /** How a Scala.js link is finished. `Fast` is the linker with the optimizer off. `Full` turns the optimizer on and then
-  * minifies the result to one classic script.
+  * applies Splice production minification. The module kind is an independent declaration.
   */
 enum JsOptimize:
   case Fast
@@ -11,3 +11,7 @@ enum JsOptimize:
     case Fast => "fast"
     case Full => "full"
 end JsOptimize
+
+object JsOptimize:
+  def effective(tool: JsOptimize, module: Option[JsOptimize], task: Option[JsOptimize]): JsOptimize =
+    task.orElse(module).getOrElse(tool)

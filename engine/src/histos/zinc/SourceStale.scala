@@ -1,16 +1,16 @@
 package histos.zinc
 
 import histos.{Platform, ProjectName, ScalaVersion}
+import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
 import sbt.internal.inc.{FileAnalysisStore, Stamp, Stamper}
 import xsbti.VirtualFileRef
 
-import zio.{UIO, ZIO}
+import zio.{IO, UIO, ZIO}
 
 /** Which analysis directory a cell writes. Main and test compiles do not share one.
   */
@@ -63,13 +63,29 @@ object SourceStale:
       case FileStaleness.Known(_)   => false
       case FileStaleness.Unknown    => false
 
+  /** Replay requires the exact logical input set and its current content stamps. */
+  def current(request: CompileRequest): IO[CompileError, Boolean] =
+    ZIO
+      .attemptBlocking {
+        val paths = if request.sourceInputs.isEmpty then request.sources else request.sourceInputs.map(_.path)
+        val files = paths.zip(SourceRef.files(request))
+        val zip   = request.analysis.resolve("inc.zip")
+        if !Files.isRegularFile(zip) then false
+        else
+          load(zip).exists: analysis =>
+            analysis.stamps.sources.keySet.map(_.id) == files.map(_._2.id).toSet &&
+              stale(analysis, files).isEmpty
+      }
+      .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Read)))
+
   private def answer(checkout: Path, dir: Path, sources: List[Path]): FileStaleness =
     val zip = dir.resolve("inc.zip")
     if !Files.exists(zip) then FileStaleness.Initial(sources)
     else
       load(zip) match
         case None           => FileStaleness.Unknown
-        case Some(analysis) => FileStaleness.Known(stale(checkout, analysis, sources))
+        case Some(analysis) =>
+          FileStaleness.Known(stale(analysis, sources.map(path => path -> SourceRef.file(checkout, path))))
 
   /** `None` is a file that exists and could not be read, or an analysis that is not Zinc's. */
   private def load(zip: Path): Option[sbt.internal.inc.Analysis] =
@@ -82,13 +98,15 @@ object SourceStale:
           case analysis: sbt.internal.inc.Analysis => Some(analysis)
           case _                                   => None
 
-  private def stale(checkout: Path, analysis: sbt.internal.inc.Analysis, sources: List[Path]): List[Path] =
+  private def stale(
+      analysis: sbt.internal.inc.Analysis,
+      sources: List[(Path, xsbti.VirtualFile)],
+  ): List[Path] =
     val byId = analysis.stamps.sources.iterator.map { (ref, stamp) =>
       ref.id -> (ref, stamp)
     }.toMap
-    val rows = sources.map: path =>
-      val file    = path.toAbsolutePath.normalize
-      val virtual = SourceRef.file(checkout, file)
+    val rows = sources.map: (path, virtual) =>
+      val file = path.toAbsolutePath.normalize
       byId.get(virtual.id) match
         case None =>
           Row(file, None, changed = true)
@@ -109,7 +127,7 @@ object SourceStale:
       case Row(file, _, true)                                      => file
       case Row(file, Some(ref), false) if userIds.contains(ref.id) => file
     val keep = wanted.toSet
-    sources.filter(path => keep.contains(path.toAbsolutePath.normalize))
+    sources.map(_._1).filter(path => keep.contains(path.toAbsolutePath.normalize))
 
   /** Member-ref users of `defined`, then users of those, until the set stops growing. Not `defined` itself. */
   private def dependents(
