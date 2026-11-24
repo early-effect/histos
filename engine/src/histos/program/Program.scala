@@ -522,6 +522,7 @@ object Program:
                       jvmOptions = module.jvmOptions,
                     ),
                     relay,
+                    ChildProcess.Stdout.Bytes,
                   ),
                 )
             case Platform.Js =>
@@ -582,7 +583,7 @@ object Program:
                         histos.toolchain.PlatformToolError.JsRun(error),
                       )
                     )
-                yield feeds(cell, ChildProcess.events(asked, relay))
+                yield feeds(cell, ChildProcess.events(asked, relay, ChildProcess.Stdout.Bytes))
             case Platform.Native =>
               ZStream.unwrap:
                 val linkDir = workDir(repo, cell)
@@ -643,6 +644,7 @@ object Program:
                     cwd.getOrElse(linkDir),
                     nativeEnvironment(programEnv, module),
                     relay,
+                    ChildProcess.Stdout.Bytes,
                   ),
                 )
         began ++ ran
@@ -663,7 +665,7 @@ object Program:
   ): ZIO[R, E, A] =
     effect.provideSomeLayer(zio.ZLayer.succeed(store) ++ LinkerStarts.live)
 
-  /** Lines from the child's pipes. */
+  /** Byte stdout and text stderr from the child's pipes. */
   private def feeds(
       cell: histos.zinc.CompiledCell,
       ran: ZStream[Any, histos.process.ChildError, ChildEvent],

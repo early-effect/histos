@@ -2,6 +2,7 @@ package histos.cli
 
 import histos.build.BuildEvent
 import histos.lock.{CallIdentity, LockEvent, LockReply}
+import histos.server.Attendance
 import histos.testrun.TestFeed
 import histos.theme.Theme
 
@@ -9,7 +10,8 @@ import java.nio.file.Path
 
 import zio.{Chunk, Ref, ZIO}
 
-/** Console lines for one [[histos.build.BuildEvent]]. The event is not rewritten into this text.
+/** Console lines for one [[histos.build.BuildEvent]]. Program calls reserve stdout for bytes, so their lines use
+  * stderr.
   */
 object Show:
   /** The column and the theme remembered from silent events. */
@@ -22,8 +24,9 @@ object Show:
       event: BuildEvent,
       column: Int = 0,
       log: CompileLog = CompileLog.Units,
+      attendance: Attendance = Attendance.Quiet,
   ): Chunk[CompileConsole.Line] =
-    event match
+    val lines = event match
       case BuildEvent.Layout(_)          => Chunk.empty
       case BuildEvent.Theme(_)           => Chunk.empty
       case BuildEvent.Compile(feed)      => CompileConsole.lines(repo, feed, column, log)
@@ -33,6 +36,12 @@ object Show:
       case BuildEvent.Status(text, role) =>
         Chunk(CompileConsole.Line.Out(Chunk(Part.Mark(text, role))))
       case BuildEvent.Lock(event) => lockLines(event)
+    attendance match
+      case Attendance.Program =>
+        lines.map:
+          case CompileConsole.Line.Out(parts) => CompileConsole.Line.Err(parts)
+          case line: CompileConsole.Line.Err  => line
+      case Attendance.Held | Attendance.Quiet => lines
 
   /** `Layout` in the chunk is the column. A chunk without one leaves names unpadded. Escapes are not added. */
   def transcript(repo: Path, events: Chunk[BuildEvent]): (Chunk[String], Chunk[String]) =
@@ -70,13 +79,20 @@ object Show:
       appearance: Appearance,
       out: String => ZIO[R, E, Unit],
       err: String => ZIO[R, E, Unit],
+      attendance: Attendance = Attendance.Quiet,
   ): ZIO[R, E, Unit] =
     event match
       case BuildEvent.Layout(width) => shown.update(_.copy(column = width))
       case BuildEvent.Theme(value)  => shown.update(_.copy(theme = value.orElse(Theme.standard)))
       case other                    =>
         shown.get.flatMap: frame =>
-          CompileConsole.show(apply(repo, other, frame.column, appearance.log), frame.theme, appearance, out, err)
+          CompileConsole.show(
+            apply(repo, other, frame.column, appearance.log, attendance),
+            frame.theme,
+            appearance,
+            out,
+            err,
+          )
 
   private def lockLines(event: LockEvent): Chunk[CompileConsole.Line] =
     event match

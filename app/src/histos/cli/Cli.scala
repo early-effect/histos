@@ -997,7 +997,7 @@ object Cli:
           ZIO.environment[Stdio].flatMap { io =>
             val printing = new Say({
               case Message.Event(event) =>
-                Show.follow(repo, shown, event, appearance, say, sayError).provideEnvironment(io)
+                Show.follow(repo, shown, event, appearance, say, sayError, inner.attendance).provideEnvironment(io)
               case Message.Output(encoded) =>
                 histos.server.RunBytes.decode(encoded) match
                   case Some(bytes) => histos.build.Build.write(bytes)
@@ -1068,7 +1068,7 @@ object Cli:
                 shown,
                 adopted(repo, apiJar, _),
                 cliEdges(repo, _),
-                heard(repo, frame, _).provideEnvironment(services),
+                heard(repo, frame, _, call.attendance).provideEnvironment(services),
                 histos.process.Terminal.Owned,
                 call => CallerFacts.cli(call, choice.mode, services.get[Stdio].prompts),
               )
@@ -1184,10 +1184,15 @@ object Cli:
       compiled = ZIO.unit,
     )
 
-  private def heard(repo: Path, shown: Ref[Show.Shown], beat: Beat)(using appearance: Appearance): URIO[Stdio, Unit] =
+  private[cli] def heard(
+      repo: Path,
+      shown: Ref[Show.Shown],
+      beat: Beat,
+      attendance: histos.server.Attendance = histos.server.Attendance.Quiet,
+  )(using appearance: Appearance): URIO[Stdio, Unit] =
     beat match
       case Beat.Heard(event) =>
-        Show.follow(repo, shown, event, appearance, say, sayError)
+        Show.follow(repo, shown, event, appearance, say, sayError, attendance)
       case Beat.Bytes(data) =>
         histos.build.Build.write(data)
       case Beat.Finished(CallResult.Fault(fault)) =>
@@ -2378,20 +2383,21 @@ object Cli:
       done => ZIO.succeed(done),
     )
 
-  private def remote(
+  private[cli] def remote(
       repo: Path,
       socket: java.nio.file.Path,
       call: Call,
+      terminal: histos.process.Terminal = histos.process.Terminal.Owned,
   )(using appearance: Appearance, choice: LockChoice): ZIO[Stdio, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).zip(Ref.make(Show.start)).flatMap {
       (result, shown) =>
         ZIO.service[Stdio].flatMap { stdio =>
           Build
-            .attached(socket, histos.process.Terminal.Owned, call => CallerFacts.cli(call, choice.mode, stdio.prompts))
+            .attached(socket, terminal, call => CallerFacts.cli(call, choice.mode, stdio.prompts))
             .perform(call)
             .foreach {
               case Beat.Heard(event) =>
-                Show.follow(repo, shown, event, appearance, say, sayError)
+                Show.follow(repo, shown, event, appearance, say, sayError, call.attendance)
               case Beat.Bytes(data) =>
                 histos.build.Build.write(data)
               case Beat.Finished(done) =>

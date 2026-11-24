@@ -53,7 +53,7 @@ object Help:
       "run",
       "build",
       "histos run <name> [--platform <jvm|js|native>] [--main <class>] [-- arg ...]",
-      "Run a module main, inspect, versions, or doc. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. An ambiguous module requires --platform. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program.",
+      "Run a module main, inspect, versions, or doc. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. An ambiguous module requires --platform. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program. Program stdout stays byte-for-byte stdout; build and status diagnostics use stderr.",
     ),
     Entry(
       "clean",

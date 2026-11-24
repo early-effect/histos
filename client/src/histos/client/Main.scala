@@ -208,7 +208,14 @@ object Main extends ZIOAppDefault:
               ready(head) match
                 case Left(error) => ZIO.succeed(Left(error))
                 case Right(_)    =>
-                  copyInput(call, session.output) *> frames(repo, socket, session.input, Show.start, appearance)
+                  copyInput(call, session.output) *> frames(
+                    repo,
+                    socket,
+                    session.input,
+                    Show.start,
+                    appearance,
+                    call.attendance,
+                  )
           }
       }
     }
@@ -230,6 +237,7 @@ object Main extends ZIOAppDefault:
       input: java.io.InputStream,
       shown: Show.Shown,
       appearance: Appearance,
+      attendance: Attendance,
   ): ZIO[Any, Nothing, Either[ServerError, Int]] =
     ZIO.attemptBlocking(Frame.take(input)).orDie.flatMap {
       case Left(_)              => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
@@ -237,26 +245,39 @@ object Main extends ZIOAppDefault:
       case Right(Some(payload)) =>
         payload.fromJson[Message] match
           case Right(Message.Event(BuildEvent.Layout(width))) =>
-            frames(repo, socket, input, shown.copy(column = width), appearance)
+            frames(repo, socket, input, shown.copy(column = width), appearance, attendance)
           case Right(Message.Event(BuildEvent.Theme(value))) =>
-            frames(repo, socket, input, shown.copy(theme = value.orElse(histos.theme.Theme.standard)), appearance)
+            frames(
+              repo,
+              socket,
+              input,
+              shown.copy(theme = value.orElse(histos.theme.Theme.standard)),
+              appearance,
+              attendance,
+            )
           case Right(Message.Event(event)) =>
-            ZIO.succeed(show(repo, event, shown, appearance)) *>
-              frames(repo, socket, input, shown, appearance)
+            ZIO.succeed(show(repo, event, shown, appearance, attendance)) *>
+              frames(repo, socket, input, shown, appearance, attendance)
           case Right(Message.Output(encoded)) =>
             RunBytes.decode(encoded) match
               case Some(bytes) =>
                 ZIO.succeed {
                   System.out.write(bytes.toArray)
                   System.out.flush()
-                } *> frames(repo, socket, input, shown, appearance)
+                } *> frames(repo, socket, input, shown, appearance, attendance)
               case None => ZIO.succeed(Left(ServerError.Protocol))
           case Right(Message.Done(result)) => ZIO.succeed(Right(finish(result)))
           case _                           => ZIO.succeed(Left(ServerError.Protocol))
     }
 
-  private def show(repo: Path, event: BuildEvent, shown: Show.Shown, appearance: Appearance): Unit =
-    Show(repo, event, shown.column, appearance.log).foreach:
+  private[client] def show(
+      repo: Path,
+      event: BuildEvent,
+      shown: Show.Shown,
+      appearance: Appearance,
+      attendance: Attendance,
+  ): Unit =
+    Show(repo, event, shown.column, appearance.log, attendance).foreach:
       case line: CompileConsole.Line.Out =>
         System.out.println(Paint.paint(line.spans, shown.theme, appearance))
       case line: CompileConsole.Line.Err =>

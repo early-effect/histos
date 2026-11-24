@@ -34,7 +34,7 @@ final case class ChildOutcome(
     err: ProcessOutput,
 )
 
-/** One line from a child, then its status. The lines arrive as the process writes them.
+/** Text or bytes from a child, then its status. Output arrives as the process writes it.
   */
 enum ChildEvent:
   case Out(text: String)
@@ -43,6 +43,9 @@ enum ChildEvent:
   case Exited(code: ProcessExit)
 
 object ChildProcess:
+  enum Stdout:
+    case Text, Bytes
+
   /** How long a process's pipes may stay open after it exits. A child still holding them past this is an orphan. */
   private[process] val Drain: Duration = 1.second
 
@@ -80,13 +83,14 @@ object ChildProcess:
       |}
       |""".stripMargin
 
-  /** One subprocess for one main. Stdout and stderr are lines, merged so neither pipe fills up. The environment is the
+  /** One subprocess for one main. Programs select byte stdout; tools keep text. Stderr is text. The environment is the
     * request's map. The stream waits for the process, then drains for [[Drain]]. Interrupt, and an orphan, end the
     * process group and every descendant.
     */
   def events(
       request: ChildRequest,
       relay: RunRelay = RunRelay.Closed,
+      stdout: Stdout = Stdout.Text,
   ): ZStream[Any, ChildError, ChildEvent] =
     if request.platform != Platform.Jvm then ZStream.fail(ChildError.UnsupportedPlatform(request.platform))
     else
@@ -95,7 +99,7 @@ object ChildProcess:
           _        <- require(request)
           compiler <- ZIO.fromEither(javac(request.java))
           entry    <- bootstrap(request.work, compiler)
-          child    <- spawn(start(request, entry), Group.Own)
+          child    <- spawn(start(request, entry), Group.Own, stdout)
           _        <- pump(child.process, relay).forkScoped
         yield attend(child, finish(request, child.process), Group.Own)
       }
@@ -110,6 +114,7 @@ object ChildProcess:
       work: Path,
       environment: Map[String, String],
       relay: RunRelay = RunRelay.Closed,
+      stdout: Stdout = Stdout.Text,
   ): ZStream[Any, ChildError, ChildEvent] =
     argv match
       case Nil => ZStream.fail(ChildError.NoProgram)
@@ -119,7 +124,7 @@ object ChildProcess:
             _       <- directory(work, ChildError.Work(work))
             java    <- runningJava
             classes <- launcher(java)
-            child   <- spawn(startCommand(java, classes, argv, work, environment), Group.Own)
+            child   <- spawn(startCommand(java, classes, argv, work, environment), Group.Own, stdout)
             _       <- pump(child.process, relay).forkScoped
           yield attend(child, wait(child.process), Group.Own)
 
@@ -183,14 +188,23 @@ object ChildProcess:
   private def spawn(
       start: IO[ChildError, Process],
       group: Group,
+      stdout: Stdout = Stdout.Text,
   ): ZIO[Scope, ChildError, Child] =
     for
       readers <- ZIO.scopeWith(_.fork)
       process <- ZIO.acquireRelease(start)(stop(_, group))
       outDone <- Promise.make[Nothing, Unit]
       errDone <- Promise.make[Nothing, Unit]
-      out     <- readers.extend(hear(process.getInputStream, ChildEvent.Out(_), outDone))
-      err     <- readers.extend(hear(process.getErrorStream, ChildEvent.Err(_), errDone))
+      output = stdout match
+        case Stdout.Text  => text(process.getInputStream).map(ChildEvent.Out(_))
+        case Stdout.Bytes =>
+          ZStream
+            .fromInputStream(process.getInputStream)
+            .chunks
+            .map(ChildEvent.Bytes(_))
+            .mapError(_ => ChildError.Console)
+      out <- readers.extend(hear(output, outDone))
+      err <- readers.extend(hear(text(process.getErrorStream).map(ChildEvent.Err(_)), errDone))
     yield Child(
       process,
       ZStream.fromQueue(out).flattenTake.merge(ZStream.fromQueue(err).flattenTake),
@@ -198,13 +212,12 @@ object ChildProcess:
     )
 
   private def hear(
-      input: InputStream,
-      event: String => ChildEvent,
+      events: ZStream[Any, ChildError, ChildEvent],
       done: Promise[Nothing, Unit],
   ): ZIO[Scope, Nothing, Queue[Take[ChildError, ChildEvent]]] =
     for
       queue <- ZIO.acquireRelease(Queue.unbounded[Take[ChildError, ChildEvent]])(_.shutdown)
-      _     <- text(input).map(event).runIntoQueue(queue).ensuring(done.succeed(()).unit).forkScoped
+      _     <- events.runIntoQueue(queue).ensuring(done.succeed(()).unit).forkScoped
     yield queue
 
   /** Lines while the process runs, then its status. The status waits on the process, not on the pipes. After it exits,
