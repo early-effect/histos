@@ -3,6 +3,7 @@ package histos.docs
 import mermoid.ascent.MermoidAscent
 import specular.*
 
+import zio.ZIO
 import zio.test.*
 
 /** Modules, cells, platforms, and the literals that build them. */
@@ -81,7 +82,7 @@ Platform-specific fixture edges use `testDependsOn(Jvm)(core)`.
 """,
       cite[histos.CompilationStage].signature,
       cite[histos.ScopedRoot].signature,
-      exampleValue {
+      exampleZIO {
         import histos.*
         import histos.Platform.*
         import histos.plugin.{RepoPath, SourceSet}
@@ -89,12 +90,39 @@ Platform-specific fixture edges use `testDependsOn(Jvm)(core)`.
         val fixtures = module("fixtures", Jvm)(scala"3.8.1")
         val core     = module("core", Jvm, Js)(scala"3.8.1")
           .roots(
-            ScopedRoot(RepoPath("shared/main"), SourceSet.Main, ScopedRoot.jvmNative, RootKind.Sources),
+            ScopedRoot(RepoPath("shared/main"), SourceSet.Main, PlatformSelection.only(Jvm), RootKind.Sources),
             ScopedRoot(RepoPath("shared/test-data"), SourceSet.Test, PlatformSelection.All, RootKind.Resources),
           )
           .testDependsOn(Jvm)(fixtures)
-        core.name
-      }.assert(name => assertTrue(name == "core")),
+        val graph = ZIO.fromEither(Projects(fixtures, core))
+        graph
+      }.assert { graph =>
+        import histos.*
+        import histos.Platform.*
+        import histos.plugin.{RepoPath, SourceSet}
+
+        val core = graph.get(ProjectName("core")).collect { case module: Module => module }
+        assertTrue(
+          core.exists(
+            _.roots.exists(root =>
+              root.path == RepoPath("shared/main") && root.kind == RootKind.Sources &&
+                root.applies(SourceSet.Main, Jvm) && !root.applies(SourceSet.Main, Js) &&
+                !root.applies(SourceSet.Test, Jvm)
+            )
+          ),
+          core.exists(
+            _.roots.exists(root =>
+              root.path == RepoPath("shared/test-data") && root.kind == RootKind.Resources &&
+                root.applies(SourceSet.Test, Jvm) && root.applies(SourceSet.Test, Js) &&
+                !root.applies(SourceSet.Main, Jvm)
+            )
+          ),
+          core.exists(module =>
+            module.upstream(Jvm, SourceSet.Test) == List(ProjectName("fixtures")) &&
+              module.upstream(Js, SourceSet.Test).isEmpty && module.upstream(Jvm, SourceSet.Main).isEmpty
+          ),
+        )
+      },
     ),
     section("Native libraries")(
       md"""
