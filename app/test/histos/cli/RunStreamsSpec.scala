@@ -107,7 +107,11 @@ object RunStreamsSpec extends ZIOSpecDefault:
 
   private def remote(mode: String, bytes: Chunk[Byte], inputEnd: InputEnd, expected: Chunk[Byte]) = ZIO.scoped:
     for
-      java <- ZIO.fromOption(sys.env.get("HISTOS_JAVA")).orElseFail(ProbeError.Java)
+      java <- ZIO
+        .systemWith(_.property("java.home"))
+        .mapError(_ => ProbeError.Java)
+        .flatMap(home => ZIO.fromOption(home.filter(_.nonEmpty)).orElseFail(ProbeError.Java))
+        .map(home => Path.of(home, "bin", "java").toString)
       root <- ZIO.acquireRelease(
         ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hi-")).mapError(_ => ProbeError.IO)
       )(root => ZIO.attemptBlocking(Files.deleteIfExists(root)).ignore)
@@ -182,7 +186,7 @@ object RunStreamsSpec extends ZIOSpecDefault:
         else ZIO.succeed(assertTrue(done))
     yield result
 
-  private val verified = tests @@ TestAspect.withLiveClock @@ TestAspect.silent
+  private val verified = tests @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.silent
 
   def spec = verified
 end RunStreamsSpec

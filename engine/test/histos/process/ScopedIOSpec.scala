@@ -35,13 +35,17 @@ object ScopedIOSpec extends ZIOSpecDefault:
     },
   )
 
-  private val verified = tests @@ TestAspect.withLiveClock @@ TestAspect.sequential
+  private val verified = tests @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.sequential
 
   def spec = verified
 
   private def child(mode: String): ZIO[Scope, ProbeError, Process] =
     for
-      java    <- ZIO.fromOption(sys.env.get("HISTOS_JAVA")).orElseFail(ProbeError.Java)
+      java <- ZIO
+        .systemWith(_.property("java.home"))
+        .mapError(_ => ProbeError.Java)
+        .flatMap(home => ZIO.fromOption(home.filter(_.nonEmpty)).orElseFail(ProbeError.Java))
+        .map(home => Path.of(home, "bin", "java").toString)
       process <- ZIO.acquireRelease(
         ZIO
           .attemptBlocking(
