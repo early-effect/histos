@@ -15,7 +15,7 @@ Scope: assembled review F1 and F2. Ordinary compile/test execution is unchanged 
 
 ## Contracts
 
-Preflight removes bump, pin, and binary checks. The complete doctor still selects binary verification. Generated workflow compatibility steps continue compiling published JVM members before `doctor release`.
+Preflight removes bump, pin, and binary checks. The release area of doctor keeps session, releases, bump, and pin. It does not read classfiles. Binary compatibility runs in publication: `publish check` and `publish local` compare the published JVM members Affected selects, and `publish snapshots` and `publish release` compare every published JVM member before upload.
 
 `LocalPublish.runUsing` checks every JVM member and Scala version of each ship that contains a selected publication module, including members omitted from the publish token. The existing scoped executor compiles those additional JVM stages. Only the selected modules become publication jobs. Their generated-product leases remain alive through verification and packaging.
 

@@ -51,8 +51,7 @@ object WorkflowPolicySpec extends ZIOSpecDefault:
         body.contains("workflow_dispatch:") && body.contains("[ \"$CI_BRANCH\" = \"$DEFAULT_BRANCH\" ]") &&
         body.contains("[ \"$current\" = \"$CI_SHA\" ]") && body.contains("./histos publish snapshots") &&
         !body.contains("./histos publish release") && !body.contains("tags:") &&
-        body.indexOf("./histos compile api --platform jvm") < body.indexOf("./histos doctor release") &&
-        body.indexOf("./histos doctor release") < body.indexOf("./histos publish snapshots"))
+        !body.contains("doctor --area release") && !body.contains("./histos compile api --platform jvm"))
     },
     test("site builds are required on PRs and verified main deploy waits for all required checks") {
       for

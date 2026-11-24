@@ -16,7 +16,7 @@ import histos.cache.{ContentStore, ProductCache}
 import histos.pack.{ClassJar, JarError, JavadocStub, PackageKey}
 import histos.plugin.{ApiDigest, PluginCoordinate, RecipeError, RecipeFeature, RecipeNodeId}
 import histos.resolve.{ArtifactName, Resolve}
-import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
+import histos.version.{Decision, PublishAction, Ship, ShipName, VersionError, VersionTask}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{
   CompileError,
@@ -93,6 +93,7 @@ final case class PublishOutput(
     modules: List[PublishedModule],
     held: List[String],
     refused: List[String],
+    notes: List[String] = Nil,
 )
 
 final case class PublishInputs(cells: List[histos.zinc.CompiledCell], generated: GeneratedRoots)
@@ -112,8 +113,9 @@ object LocalPublish:
       env: Map[String, String],
       write: PublishWrite,
       api: ApiDigest,
+      scope: ProofScope = ProofScope.All,
   ): ZIO[R & PublishEnv, E | ExecutionError | ProjectionError, PublishOutput] =
-    runUsing(compiler, PublicationCompatibility.live)(repo, graph, names, env, write, api)
+    runUsing(compiler, PublicationCompatibility.live)(repo, graph, names, env, write, api, scope)
 
   def runUsing[R, E](
       compiler: PublishCompiler[R, E],
@@ -125,6 +127,7 @@ object LocalPublish:
       env: Map[String, String],
       write: PublishWrite,
       api: ApiDigest,
+      scope: ProofScope,
   ): ZIO[R & PublishEnv, E | ExecutionError | ProjectionError, PublishOutput] =
     ZIO.scoped:
       go(
@@ -135,18 +138,8 @@ object LocalPublish:
         write,
         api,
         compatibility,
-        (selected, checked) =>
-          val stages = graph.projects
-            .collect {
-              case module: Module if selected.contains(module.name) || checked.contains(module.name) => module
-            }
-            .flatMap(module =>
-              for
-                version  <- module.versions.all
-                platform <- module.platforms.all
-                if selected.contains(module.name) || platform == Platform.Jvm
-              yield CompilationStage(Cell(module.name, version, platform), SourceSet.Main)
-            )
+        scope,
+        stages =>
           for
             products <- compiler.ensure(stages.map(BuildNode.Compile(_)))
             cells    <- ZIO.foreach(stages)(stage => ZIO.fromEither(products.require(stage)).map(_.compiled))
@@ -166,7 +159,8 @@ object LocalPublish:
     yield jar.path
 
   /** Compile the modules a decision releases and write them. A hold is reported and not written. A development session
-    * is the snapshot at HEAD for a local or snapshot write. A release write is not settled.
+    * is the snapshot at HEAD for check, local, and snapshots. A release write is not settled. Check returns before any
+    * Ivy write.
     */
   def run(
       repo: Path,
@@ -178,6 +172,7 @@ object LocalPublish:
       api: ApiDigest,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
       plugins: Option[histos.load.PluginRuntime] = None,
+      scope: ProofScope = ProofScope.All,
   ): ZIO[histos.resolve.Resolve & Publisher & ContentStore, ProjectionError, PublishOutput] =
     ZIO.scoped:
       for
@@ -197,7 +192,7 @@ object LocalPublish:
             )
           )
         )
-        written <- runUsing(compiler)(repo, graph, names, env, write, api)
+        written <- runUsing(compiler)(repo, graph, names, env, write, api, scope)
           .mapError {
             case error: LocalPublishError => error
             case error: StageRootError    => error
@@ -214,7 +209,8 @@ object LocalPublish:
       write: PublishWrite,
       api: ApiDigest,
       compatibility: Layer[histos.doctor.CompatibilityError, PublicationCompatibility],
-      compile: (List[ProjectName], List[ProjectName]) => ZIO[R, E, PublishInputs],
+      scope: ProofScope,
+      compile: List[CompilationStage] => ZIO[R, E, PublishInputs],
   ): ZIO[R & PublishEnv, E | ProjectionError, PublishOutput] =
     for
       prepared <- SessionSettle.prepare(repo, graph.catalog, env, write)
@@ -238,34 +234,51 @@ object LocalPublish:
               .fromEither(choose(graph, names, plans))
               .flatMap: picked =>
                 val (live, notes) = write match
-                  case PublishWrite.Release => releaseShips(plans, picked)
-                  case _                    => (picked, Nil)
+                  case PublishWrite.Release                                             => releaseShips(plans, picked)
+                  case PublishWrite.Check | PublishWrite.Local | PublishWrite.Snapshots => (picked, Nil)
                 if live.modules.isEmpty then
                   if live.refused.nonEmpty || live.skipped.nonEmpty || chosen.held.nonEmpty || notes.nonEmpty then
                     ZIO.succeed(PublishOutput(skipped(live), Nil, chosen.held, refused(live) ++ notes))
                   else ZIO.fail(LocalPublishError.NothingToPublish)
                 else
-                  for
-                    group <- ZIO.fromEither(organization(graph))
-                    _     <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
-                    checked = graph.catalog.ships.filter(_.members.exists(live.modules.contains))
-                    inputs  <- compile(live.modules.toList, checked.flatMap(_.members.toList).distinct)
-                    _       <- PublicationCompatibility.verify(graph, checked, group, inputs.cells, compatibility)
-                    modules <- publishJobs(
-                      repo,
-                      graph,
-                      group,
-                      jobs(plans, live.modules, inputs.cells),
-                      write,
-                      api,
-                      inputs.generated,
+                  val checked = graph.catalog.ships.filter(_.members.exists(live.modules.contains))
+                  val members = jvmMembers(graph, checked)
+                  val proving = members.filter(PublicationCompatibility.enforced(write, scope).allows)
+                  val noted   = proofNotes(write, scope, members, proving)
+                  if write == PublishWrite.Check && proving.isEmpty then
+                    ZIO.succeed(PublishOutput(skipped(live), Nil, chosen.held, refused(live) ++ notes, noted))
+                  else
+                    for
+                      group  <- ZIO.fromEither(organization(graph))
+                      _      <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
+                      inputs <- compile(compileStages(graph, write, live.modules, proving))
+                      _      <- PublicationCompatibility.verify(
+                        graph,
+                        checked,
+                        group,
+                        inputs.cells,
+                        compatibility,
+                        PublicationCompatibility.enforced(write, scope),
+                      )
+                      modules <- write match
+                        case PublishWrite.Check                                                 => ZIO.succeed(Nil)
+                        case PublishWrite.Local | PublishWrite.Snapshots | PublishWrite.Release =>
+                          publishJobs(
+                            repo,
+                            graph,
+                            group,
+                            jobs(plans, live.modules, inputs.cells),
+                            write,
+                            api,
+                            inputs.generated,
+                          )
+                    yield PublishOutput(
+                      skipped(live),
+                      modules.sortBy(line => (line.group.value, line.artifact, line.revision)),
+                      chosen.held,
+                      refused(live) ++ notes,
+                      noted,
                     )
-                  yield PublishOutput(
-                    skipped(live),
-                    modules.sortBy(line => (line.group.value, line.artifact, line.revision)),
-                    chosen.held,
-                    refused(live) ++ notes,
-                  )
     yield written
 
   private type PublishEnv = Publisher & Resolve & ContentStore & RemoteCache
@@ -399,6 +412,60 @@ object LocalPublish:
           seen.map: item =>
             if item.ship == plan.ship then item.copy(snapshot = item.snapshot || snapshot)
             else item
+
+  /** Published JVM members of the ships being written. Order follows the catalog. */
+  private def jvmMembers(graph: ProjectGraph, ships: List[Ship]): List[ProjectName] =
+    ships
+      .flatMap(_.members.toList)
+      .distinct
+      .filter: name =>
+        graph.get(name) match
+          case Some(module: Module) => module.platforms.all.contains(Platform.Jvm)
+          case _                    => false
+
+  /** Check compiles only the members it compares. A write compiles every module it publishes, and any extra JVM member
+    * the proof still needs.
+    */
+  private def compileStages(
+      graph: ProjectGraph,
+      write: PublishWrite,
+      publishing: Set[ProjectName],
+      proving: List[ProjectName],
+  ): List[CompilationStage] =
+    val names = write match
+      case PublishWrite.Check                                                 => proving
+      case PublishWrite.Local | PublishWrite.Snapshots | PublishWrite.Release =>
+        (publishing.toList ++ proving).distinct
+    names.flatMap: name =>
+      val every = write != PublishWrite.Check && publishing.contains(name)
+      mainStages(graph, name, every)
+
+  private def mainStages(graph: ProjectGraph, name: ProjectName, everyPlatform: Boolean): List[CompilationStage] =
+    graph.get(name) match
+      case Some(module: Module) =>
+        for
+          version  <- module.versions.all
+          platform <- module.platforms.all
+          if everyPlatform || platform == Platform.Jvm
+        yield CompilationStage(Cell(name, version, platform), SourceSet.Main)
+      case _ => Nil
+
+  /** A member outside the scope is named, not described as compatible. An empty selection is not a full proof. */
+  private def proofNotes(
+      write: PublishWrite,
+      scope: ProofScope,
+      members: List[ProjectName],
+      proving: List[ProjectName],
+  ): List[String] =
+    write match
+      case PublishWrite.Snapshots | PublishWrite.Release => Nil
+      case PublishWrite.Check | PublishWrite.Local       =>
+        val omitted = members.filterNot(proving.toSet.contains).map(_.value).sorted
+        val named   = if omitted.isEmpty then Nil else List(omitted.mkString("not checked: ", ", ", ""))
+        val empty   = scope match
+          case ProofScope.Selected(_) if proving.isEmpty => List("nothing was selected")
+          case ProofScope.All | ProofScope.Selected(_)   => Nil
+        empty ++ named
 
   private def organization(
       graph: ProjectGraph
@@ -891,8 +958,8 @@ object LocalPublish:
       write: PublishWrite,
   ): ZIO[Any, LocalPublishError, Option[Chunk[Byte]]] =
     write match
-      case PublishWrite.Snapshots                    => ZIO.succeed(None)
-      case PublishWrite.Local | PublishWrite.Release =>
+      case PublishWrite.Check | PublishWrite.Snapshots => ZIO.succeed(None)
+      case PublishWrite.Local | PublishWrite.Release   =>
         val path = scratch(repo, cell, revision, Scratch.Javadoc)
         JavadocStub
           .write(path)

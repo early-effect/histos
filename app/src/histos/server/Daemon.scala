@@ -1164,9 +1164,9 @@ object Daemon:
     */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _) | Call.Assembly(_) | Call.Clean(_, _) |
-          Call.Format(_, _) | Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _) | Call.Assembly(_) |
+          Call.Clean(_, _) | Call.Format(_, _) | Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishWithdraw | Call.PublishAssets(_) | Call.Graph |
           Call.Task(_, _) | Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |

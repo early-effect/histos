@@ -59,12 +59,5 @@ object LibrarySurfaceSpec extends ZIOSpecDefault:
         SystemProperty.from("has space=no").isLeft,
       )
     },
-    test("a 0.x binary difference is a minor bump") {
-      val text = histos.version.ShipName.from("heddle") match
-        case Right(name) =>
-          histos.version.ShipAdvice.binaryBump(name, histos.version.ShipNumber.trusted(0, 16, 0), "minor")
-        case Left(_) => ""
-      assertTrue(text.contains("minor"), text.contains("0.x"))
-    },
   )
 end LibrarySurfaceSpec

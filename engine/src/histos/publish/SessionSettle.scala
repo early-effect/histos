@@ -9,10 +9,11 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** A development session becomes the snapshot at HEAD before a local or snapshot write. `publish snapshots` then moves
-  * the pointer from any checkout. A local write moves it only on the recorded default branch. A pull request stays. A
-  * release stays, so a local write of that session still writes the release number. A release write does not settle. An
-  * empty catalog is not a publish, so it is not asked for a commit.
+/** A development session becomes the snapshot at HEAD before a check, a local write, or a snapshot write. `publish
+  * snapshots` then moves the pointer from any checkout. A check does not move it, and neither does a local write except
+  * on the recorded default branch. A pull request stays. A release stays, so a local write of that session still writes
+  * the release number. A release write does not settle. An empty catalog is not a publish, so it is not asked for a
+  * commit.
   */
 object SessionSettle:
   def prepare(
@@ -35,11 +36,15 @@ object SessionSettle:
       case Right(Session.Snapshot(_, _)) => env.updated(Session.BranchKey, "default")
       case _                             => env
 
-  /** Development, and only a local or snapshot write. An incomplete session stays, so its own error is reported. */
+  /** Development, for a check, a local write, or a snapshot write. An incomplete session stays, so its own error is
+    * reported. A release write does not settle. Check does not move the snapshot pointer.
+    */
   private[publish] def settle(source: SessionSource, write: PublishWrite): Boolean =
     (Session.from(source), write) match
-      case (Right(Session.Development), PublishWrite.Local | PublishWrite.Snapshots) => true
-      case _                                                                         => false
+      case (Right(Session.Development), PublishWrite.Check | PublishWrite.Local | PublishWrite.Snapshots) => true
+      case (Right(Session.Development), PublishWrite.Release)                                             => false
+      case (Right(Session.Snapshot(_, _) | Session.PullRequest(_, _) | Session.Release), _)               => false
+      case (Left(_), _)                                                                                   => false
 
   private def source(env: Map[String, String]): SessionSource =
     SessionSource(

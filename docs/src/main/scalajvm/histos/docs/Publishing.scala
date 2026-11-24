@@ -62,15 +62,19 @@ the handoff without relying on a temporary source-launcher script.
     ),
     section("Which command to run")(
       md"""
-`histos publish local` writes the snapshot coordinate of your current commit into the
-local Ivy repository, so another project on this machine can depend on it before you
-publish anywhere else.
+`histos publish check` compiles the published JVM members the diff selects and compares
+them. It writes no Ivy files and moves no snapshot pointer. `histos publish local` writes
+the snapshot coordinate of your current commit into the local Ivy repository, so another
+project on this machine can depend on it before you publish anywhere else. Both follow
+the same selection as `histos affected`: a build file, a failed diff, `--base all`, or no
+base compares every published JVM member. A member the diff did not select is named and
+is not reported as compatible.
 
 `histos publish snapshots` publishes that same coordinate to the snapshot repository.
-
 `histos publish release` publishes the ship number. It runs only when
 `HISTOS_SESSION=release`, which is how a person and a CI job agree that this invocation
-is a release and not an accident.
+is a release and not an accident. Both compare every published JVM member and every
+declared Scala version before any upload. `--base` does not narrow them.
 
 `histos publish assets` uploads a packaged file after the deployment is validated and
 the GitHub release exists. `publish promote` and `publish drop` finish a deployment that
@@ -84,11 +88,13 @@ It does not change `histos.version`.
     ),
     section("What kind of bump")(
       md"""
-`histos doctor --area release` checks every published JVM member and every declared
-Scala version against the newest stable release of that exact Maven coordinate. Compile
-those members first. A coordinate with no stable release is an explicit first publication,
-not a claim that a baseline was compared. Missing current classes, unreachable metadata,
-missing baseline jars, and failed analysis are incomplete verification and fail the check.
+`histos publish check` and `histos publish local` compare the published JVM members the
+diff selects, on every declared Scala version of those members. `histos publish snapshots`
+and `histos publish release` compare every published JVM member before upload. A coordinate
+with no stable release is an explicit first publication, not a claim that a baseline was
+compared. Missing current classes, unreachable metadata, missing baseline jars, and failed
+analysis are incomplete verification and fail the check. The release area of `histos doctor`
+checks the session, the releases file, the bump, and the pin. It does not read classfiles.
 
 The `CompatibilityAnalyzer` service currently uses MiMa for backward JVM classfile
 compatibility only. It does not prove source, behavioral, TASTy, Scala.js IR, or Native ABI
@@ -102,19 +108,23 @@ binary problems require a minor bump. A catalog number that already covers the r
 component passes.
 
 Job preflight is product-independent: it checks prerequisites before compilation,
-not compatibility of classes that do not exist yet. Generated publication jobs compile
-all applicable published JVM members and Scala versions, then run the complete
-`ship.binary` check. Missing or incomplete evidence fails closed.
+not compatibility of classes that do not exist yet. A pin host's compatibility job runs
+`histos publish check`. A local host's publish job runs `histos publish local`. Neither
+compiles the world and then asks doctor to read classfiles. Missing or incomplete
+evidence fails closed.
 
-Direct local, snapshot, and release publication also enforce the complete applicable
-JVM compatibility gate before staging artifacts: every JVM member and Scala version
-of each ship containing a selected publication. Selecting fewer publication tokens
-does not reduce a ship's gate to one representative member. Explicit first publication
-needs no invented baseline. Ordinary compile and test do not fetch release metadata
-or compatibility baselines; JS and Native linking and inventory are separate proof.
+`publish check` compiles only the selected closure, because it writes nothing. `publish
+local`, `publish snapshots`, and `publish release` still compile and write what they
+publish today. Check and local narrow only the MiMa set. Snapshots and release compare
+every JVM member and Scala version of each ship that contains a selected publication.
+Selecting fewer publication tokens does not reduce that full gate to one representative
+member. An empty selection succeeds and says nothing was selected. It is not a full-proof
+claim. Explicit first publication needs no invented baseline. Ordinary compile and test
+do not fetch release metadata or compatibility baselines; JS and Native linking and
+inventory are separate proof.
 
-`histos bump` rewrites `.next`. It does not decide the component. You pass
-`--minor` or `--major` when the doctor named one. The default is the next patch.
+`histos bump` rewrites `.next`. It does not decide the component. The default is the
+next patch. A binary difference is reported by publish, not by doctor.
 """,
       cite[histos.version.BumpPart](_.token),
     ),

@@ -1,6 +1,6 @@
 package histos.doctor
 
-import histos.version.{BumpPart, ShipName, ShipNumber}
+import histos.version.{BumpPart, ShipNumber}
 
 /** Early-semver bump policy for independently collected backward binary compatibility evidence. */
 object BinaryCheck:
@@ -31,11 +31,4 @@ object BinaryCheck:
       case BumpPart.Minor =>
         catalog.major > previous.major || (catalog.major == previous.major && catalog.minor > previous.minor)
       case BumpPart.Patch => Ordering[ShipNumber].gt(catalog, previous)
-
-  def outcome(ship: ShipName, number: ShipNumber, difference: Difference): Outcome =
-    difference match
-      case Difference.None =>
-        Outcome.Ok(CheckId.trusted("ship.binary"), s"${ship.value} ${number.render} matches the previous release")
-      case Difference.Break(bump, _) =>
-        Outcome.Found(histos.version.ShipDiagnostic.BinaryBump(ship, number, bump.token))
 end BinaryCheck

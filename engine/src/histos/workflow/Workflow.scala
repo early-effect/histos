@@ -254,7 +254,7 @@ object Workflow:
     val taken         = graph.verify.exists(_.name == compatibility) || graph.plugins.exists(
       _.contribution.jobs.exists(_.name == compatibility)
     )
-    if graph.catalog.ships.nonEmpty && taken then Left(CiError.Fault(histos.CiFault.RenderedJob(compatibility)))
+    if emitsCompatibility(graph) && taken then Left(CiError.Fault(histos.CiFault.RenderedJob(compatibility)))
     else Right(())
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
@@ -373,7 +373,9 @@ object Workflow:
       case _   => testJob(jobs, graph, lock)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
-      case _             => List(versionsJob(graph), compatibilityJob(graph))
+      case _             =>
+        val proof = if emitsCompatibility(graph) then List(compatibilityJob(graph)) else Nil
+        List(versionsJob(graph)) ++ proof
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
@@ -440,7 +442,7 @@ object Workflow:
     "          printf 'publish=%s\\nsession=%s\\npr=%s\\n' \"$publish\" \"$session\" \"$pr\" >> \"$GITHUB_OUTPUT\"",
   )
 
-  /** Recheck the current head and PR label immediately before publication, after compilation and compatibility. */
+  /** Recheck the current head and PR label immediately before publication. */
   private def snapshotDocument(graph: ProjectGraph)(using RenderingShip): String =
     val verified =
       "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository"
@@ -484,7 +486,7 @@ object Workflow:
       s"      - uses: $Checkout",
       "        with:",
       "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}",
-    ) ++ coursierCli(graph, "snapshots") ++ compatibilitySteps(graph) ++ List(
+    ) ++ coursierCli(graph, "snapshots") ++ List(
       "      - id: authorized"
     ) ++ snapshotAuthorization ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
@@ -991,19 +993,24 @@ object Workflow:
           s"          timeout 180s node \"$$dir/node_modules/playwright/cli.js\" install-deps $named",
         ) ++ cell.toList.map(text => s"        if: $text")
 
+  /** PR base, else the last successful push on this branch, else `all`. A failed ancestor check keeps `all`. */
+  private val diffBase: String =
+    """base=all
+      |if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+      |  base="$PR_BASE"
+      |elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+      |  last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
+      |  if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
+      |    base="$last"
+      |  fi
+      |fi""".stripMargin
+
   private def affectedJob(graph: ProjectGraph)(using RenderingShip): String =
-    val script =
-      """          base=all
-          |          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-          |            base="$PR_BASE"
-          |          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
-          |            last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
-          |            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
-          |              base="$last"
-          |            fi
-          |          fi
-          |          modules=$(./histos affected --base "$base" || echo '["all"]')
-          |          echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
+    val script = runScript(
+      diffBase + "\n" +
+        """modules=$(./histos affected --base "$base" || echo '["all"]')
+          |echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
+    )
     (List(
       "  affected:"
     ) ++ List(
@@ -1258,6 +1265,21 @@ object Workflow:
   /** A writing step. The namespace is the caller's. The mode is write, and a laptop that copies this file still opens
     * as read.
     */
+  /** The same base script as `affected`, then one publish command. Cache write stays on the local publish job. */
+  private def proofStep(command: String, writeCache: Boolean): List[String] =
+    val cache =
+      if writeCache then
+        List(
+          s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
+          s"          ${CacheConfig.ModeKey}: ${quote("write")}",
+        )
+      else Nil
+    script(diffBase + "\n" + command) ++ List(
+      "        env:",
+      "          GH_TOKEN: ${{ github.token }}",
+      "          PR_BASE: ${{ github.event.pull_request.base.sha }}",
+    ) ++ cache
+
   private def cacheWrite(namespace: String, command: String): List[String] =
     List(
       s"      - run: ${quote(command)}",
@@ -1400,28 +1422,15 @@ object Workflow:
     ) ++ fullGitCheckout() ++ CiInstall.originHead ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(
       graph,
       "workflow",
-    ) ++ compatibilitySteps(graph) ++ SupplyYaml.fullDoctor(
+    ) ++ SupplyYaml.fullDoctor(
       graph.supply.updates.author
     ) ++ List(
       "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
-  /** Current products are built before the complete JVM evidence check, never replaced by a cold preflight. */
-  def compatibilitySteps(graph: ProjectGraph): List[String] =
-    val published = graph.catalog.ships.flatMap(_.members.toList).distinct
-    val names     = published.filter(name =>
-      graph
-        .get(name)
-        .exists:
-          case module: Module => module.platforms.all.contains(Platform.Jvm)
-          case _: Aggregate   => false
-    )
-    if names.isEmpty then Nil
-    else
-      List(
-        s"      - run: ${quote((List("./histos", "compile") ++ names.map(_.value) ++ List("--platform", "jvm")).mkString(" "))}",
-        "      - run: ./histos doctor --area release",
-      )
+  /** Pin with a catalog renders `compatibility`. Local renders `publish` instead. */
+  private def emitsCompatibility(graph: ProjectGraph): Boolean =
+    graph.suiteHost == SuiteHost.Pin && graph.catalog.ships.nonEmpty
 
   def requiredJobs(graph: ProjectGraph): List[String] =
     val suite = if graph.projects.exists:
@@ -1429,7 +1438,11 @@ object Workflow:
         case _: Aggregate   => false
     then List("test")
     else Nil
-    val catalog = if graph.catalog.ships.nonEmpty then List("versions", "compatibility") else Nil
+    val catalog =
+      if graph.catalog.ships.isEmpty then Nil
+      else if emitsCompatibility(graph) then List("versions", "compatibility")
+      else List("versions")
+    val publish = if graph.suiteHost == SuiteHost.Local then List("publish") else Nil
     val doc     = if graph.docCheck == DocCheck.On then List("scaladoc") else Nil
     val format  = graph.formatting match
       case Formatting.Off         => Nil
@@ -1441,7 +1454,7 @@ object Workflow:
       "affected",
       "workflow",
       graph.supply.checkName.value,
-    ) ++ suite ++ catalog ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
+    ) ++ suite ++ catalog ++ publish ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
 
   private def compatibilityJob(graph: ProjectGraph)(using RenderingShip): String =
     (List("  compatibility:") ++ verifyIf ++ afterAffected(Nil) ++ List(
@@ -1451,7 +1464,10 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ compatibilitySteps(graph)).mkString("\n")
+    ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ proofStep(
+      """./histos publish check --base "$base"""",
+      writeCache = false,
+    )).mkString("\n")
 
   private def versionsJob(graph: ProjectGraph)(using RenderingShip): String =
     (List(
@@ -1513,9 +1529,9 @@ object Workflow:
       s"      - uses: $Checkout",
     ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "publish") ++
       coursierStep(graph.resolution) ++
-      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ compatibilitySteps(graph) ++ cacheWrite(
-        cacheNamespace,
-        "./histos publish local",
+      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ proofStep(
+        """./histos publish local --base "$base"""",
+        writeCache = true,
       ) ++ script(stageBody) ++ uploadHost ++ storeSave
     lines.mkString("\n")
 
@@ -1653,6 +1669,9 @@ object Workflow:
 
   private def script(body: String): List[String] =
     List("      - run: |") ++ body.linesIterator.map(line => "          " + line).toList
+
+  private def runScript(body: String): String =
+    body.linesIterator.map(line => "          " + line).mkString("\n")
 
   private def quote(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""

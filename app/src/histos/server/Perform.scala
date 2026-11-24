@@ -33,11 +33,12 @@ object Perform:
   /** Clean adopts generated ownership. Graph-free recovery is a local launcher fallback. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
-          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
-          Call.Graph | Call.Run(_, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
-          Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+          Call.PublishWithdraw | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) |
+          Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) |
+          Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) |
+          Call.CacheVerify(_) | Call.Catalog(_) =>
         true
       case Call.Clean(Nil, _) =>
         true
@@ -57,8 +58,8 @@ object Perform:
     */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case _ => notCompiled(error)
 
@@ -135,7 +136,25 @@ object Perform:
                 )
               case Call.PublishWithdraw =>
                 held(build => follow(Calls.withdraw(repo, build.graph, machine, say)))
-              case Call.PublishLocal(tokens) =>
+              case Call.PublishCheck(tokens, scope) =>
+                held(build =>
+                  follow(
+                    withJdk(jdk =>
+                      Calls.publishCheck(
+                        repo,
+                        build.graph,
+                        machine,
+                        jdk,
+                        tokens.map(_.value),
+                        scope,
+                        say,
+                        build.plugins.launcher,
+                        Some(build.plugins),
+                      )
+                    )
+                  )
+                )
+              case Call.PublishLocal(tokens, scope) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -146,6 +165,7 @@ object Perform:
                         machine,
                         jdk,
                         tokens.map(_.value),
+                        scope,
                         say,
                         build.plugins.launcher,
                         Some(build.plugins),

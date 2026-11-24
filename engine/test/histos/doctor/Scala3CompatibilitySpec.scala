@@ -83,22 +83,17 @@ object Scala3CompatibilitySpec extends ZIOSpecDefault:
                 yield (missing, matched)
               }
               .provideLayer(CompatibilityAnalyzer.jvm)
-              .either
           yield results
         }
         .map { ran =>
-          val missing = ran.value.exists { (result, _) =>
-            result.exists {
-              case CompatibilityResult.Incompatible(problems) =>
-                problems.contains(CompatibilityProblem.MissingClass("fixture.Api"))
-              case CompatibilityResult.Compatible => false
-            }
-          }
-          val matched = ran.value.exists { (_, result) =>
-            result match
-              case Left(CompatibilityError.AnalysisFailed(_, _)) => true
-              case _                                             => false
-          }
+          val (missingResult, matchedResult) = ran.value
+          val missing                        = missingResult match
+            case Right(CompatibilityResult.Incompatible(problems)) =>
+              problems.contains(CompatibilityProblem.MissingClass("fixture.Api"))
+            case _ => false
+          val matched = matchedResult match
+            case Left(CompatibilityError.AnalysisFailed(_, _)) => true
+            case _                                             => false
           assertTrue(missing, matched)
         }
     },

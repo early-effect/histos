@@ -160,18 +160,32 @@ object CompletionSurface:
     ),
   )
 
+  private val publishBase = Flag("--base", "The base commit", Some(Slot.Free))
+
   private val publishForms = List(
-    Node("local", sentence("publish local"), args = List(Pos(Slot.Free, many = true, name = "token"))),
+    Node(
+      "check",
+      sentence("publish check"),
+      flags = List(publishBase),
+      args = List(Pos(Slot.Free, many = true, name = "token")),
+    ),
+    Node(
+      "local",
+      sentence("publish local"),
+      flags = List(publishBase),
+      args = List(Pos(Slot.Free, many = true, name = "token")),
+    ),
     Node("withdraw", sentence("publish withdraw")),
     Node(
       "snapshots",
       "Publish the snapshot coordinate at HEAD.",
+      flags = List(publishBase),
       args = List(Pos(Slot.Free, many = true, name = "token")),
     ),
     Node(
       "release",
       sentence("publish release"),
-      flags = List(Flag("--automatic", "Close the portal deployment")),
+      flags = List(publishBase, Flag("--automatic", "Close the portal deployment")),
       args = List(Pos(Slot.Free, many = true, name = "token")),
     ),
     Node("assets", sentence("publish assets"), args = List(Pos(Slot.Free, many = true, name = "token"))),

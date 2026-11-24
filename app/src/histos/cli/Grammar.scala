@@ -50,7 +50,8 @@ object Grammar:
     case Compile(projects: List[String])
     case Clean(tokens: List[String])
     case Assembly(modules: List[String])
-    case PublishLocal(tokens: List[String])
+    case PublishCheck(tokens: List[String], base: Option[String])
+    case PublishLocal(tokens: List[String], base: Option[String])
     case PublishWithdraw
     case PublishSnapshots(projects: List[String])
     case PublishRelease(automatic: Boolean, tokens: List[String])
@@ -126,17 +127,26 @@ object Grammar:
   private val cleanBuild = CliCommand("clean", Args.text("token").*).map(tokens => Wire.Clean(tokens.toList))
   private val assembly   =
     CliCommand("assembly", Args.text("module").*).map(names => Wire.Assembly(names.toList))
+  private val publishCheck =
+    CliCommand("check", Options.text("base").optional, Args.text("token").*).map { case (base, tokens) =>
+      Wire.PublishCheck(tokens.toList, base)
+    }
   private val publishLocal =
-    CliCommand("local", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
+    CliCommand("local", Options.text("base").optional, Args.text("token").*).map { case (base, tokens) =>
+      Wire.PublishLocal(tokens.toList, base)
+    }
   private val publishWithdraw =
     CliCommand("withdraw").map(_ => Wire.PublishWithdraw)
   private val publishSnapshots =
-    CliCommand("snapshots", Args.text("project").*).map(names => Wire.PublishSnapshots(names.toList))
+    CliCommand("snapshots", Options.text("base").optional, Args.text("project").*).map { case (_, names) =>
+      Wire.PublishSnapshots(names.toList)
+    }
   private val publishRelease =
-    CliCommand("release", Options.boolean("automatic"), Args.text("token").*).map { case (automatic, names) =>
-      val raw    = names.toList
-      val tokens = raw.filterNot(_ == "--automatic")
-      Wire.PublishRelease(automatic || raw.exists(_ == "--automatic"), tokens)
+    CliCommand("release", Options.boolean("automatic") ++ Options.text("base").optional, Args.text("token").*).map {
+      case ((automatic, _), names) =>
+        val raw    = names.toList
+        val tokens = raw.filterNot(_ == "--automatic")
+        Wire.PublishRelease(automatic || raw.exists(_ == "--automatic"), tokens)
     }
   private val publishPromote =
     CliCommand("promote", Args.text("deployment")).map(Wire.PublishPromote(_))
@@ -146,7 +156,8 @@ object Grammar:
     CliCommand("assets", Args.text("token").*).map(tokens => Wire.PublishAssets(tokens.toList))
   private val publish =
     CliCommand("publish").subcommands(
-      publishLocal | publishWithdraw | publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
+      publishCheck | publishLocal | publishWithdraw | publishSnapshots | publishRelease | publishAssets | publishPromote |
+        publishDrop
     )
   private val mcp    = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp    = CliCommand("bsp").map(_ => Wire.Bsp)
@@ -514,8 +525,10 @@ object Grammar:
         cleaned("clean", tokens, Command.Clean.apply)
       case Wire.Assembly(modules) =>
         ZIO.succeed(Command.Assembly(modules))
-      case Wire.PublishLocal(tokens) =>
-        publishTokens(tokens).map(Command.PublishLocal(_))
+      case Wire.PublishCheck(tokens, base) =>
+        publishTokens(tokens).map(parsed => Command.PublishCheck(parsed, base))
+      case Wire.PublishLocal(tokens, base) =>
+        publishTokens(tokens).map(parsed => Command.PublishLocal(parsed, base))
       case Wire.PublishWithdraw =>
         ZIO.succeed(Command.PublishWithdraw)
       case Wire.PublishSnapshots(tokens) =>
@@ -1007,7 +1020,7 @@ object Grammar:
           case ValidationErrorType.MissingValue | ValidationErrorType.InvalidArgument =>
             CliParseError.Pattern("cache promote needs --from and --to")
           case _ => reject(error, args)
-      case "publish" :: ("local" | "snapshots" | "release" | "assets" | "promote" | "drop") :: _ =>
+      case "publish" :: ("check" | "local" | "snapshots" | "release" | "assets" | "promote" | "drop") :: _ =>
         reject(error, args)
       case "publish" :: _                                         => CliParseError.PublishForm
       case "preview" :: "publish" :: ("local" | "snapshots") :: _ => reject(error, args)

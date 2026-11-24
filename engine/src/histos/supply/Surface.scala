@@ -177,7 +177,6 @@ object DoctorSurface:
     val dropped = Set(
       histos.doctor.ShipChecks.bumpId,
       histos.doctor.ShipChecks.pinId,
-      histos.doctor.ShipChecks.binaryId,
     )
     if preflight.isDefined then checks.filterNot(check => dropped.contains(check.id)) else checks
 

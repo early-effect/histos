@@ -369,8 +369,8 @@ the run. `--area <area>` runs one group of checks. `--json` prints JSON for a sc
 `--preflight <job>` runs the checks that job needs. `--verbose` lists every check.
 `--fix` applies the edits Histos knows how to make, and `--yes` applies them without
 asking. Job preflight checks configuration and other product-independent prerequisites;
-it is not a substitute for the post-compile JVM compatibility publication gate
-explained on the Publish page.
+it is not a substitute for the JVM compatibility proof that `publish check`, `publish local`,
+`publish snapshots`, and `publish release` run, explained on the Publish page.
 """
     ),
     section("setup")(

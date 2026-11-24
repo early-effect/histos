@@ -17,9 +17,9 @@ object CallIdentity:
       case Call.Resolve(ResolveAction.Check)              => CommandIdentity.Resolve(ResolveVerb.Check)
       case Call.Resolve(ResolveAction.Refresh(selectors)) => CommandIdentity.Refresh(selectors)
       case Call.Format(_, _)                              => CommandIdentity.Format
-      case Call.PublishLocal(_) | Call.PublishWithdraw | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
-          Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishWithdraw | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         CommandIdentity.Publish
       case Call.Task(id, _) =>
         PluginTaskId.parse(id) match
@@ -65,7 +65,8 @@ object CallIdentity:
       case Call.Task(id, _)                         => List(id)
       case Call.Watch(inner, _)                     => "~" :: words(inner)
       case Call.Format(_, _)                        => List("fmt")
-      case Call.PublishLocal(_)                     => List("publish", "local")
+      case Call.PublishCheck(_, _)                  => List("publish", "check")
+      case Call.PublishLocal(_, _)                  => List("publish", "local")
       case Call.PublishWithdraw                     => List("publish", "withdraw")
       case Call.PublishSnapshots(_)                 => List("publish", "snapshots")
       case Call.PublishRelease(_, _)                => List("publish", "release")

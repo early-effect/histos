@@ -86,8 +86,10 @@ object Operation:
         else Right(Call.Clean(projects, extent))
       case Command.Assembly(modules) =>
         Right(Call.Assembly(modules))
-      case Command.PublishLocal(tokens) =>
-        Right(Call.PublishLocal(tokens))
+      case Command.PublishCheck(tokens, _) =>
+        Right(Call.PublishCheck(tokens, histos.publish.ProofScope.All))
+      case Command.PublishLocal(tokens, _) =>
+        Right(Call.PublishLocal(tokens, histos.publish.ProofScope.All))
       case Command.PublishWithdraw =>
         Right(Call.PublishWithdraw)
       case Command.PublishSnapshots(tokens) =>

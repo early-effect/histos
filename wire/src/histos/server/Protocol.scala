@@ -239,7 +239,8 @@ enum Call derives JsonCodec:
       mode: TestMode,
       filter: TestFilter,
   )
-  case PublishLocal(tokens: List[PublishToken])
+  case PublishCheck(tokens: List[PublishToken], scope: histos.publish.ProofScope)
+  case PublishLocal(tokens: List[PublishToken], scope: histos.publish.ProofScope)
 
   /** Remove the local ivy revisions and toolchain directory for HEAD. The pin stays. */
   case PublishWithdraw

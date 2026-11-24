@@ -100,10 +100,16 @@ object Help:
       "Write a project in the current directory. --from drafts histos.scala from sbt or zipx.",
     ),
     Entry(
+      "publish check",
+      "publish",
+      "histos publish check [--base <sha|all>] [token ...]",
+      "Compile the published JVM members the diff selects and compare them. Writes no Ivy files and moves no snapshot pointer. No base, --base all, a build file, or a failed diff compares every member. A member that was not selected is named and is not reported as compatible.",
+    ),
+    Entry(
       "publish local",
       "publish",
-      "histos publish local [token ...]",
-      "Publish to the local Ivy repository. The three publish commands link the client.",
+      "histos publish local [--base <sha|all>] [token ...]",
+      "Publish to the local Ivy repository. The comparison follows the same selection as publish check. The three writing publish commands link the client.",
     ),
     Entry(
       "publish withdraw",
@@ -115,13 +121,13 @@ object Help:
       "publish",
       "publish",
       "histos publish snapshots [token ...]",
-      "Publish the snapshot coordinate at HEAD. A snapshot or pull-request session already set is kept. The pointer moves from any checkout.",
+      "Publish the snapshot coordinate at HEAD. Every published JVM member is compared before upload. --base is accepted and does not narrow that comparison. A snapshot or pull-request session already set is kept. The pointer moves from any checkout.",
     ),
     Entry(
       "publish release",
       "publish",
       "histos publish release [token ...] [--automatic]",
-      "Publish the ship number. Requires HISTOS_SESSION=release. --automatic closes the portal deployment.",
+      "Publish the ship number. Every published JVM member is compared before upload. --base is accepted and does not narrow that comparison. Requires HISTOS_SESSION=release. --automatic closes the portal deployment.",
     ),
     Entry(
       "publish assets",

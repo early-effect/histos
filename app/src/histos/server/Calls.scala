@@ -227,6 +227,38 @@ object Calls:
         report => told(say, report.lines.mkString("\n")) *> ok(say),
       )
 
+  def publishCheck(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      jdk: JdkRuntime,
+      tokens: List[String],
+      scope: histos.publish.ProofScope,
+      say: Say,
+      launcher: ApiDigest,
+      plugins: Option[histos.load.PluginRuntime] = None,
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+    layout(say, graph) *>
+      CompileConsole.open(repo, graph.moduleColumn).flatMap { console =>
+        reported(
+          repo,
+          say,
+          console,
+          histos.publish.PublishRun.check(
+            repo,
+            graph,
+            tokens,
+            jdk,
+            machine.env,
+            launcher,
+            scope,
+            feed => speak(say, console, feed).ignore,
+            hear(say),
+            plugins,
+          ),
+        )
+      }
+
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
@@ -234,6 +266,7 @@ object Calls:
       machine: Machine,
       jdk: JdkRuntime,
       tokens: List[String],
+      scope: histos.publish.ProofScope,
       say: Say,
       launcher: ApiDigest,
       plugins: Option[histos.load.PluginRuntime] = None,
@@ -252,6 +285,7 @@ object Calls:
             jdk,
             machine.env,
             launcher,
+            scope,
             feed => speak(say, console, feed).ignore,
             hear(say),
             plugins,

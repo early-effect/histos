@@ -4,7 +4,7 @@ import histos.*
 import histos.central.{FeedError, MavenModule, ReleaseFeed}
 import histos.doctor.*
 import histos.version.ShipNumber
-import histos.workflow.{SupplyYaml, Workflow}
+import histos.workflow.SupplyYaml
 import histos.workspace.Workspace
 import java.nio.file.Path
 import zio.{Duration, IO, Ref, UIO, ZIO, ZLayer}
@@ -19,24 +19,18 @@ object PreflightCompatibilitySpec extends ZIOSpecDefault:
   )
 
   def spec = suite("product-independent preflight")(
-    test("actual cold preflight selection reaches the compile, while the full gate remains fatal") {
+    test("cold preflight stays on session and releases while the full selection keeps bump and pin") {
       ZIO.scoped:
         for
-          repo     <- Workspace.work("cold-preflight")
-          graph    <- ZIO.fromEither(built)
-          _        <- Workspace.writeString(repo.resolve("releases"), "")
-          listed   <- Ref.make(0)
-          compiled <- Ref.make(false)
+          repo   <- Workspace.work("cold-preflight")
+          graph  <- ZIO.fromEither(built)
+          _      <- Workspace.writeString(repo.resolve("releases"), "")
+          listed <- Ref.make(0)
           feed = new ReleaseFeed:
             def newest(module: MavenModule): IO[FeedError, Option[ShipNumber]] = listed.update(_ + 1).as(None)
-          baseline = new CompatibilityBaseline:
-            def fetch(coordinate: BaselineCoordinate): IO[BaselineError, Path] =
-              ZIO.fail(BaselineError.MissingJar(coordinate))
-          verification = (ZLayer.succeed(feed) ++ ZLayer.succeed(
-            baseline
-          ) ++ CompatibilityAnalyzer.jvm) >>> CompatibilityVerification.layer
-          checks    = ShipChecks.checks(repo, graph, Map.empty, feed, verification)
+          checks    = ShipChecks.checks(repo, graph, Map.empty, feed)
           preflight = DoctorSurface.selection(checks, Some("workflow"))
+          full      = DoctorSurface.selection(checks, None)
           report <- Runner.run(preflight, DoctorContext(Nil, Set(Probe.Local)), Duration.Infinity)
           machine = histos.jdk.Machine(
             Map.empty,
@@ -56,28 +50,20 @@ object PreflightCompatibilitySpec extends ZIOSpecDefault:
                 ZLayer.succeed(noAuth) ++ histos.central.KeyServer.central ++
                 ZLayer.succeed(histos.cli.Stdio.redirected) ++ ZLayer.succeed(noCommands)
             )
-          _         <- ZIO.when(report.exit == 0 && surface._1 == 0)(compiled.set(true))
-          reachable <- compiled.get
-          reads     <- listed.get
-          full = DoctorSurface.selection(checks, None).filter(_.id == ShipChecks.binaryId)
-          gated <- Runner.run(full, DoctorContext(Nil, Set(Probe.Local)), Duration.Infinity)
+          reads <- listed.get
         yield assertTrue(
           preflight.map(_.id) == List(ShipChecks.sessionId, ShipChecks.releasesId),
           report.exit == 0,
           surface._1 == 0,
           !surface._2.contains("ship.binary"),
-          reachable,
           reads == 0,
-          gated.exit == 1,
-          gated.errors == 1,
-          gated.skipped == 0,
-          gated.found.exists:
-            case IncompleteCompatibility(_, CompatibilityIncomplete.MissingCurrent(_), None) => true
-            case _                                                                           => false
-          ,
+          full.map(_.id) == List(
+            ShipChecks.sessionId,
+            ShipChecks.releasesId,
+            ShipChecks.bumpId,
+            ShipChecks.pinId,
+          ),
           SupplyYaml.preflight(graph, "workflow").exists(_.contains("doctor --preflight workflow")),
-          Workflow.compatibilitySteps(graph).exists(_.contains("compile published --platform jvm")),
-          Workflow.compatibilitySteps(graph).contains("      - run: ./histos doctor --area release"),
         )
     }
   )

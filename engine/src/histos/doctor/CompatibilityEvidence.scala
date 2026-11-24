@@ -58,21 +58,3 @@ final class CompatibilityVerification(
 object CompatibilityVerification:
   val layer: ZLayer[ReleaseFeed & CompatibilityBaseline & CompatibilityAnalyzer, Nothing, CompatibilityVerification] =
     ZLayer.fromFunction(CompatibilityVerification(_, _, _))
-
-/** Incomplete evidence fails the complete post-compile doctor gate, rather than becoming a skipped green check. */
-final case class IncompleteCompatibility(
-    label: String,
-    reason: CompatibilityIncomplete,
-    baseline: Option[ShipNumber],
-) extends Diagnostic:
-  def check   = ShipChecks.binaryId
-  def level   = Level.Error
-  def title   = "JVM compatibility verification is incomplete"
-  def summary = s"$label${baseline.fold("")(number => s" against ${number.render}")}: $reason"
-  def explain = "Every published JVM member and Scala version needs current classes and its own released baseline."
-  def fixes   = ::(
-    Fix.Steps(
-      ::("Compile all published JVM members, restore registry access, then run histos doctor --area release.", Nil)
-    ),
-    Nil,
-  )

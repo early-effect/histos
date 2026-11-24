@@ -106,14 +106,27 @@ object VerifyJobSpec extends ZIOSpecDefault:
           "libssl-dev"
         ) && !job.contains("setup-node"))
     },
-    test("complete JVM compatibility compiles every published member before doctor") {
+    test("a pin compatibility job runs publish check against the base") {
       val other = module("other", Jvm)(ScalaVersion("3.10.1"))
       val text  = render(Projects(ships(Ship("libs").next(0, 1, 0)(api, other)), api, other), NpmLock.Absent)
       assertTrue(text.exists: body =>
-        val job     = slice(body, "compatibility")
-        val compile = job.indexOf("./histos compile api other --platform jvm")
-        val doctor  = job.indexOf("./histos doctor release")
-        compile >= 0 && doctor > compile && !job.contains("continue-on-error") && !job.contains("--preflight"))
+        val job = slice(body, "compatibility")
+        job.contains("./histos publish check --base \"$base\"") && job.contains("base=all") &&
+        job.contains("PR_BASE") && !job.contains("doctor --area release") && !job.contains("./histos compile") &&
+        !job.contains("continue-on-error") && !job.contains("--preflight") &&
+        !job.contains("HISTOS_CACHE_MODE") &&
+        slice(body, "supply-chain").contains("./histos compile --platform jvm"))
+    },
+    test("a local suite does not reserve the compatibility job name") {
+      val task = VerifyTask(JobName("compatibility"), host)
+      val text = render(
+        Projects.publishLocalSuite.verify(task)(ships(Ship("libs").next(0, 1, 0)(api)), api),
+        NpmLock.Absent,
+      )
+      assertTrue(text.exists: body =>
+        slice(body, "compatibility").contains("./histos run host") &&
+          !body.contains("./histos publish check") &&
+          slice(body, "publish").contains("./histos publish local --base \"$base\""))
     },
     test("a user job cannot collide with the complete compatibility check") {
       val task = VerifyTask(JobName("compatibility"), host)
@@ -156,7 +169,15 @@ object VerifyJobSpec extends ZIOSpecDefault:
         NpmLock.Absent,
       )
       assertTrue(
-        text.map(body => !body.contains("HISTOS_SESSION") && !body.contains("HISTOS_BRANCH")) == Right(true),
+        text.map(body =>
+          !body.contains("HISTOS_SESSION") && !body.contains("HISTOS_BRANCH") &&
+            !body.contains("\n  compatibility:\n") &&
+            slice(body, "publish").contains("./histos publish local --base \"$base\"") &&
+            slice(body, "publish").contains("base=all") &&
+            slice(body, "publish").contains("PR_BASE") &&
+            !slice(body, "publish").contains("doctor --area release") &&
+            !slice(body, "workflow").contains("doctor --area release")
+        ) == Right(true),
         text.map(body => publishHost(slice(body, "publish")) && publishStores(slice(body, "publish"))) == Right(
           true
         ),

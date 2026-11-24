@@ -255,13 +255,13 @@ object Watching:
       case Call.PreviewRun(id, platforms, main)  => run(id, platforms, main)
       case Call.Task(id, _)                      => task(id)
       case Call.Watch(inner, _)                  => nodes(graph, inner)
-      case other @ (Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
-          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PublishWithdraw |
-          Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Assembly(_) | Call.Clean(_, _) |
-          Call.PreviewClean(_, _) | Call.Format(_, _) | Call.Resolve(_) | Call.Workflow(_) | Call.Graph |
-          Call.Cancel(_) | Call.Reload | Call.Reboot(_) | Call.Stop | Call.Version | Call.CachePath | Call.CacheList |
-          Call.CacheClean(_) | Call.CachePromote(_, _) | Call.CacheForget(_) | Call.CacheVerify(_) | Call.Bsp |
-          Call.Catalog(_)) =>
+      case other @ (Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
+          Call.PublishWithdraw | Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) |
+          Call.Assembly(_) | Call.Clean(_, _) | Call.PreviewClean(_, _) | Call.Format(_, _) | Call.Resolve(_) |
+          Call.Workflow(_) | Call.Graph | Call.Cancel(_) | Call.Reload | Call.Reboot(_) | Call.Stop | Call.Version |
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) | Call.CacheForget(_) |
+          Call.CacheVerify(_) | Call.Bsp | Call.Catalog(_)) =>
         projects(graph, other) match
           case WatchNames.Every       => compile(Nil, histos.PlatformSelection.All)
           case WatchNames.Only(names) => compile(names, histos.PlatformSelection.All)
@@ -291,7 +291,8 @@ object Watching:
       case Call.Compile(names, _)               => listed(names)
       case Call.PreviewCompile(names, _)        => listed(names)
       case Call.PreviewTest(selection, _, _, _) => testNames(graph, selection)
-      case Call.PublishLocal(tokens)            => publish(graph, tokens.map(_.value))
+      case Call.PublishCheck(tokens, _)         => publish(graph, tokens.map(_.value))
+      case Call.PublishLocal(tokens, _)         => publish(graph, tokens.map(_.value))
       case Call.PublishSnapshots(tokens)        => publish(graph, tokens)
       case Call.PreviewPublishLocal(tokens)     => publish(graph, tokens.map(_.value))
       case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)

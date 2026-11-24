@@ -21,7 +21,7 @@ import histos.{Module, ProjectGraph}
 
 import java.nio.file.{Files, Path}
 
-import zio.{Layer, UIO, ZIO, ZLayer}
+import zio.{UIO, ZIO}
 
 /** What `releases` looked like. A missing file is not an empty registry. */
 enum ReleasesFile:
@@ -35,13 +35,12 @@ enum Listing:
   case Unreachable(error: FeedError)
   case Newest(release: Option[ShipNumber])
 
-/** Ship diagnostics and JVM compatibility evidence. These checks do not rewrite the catalog or launcher pin. */
+/** Ship diagnostics. These checks do not rewrite the catalog or launcher pin, and they do not read classfiles. */
 object ShipChecks:
   val sessionId  = CheckId.trusted("ship.session")
   val releasesId = CheckId.trusted("ship.releases")
   val bumpId     = CheckId.trusted("ship.should-bump")
   val pinId      = CheckId.trusted("ship.pin")
-  val binaryId   = CheckId.trusted("ship.binary")
 
   def read(path: Path): UIO[ReleasesFile] =
     ZIO
@@ -52,21 +51,8 @@ object ShipChecks:
       }
       .orElseSucceed(ReleasesFile.Unreadable)
 
-  /** Session, releases, bump, pin, and binary checks. Bump, pin, and binary checks read the registry when run. */
+  /** Session, releases, bump, and pin. Bump and pin read the registry when run. */
   def checks(repo: Path, graph: ProjectGraph, env: Map[String, String], feed: ReleaseFeed): List[DoctorCheck] =
-    val verification =
-      (ZLayer.succeed(
-        feed
-      ) ++ CompatibilityBaseline.live ++ CompatibilityAnalyzer.jvm) >>> CompatibilityVerification.layer
-    checks(repo, graph, env, feed, verification)
-
-  def checks(
-      repo: Path,
-      graph: ProjectGraph,
-      env: Map[String, String],
-      feed: ReleaseFeed,
-      verification: Layer[CompatibilityError, CompatibilityVerification],
-  ): List[DoctorCheck] =
     val file = repo.resolve(VersionTask.fileName)
     List(
       local(sessionId)(ZIO.succeed(List(session(graph.catalog, env)))),
@@ -82,20 +68,6 @@ object ShipChecks:
             case None      => ZIO.succeed(List(pin(None, Listing.Unasked)))
             case Some(pin) =>
               listing(feed, Some(ReleaseFeed.histos)).map(found => List(ShipChecks.pin(Some(pin.choice), found))),
-      local(binaryId)(
-        ZIO
-          .serviceWithZIO[CompatibilityVerification](binaries(repo, graph, _))
-          .provideLayer(verification)
-          .catchAll(error =>
-            ZIO.succeed(
-              List(
-                Outcome.Found(
-                  IncompleteCompatibility("JVM analyzer", CompatibilityIncomplete.AnalysisFailed(error), None)
-                )
-              )
-            )
-          )
-      ),
     )
 
   def outcomes(
@@ -172,7 +144,7 @@ object ShipChecks:
           case None      =>
             Outcome.Ok(pinId, s"histos.version runs ${pinned.line.render}, and ${release.render} does not pass it")
 
-  /** Representative coordinate for ship-bump policy. Binary verification independently enumerates every JVM cell. */
+  /** Representative coordinate for ship-bump policy. */
   def module(graph: ProjectGraph, ship: Ship.Line): Option[MavenModule] =
     for
       group  <- graph.organization
@@ -206,69 +178,6 @@ object ShipChecks:
         listing(feed, module(graph, ship)).map(ship.name -> _)
       )
       .map(_.toMap)
-
-  /** Every published JVM member/version needs evidence, including when the newest release caught the catalog. */
-  private def binaries(repo: Path, graph: ProjectGraph, verification: CompatibilityVerification): UIO[List[Outcome]] =
-    graph.catalog.ships match
-      case Nil   => ZIO.succeed(List(Outcome.Ok(binaryId, "no catalog")))
-      case ships => ZIO.foreach(ships)(binaryOne(repo, graph, verification, _)).map(_.flatten)
-
-  private def binaryOne(
-      repo: Path,
-      graph: ProjectGraph,
-      verification: CompatibilityVerification,
-      ship: Ship,
-  ): UIO[List[Outcome]] =
-    ship match
-      case line: Ship.Line =>
-        val targets = line.members
-          .flatMap(name => graph.get(name).collect { case member: Module => member })
-          .filter(_.platforms.all.contains(histos.Platform.Jvm))
-          .flatMap: member =>
-            member.versions.all.map: version =>
-              for
-                group <- graph.organization.toRight(CompatibilityIncomplete.MissingOrganization(member.name))
-                id    <- ArtifactId
-                  .from(ArtifactName.module(member, version, histos.Platform.Jvm))
-                  .left
-                  .map(CompatibilityIncomplete.InvalidArtifact(member.name, _))
-              yield CompatibilityTarget(
-                member.name,
-                version,
-                MavenModule(group, id),
-                histos.zinc.GraphCompile.classesDir(repo, member.name, version),
-              )
-        if targets.isEmpty then ZIO.succeed(List(Outcome.Ok(binaryId, s"${line.name.value} has no JVM member")))
-        else
-          ZIO.foreach(targets):
-            case Left(reason)  => ZIO.succeed(Outcome.Found(IncompleteCompatibility(line.name.value, reason, None)))
-            case Right(target) => verification.verify(target).map(judge(line, target, _))
-
-  private def judge(ship: Ship.Line, target: CompatibilityTarget, evidence: CompatibilityEvidence): Outcome =
-    evidence match
-      case CompatibilityEvidence.FirstPublication =>
-        Outcome.Ok(binaryId, s"${target.label}: first publication, no stable baseline")
-      case CompatibilityEvidence.Incomplete(reason, baseline) =>
-        Outcome.Found(IncompleteCompatibility(target.label, reason, baseline))
-      case CompatibilityEvidence.Compared(previous, result) =>
-        BinaryCheck.difference(ship.number, result) match
-          case BinaryCheck.Difference.None =>
-            Outcome.Ok(binaryId, s"${target.label} matches ${previous.render}")
-          case BinaryCheck.Difference.Break(part, _) if BinaryCheck.covers(previous, ship.number, part) =>
-            Outcome.Ok(
-              binaryId,
-              s"${target.label}: ${ship.number.render} covers a ${part.token} from ${previous.render}",
-            )
-          case BinaryCheck.Difference.Break(part, _) =>
-            Outcome.Found(BinaryFinding(target.label, ShipDiagnostic.BinaryBump(ship.name, ship.number, part.token)))
-
-  private final case class BinaryFinding(label: String, underlying: ShipDiagnostic) extends Diagnostic:
-    def check   = underlying.check
-    def level   = underlying.level
-    def title   = underlying.title
-    def summary = s"$label: ${underlying.summary}"
-    def explain = underlying.explain
-    def fixes   = underlying.fixes
 
   private def listing(feed: ReleaseFeed, module: Option[MavenModule]): UIO[Listing] =
     module match

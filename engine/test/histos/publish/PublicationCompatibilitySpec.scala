@@ -31,7 +31,7 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
     .scm(Scm(MetadataUri("https://example.test/repo"), ScmConnection("scm:git:example.test/repo")))
 
   private enum Fixture:
-    case Broken, Unavailable, Compatible, Covered, First, MissingCurrent, SecondVersion, Initialization, Corrupt
+    case Broken, Unavailable, Compatible, Covered, First, MissingCurrent, SecondVersion, Initialization, Corrupt, Both
 
   private val writeSuites =
     List(PublishWrite.Local, PublishWrite.Snapshots, PublishWrite.Release).map: write =>
@@ -42,8 +42,10 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
               policyFailure(result),
               callbacks.isEmpty,
               stages.contains(stage(ProjectName("second"))),
-              baselines.map(_.module.artifact.value) == List("first-artifact_3", "second-artifact_3"),
-              baselines.map(_.revision) == List(firstPrevious, previous),
+              coordinates(baselines) == Set(
+                "first-artifact_3"  -> firstPrevious,
+                "second-artifact_3" -> previous,
+              ),
               baselines.forall(_.module.group == organization"example.test"),
             )
         },
@@ -92,7 +94,10 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
       boundary(PublishWrite.Local, Fixture.Corrupt, subset = true).map: (result, callbacks, _, baselines) =>
         assertTrue(
           callbacks.isEmpty,
-          baselines.map(_.revision) == List(firstPrevious, previous),
+          coordinates(baselines) == Set(
+            "first-artifact_3"  -> firstPrevious,
+            "second-artifact_3" -> previous,
+          ),
           result.left.exists:
             case LocalPublishError.Compatibility(failures) =>
               failures.size == 1 && failures.exists(failure =>
@@ -135,6 +140,95 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
     test("first publication is explicit and does not fetch any baseline") {
       boundary(PublishWrite.Local, Fixture.First, subset = true).map: (result, callbacks, _, baselines) =>
         assertTrue(result.exists(_.modules.nonEmpty), callbacks == List("first-artifact_3"), baselines.isEmpty)
+    },
+    test("every failing coordinate is reported together") {
+      boundary(PublishWrite.Local, Fixture.Both, subset = false).map: (result, callbacks, _, _) =>
+        assertTrue(
+          callbacks.isEmpty,
+          result.left.exists:
+            case LocalPublishError.Compatibility(failures) =>
+              failures.map(failure => (failure.member, failure.outcome)) == List(
+                (
+                  ProjectName("first"),
+                  PublicationCompatibilityOutcome.Policy(previous, BumpPart.Minor, 1),
+                ),
+                (
+                  ProjectName("second"),
+                  PublicationCompatibilityOutcome.Policy(previous, BumpPart.Minor, 1),
+                ),
+              )
+            case _ => false,
+        )
+    },
+    test("a selected member does not claim the others matched") {
+      boundary(
+        PublishWrite.Local,
+        Fixture.Broken,
+        subset = false,
+        ProofScope.Selected(Set(ProjectName("first"))),
+      ).map: (result, callbacks, _, baselines) =>
+        assertTrue(
+          result.exists(output =>
+            output.modules.map(_.artifact).toSet == Set(
+              "first-artifact_3",
+              "second-artifact_3",
+              "second-artifact_sjs1_3",
+            ) && output.notes == List("not checked: second") && !output.notes.exists(_.contains("compatible"))
+          ),
+          callbacks.toSet == Set("first-artifact_3", "second-artifact_3", "second-artifact_sjs1_3"),
+          baselines.map(_.module.artifact.value) == List("first-artifact_3"),
+        )
+    },
+    test("snapshots still verify a member the diff did not select") {
+      boundary(
+        PublishWrite.Snapshots,
+        Fixture.Compatible,
+        subset = true,
+        ProofScope.Selected(Set(ProjectName("first"))),
+      ).map: (result, _, _, baselines) =>
+        assertTrue(
+          result.exists(_.notes.isEmpty),
+          baselines.exists(_.module.artifact.value == "second-artifact_3"),
+        )
+    },
+    test("release still verifies a member the diff did not select") {
+      boundary(
+        PublishWrite.Release,
+        Fixture.Compatible,
+        subset = true,
+        ProofScope.Selected(Set(ProjectName("first"))),
+      ).map: (result, _, _, baselines) =>
+        assertTrue(
+          result.exists(_.notes.isEmpty),
+          baselines.exists(_.module.artifact.value == "second-artifact_3"),
+        )
+    },
+    test("publish check reports a break and writes nothing") {
+      boundary(PublishWrite.Check, Fixture.Broken, subset = false).map: (result, callbacks, stages, _) =>
+        assertTrue(
+          callbacks.isEmpty,
+          stages.nonEmpty,
+          result.left.exists:
+            case LocalPublishError.Compatibility(failures) =>
+              failures.exists(_.member == ProjectName("second"))
+            case _ => false,
+        )
+    },
+    test("an empty selection names what it did not check") {
+      boundary(
+        PublishWrite.Check,
+        Fixture.Compatible,
+        subset = false,
+        ProofScope.Selected(Set.empty),
+      ).map: (result, callbacks, stages, baselines) =>
+        assertTrue(
+          result.exists(output =>
+            output.modules.isEmpty && output.notes == List("nothing was selected", "not checked: first, second")
+          ),
+          callbacks.isEmpty,
+          stages.isEmpty,
+          baselines.isEmpty,
+        )
     },
     test("missing current classes remain fatal after the executor returns") {
       boundary(PublishWrite.Local, Fixture.MissingCurrent, subset = true).map: (result, callbacks, _, _) =>
@@ -179,7 +273,12 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
       )
     case _ => false
 
-  private def boundary(write: PublishWrite, fixture: Fixture, subset: Boolean) = ZIO.scoped:
+  private def boundary(
+      write: PublishWrite,
+      fixture: Fixture,
+      subset: Boolean,
+      scope: ProofScope = ProofScope.All,
+  ) = ZIO.scoped:
     for
       repo <- Workspace.work("publish-compatibility")
       member =
@@ -201,7 +300,10 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
         def newest(module: MavenModule): IO[FeedError, Option[ShipNumber]] =
           ZIO.succeed(
             Option.unless(fixture == Fixture.First)(
-              if module.artifact.value == "first-artifact_3" then firstPrevious else previous
+              // Both members stay on this minor. A lower first baseline would be covered by the catalog bump.
+              if fixture == Fixture.Both then previous
+              else if module.artifact.value == "first-artifact_3" then firstPrevious
+              else previous
             )
           )
       baseline = new CompatibilityBaseline:
@@ -237,13 +339,12 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
                   _ <-
                     if fixture == Fixture.MissingCurrent && cell.module == ProjectName("second") then ZIO.unit
                     else
-                      products(
-                        classes,
-                        method = cell.module != ProjectName(
-                          "second"
-                        ) || (fixture != Fixture.Broken && fixture != Fixture.Covered &&
-                          !(fixture == Fixture.SecondVersion && cell.version == ScalaVersion("3.8.2"))),
-                      ).unit
+                      val kept =
+                        fixture != Fixture.Both &&
+                          (cell.module != ProjectName("second") ||
+                            (fixture != Fixture.Broken && fixture != Fixture.Covered &&
+                              !(fixture == Fixture.SecondVersion && cell.version == ScalaVersion("3.8.2"))))
+                      products(classes, method = kept).unit
                   key <-
                     if fixture == Fixture.MissingCurrent && cell.module == ProjectName("second") then
                       ZIO.succeed(Sha256.trusted("0" * 64))
@@ -294,6 +395,7 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
           env,
           write,
           ApiDigest.trusted("0" * 64),
+          scope,
         )
         .either
         .provideLayer(
@@ -304,6 +406,9 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
       stages    <- requested.get
       baselines <- fetched.get
     yield (result, callbacks, stages, baselines)
+
+  private def coordinates(baselines: List[BaselineCoordinate]): Set[(String, ShipNumber)] =
+    baselines.map(baseline => baseline.module.artifact.value -> baseline.revision).toSet
 
   private def products(path: Path, method: Boolean): IO[IoFailure, Path] =
     ZIO

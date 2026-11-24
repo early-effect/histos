@@ -521,7 +521,7 @@ object HistosMcp:
   def publishCall(place: PublishPlace, tokens: List[String]): Either[Rejection, Call] =
     place match
       case PublishPlace.Local =>
-        publishTokens(tokens).map(Call.PublishLocal(_))
+        publishTokens(tokens).map(found => Call.PublishLocal(found, histos.publish.ProofScope.All))
       case PublishPlace.Snapshots =>
         Right(Call.PublishSnapshots(tokens))
 
