@@ -1,7 +1,7 @@
 package histos.client
 
-import histos.Platform
-import histos.lock.ExecutionKind
+import histos.{Platform, PlatformSelection, TestSelection, TestTargets}
+import histos.lock.{CallIdentity, ExecutionKind}
 import histos.plugin.Interaction
 import histos.server.{Call, CatalogQuery, ResolveAction}
 import histos.ProjectName
@@ -36,6 +36,69 @@ object BatchRunSpec extends ZIOSpecDefault:
       assertTrue(
         Batch.parse(List("compile", "--lock=frozen")).isEmpty,
         Batch.parse(List("compile", "app")) == Some(Batch.Parsed.Ready(Call.Compile(List(ProjectName("app"))))),
+      )
+    },
+    test("native test omission is All and named requests retain focused intent") {
+      val app   = ProjectName("app")
+      val all   = Call.Test(TestSelection(), Nil, histos.testrun.TestMode.Run, histos.testrun.TestFilter.empty)
+      val named = Call.Test(
+        TestSelection(TestTargets.Named(app, Nil)),
+        Nil,
+        histos.testrun.TestMode.Run,
+        histos.testrun.TestFilter.empty,
+      )
+      assertTrue(
+        Batch.parse(List("test")) == Some(Batch.Parsed.Ready(all)),
+        Batch.parse(List("test", "app")) == Some(Batch.Parsed.Ready(named)),
+        Batch.parse(List("test", "--platform", "jvm")).isEmpty,
+      )
+    },
+    test("rerun words retain filtered eligibility, platform union and an empty affected mask") {
+      val app       = ProjectName("app")
+      val selection = TestSelection(
+        TestTargets.Filtered(List(app)),
+        PlatformSelection.only(Platform.Jvm, Platform.Js),
+        Some(Nil),
+      )
+      val call     = Call.Test(selection, Nil, histos.testrun.TestMode.Run, histos.testrun.TestFilter.empty)
+      val expected = List("test", "--suite", "[\"app\"]", "--platform", "jvm,js", "--affected", "[]")
+      assertTrue(
+        CallIdentity.words(call) == expected,
+        CallIdentity.rerun(call, histos.lock.LockMode.Local) ==
+          "histos test --suite '[\"app\"]' --platform jvm,js --affected '[]' --lock=local",
+        CallIdentity.words(
+          Call.PreviewTest(selection, Nil, histos.testrun.TestMode.Run, histos.testrun.TestFilter.empty)
+        ) ==
+          "preview" :: expected,
+        call.toJson.fromJson[Call] == Right(call),
+      )
+    },
+    test("rerun words retain explicit main and forwarded arguments") {
+      val call = Call.Run(
+        "app",
+        Some(PlatformSelection.only(Platform.Js)),
+        histos.server.RunLaunch.Tool(Map.empty, None),
+        List("--verbose", "hello world", "a'b", ""),
+        Some(histos.MainClass("demo.Main")),
+      )
+      assertTrue(
+        CallIdentity.words(call) == List(
+          "run",
+          "app",
+          "--platform",
+          "js",
+          "--main",
+          "demo.Main",
+          "--",
+          "--verbose",
+          "hello world",
+          "a'b",
+          "",
+        ),
+        CallIdentity.rerun(call, histos.lock.LockMode.Local) ==
+          "histos run app --platform js --main demo.Main --lock=local -- --verbose 'hello world' 'a'\\''b' ''",
+        CallIdentity.words(Call.Compile(List(ProjectName("app")), PlatformSelection.only(Platform.Native))) ==
+          List("compile", "app", "--platform", "native"),
       )
     },
     test("resolve --refresh is a native call and a lock flag is not") {

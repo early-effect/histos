@@ -5,7 +5,7 @@ import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.server.{Call, CatalogQuery, CleanExtent, ResolveAction}
 import histos.task.TaskId
 import histos.testrun.{TestFilter, TestMode}
-import histos.{Platform, ProjectName}
+import histos.{Platform, ProjectName, TestSelection, TestTargets}
 
 import zio.NonEmptyChunk
 
@@ -25,7 +25,11 @@ object Batch:
     args match
       case "compile" :: rest => projects(rest).map(names => Parsed.Ready(Call.Compile(names)))
       case "test" :: rest    =>
-        projects(rest).map(names => Parsed.Ready(Call.Test(names, Nil, TestMode.Run, TestFilter.empty)))
+        projects(rest).map: names =>
+          val targets = names match
+            case first :: rest => TestTargets.Named(first, rest)
+            case Nil           => TestTargets.All
+          Parsed.Ready(Call.Test(TestSelection(targets), Nil, TestMode.Run, TestFilter.empty))
       case "run" :: name :: rest =>
         val (tokens, argv) = splitDash(rest)
         tokens match
