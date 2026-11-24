@@ -12,8 +12,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Duration, IO, Promise, Queue, Scope, System, UIO, ZIO}
-import zio.durationInt
+import zio.{Chunk, IO, Promise, Queue, Scope, System, UIO, ZIO}
 import zio.stream.{Take, ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses.
@@ -45,9 +44,6 @@ enum ChildEvent:
 object ChildProcess:
   enum Stdout:
     case Text, Bytes
-
-  /** How long a process's pipes may stay open after it exits. A child still holding them past this is an orphan. */
-  private[process] val Drain: Duration = 1.second
 
   private val EntryClass: MainClass = MainClass.trusted("subprocess.Entry")
 
@@ -84,8 +80,8 @@ object ChildProcess:
       |""".stripMargin
 
   /** One subprocess for one main. Programs select byte stdout; tools keep text. Stderr is text. The environment is the
-    * request's map. The stream waits for the process, then drains for [[Drain]]. Interrupt, and an orphan, end the
-    * process group and every descendant.
+    * request's map. The stream waits for the process, then asks [[Attendance]] whether the group is empty. Interrupt,
+    * and an orphan, end the process group and every descendant.
     */
   def events(
       request: ChildRequest,
@@ -105,9 +101,9 @@ object ChildProcess:
       }
 
   /** A linked program: `node`, or a native binary. A small JVM calls `setpgid(0, 0)` and then `execvp`, so the program
-    * and everything it starts share that group. The stream waits for the program, then drains for [[Drain]]. Interrupt,
-    * and an orphan, end the group, which still names a descendant after its parent has exited. On Linux that also
-    * closes the pipe a blocked read is waiting on.
+    * and everything it starts share that group. The stream waits for the program, then asks [[Attendance]] whether the
+    * group is empty. Interrupt, and an orphan, end the group, which still names a descendant after its parent has
+    * exited. On Linux that also closes the pipe a blocked read is waiting on.
     */
   def command(
       argv: List[String],
@@ -221,10 +217,9 @@ object ChildProcess:
     yield queue
 
   /** Lines while the process runs, then its status. The status waits on the process, not on the pipes. After it exits,
-    * a child that inherited a pipe may still hold that pipe. The drain is [[Drain]], waited on a blocking thread so the
-    * caller's clock cannot hold the suite. It completes when the pipe readers see the end, not when the consumer
-    * finishes. Past that the group is ended and the stream fails with [[ChildError.Orphan]], so a suite cannot be
-    * recorded as finished while the child lives.
+    * [[Attendance]] reports whether the group still has a member. A member is an orphan and the group is ended. An
+    * empty group waits until the pipe readers see the end. Those readers finish when the pipes close, not when the
+    * consumer reads, because each reader offers into an unbounded queue.
     */
   private def attend(
       child: Child,
@@ -238,18 +233,16 @@ object ChildProcess:
           .foldZIO(
             error => end(child.process, group) *> result.fail(error),
             code =>
-              child.drained
-                .as(true)
-                .race(pause(Drain).as(false))
-                .flatMap:
-                  case true  => result.succeed(ChildEvent.Exited(code))
-                  case false => end(child.process, group) *> result.fail(ChildError.Orphan(code.value)),
+              Attendance
+                .settle(code)
+                .provideLayer(Attendance.live(child.process, child.drained))
+                .foldZIO(
+                  error => end(child.process, group) *> result.fail(error),
+                  event => result.succeed(event),
+                ),
           )
           .forkScoped
       yield child.console ++ ZStream.fromZIO(result.await)
-
-  private def pause(bound: Duration): UIO[Unit] =
-    ZIO.sleep(bound)
 
   private def end(process: Process, group: Group): UIO[Unit] =
     val killed =

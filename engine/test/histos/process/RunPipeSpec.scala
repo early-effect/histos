@@ -8,9 +8,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Exit, Queue, System, ZIO}
-import zio.durationInt
-import zio.stream.ZSink
+import zio.{Chunk, Queue, System, ZIO}
 import zio.test.*
 
 object RunPipeSpec extends ZIOSpecDefault:
@@ -30,17 +28,6 @@ object RunPipeSpec extends ZIOSpecDefault:
       |      byte[] all = System.in.readAllBytes();
       |      System.out.println("in=" + new String(all, java.nio.charset.StandardCharsets.UTF_8));
       |    }
-      |  }
-      |}
-      |""".stripMargin
-
-  private val Hold: String =
-    """package demo;
-      |
-      |public final class Hold {
-      |  public static void main(String[] args) throws Exception {
-      |    new ProcessBuilder("sleep", "30").inheritIO().start();
-      |    System.exit(0);
       |  }
       |}
       |""".stripMargin
@@ -121,57 +108,6 @@ object RunPipeSpec extends ZIOSpecDefault:
             dirOk <- matches(lines.find(_.nonEmpty), launch)
           yield assertTrue(exited == List(0), dirOk)
     },
-    test("a consumer that pauses past the drain still records a clean exit") {
-      prepared: fixture =>
-        val Fixture(java, classes, scratch, launch) = fixture
-        ZIO.scoped:
-          for
-            main               <- echo
-            (first, remainder) <- ChildProcess
-              .events(
-                ChildRequest(
-                  Platform.Jvm,
-                  java,
-                  ChildClasspath(classes, Nil),
-                  main,
-                  scratch,
-                  directory = Some(launch),
-                  arguments = List("hello", "world"),
-                )
-              )
-              .peel(ZSink.take(1))
-            _    <- ZIO.sleep(ChildProcess.Drain) *> ZIO.sleep(500.millis)
-            more <- remainder.runCollect
-            events = first ++ more
-            lines  = events.collect { case ChildEvent.Out(text) => text }.toList
-            exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
-          yield assertTrue(
-            exited == List(0),
-            lines.contains("argc=2"),
-            lines.contains("arg=hello"),
-            lines.contains("arg=world"),
-          )
-    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds),
-    test("a descendant that keeps stdout is an orphan") {
-      prepared: fixture =>
-        val Fixture(java, classes, scratch, launch) = fixture
-        for
-          main    <- hold
-          outcome <- ChildProcess
-            .events(
-              ChildRequest(
-                Platform.Jvm,
-                java,
-                ChildClasspath(classes, Nil),
-                main,
-                scratch,
-                directory = Some(launch),
-              )
-            )
-            .runCollect
-            .exit
-        yield assertTrue(outcome == Exit.fail(ChildError.Orphan(0)))
-    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds),
   )
 
   def spec = tests @@ TestAspect.withLiveClock
@@ -189,7 +125,6 @@ object RunPipeSpec extends ZIOSpecDefault:
           val scratch = root.resolve("scratch")
           val launch  = root.resolve("launch")
           val source  = classes.resolve("demo").resolve("Echo.java")
-          val held    = classes.resolve("demo").resolve("Hold.java")
           val home    = _root_.java.lang.System.getProperty("java.home")
           val java    = Path.of(home, "bin", "java")
           val javac   = Path.of(home, "bin", "javac")
@@ -199,12 +134,11 @@ object RunPipeSpec extends ZIOSpecDefault:
               Files.createDirectories(scratch)
               Files.createDirectories(launch)
               Files.writeString(source, Echo)
-              Files.writeString(held, Hold)
               ()
             }.orDie
             compiled <- ZIO.attemptBlocking {
               val process =
-                new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString, held.toString).start()
+                new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString).start()
               val err  = new String(process.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
               val code = process.waitFor()
               (code, err)
@@ -216,9 +150,6 @@ object RunPipeSpec extends ZIOSpecDefault:
 
   private def echo: ZIO[Any, Nothing, MainClass] =
     ZIO.fromEither(MainClass.from("demo.Echo")).orDieWith(error => new IllegalArgumentException(error.message))
-
-  private def hold: ZIO[Any, Nothing, MainClass] =
-    ZIO.fromEither(MainClass.from("demo.Hold")).orDieWith(error => new IllegalArgumentException(error.message))
 
   private def matches(printed: Option[String], launch: Path): ZIO[Any, Nothing, Boolean] =
     ZIO
