@@ -17,6 +17,10 @@ object WireSchemaScopedSpec extends ZIOSpecDefault:
         labels[PluginFault].contains("Scoped"),
         labels[PreviewError].contains("Test"),
         labels[LocalPublishError].contains("Build"),
+        labels[LocalPublishError].contains("Compatibility"),
+        labels[histos.publish.PublicationCompatibilityOutcome].contains("Incomplete"),
+        labels[histos.publish.PublicationCompatibilityOutcome].contains("Policy"),
+        labels[histos.publish.PublicationCompatibilityGap].contains("BaselineMissing"),
         labels[CallResult].contains("Fault"),
       )
     }

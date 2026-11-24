@@ -169,11 +169,17 @@ object DoctorSurface:
       pins :: github :: release ++ histos.doctor.ShipChecks.checks(repo, graph, env, feed) ++
         histos.doctor.ToolchainChecks.checks(machine, graph, request.launch) ++
         histos.doctor.FormatChecks.checks(repo, graph)
-    val all     = histos.doctor.Registry.collect(graph, core)
-    val dropped = Set(histos.doctor.ShipChecks.bumpId.value, histos.doctor.ShipChecks.pinId.value)
-    val kept    =
-      if request.preflight.isDefined then all.filterNot(check => dropped.contains(check.id.value)) else all
+    val all  = histos.doctor.Registry.collect(graph, core)
+    val kept = selection(all, request.preflight)
     request.area.fold(kept)(name => kept.filter(check => areaName(check.area) == name))
+
+  private[supply] def selection(checks: List[DoctorCheck], preflight: Option[String]): List[DoctorCheck] =
+    val dropped = Set(
+      histos.doctor.ShipChecks.bumpId,
+      histos.doctor.ShipChecks.pinId,
+      histos.doctor.ShipChecks.binaryId,
+    )
+    if preflight.isDefined then checks.filterNot(check => dropped.contains(check.id)) else checks
 
   private def closed(raw: String, where: Area, outcome: Outcome): DoctorCheck =
     new DoctorCheck:

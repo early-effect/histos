@@ -51,7 +51,7 @@ import java.nio.file.{Files, Path}
 import histos.schedule.{CacheConfig, CacheError, Histos, Outcome, Parallelism, RemoteCache, RemoteError, StepFailure}
 import histos.step.{Need, Phase, Step, StepId, StepInfo}
 
-import zio.{Chunk, ZIO, ZLayer}
+import zio.{Chunk, Layer, ZIO, ZLayer}
 
 final case class PublishedModule(
     module: ProjectName,
@@ -113,6 +113,19 @@ object LocalPublish:
       write: PublishWrite,
       api: ApiDigest,
   ): ZIO[R & PublishEnv, E | ExecutionError | ProjectionError, PublishOutput] =
+    runUsing(compiler, PublicationCompatibility.live)(repo, graph, names, env, write, api)
+
+  def runUsing[R, E](
+      compiler: PublishCompiler[R, E],
+      compatibility: Layer[histos.doctor.CompatibilityError, PublicationCompatibility],
+  )(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[PublishName],
+      env: Map[String, String],
+      write: PublishWrite,
+      api: ApiDigest,
+  ): ZIO[R & PublishEnv, E | ExecutionError | ProjectionError, PublishOutput] =
     ZIO.scoped:
       go(
         repo,
@@ -121,13 +134,17 @@ object LocalPublish:
         env,
         write,
         api,
-        selected =>
+        compatibility,
+        (selected, checked) =>
           val stages = graph.projects
-            .collect { case module: Module if selected.contains(module.name) => module }
+            .collect {
+              case module: Module if selected.contains(module.name) || checked.contains(module.name) => module
+            }
             .flatMap(module =>
               for
                 version  <- module.versions.all
                 platform <- module.platforms.all
+                if selected.contains(module.name) || platform == Platform.Jvm
               yield CompilationStage(Cell(module.name, version, platform), SourceSet.Main)
             )
           for
@@ -196,7 +213,8 @@ object LocalPublish:
       env: Map[String, String],
       write: PublishWrite,
       api: ApiDigest,
-      compile: List[ProjectName] => ZIO[R, E, PublishInputs],
+      compatibility: Layer[histos.doctor.CompatibilityError, PublicationCompatibility],
+      compile: (List[ProjectName], List[ProjectName]) => ZIO[R, E, PublishInputs],
   ): ZIO[R & PublishEnv, E | ProjectionError, PublishOutput] =
     for
       prepared <- SessionSettle.prepare(repo, graph.catalog, env, write)
@@ -228,9 +246,11 @@ object LocalPublish:
                   else ZIO.fail(LocalPublishError.NothingToPublish)
                 else
                   for
-                    group   <- ZIO.fromEither(organization(graph))
-                    _       <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
-                    inputs  <- compile(live.modules.toList)
+                    group <- ZIO.fromEither(organization(graph))
+                    _     <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
+                    checked = graph.catalog.ships.filter(_.members.exists(live.modules.contains))
+                    inputs  <- compile(live.modules.toList, checked.flatMap(_.members.toList).distinct)
+                    _       <- PublicationCompatibility.verify(graph, checked, group, inputs.cells, compatibility)
                     modules <- publishJobs(
                       repo,
                       graph,

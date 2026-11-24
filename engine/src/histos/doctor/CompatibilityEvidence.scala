@@ -58,8 +58,7 @@ object CompatibilityVerification:
   val layer: ZLayer[ReleaseFeed & CompatibilityBaseline & CompatibilityAnalyzer, Nothing, CompatibilityVerification] =
     ZLayer.fromFunction(CompatibilityVerification(_, _, _))
 
-/** Incomplete evidence fails doctor and its existing CI/preflight wiring, rather than becoming a skipped green check.
-  */
+/** Incomplete evidence fails the complete post-compile doctor gate, rather than becoming a skipped green check. */
 final case class IncompleteCompatibility(label: String, reason: CompatibilityIncomplete) extends Diagnostic:
   def check   = ShipChecks.binaryId
   def level   = Level.Error

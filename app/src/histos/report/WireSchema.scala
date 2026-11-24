@@ -620,6 +620,12 @@ private object WireSchemaCall extends WireSchemaSupport:
   private val assemblyErrorSchema: Schema[AssemblyError] = Schema.derived
   given Schema[AssemblyError]                            = assemblyErrorSchema
 
+  given Schema[histos.publish.PublicationCoordinate]           = Schema.derived
+  given Schema[histos.version.BumpPart]                        = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityGap]     = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityOutcome] = Schema.derived
+  given Schema[histos.publish.PublicationCompatibilityFailure] = Schema.derived
+
   given Schema[LocalPublishError] = Schema.derived
 
   given Schema[PreviewError] = Schema.derived
