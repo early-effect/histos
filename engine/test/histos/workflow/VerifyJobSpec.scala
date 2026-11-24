@@ -113,7 +113,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
         job.contains("PR_BASE") && !job.contains("doctor --area release") && !job.contains("./histos compile") &&
         !job.contains("continue-on-error") && !job.contains("--preflight") &&
         !job.contains("HISTOS_CACHE_MODE") &&
-        slice(body, "supply-chain").contains("./histos compile --platform jvm"))
+        !slice(body, "supply-chain").contains("./histos compile"))
     },
     test("a user job cannot collide with the complete compatibility check") {
       val task = VerifyTask(JobName("compatibility"), host)

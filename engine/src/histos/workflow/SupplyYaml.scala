@@ -48,7 +48,7 @@ object SupplyYaml:
       "          path: ~/.cache/histos/advisories",
       "          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}",
       "          restore-keys: histos-osv-",
-    ) ++ preflight(graph, name) ++ List("      - run: ./histos compile --platform jvm") ++ fullDoctor(
+    ) ++ preflight(graph, name) ++ fullDoctor(
       policy.updates.author
     ) ++ List(
       "      - run: ./histos workflow --check"
