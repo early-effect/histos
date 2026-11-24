@@ -134,15 +134,15 @@ object build extends HistosBuild:
       .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
       .main(MainClass("histos.docs.ClientMain"))
       .libraryDependencies(
-        dep"rocks.earlyeffect::specular-core:0.21.4",
-        dep"rocks.earlyeffect::specular-site:0.21.4".on(Jvm),
-        dep"rocks.earlyeffect::early-effect-docs-theme:0.21.4".on(Jvm),
+        dep"rocks.earlyeffect::specular-core:0.22.0-SNAPSHOT",
+        dep"rocks.earlyeffect::specular-site:0.22.0-SNAPSHOT".on(Jvm),
+        dep"rocks.earlyeffect::early-effect-docs-theme:0.22.0-SNAPSHOT".on(Jvm),
         dep"rocks.earlyeffect::mermoid-ascent:0.2.0".on(Jvm),
         dep"org.scala-lang::scala3-tasty-inspector:3.10.1".on(Jvm),
         zio,
       )
       .testDependencies(
-        dep"rocks.earlyeffect::specular-zio-test:0.21.4".on(Jvm),
+        dep"rocks.earlyeffect::specular-zio-test:0.22.0-SNAPSHOT".on(Jvm),
         zioTest.on(Jvm),
         zioTestSbt.on(Jvm),
       )
