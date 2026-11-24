@@ -272,7 +272,7 @@ object Client:
         output = Channels.newOutputStream(channel)
         _        <- Frame.write(output, envelope.toJson).mapError(written(socket))
         first    <- Frame.read(input).mapError(read(socket))
-        _        <- ZIO.fromEither(ready(first))
+        _        <- ZIO.fromEither(CommandFrame.ready(first))
         attached <- ZIO.scopeWith(_.fork)
         // Close before the input scope joins its readers and any blocked socket writer.
         _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
@@ -293,7 +293,7 @@ object Client:
           .write(output, posted.toJson)
           .mapError(written(socket))
         first <- Frame.read(input).mapError(read(socket))
-        _     <- ZIO.fromEither(ready(first))
+        _     <- ZIO.fromEither(CommandFrame.ready(first))
         _     <- copyStdin(output, channel, socket).forkScoped
         code  <- copyToStdout(input, socket)
       yield code
@@ -331,30 +331,17 @@ object Client:
       .attemptBlocking(SocketChannel.open(UnixDomainSocketAddress.of(socket)))
       .mapError(_ => ServerError.Unreachable(socket))
 
-  private def ready(frame: Option[String]): Either[ServerError, Unit] =
-    frame.flatMap(_.fromJson[Message].toOption) match
-      case Some(Message.Ready) => Right(())
-      case _                   => Left(ServerError.Protocol)
-
   private def frames(
       input: InputStream,
       socket: Path,
   ): ZStream[Any, ServerError, Feed] =
     ZStream
       .fromZIO(Frame.read(input).mapError(read(socket)))
-      .flatMap:
-        case None          => ZStream.fail(ServerError.Protocol)
-        case Some(payload) =>
-          payload.fromJson[Message] match
-            case Right(Message.Event(event)) =>
-              ZStream.succeed(Feed.Event(event)) ++ frames(input, socket)
-            case Right(Message.Output(encoded)) =>
-              histos.server.RunBytes.decode(encoded) match
-                case Some(bytes) => ZStream.succeed(Feed.Output(bytes)) ++ frames(input, socket)
-                case None        => ZStream.fail(ServerError.Protocol)
-            case Right(Message.Done(result)) =>
-              ZStream.succeed(Feed.Done(result))
-            case _ => ZStream.fail(ServerError.Protocol)
+      .flatMap: frame =>
+        CommandFrame.read(frame) match
+          case Left(error)            => ZStream.fail(error)
+          case Right(Feed.Done(done)) => ZStream.succeed(Feed.Done(done))
+          case Right(feed)            => ZStream.succeed(feed) ++ frames(input, socket)
 
   private def copyStdin(
       output: OutputStream,

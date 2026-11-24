@@ -43,6 +43,9 @@ enum ServerError:
   /** A stop was not honored, and the process is still listening. The record stays with that process. */
   case DidNotStop(socket: Path)
   case NoServer
+
+  /** The socket closed before [[Message.Done]]. The client did not reject a payload. */
+  case Closed
   case Protocol
   case Address(path: Path)
   case Io(op: ServerIo)
@@ -60,6 +63,7 @@ enum ServerError:
       s"histos server at $socket did not record version $wanted; it has $got"
     case DidNotStop(socket) => s"histos server at $socket did not stop"
     case NoServer           => "no histos server is running"
+    case Closed             => "histos server closed the frame stream before the command finished"
     case Protocol           =>
       "histos server sent a frame this client does not understand"
     case Address(path) => s"histos server socket path is too long: $path"
@@ -189,6 +193,31 @@ object RunBytes:
     try Some(Chunk.fromArray(java.util.Base64.getDecoder.decode(text)))
     catch case _: IllegalArgumentException => None
 end RunBytes
+
+/** What a running command does with one daemon frame. `None` is a closed stream, not a payload. */
+object CommandFrame:
+  def read(frame: Option[String]): Either[ServerError, Feed] =
+    frame match
+      case None          => Left(ServerError.Closed)
+      case Some(payload) =>
+        payload.fromJson[Message] match
+          case Right(Message.Event(event))    => Right(Feed.Event(event))
+          case Right(Message.Output(encoded)) =>
+            RunBytes.decode(encoded) match
+              case Some(bytes) => Right(Feed.Output(bytes))
+              case None        => Left(ServerError.Protocol)
+          case Right(Message.Done(result)) => Right(Feed.Done(result))
+          case _                           => Left(ServerError.Protocol)
+
+  /** The first frame is [[Message.Ready]]. A closed stream is [[ServerError.Closed]]. */
+  def ready(frame: Option[String]): Either[ServerError, Unit] =
+    frame match
+      case None          => Left(ServerError.Closed)
+      case Some(payload) =>
+        payload.fromJson[Message] match
+          case Right(Message.Ready) => Right(())
+          case _                    => Left(ServerError.Protocol)
+end CommandFrame
 
 /** What the client does with the socket after Ready. */
 enum Attendance:
