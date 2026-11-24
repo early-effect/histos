@@ -3,7 +3,7 @@ package histos.testrun
 import histos.build.{BuildDagError, BuildNode, ExecutionError}
 import histos.zinc.StageRootError
 
-private[testrun] object TestFailures:
+private[histos] object TestFailures:
   def apply(error: ModuleTest.Error): ModuleTestError = error match
     case error: ModuleTestError    => error
     case error: TestSelectionError => ModuleTestError.Scoped(ScopedTestFailure.Selection(error))
@@ -15,12 +15,7 @@ private[testrun] object TestFailures:
         case ExecutionError.Link(error)    => ModuleTestError.Link(error)
         case ExecutionError.Roots(error)   => ModuleTestError.Scoped(root(error))
         case ExecutionError.Graph(error)   =>
-          ModuleTestError.Scoped(error match
-            case BuildDagError.Declaration(error) => ScopedTestFailure.Declaration(error)
-            case BuildDagError.UnknownNode(found) => ScopedTestFailure.Node(TestNodeFailure.Unknown, node(found))
-            case BuildDagError.MissingUpstream(stage, module) => ScopedTestFailure.MissingUpstream(stage, module)
-            case BuildDagError.MissingCell(task, module, version, platform) =>
-              ScopedTestFailure.MissingCell(task, module, version, platform))
+          ModuleTestError.Scoped(graph(error))
         case ExecutionError.MissingProduct(found) =>
           ModuleTestError.Scoped(ScopedTestFailure.Node(TestNodeFailure.Missing, node(found)))
         case ExecutionError.WrongProduct(found) =>
@@ -29,12 +24,19 @@ private[testrun] object TestFailures:
           ModuleTestError.Scoped(ScopedTestFailure.Node(TestNodeFailure.Dependency, node(found)))
         case ExecutionError.Skipped(steps) => ModuleTestError.Scoped(ScopedTestFailure.Skipped(steps))
 
-  private def node(value: BuildNode): TestFailureNode = value match
+  def graph(error: BuildDagError): ScopedTestFailure = error match
+    case BuildDagError.Declaration(error)             => ScopedTestFailure.Declaration(error)
+    case BuildDagError.UnknownNode(found)             => ScopedTestFailure.Node(TestNodeFailure.Unknown, node(found))
+    case BuildDagError.MissingUpstream(stage, module) => ScopedTestFailure.MissingUpstream(stage, module)
+    case BuildDagError.MissingCell(task, module, version, platform) =>
+      ScopedTestFailure.MissingCell(task, module, version, platform)
+
+  def node(value: BuildNode): TestFailureNode = value match
     case BuildNode.Compile(stage)   => TestFailureNode.Compile(stage)
     case BuildNode.Generate(task)   => TestFailureNode.Generate(task)
     case BuildNode.Link(cell, mode) => TestFailureNode.Link(cell, mode)
 
-  private def root(error: StageRootError): ScopedTestFailure = error match
+  def root(error: StageRootError): ScopedTestFailure = error match
     case StageRootError.UnknownStage(stage)    => ScopedTestFailure.UnknownStage(stage)
     case StageRootError.Contract(error)        => ScopedTestFailure.RootContract(error)
     case StageRootError.InvalidPath(raw)       => ScopedTestFailure.InvalidPath(raw)

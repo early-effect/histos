@@ -120,6 +120,8 @@ import zio.json.*
   */
 private[histos] object WireContract extends WireSupport:
   import WireLeaves.given
+  import WireStages.given JsonCodec[histos.PlatformSelection]
+  import WireStages.given JsonCodec[histos.TestSelection]
 
   given JsonCodec[SourceId]      = parsed(SourceId.from, _.message, _.value)
   given JsonCodec[ServiceKey]    = parsed(ServiceKey.from, _.message, _.value)

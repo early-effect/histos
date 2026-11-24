@@ -1173,16 +1173,16 @@ object Daemon:
     */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _, _, _) | Call.Assembly(_) | Call.Clean(_, _) | Call.Format(_, _) |
-          Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _) | Call.Assembly(_) | Call.Clean(_, _) |
+          Call.Format(_, _) | Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishWithdraw | Call.PublishAssets(_) | Call.Graph |
           Call.Task(_, _) | Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
           Call.Stop | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) |
+          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_, _) |
           Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewClean(_, _) | Call.PreviewRun(_, _) | Call.Catalog(_) =>
+          Call.PreviewClean(_, _) | Call.PreviewRun(_, _, _) | Call.Catalog(_) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(
@@ -1199,7 +1199,7 @@ object Daemon:
       body: UIO[Unit] => ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     call match
-      case Call.Run(_, _, _, _) =>
+      case Call.Run(_, _, _, _, _) =>
         for
           held     <- Promise.make[Nothing, Unit]
           compiled <- Promise.make[Nothing, Unit]
@@ -1283,6 +1283,7 @@ object Daemon:
                 build,
                 effect => permit.withPermit(effect),
                 Some(warm.graphs),
+                Some(generation.plugins),
               )
               .mapError(ServerError.Resolve(_))
               .flatMap { session =>
@@ -1296,7 +1297,9 @@ object Daemon:
                         )
                     }
                     .flatMap { gen =>
-                      session.answer(gen.graph, gen.buildFileClasspath, payload).ensuring(release(gen))
+                      session
+                        .answer(gen.graph, gen.buildFileClasspath, payload, Some(gen.plugins))
+                        .ensuring(release(gen))
                     }
                 warm.spliced.update(_ + session) *>
                   session.follow *>

@@ -15,6 +15,8 @@ enum PluginFault:
   case Resolved(error: ResolveError)
   case Tested(error: ModuleTestError)
   case Scheduled(error: ScheduleError[PluginFault])
+  case Scoped(error: histos.testrun.ScopedTestFailure)
+  case Linked(error: histos.js.JsLinkError)
 
   def message: String = this match
     case Task(error)        => error.message
@@ -24,4 +26,6 @@ enum PluginFault:
     case Resolved(error)    => error.message
     case Tested(error)      => error.message
     case Scheduled(error)   => error.message
+    case Scoped(error)      => error.message
+    case Linked(error)      => error.message
 end PluginFault

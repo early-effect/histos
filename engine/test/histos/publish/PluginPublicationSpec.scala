@@ -210,42 +210,23 @@ object PluginPublicationSpec extends ZIOSpecDefault:
         assertTrue(uploads == 0, changed)
     },
     test("an empty toolchain list fails capture") {
-      val jdk         = JdkVersion.trusted("21", JdkMajor.trusted(21))
-      val bridge      = Path.of("bridge.jar")
-      val jar         = Path.of("compiler.jar")
-      val library     = Path.of("library.jar")
-      val runtimeMiss = CellCapture
-        .record(
-          Path.of("repo"),
-          ProjectName("plug"),
-          version,
-          Platform.Jvm,
-          Nil,
-          Path.of("unmanaged"),
-          Path.of("src"),
-          Path.of("classes"),
-          Nil,
-          jdk,
-          Nil,
-          List(jar),
-          bridge,
-        )
-        .either
+      val jdk     = JdkVersion.trusted("21", JdkMajor.trusted(21))
+      val bridge  = Path.of("bridge.jar")
+      val jar     = Path.of("compiler.jar")
+      val library = Path.of("library.jar")
+      val capture = histos.zinc.CaptureRequest(
+        Path.of("repo"),
+        CompilationStage(Cell(ProjectName("plug"), version, Platform.Jvm), histos.plugin.SourceSet.Main),
+        histos.zinc.StageFiles(Nil, Nil, Nil),
+        histos.zinc.CaptureProduct(Path.of("classes"), Nil),
+        histos.zinc.CaptureTools(jdk, Nil, List(jar), bridge),
+      )
+      val runtimeMiss  = CellCapture.record(capture).either
       val compilerMiss = CellCapture
         .record(
-          Path.of("repo"),
-          ProjectName("plug"),
-          version,
-          Platform.Jvm,
-          Nil,
-          Path.of("unmanaged"),
-          Path.of("src"),
-          Path.of("classes"),
-          Nil,
-          jdk,
-          List(library),
-          Nil,
-          bridge,
+          capture.copy(
+            tools = histos.zinc.CaptureTools(jdk, List(library), Nil, bridge)
+          )
         )
         .either
       runtimeMiss
@@ -256,7 +237,7 @@ object PluginPublicationSpec extends ZIOSpecDefault:
             compiler == Left(missing(CompilerPart.Scala3Compiler)),
           )
     },
-    test("a GraphCompile snapshot publishes the jar it compiled") {
+    test("a resident GraphCompile snapshot publishes the jar it compiled") {
       ZIO.scoped {
         Workspace
           .work("plugin-graph")
@@ -268,17 +249,18 @@ object PluginPublicationSpec extends ZIOSpecDefault:
               .make(0)
               .flatMap: fetches =>
                 val compiled = for
-                  _        <- write(source, "package demo\n\nobject Mark:\n  def token = \"from-graph\"\n")
-                  _        <- hostFacts
-                  graph    <- ZIO.fromEither(built).mapError(Gate.Build(_))
-                  machine  <- Machine.load(repo).mapError(Gate.Tool(_))
-                  jdk      <- GraphCompile.jdk(machine).mapError(Gate.Compile(_))
-                  missed   <- compileCell(repo, graph, jdk, machine.native)
+                  _          <- write(source, "package demo\n\nobject Mark:\n  def token = \"from-graph\"\n")
+                  _          <- hostFacts
+                  graph      <- ZIO.fromEither(built).mapError(Gate.Build(_))
+                  machine    <- Machine.load(repo).mapError(Gate.Tool(_))
+                  jdk        <- GraphCompile.jdk(machine).mapError(Gate.Compile(_))
+                  resolution <- ResolutionService.open(repo, graph).mapError(Gate.Lock(_))
+                  compile = compileCell(repo, graph, jdk, machine.native).provideSomeLayer(ZLayer.succeed(resolution))
+                  missed   <- compile
                   _        <- fetches.set(0)
-                  hit      <- compileCell(repo, graph, jdk, machine.native)
+                  hit      <- compile
                   resolved <- fetches.get
-                  opened   <- ResolutionService.open(repo, graph).mapError(Gate.Lock(_))
-                  lock     <- opened.current
+                  lock     <- resolution.current
                   tools    <- LockedTools.make(lock, graph)
                   module   <- graph.projects.collect { case item: Module => item } match
                     case item :: Nil => ZIO.succeed(item)
@@ -358,10 +340,12 @@ object PluginPublicationSpec extends ZIOSpecDefault:
                     json.exists(text => compilerIds.forall(item => text.contains(item.digest.value))),
                     json.exists(text => runtimeIds.forall(item => text.contains(item.digest.value))),
                   )
-                compiled.provide(
+                compiled.provideSome[zio.Scope](
                   Resolve.coursier >>> ZLayer.fromFunction(counting(fetches)),
                   ZLayer.succeed(ContentStore.in(repo.resolve("store"))),
                   RemoteCache.off,
+                  histos.zinc.Compilers.live,
+                  histos.zinc.CompileMemo.live,
                 )
       }
     },
@@ -383,9 +367,15 @@ object PluginPublicationSpec extends ZIOSpecDefault:
       graph: ProjectGraph,
       jdk: histos.jdk.JdkRuntime,
       native: histos.native.NativeOrigin,
-  ): ZIO[Resolve & ContentStore & RemoteCache, Gate, Shot] =
+  ): ZIO[
+    Resolve & ContentStore & RemoteCache & histos.zinc.Compilers & histos.zinc.CompileMemo & ResolutionService,
+    Gate,
+    Shot,
+  ] =
     GraphCompile
-      .run(repo, graph, List(ProjectName("plug")), jdk, native, Some(Platform.Jvm), _ => ZIO.unit)
+      .strict(GraphCompile.resident(repo, graph, List(ProjectName("plug")), jdk, native, Some(Platform.Jvm)))
+      .runCollect
+      .map(_.collect { case histos.zinc.CompileFeed.Done(cell) => cell }.toList)
       .mapError(Gate.Compile(_))
       .flatMap:
         case cell :: Nil =>

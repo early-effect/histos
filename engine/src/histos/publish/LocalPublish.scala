@@ -160,24 +160,33 @@ object LocalPublish:
       write: PublishWrite,
       api: ApiDigest,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[histos.resolve.Resolve & Publisher & ContentStore, ProjectionError, PublishOutput] =
     ZIO.scoped:
       for
-        process <- CacheConfig.processEnv
-        remote  <- CacheConfig.open(process).mapError(LocalPublishError.Remote(_))
-        written <- go(
-          repo,
-          graph,
-          names,
-          env,
-          write,
-          api,
-          selected =>
-            GraphCompile
-              .run(repo, graph, selected, jdk, NativeOrigin.read(env), None, report)
-              .mapError(LocalPublishError.Compile(_))
-              .map(cells => PublishInputs(cells, GeneratedRoots.Existing)),
-        ).provideSomeLayer(ZLayer.succeed(remote))
+        process    <- CacheConfig.processEnv
+        remote     <- CacheConfig.open(process).mapError(LocalPublishError.Remote(_))
+        resolution <- histos.resolve.ResolutionService.open(repo, graph).mapError(LocalPublishError.Classpath(_))
+        lock       <- resolution.current
+        runtime    <- histos.build.BuildRuntime
+          .open(plugins)
+          .provideSomeLayer(ZLayer.succeed(remote) ++ ZLayer.succeed(resolution))
+        compiler = PublishCompiler[zio.Scope, histos.build.ExecutionError](roots =>
+          runtime.ensure(
+            histos.build.ExecutionRequest(
+              histos.zinc.CompileSession(repo, graph, jdk, NativeOrigin.read(env), lock),
+              roots,
+              report,
+            )
+          )
+        )
+        written <- runUsing(compiler)(repo, graph, names, env, write, api)
+          .mapError {
+            case error: LocalPublishError => error
+            case error: StageRootError    => error
+            case error: ExecutionError    => LocalPublishError.Build(histos.testrun.TestFailures(error))
+          }
+          .provideSomeLayer(ZLayer.succeed(remote))
       yield written
 
   private def go[R, E](

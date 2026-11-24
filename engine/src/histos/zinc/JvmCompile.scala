@@ -168,7 +168,10 @@ object CompileKey:
     * checkout path is not an input.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
-    Sha256Digest.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
+    Sha256Digest.of(
+      Chunk.fromArray("logical-sources-owned-tasty-v1\n".getBytes(StandardCharsets.UTF_8)) ++
+        CompileInputs.encode(CompileInputs.declared(request, sources))
+    )
 end CompileKey
 
 object JvmCompile:
@@ -470,9 +473,11 @@ object JvmCompile:
   ): ZIO[ContentStore & CompilerStarts & Compilers & RemoteCache, CompileError, CompileOutput] =
     val compileOnce =
       CompilerStarts.tick *>
-        ZIO.serviceWithZIO[Compilers](
-          _.compile(request, artifacts, extra, hear, onPulse, key, admitted)
-        )
+        ZIO
+          .serviceWithZIO[Compilers](
+            _.compile(request, artifacts, extra, hear, onPulse, key, admitted)
+          )
+          .tapError(_ => forgetPrevious(request))
     for
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
@@ -491,6 +496,7 @@ object JvmCompile:
         case None =>
           for
             change   <- CompileInputs.explain(store, request.analysis, rows)
+            _        <- ZIO.fromEither(TastyProducts.prune(request.classes))
             written  <- compileOnce
             keep     <- stable(request, rows)
             stamped  <- stamps(request, keep)

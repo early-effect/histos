@@ -98,6 +98,28 @@ object WireJsonSpec extends ZIOSpecDefault:
       ) :+ CallResult.Fault(BuildFault.Plugin(PluginFault.MissingProduct(task)))
       assertTrue(results.forall(result => result.toJson.fromJson[CallResult] == Right(result)))
     },
+    test("scoped execution faults retain data through test, plugin, run, preview and publication boundaries") {
+      val scoped    = histos.testrun.ScopedTestFailure.MissingGenerated(task, output)
+      val tested    = histos.testrun.ModuleTestError.Plugin(PluginFault.Scoped(scoped))
+      val scheduled = histos.schedule.ActionId
+        .from("docs/generate")
+        .map(action =>
+          CallResult.Fault(
+            BuildFault.Plugin(PluginFault.Scheduled(ScheduleError.Failed(action, PluginFault.Tested(tested))))
+          )
+        )
+      val results = List(
+        CallResult.Fault(BuildFault.Test(tested)),
+        CallResult.Fault(BuildFault.Plugin(PluginFault.Tested(tested))),
+        CallResult.Fault(BuildFault.Program(histos.program.ProgramError.Scoped(tested))),
+        CallResult.Fault(BuildFault.Preview(histos.preview.PreviewError.Test(tested))),
+        CallResult.Fault(BuildFault.Publish(histos.publish.LocalPublishError.Build(tested))),
+      )
+      assertTrue(
+        results.forall(result => result.toJson.fromJson[CallResult] == Right(result)),
+        scheduled.exists(result => result.toJson.fromJson[CallResult] == Right(result)),
+      )
+    },
     test("generic product entry paths validate at the wire edge and round-trip inside manifests") {
       val entry    = ProductEntryPath("assets/@scope/client+v1.js")
       val manifest = OutputManifest(

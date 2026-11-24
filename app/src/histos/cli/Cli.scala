@@ -1517,7 +1517,7 @@ object Cli:
     Plan
       .publishLocal(repo, loaded.graph, tokens, env)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderPublish(plan), CallResult.reported()),
       )
 
@@ -1530,7 +1530,7 @@ object Cli:
     Plan
       .publishSnapshots(repo, loaded.graph, tokens, env)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderPublish(plan), CallResult.reported()),
       )
 
@@ -1565,7 +1565,7 @@ object Cli:
     Plan
       .clean(repo, loaded.graph, projects)
       .fold(
-        error => held("", CallResult.Fault(BuildFault.Preview(error))),
+        error => held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error)))),
         plan => held(Plan.renderClean(repo, plan), CallResult.reported()),
       )
 
@@ -1594,7 +1594,7 @@ object Cli:
     ZIO.succeed:
       Plan.run(loaded.graph, id, platform) match
         case Left(error) =>
-          held("", CallResult.Fault(BuildFault.Preview(error)))
+          held("", CallResult.Fault(BuildFault.Preview(Plan.failure(error))))
         case Right(plan) =>
           held(Plan.renderRun(plan), CallResult.reported())
 
@@ -2443,6 +2443,7 @@ object Cli:
                           classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
                           compile => compile,
                           None,
+                          Some(loaded.plugins),
                         )
                         .either
                         .flatMap:

@@ -381,8 +381,12 @@ object BspMetalsSpec extends ZIOSpecDefault:
 
   private def startsWith(path: Path)(classpath: List[String]): Boolean =
     classpath match
-      case first :: _ => first == Bsp.fileUri(path)
-      case Nil        => false
+      case first :: _ =>
+        _root_.scala.util
+          .Try(Path.of(java.net.URI.create(first)).toAbsolutePath.normalize)
+          .toOption
+          .contains(path.toAbsolutePath.normalize)
+      case Nil => false
 
   private def only(built: Either[BuildError, ProjectGraph]): Option[Module] =
     built.toOption.flatMap: graph =>

@@ -559,6 +559,7 @@ private object WireBuild extends WireSupport:
   given JsonCodec[SurveyError]     = JsonCodec.derived
 end WireBuild
 private object WireCall extends WireSupport:
+  import WireExecution.given
   import WireProducts.given
   import WireLeaves.given
   import WireContract.given
@@ -591,8 +592,6 @@ private object WireCall extends WireSupport:
   given JsonCodec[NativeError]                             = JsonCodec.derived
   given JsonCodec[NativeSuiteError]                        = JsonCodec.derived
   given JsonCodec[PlatformToolError]                       = JsonCodec.derived
-  given JsonCodec[ModuleTestError]                         = JsonCodec.derived
-  given JsonCodec[ProgramError]                            = JsonCodec.derived
   given JsonCodec[JarIo]                                   = JsonCodec.derived
   private val jarErrorCodec: JsonCodec[JarError]           = JsonCodec.derived
   given JsonCodec[JarError]                                = jarErrorCodec
@@ -610,7 +609,6 @@ private object WireCall extends WireSupport:
   given JsonEncoder[AssemblyError]                         = assemblyErrorCodec.encoder
   given JsonDecoder[AssemblyError]                         = assemblyErrorCodec.decoder
   given JsonCodec[LocalPublishError]                       = JsonCodec.derived
-  given JsonCodec[PreviewError]                            = JsonCodec.derived
   given JsonCodec[WatchError]                              = JsonCodec.derived
   given JsonCodec[histos.format.ScalafmtPackage]           = JsonCodec.derived
   given JsonCodec[histos.format.FormatError]               = JsonCodec.derived
@@ -632,26 +630,23 @@ private object WireCall extends WireSupport:
         case TagRelation.Unknown => "unknown"
       },
     )
-  given JsonCodec[TagRelationError]           = JsonCodec.derived
-  given JsonCodec[RegistryError]              = JsonCodec.derived
-  given JsonCodec[Refusal]                    = JsonCodec.derived
-  given JsonCodec[VersionError]               = JsonCodec.derived
-  given JsonCodec[HostIo]                     = JsonCodec.derived
-  given JsonCodec[HostProof]                  = JsonCodec.derived
-  given JsonCodec[TaskError]                  = JsonCodec.derived
-  given JsonCodec[PluginTaskError]            = JsonCodec.derived
-  given JsonCodec[PluginRunError]             = JsonCodec.derived
-  given JsonCodec[CiError]                    = JsonCodec.derived
-  given JsonCodec[ScriptError]                = JsonCodec.derived
-  given JsonCodec[AssembleError]              = JsonCodec.derived
-  given JsonCodec[LauncherError]              = JsonCodec.derived
-  given JsonCodec[ScheduleError[PluginFault]] = JsonCodec.derived
-
-  given JsonCodec[PluginFault]   = JsonCodec.derived
-  given JsonCodec[WorkflowFault] = JsonCodec.derived
-  given JsonCodec[Rejection]     = JsonCodec.derived
-  given JsonCodec[BuildFault]    = JsonCodec.derived
-  given JsonCodec[CallResult]    = JsonCodec.derived
+  given JsonCodec[TagRelationError] = JsonCodec.derived
+  given JsonCodec[RegistryError]    = JsonCodec.derived
+  given JsonCodec[Refusal]          = JsonCodec.derived
+  given JsonCodec[VersionError]     = JsonCodec.derived
+  given JsonCodec[HostIo]           = JsonCodec.derived
+  given JsonCodec[HostProof]        = JsonCodec.derived
+  given JsonCodec[TaskError]        = JsonCodec.derived
+  given JsonCodec[PluginTaskError]  = JsonCodec.derived
+  given JsonCodec[PluginRunError]   = JsonCodec.derived
+  given JsonCodec[CiError]          = JsonCodec.derived
+  given JsonCodec[ScriptError]      = JsonCodec.derived
+  given JsonCodec[AssembleError]    = JsonCodec.derived
+  given JsonCodec[LauncherError]    = JsonCodec.derived
+  given JsonCodec[WorkflowFault]    = JsonCodec.derived
+  given JsonCodec[Rejection]        = JsonCodec.derived
+  given JsonCodec[BuildFault]       = JsonCodec.derived
+  given JsonCodec[CallResult]       = JsonCodec.derived
   private final case class WireLibrary(organization: String, name: String)
 
   private final case class WireProvider(framework: FrameworkClass, organization: String, name: String)
@@ -684,4 +679,5 @@ object WireJson:
   export WireProducts.given
   export WireBuild.given
   export WireCall.given
+  export WireExecution.given
   export WireEvent.given

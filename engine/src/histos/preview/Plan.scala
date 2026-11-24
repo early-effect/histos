@@ -89,6 +89,11 @@ final case class StageProjection(plan: ExecutionPlan, stages: List[ProjectedStag
 object Plan:
   type ProjectionError = PreviewError | BuildDagError | StageRootError
 
+  def failure(error: ProjectionError): PreviewError = error match
+    case error: PreviewError   => error
+    case error: BuildDagError  => PreviewError.Scoped(histos.testrun.TestFailures.graph(error))
+    case error: StageRootError => PreviewError.Scoped(histos.testrun.TestFailures.root(error))
+
   def project(
       repo: Path,
       graph: ProjectGraph,
@@ -111,8 +116,9 @@ object Plan:
       graph: ProjectGraph,
       projects: List[ProjectName],
       generated: GeneratedRoots = GeneratedRoots.Existing,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
   ): IO[ProjectionError, String] =
-    compile(repo, graph, projects, generated).map(render(repo, _))
+    modulePlan(repo, graph, projects, Tree.Main, generated, platforms).map(units => render(repo, CompilePlan(units)))
 
   def compile(
       repo: Path,
@@ -129,6 +135,14 @@ object Plan:
       generated: GeneratedRoots = GeneratedRoots.Existing,
   ): IO[ProjectionError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test, generated).map(TestPlan(_))
+
+  def testSelection(
+      repo: Path,
+      graph: ProjectGraph,
+      selection: histos.TestSelection,
+      generated: GeneratedRoots = GeneratedRoots.Existing,
+  ): IO[ProjectionError, TestPlan] =
+    modulePlan(repo, graph, Nil, Tree.Test, generated, selection.platforms, Some(selection)).map(TestPlan(_))
 
   /** Drop quick-answer names `--only` would not run. The plan's modules stay. */
   def narrow(plan: TestPlan, patterns: List[SuitePattern]): TestPlan =
@@ -210,6 +224,30 @@ object Plan:
   def cleanFull(repo: Path): CleanPlan =
     cleanAll(repo).copy(store = StoreFate.Forgotten)
 
+  def runSelected(
+      graph: ProjectGraph,
+      id: String,
+      platform: Option[histos.PlatformSelection],
+      main: Option[histos.MainClass],
+  ): Either[PreviewError, RunPlan] =
+    if TaskId.from(id).toOption.exists(_.builtIn) || id.contains("/") then
+      if platform.nonEmpty || main.nonEmpty then
+        Left(PreviewError.Run(RunMiss.BadId(s"run $id does not take module selectors")))
+      else run(graph, id, None)
+    else
+      ProjectName.from(id).left.map(_ => PreviewError.Run(RunMiss.Absent(id))).flatMap { name =>
+        graph.get(name) match
+          case None                 => Left(PreviewError.Run(RunMiss.Absent(id)))
+          case Some(_: Aggregate)   => Left(PreviewError.Run(RunMiss.Aggregate(name)))
+          case Some(module: Module) =>
+            if main.orElse(module.application).isEmpty then Left(PreviewError.Run(RunMiss.NoMain(name)))
+            else
+              histos.RunPlatform.resolve(module, platform).left.map(PreviewError.Selection(_)).map { selected =>
+                val modules = graph.projects.collect { case module: Module => module }
+                RunPlan(RunUnit.Module(name, selected, Module.chain(module, modules, selected).map(_.name)))
+              }
+      }
+
   /** The module or task `run` would start. Does not start it. */
   def run(
       graph: ProjectGraph,
@@ -271,26 +309,26 @@ object Plan:
       projects: List[ProjectName],
       tree: Tree,
       generated: GeneratedRoots,
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      selection: Option[histos.TestSelection] = None,
   ): IO[ProjectionError, List[PlanUnit]] =
     val modules = graph.projects.collect { case module: Module => module }
-    val scope   = tree match
-      case Tree.Main => SourceSet.Main
-      case Tree.Test => SourceSet.Test
     for
-      selected <- ZIO.fromEither(Selection.select(graph, projects)).mapError(PreviewError.Target(_))
-      chosen = selected.modules.map(_.name).toSet
-      projection <- project(
-        repo,
-        graph,
-        selected.modules.flatMap(module =>
-          for
-            version  <- module.versions.all
-            platform <- module.platforms.all
-          yield BuildNode.Compile(CompilationStage(Cell(module.name, version, platform), scope))
-        ),
-        generated,
-      )
-      listed <- ZIO.foreach(projection.stages) { projected =>
+      nodes <- tree match
+        case Tree.Main =>
+          ZIO
+            .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+            .mapError(PreviewError.Test(_))
+        case Tree.Test =>
+          ZIO
+            .fromEither(
+              histos.testrun.TestCells.plan(graph, selection.getOrElse(histos.TestSelection.named(projects, platforms)))
+            )
+            .mapError(error => PreviewError.Scoped(histos.testrun.ScopedTestFailure.Selection(error)))
+            .map(_.compileStageRoots.map(BuildNode.Compile(_)))
+      chosen = nodes.collect { case BuildNode.Compile(stage) => stage.cell.module }.toSet
+      projection <- project(repo, graph, nodes, generated)
+      listed     <- ZIO.foreach(projection.stages) { projected =>
         val stage = projected.stage
         val cell  = stage.cell
         val found = projected.files.sources.map(_.path)

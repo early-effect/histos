@@ -15,8 +15,9 @@ enum OfflineSelection:
 
 /** The command this invocation will run. Not the wire `Call`. */
 enum CommandIdentity:
-  case Compile(projects: List[ProjectName])
-  case Test(projects: List[ProjectName])
+  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
+  case Test(selection: histos.TestSelection)
+  case Run(module: CommandToken, platforms: Option[histos.PlatformSelection], main: Option[histos.MainClass])
   case Resolve(action: ResolveVerb)
   case Refresh(selectors: List[ProjectName])
   case Task(id: PluginTaskId)

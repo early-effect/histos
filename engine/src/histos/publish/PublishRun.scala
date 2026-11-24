@@ -29,12 +29,13 @@ object PublishRun:
       api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & IvyRoot, LocalPublishError, Report] =
     ZIO.scoped:
       for
         root   <- ZIO.service[IvyRoot]
         names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note, plugins)
         placed <- toolchain(repo, graph, staged, jdk, note)
         lines  <- localLines(repo, staged, ZLayer.succeed(root) >>> LocalStock.layer(note) >>> build.local)
         _      <- packLocal(repo, graph, staged, placed, note)
@@ -51,6 +52,7 @@ object PublishRun:
       api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     val layer = sonaLayer(env, build, note)
     ZIO.scoped:
@@ -60,7 +62,7 @@ object PublishRun:
         _          <- ZIO.when(sonaSecrets(publishing))(
           ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
         )
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, api, report, note)
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, api, report, note, plugins)
         _      <- toolchain(repo, graph, staged, jdk, note)
         plans  <- ZIO
           .fromEither(DistChannel.plan(graph, staged.output.modules))
@@ -83,6 +85,7 @@ object PublishRun:
       api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, ReleaseError, ReleaseReport] =
     val layer = sonaLayer(env, build, note)
     ZIO.scoped:
@@ -93,7 +96,7 @@ object PublishRun:
           .fromEither(PublishSelect.resolve(graph, tokens))
           .tapError(error => note(error.message))
           .mapError(ReleaseError.Stage(_))
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, api, report, note).mapError(
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, api, report, note, plugins).mapError(
           ReleaseError.Stage(_)
         )
         _      <- toolchain(repo, graph, staged, jdk, note).mapError(ReleaseError.Stage(_))
@@ -256,6 +259,7 @@ object PublishRun:
       api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
+      plugins: Option[histos.load.PluginRuntime],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, LocalPublishError, StagedTree] =
     for
       _    <- ZIO.foreachDiscard(names)(name => note(s"building ${shown(name)}"))
@@ -265,7 +269,11 @@ object PublishRun:
           .mapError(_ => LocalPublishError.Io("histos-stage"))
       )(deleteTree)
       output <- LocalPublish
-        .run(repo, graph, names, jdk, env, write, api, report)
+        .run(repo, graph, names, jdk, env, write, api, report, plugins)
+        .mapError {
+          case error: LocalPublishError          => error
+          case error: histos.zinc.StageRootError => LocalPublishError.Scoped(histos.testrun.TestFailures.root(error))
+        }
         .tapError(error => note(error.message))
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(root))
       _ <- ZIO.foreachDiscard(output.modules)(module => note(s"staged ${module.artifact} ${module.revision}"))

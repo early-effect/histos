@@ -2,7 +2,7 @@ package histos.lock
 
 import histos.plugin.{CommandIdentity, CommandToken, PluginTaskId, ResolveVerb}
 import histos.server.{Call, CatalogQuery, ResolveAction}
-import histos.{PlatformSelection, ProjectName, TestSelection, TestTargets}
+import histos.{PlatformSelection, TestSelection, TestTargets}
 import histos.report.WireJson.given
 import zio.json.*
 
@@ -10,8 +10,8 @@ import zio.json.*
 object CallIdentity:
   def identity(call: Call): CommandIdentity =
     call match
-      case Call.Compile(projects, _)                      => CommandIdentity.Compile(projects)
-      case Call.Test(selection, _, _, _)                  => CommandIdentity.Test(projects(selection.targets))
+      case Call.Compile(projects, platforms)              => CommandIdentity.Compile(projects, platforms)
+      case Call.Test(selection, _, _, _)                  => CommandIdentity.Test(selection)
       case Call.Resolve(ResolveAction.Verify)             => CommandIdentity.Resolve(ResolveVerb.Verify)
       case Call.Resolve(ResolveAction.Update)             => CommandIdentity.Resolve(ResolveVerb.Update)
       case Call.Resolve(ResolveAction.Check)              => CommandIdentity.Resolve(ResolveVerb.Check)
@@ -25,29 +25,29 @@ object CallIdentity:
         PluginTaskId.parse(id) match
           case Right(task) => CommandIdentity.Task(task)
           case Left(_)     => other(id, "task")
-      case Call.Watch(inner, _)         => identity(inner)
-      case Call.Run(id, _, _, _, _)     => other(id, "run")
-      case Call.PreviewRun(id, _, _)    => other(id, "preview-run")
-      case Call.Assembly(_)             => CommandIdentity.Other(CommandToken("assembly"))
-      case Call.Clean(_, _)             => CommandIdentity.Other(CommandToken("clean"))
-      case Call.PreviewCompile(_, _)    => CommandIdentity.Other(CommandToken("preview-compile"))
-      case Call.PreviewTest(_, _, _, _) => CommandIdentity.Other(CommandToken("preview-test"))
-      case Call.PreviewClean(_, _)      => CommandIdentity.Other(CommandToken("preview-clean"))
-      case Call.Graph                   => CommandIdentity.Other(CommandToken("graph"))
-      case Call.Cancel(_)               => CommandIdentity.Other(CommandToken("cancel"))
-      case Call.Workflow(_)             => CommandIdentity.Other(CommandToken("workflow"))
-      case Call.Reload                  => CommandIdentity.Other(CommandToken("reload"))
-      case Call.Reboot(_)               => CommandIdentity.Other(CommandToken("reboot"))
-      case Call.Stop                    => CommandIdentity.Other(CommandToken("stop"))
-      case Call.Version                 => CommandIdentity.Other(CommandToken("version"))
-      case Call.CachePath               => CommandIdentity.Other(CommandToken("cache-path"))
-      case Call.CacheList               => CommandIdentity.Other(CommandToken("cache-list"))
-      case Call.CacheClean(_)           => CommandIdentity.Other(CommandToken("cache-clean"))
-      case Call.CachePromote(_, _)      => CommandIdentity.Other(CommandToken("cache-promote"))
-      case Call.CacheForget(_)          => CommandIdentity.Other(CommandToken("cache-forget"))
-      case Call.CacheVerify(_)          => CommandIdentity.Other(CommandToken("cache-verify"))
-      case Call.Bsp                     => CommandIdentity.Other(CommandToken("bsp"))
-      case Call.Catalog(_)              => CommandIdentity.Other(CommandToken("complete"))
+      case Call.Watch(inner, _)                 => identity(inner)
+      case Call.Run(id, platforms, _, _, main)  => runIdentity(id, platforms, main)
+      case Call.PreviewRun(id, platforms, main) => runIdentity(id, platforms, main)
+      case Call.Assembly(_)                     => CommandIdentity.Other(CommandToken("assembly"))
+      case Call.Clean(_, _)                     => CommandIdentity.Other(CommandToken("clean"))
+      case Call.PreviewCompile(_, _)            => CommandIdentity.Other(CommandToken("preview-compile"))
+      case Call.PreviewTest(_, _, _, _)         => CommandIdentity.Other(CommandToken("preview-test"))
+      case Call.PreviewClean(_, _)              => CommandIdentity.Other(CommandToken("preview-clean"))
+      case Call.Graph                           => CommandIdentity.Other(CommandToken("graph"))
+      case Call.Cancel(_)                       => CommandIdentity.Other(CommandToken("cancel"))
+      case Call.Workflow(_)                     => CommandIdentity.Other(CommandToken("workflow"))
+      case Call.Reload                          => CommandIdentity.Other(CommandToken("reload"))
+      case Call.Reboot(_)                       => CommandIdentity.Other(CommandToken("reboot"))
+      case Call.Stop                            => CommandIdentity.Other(CommandToken("stop"))
+      case Call.Version                         => CommandIdentity.Other(CommandToken("version"))
+      case Call.CachePath                       => CommandIdentity.Other(CommandToken("cache-path"))
+      case Call.CacheList                       => CommandIdentity.Other(CommandToken("cache-list"))
+      case Call.CacheClean(_)                   => CommandIdentity.Other(CommandToken("cache-clean"))
+      case Call.CachePromote(_, _)              => CommandIdentity.Other(CommandToken("cache-promote"))
+      case Call.CacheForget(_)                  => CommandIdentity.Other(CommandToken("cache-forget"))
+      case Call.CacheVerify(_)                  => CommandIdentity.Other(CommandToken("cache-verify"))
+      case Call.Bsp                             => CommandIdentity.Other(CommandToken("bsp"))
+      case Call.Catalog(_)                      => CommandIdentity.Other(CommandToken("complete"))
 
   def words(call: Call): List[String] =
     call match
@@ -124,10 +124,14 @@ object CallIdentity:
       s"Scope: ${offer.scope.summary.value}",
     ) ++ rows
 
-  private def projects(targets: TestTargets): List[ProjectName] = targets match
-    case TestTargets.All                => Nil
-    case TestTargets.Named(first, rest) => first :: rest
-    case TestTargets.Filtered(modules)  => modules
+  private def runIdentity(
+      id: String,
+      platforms: Option[PlatformSelection],
+      main: Option[histos.MainClass],
+  ): CommandIdentity =
+    CommandToken.from(id) match
+      case Right(token) => CommandIdentity.Run(token, platforms, main)
+      case Left(_)      => other(id, "run")
 
   private def platforms(selection: PlatformSelection): List[String] = selection match
     case PlatformSelection.All          => Nil

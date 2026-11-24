@@ -45,6 +45,7 @@ final case class ExecutionRequest(
     session: CompileSession,
     roots: List[BuildNode],
     report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+    stageReport: (CompilationStage, CompileFeed) => UIO[Unit] = (_, _) => ZIO.unit,
 )
 
 enum ExecutionError:
@@ -214,7 +215,8 @@ final class BuildExecution[R, E](leaves: ExecutionLeaves[R, E], scheduler: Histo
         val compile = stage.scope match
           case SourceSet.Main => leaves.main
           case SourceSet.Test => leaves.test
-        ZIO.scoped[R](compile(request, stage, completed)).map(ExecutionProduct.Compiled(_))
+        val scoped = request.copy(report = feed => request.report(feed) *> request.stageReport(stage, feed))
+        ZIO.scoped[R](compile(scoped, stage, completed)).map(ExecutionProduct.Compiled(_))
       case BuildNode.Generate(task) =>
         ZIO.scoped[R](leaves.generate(request, task, completed)).flatMap { generated =>
           generated.read

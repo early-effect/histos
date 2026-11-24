@@ -554,6 +554,7 @@ private object WireSchemaReport extends WireSchemaSupport:
 end WireSchemaReport
 
 private object WireSchemaCall extends WireSchemaSupport:
+  import WireSchemaScoped.given
   import WireSchemaProducts.given
   import WireSchemaLeaves.given
   import WireSchemaContract.given
@@ -736,6 +737,7 @@ object WireSchema:
   export WireSchemaLeaves.given
   export WireSchemaContract.given
   export WireSchemaStages.given
+  export WireSchemaScoped.given
   export WireSchemaProducts.given
   export WireSchemaBuild.given
   export WireSchemaReport.given

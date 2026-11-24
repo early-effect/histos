@@ -33,11 +33,11 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
+      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishLocal(_) | Call.PublishWithdraw |
           Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) |
-          Call.Graph | Call.Run(_, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
-          Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
+          Call.Graph | Call.Run(_, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) | Call.Format(_, _) |
+          Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) |
+          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) | Call.CacheVerify(_) | Call.Catalog(_) =>
         true
       case Call.Clean(Nil, _) | Call.PreviewClean(Nil, _) =>
         false
@@ -115,9 +115,13 @@ object Perform:
                 )
 
             call match
-              case Call.Compile(projects) =>
+              case Call.Compile(projects, platforms) =>
                 held(build =>
-                  follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins)))
+                  follow(
+                    withJdk(jdk =>
+                      Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins, platforms)
+                    )
+                  )
                 )
               case Call.Test(projects, patterns, mode, filter) =>
                 held(build =>
@@ -142,6 +146,7 @@ object Perform:
                         tokens.map(_.value),
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -159,6 +164,7 @@ object Perform:
                         projects,
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -177,6 +183,7 @@ object Perform:
                         automatic,
                         say,
                         build.plugins.launcher,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -189,7 +196,7 @@ object Perform:
                 held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
               case Call.Assembly(modules) =>
                 held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
-              case Call.Run(id, platform, launch, args) =>
+              case Call.Run(id, platform, launch, args, main) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -205,6 +212,8 @@ object Perform:
                         say,
                         edges.compiled,
                         relay,
+                        main,
+                        Some(build.plugins),
                       )
                     )
                   )
@@ -231,8 +240,8 @@ object Perform:
                 held(build => Calls.clean(repo, build.graph, projects, say))
               case Call.Clean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewCompile(projects) =>
-                held(build => Calls.previewCompile(repo, build.graph, projects, say))
+              case Call.PreviewCompile(projects, platforms) =>
+                held(build => Calls.previewCompile(repo, build.graph, projects, say, platforms))
               case Call.PreviewTest(projects, patterns, _, _) =>
                 held(build => Calls.previewTest(repo, build.graph, projects, patterns, say))
               case Call.PreviewPublishLocal(tokens) =>
@@ -247,8 +256,8 @@ object Perform:
                 held(build => Calls.previewClean(repo, build.graph, projects, say))
               case Call.PreviewClean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewRun(id, platform) =>
-                held(build => Calls.previewRun(build.graph, id, platform, say))
+              case Call.PreviewRun(id, platform, main) =>
+                held(build => Calls.previewRun(build.graph, id, platform, say, main))
               case Call.Version =>
                 Calls.version(repo, version, say)
               case Call.CachePath =>

@@ -13,6 +13,78 @@ import zio.{Chunk, durationInt, ZIO}
 
 object CompileProductSpec extends ZIOSpecDefault:
   def spec = suite("a compile product")(
+    test("orphaned consumer TASTy cannot shadow a changed upstream constructor") {
+      PluginCompileSupport
+        .run { (root, _) =>
+          val base    = root.resolve("shape")
+          val library = cell(base, "library")
+          val caller  = cell(base, "caller")
+          for
+            store   <- ZIO.service[ContentStore]
+            payload <- PluginCompileSupport
+              .payload(root.resolve("payload"), "3.10.1", PluginCompileSupport.Scala3101)
+              .mapError(PluginCompileError.Host(_))
+            session <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
+            tools   <- ZIO.fromEither(split(session))
+            shape   <- PluginCompileSupport
+              .write(base.resolve("src/Shape.scala"), "final case class Shape(value: String)\n")
+            _ <- compile(base, library, analysisOf(library), List(shape), session, tools)
+            _ <- ZIO
+              .attemptBlocking {
+                java.nio.file.Files.createDirectories(caller)
+                java.nio.file.Files.copy(library.resolve("Shape.tasty"), caller.resolve("Shape.tasty"))
+              }
+              .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(caller, histos.workspace.IoFault.Write)))
+            _   <- PluginCompileSupport.write(shape, "final case class Shape(value: String, marker: String)\n")
+            _   <- compile(base, library, analysisOf(library), List(shape), session, tools)
+            use <- PluginCompileSupport.write(
+              base.resolve("src/Use.scala"),
+              "object Use:\n  def text: String = Shape(\"value\", \"new\").marker\n",
+            )
+            compiled <- compile(base, caller, analysisOf(caller), List(use), session, tools, List(library))
+            text     <- PluginCompileSupport.invoke(caller, library :: tools.runtime, "Use$", "text")
+            warm     <- compile(base, caller, analysisOf(caller), List(use), session, tools, List(library))
+            orphan   <- ZIO
+              .attemptBlocking(java.nio.file.Files.exists(caller.resolve("Shape.tasty")))
+              .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(caller, histos.workspace.IoFault.Stat)))
+          yield (compiled.classesWritten, text, warm.changed, orphan)
+        }
+        .map { ran =>
+          val (written, text, changed, orphan) = ran.value
+          assertTrue(written.exists(_ > 0), text == "new", !changed, !orphan)
+        }
+    },
+    test("a failed incremental request retires its analysis before the corrected retry") {
+      PluginCompileSupport
+        .run { (root, _) =>
+          val base     = root.resolve("retry")
+          val classes  = base.resolve("classes")
+          val analysis = base.resolve("analysis")
+          for
+            store   <- ZIO.service[ContentStore]
+            payload <- PluginCompileSupport
+              .payload(root.resolve("payload"), "3.10.1", PluginCompileSupport.Scala3101)
+              .mapError(PluginCompileError.Host(_))
+            session  <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
+            tools    <- ZIO.fromEither(split(session))
+            source   <- PluginCompileSupport.write(base.resolve("src/Mark.scala"), markSource("one"))
+            _        <- compile(base, classes, analysis, List(source), session, tools)
+            _        <- PluginCompileSupport.write(source, "object Mark:\n  def text: String = 1\n")
+            failed   <- compile(base, classes, analysis, List(source), session, tools).either
+            retained <- ZIO
+              .attemptBlocking(java.nio.file.Files.exists(analysis.resolve("inc.zip")))
+              .mapError(_ => PluginCompileError.Io(histos.workspace.IoFailure(analysis, histos.workspace.IoFault.Stat)))
+            _         <- PluginCompileSupport.write(source, markSource("fixed"))
+            corrected <- compile(base, classes, analysis, List(source), session, tools)
+            text      <- PluginCompileSupport.invoke(classes, tools.runtime, "Mark$", "text")
+            warm      <- compile(base, classes, analysis, List(source), session, tools)
+          yield (failed, retained, corrected.classesWritten, text, warm.changed)
+        }
+        .map { ran =>
+          val (failed, retained, written, text, changed) = ran.value
+          assertTrue(failed.isLeft, !retained, written.exists(_ > 0), text == "fixed", !changed)
+        }
+    },
     test("a changed source is stored as the new class file") {
       PluginCompileSupport
         .run { (root, _) =>

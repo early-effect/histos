@@ -93,7 +93,7 @@ object Main extends ZIOAppDefault:
         case None                                           => jvm(raw)
         case Some(Batch.Parsed.Ready(call))                 => batch(call, seen(peeled))
         case Some(Batch.Parsed.Program(id, platform, argv)) =>
-          batch(Call.Run(id, platform, shell, argv), seen(peeled))
+          batch(Call.Run(id, platform.map(value => histos.PlatformSelection.only(value)), shell, argv), seen(peeled))
         case Some(Batch.Parsed.Names(query)) =>
           query match
             case None        => ZIO.succeed(halt(0))

@@ -57,6 +57,8 @@ enum LocalPublishError:
   case Remote(error: RemoteError)
   case Recipe(error: RecipeError)
   case InputsChanged(path: RepoPath)
+  case Scoped(error: histos.testrun.ScopedTestFailure)
+  case Build(error: histos.testrun.ModuleTestError)
 
   def message: String = this match
     case Version(error)                        => error.message
@@ -100,6 +102,8 @@ enum LocalPublishError:
     case Remote(error)       => error.message
     case Recipe(error)       => error.message
     case InputsChanged(path) => s"${path.value} changed after it was recorded"
+    case Scoped(error)       => error.message
+    case Build(error)        => error.message
 
   def diagnose: Diagnostic = this match
     case Publish(error)   => error.diagnose

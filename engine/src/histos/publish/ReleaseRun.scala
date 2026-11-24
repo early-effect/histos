@@ -110,7 +110,11 @@ private[publish] object ReleaseRun:
       output <- LocalPublish
         .run(repo, graph, names, jdk, env, PublishWrite.Release, api, report)
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(dir))
-        .mapError(ReleaseError.Stage(_))
+        .mapError {
+          case error: LocalPublishError          => ReleaseError.Stage(error)
+          case error: histos.zinc.StageRootError =>
+            ReleaseError.Stage(LocalPublishError.Scoped(histos.testrun.TestFailures.root(error)))
+        }
     yield ReleaseStage(
       dir,
       output.modules,

@@ -45,35 +45,48 @@ object Program:
       name: String,
       jdk: JdkRuntime,
       runtimes: Runtimes,
-      choice: Option[Platform],
+      choice: Option[histos.PlatformSelection],
       launch: RunLaunch,
       args: List[String],
       relay: RunRelay,
       report: CompileFeed => UIO[Unit],
       afterCompile: UIO[Unit],
+      mainOverride: Option[histos.MainClass] = None,
+      plugins: Option[histos.load.PluginRuntime] = None,
   ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, ProgramFeed] =
-    ZStream.unwrap:
+    ZStream.unwrapScoped:
       for
         module <- ZIO.fromEither(locate(graph, name))
         main   <- ZIO.fromEither(
-          module.application.toRight(ProgramError.NoMain(module.name))
+          mainOverride.orElse(module.application).toRight(ProgramError.NoMain(module.name))
         )
         binary <- ZIO.fromEither(
           Binary.from(main.value).left.map(ProgramError.Main(_))
         )
-        platform <- ZIO.fromEither(pick(module, choice))
+        platform <- ZIO.fromEither(histos.RunPlatform.resolve(module, choice)).mapError(ProgramError.Selection(_))
         lock     <- ZIO.serviceWithZIO[ResolutionService](_.current)
-        compiled <- GraphCompile
-          .run(
-            histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
-            List(module.name),
-            Some(platform),
-            report,
+        runtime  <- histos.build.BuildRuntime.open(plugins)
+        roots = module.versions.all.map(version =>
+          histos.build.BuildNode.Compile(
+            histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)
           )
-          .mapError(ProgramError.Compile(_))
+        )
+        products <- runtime
+          .ensure(
+            histos.build.ExecutionRequest(
+              histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
+              roots,
+              report,
+            )
+          )
+          .mapError(error => ProgramError.Scoped(histos.testrun.TestFailures(error)))
         _ <- afterCompile
-        cells = compiled
-          .filter(cell => cell.module == module.name && cell.platform == platform)
+        cells = products.stages.toList
+          .collect {
+            case (stage, product)
+                if stage.scope == histos.plugin.SourceSet.Main && stage.cell.module == module.name && stage.cell.platform == platform =>
+              product.compiled
+          }
           .sortBy(_.version.value)
         continue <- Ref.make(true)
         store    <- ZIO.service[ContentStore]
@@ -83,7 +96,37 @@ object Program:
           ZStream.unwrap:
             continue.get.map: keep =>
               if keep then
-                live(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store, launch, args, relay))
+                ZStream
+                  .unwrap {
+                    resourcesFor(
+                      repo,
+                      graph,
+                      histos.CompilationStage(
+                        histos.Cell(cell.module, cell.version, cell.platform),
+                        histos.plugin.SourceSet.Main,
+                      ),
+                      products,
+                    )
+                      .map(resources =>
+                        live(
+                          CellRun(
+                            repo,
+                            graph,
+                            module,
+                            binary,
+                            cell,
+                            lock,
+                            jdk,
+                            runtimes,
+                            store,
+                            launch,
+                            args,
+                            relay,
+                            resources,
+                          )
+                        )
+                      )
+                  }
                   .tap:
                     case ProgramFeed.Exited(_, _, _, code) if code != 0 =>
                       continue.set(false)
@@ -393,6 +436,34 @@ object Program:
           case only :: Nil => Right(only)
           case many        => Left(ProgramError.Choose(module.name, many))
 
+  private def resourcesFor(
+      repo: Path,
+      graph: ProjectGraph,
+      stage: histos.CompilationStage,
+      products: histos.build.ExecutionProducts,
+  ): IO[ProgramError, List[histos.ResourceName]] =
+    if stage.cell.platform != Platform.Native then ZIO.succeed(Nil)
+    else
+      for
+        plan <- ZIO
+          .fromEither(histos.build.BuildDag.plan(graph, List(histos.build.BuildNode.Compile(stage))))
+          .mapError(error =>
+            ProgramError.Scoped(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.graph(error)))
+          )
+        files <- ZIO.foreach(plan.nodes.collect {
+          case histos.build.BuildNode.Compile(stage)
+              if stage.cell.platform == Platform.Native && stage.scope == histos.plugin.SourceSet.Main =>
+            stage
+        })(stage =>
+          histos.zinc.StageRoots
+            .of(graph)
+            .read(repo, stage, products.generatedRoots)
+            .mapError(error =>
+              ProgramError.Scoped(histos.testrun.ModuleTestError.Scoped(histos.testrun.TestFailures.root(error)))
+            )
+        )
+      yield files.flatMap(file => file.resources.map(_._1) ++ file.assets.map(_.name)).distinct
+
   private final case class CellRun(
       repo: Path,
       graph: ProjectGraph,
@@ -406,13 +477,14 @@ object Program:
       launch: RunLaunch,
       args: List[String],
       relay: RunRelay,
+      resources: List[histos.ResourceName],
   )
 
   private def one(
       run: CellRun
   ): ZStream[Resolve & LockedTools & RemoteCache, ProgramError, ProgramFeed] =
-    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store, launch, args, relay) = run
-    val serverEnv                                                                                   = runtimes.env
+    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes, store, launch, args, relay, resources) = run
+    val serverEnv    = runtimes.env
     val programEnv   = launch.programEnv(serverEnv)
     val modules      = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
@@ -447,6 +519,7 @@ object Program:
                       programEnv,
                       directory = cwd,
                       arguments = args,
+                      jvmOptions = module.jvmOptions,
                     ),
                     relay,
                   ),
@@ -549,6 +622,7 @@ object Program:
                         binary,
                         cell.version,
                         libraries = module.libraries,
+                        resources = resources,
                       ),
                       paths,
                     ),

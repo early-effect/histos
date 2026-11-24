@@ -49,14 +49,29 @@ private[load] object PluginInputs:
       binding: Option[PluginLinked],
       provenance: List[ProvenanceResult],
       locations: List[Path],
+      dependencyInputs: Option[List[Input]] = None,
   )
 
   def hash(request: HashRequest): IO[PluginRunError, Hashed] =
-    val HashRequest(repo, graph, plugin, task, id, jars, launcher, env, args, binding, provenance, locations) =
+    val HashRequest(
+      repo,
+      graph,
+      plugin,
+      task,
+      id,
+      jars,
+      launcher,
+      env,
+      args,
+      binding,
+      provenance,
+      locations,
+      dependencyInputs,
+    ) =
       request
     for
       declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, env, _))
-      deps     <- compileInputs(repo, graph, task)
+      deps     <- dependencyInputs.fold(compileInputs(repo, graph, task))(ZIO.succeed(_))
       jarsIn   <- ZIO.foreach(jars.sorted)(jarInput)
       places   <- ZIO.foreach(locations.distinct.sortBy(_.toString))(path => jarInput(path.toString))
       closed   <- provenanceInputs(provenance)

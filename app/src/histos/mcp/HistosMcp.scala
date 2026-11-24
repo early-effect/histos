@@ -491,7 +491,7 @@ object HistosMcp:
       terms   <- terms(tests)
       kept    <- tagNames(tags)
       ignored <- tagNames(ignoreTags)
-    yield Call.Test(found, globs, mode, TestFilter(terms, kept, ignored))
+    yield Call.Test(histos.TestSelection.named(found), globs, mode, TestFilter(terms, kept, ignored))
 
   /** Projects and files are two scopes, so asking for both is refused. No scope is the build. */
   def fmtCall(args: FmtArgs): Either[Rejection, Call] =
@@ -557,7 +557,7 @@ object HistosMcp:
         for
           found <- names(args.projects)
           globs <- suitePatterns(args.patterns)
-        yield Call.PreviewTest(found, globs, args.mode, TestFilter.empty)
+        yield Call.PreviewTest(histos.TestSelection.named(found), globs, args.mode, TestFilter.empty)
       case PreviewOp.Local =>
         publishTokens(args.projects).map(Call.PreviewPublishLocal(_))
       case PreviewOp.Snapshots =>

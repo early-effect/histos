@@ -3,7 +3,7 @@ package histos.testrun
 import histos.jdk.JdkRuntime
 import histos.toolchain.Runtimes
 import histos.zinc.{CompileFacts, CompileFeed}
-import histos.{Platform, PlatformSelection, ProjectGraph, ProjectName, ScalaVersion, TestSelection, TestTargets}
+import histos.{Platform, PlatformSelection, ProjectGraph, ProjectName, ScalaVersion, TestSelection}
 
 import java.nio.file.Path
 
@@ -28,9 +28,6 @@ final case class TestRun(
     onTestCompile: (ProjectName, ScalaVersion, Platform, CompileFacts) => UIO[Unit] = (_, _, _, _) => zio.ZIO.unit,
     coverage: Option[histos.coverage.CoverageCompile] = None,
     platforms: PlatformSelection = PlatformSelection.All,
+    requested: Option[TestSelection] = None,
 ):
-  def selection: TestSelection =
-    val targets = names match
-      case Nil           => TestTargets.All
-      case first :: rest => TestTargets.Named(first, rest)
-    TestSelection(targets, platforms)
+  def selection: TestSelection = requested.getOrElse(TestSelection.named(names, platforms))

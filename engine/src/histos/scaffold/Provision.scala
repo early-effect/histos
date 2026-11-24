@@ -116,8 +116,9 @@ object Provision:
                   file <- Workflow
                     .update(dir, graph, sona)(using branch, ship)
                     .mapError:
-                      case error: CiError    => ProvisionError.Workflow(error.message)
-                      case error: BuildError => ProvisionError.Load(LoadError.BrokenGraph(error))
+                      case error: CiError                           => ProvisionError.Workflow(error.message)
+                      case error: BuildError                        => ProvisionError.Load(LoadError.BrokenGraph(error))
+                      case error: histos.testrun.TestSelectionError => ProvisionError.Selection(error)
                   _    <- LauncherScript.update(dir, sha).mapError(error => ProvisionError.Workflow(error.message))
                   lock <- Resolve
                     .update(dir, graph, BuildResolvers(graph.resolvers), machine.native)
@@ -215,6 +216,7 @@ enum ProvisionError:
   case Workflow(detail: String)
   case Lock(error: ResolveError)
   case Branch(raw: String)
+  case Selection(error: histos.testrun.TestSelectionError)
 
   def message: String = this match
     case Files(error)     => error.message
@@ -223,5 +225,6 @@ enum ProvisionError:
     case Workflow(detail) => detail
     case Lock(error)      =>
       s"${error.message}\nThe project is written. Run 'histos resolve --update'."
-    case Branch(raw) => s"'$raw' is not a branch name"
+    case Branch(raw)      => s"'$raw' is not a branch name"
+    case Selection(error) => s"invalid workflow test selection: $error"
 end ProvisionError

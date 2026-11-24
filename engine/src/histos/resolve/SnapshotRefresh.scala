@@ -25,8 +25,9 @@ object SnapshotRefresh:
   def selectors(command: CommandIdentity): List[ProjectName] =
     command match
       case CommandIdentity.Refresh(names) => names
-      case CommandIdentity.Compile(_) | CommandIdentity.Test(_) | CommandIdentity.Resolve(_) | CommandIdentity.Task(_) |
-          CommandIdentity.Format | CommandIdentity.Publish | CommandIdentity.Other(_) =>
+      case CommandIdentity.Compile(_, _) | CommandIdentity.Test(_) | CommandIdentity.Run(_, _, _) |
+          CommandIdentity.Resolve(_) | CommandIdentity.Task(_) | CommandIdentity.Format | CommandIdentity.Publish |
+          CommandIdentity.Other(_) =>
         Nil
 
   def drift(document: LockDocument, changed: List[SnapshotLocator]): DeclarationDrift =

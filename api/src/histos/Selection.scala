@@ -98,6 +98,13 @@ final case class TestSelection(
     affected: Option[List[ProjectName]] = None,
 )
 
+object TestSelection:
+  def named(names: List[ProjectName], platforms: PlatformSelection = PlatformSelection.All): TestSelection =
+    val targets = names match
+      case first :: rest => TestTargets.Named(first, rest)
+      case Nil           => TestTargets.All
+    TestSelection(targets, platforms)
+
 object RunPlatform:
   /** An explicit selection wins over the module default, then a sole supported platform. */
   def resolve(module: Module, explicit: Option[PlatformSelection]): Either[SelectionError, Platform] =

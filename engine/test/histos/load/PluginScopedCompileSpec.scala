@@ -279,7 +279,7 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
   private def isTestFailure(fault: PluginFault): Boolean = fault match
     case PluginFault.Tested(_) => true
     case PluginFault.Task(_) | PluginFault.Products(_) | PluginFault.MissingProduct(_) | PluginFault.Compiled(_) |
-        PluginFault.Resolved(_) | PluginFault.Scheduled(_) =>
+        PluginFault.Resolved(_) | PluginFault.Scheduled(_) | PluginFault.Scoped(_) | PluginFault.Linked(_) =>
       false
 
   private def write(path: Path, text: String): UIO[Unit] =

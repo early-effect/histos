@@ -41,6 +41,7 @@ import histos.pack.{AssetSync, Resources}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestProvider}
 
 import java.nio.file.{Files, Path}
+import scala.jdk.CollectionConverters.*
 
 import zio.{IO, UIO, ZIO}
 
@@ -78,10 +79,11 @@ private[histos] object TestCompile:
           .of(session.graph)
           .read(session.repo, stage, completed.generatedRoots)
           .mapError(ExecutionError.Roots(_))
-        resolution <- ZIO.service[histos.resolve.ResolutionService]
-        lock       <- resolution.current
-        tools      <- LockedTools.make(lock, session.graph, resolution)
-        selected   <- scopedUpstream(session.graph, module, stage, completed)
+        sourceInputs <- ZIO.fromEither(files.compileInputs(session.repo)).mapError(ExecutionError.Roots(_))
+        resolution   <- ZIO.service[histos.resolve.ResolutionService]
+        lock         <- resolution.current
+        tools        <- LockedTools.make(lock, session.graph, resolution)
+        selected     <- scopedUpstream(session.graph, module, stage, completed)
           .provideSomeLayer(zio.ZLayer.succeed(tools))
         fetched <- classpath(
           module,
@@ -149,7 +151,7 @@ private[histos] object TestCompile:
           else
             val compile = CompileRequest(
               CompileToolchain(cell.version, cell.platform, session.jdk, module.flags),
-              files.sources.map(_.path),
+              sourceInputs.map(_.path),
               paths,
               classes,
               analysis,
@@ -158,8 +160,33 @@ private[histos] object TestCompile:
               permitted = host,
               checkout = session.repo,
               upstream = signatures.flatten,
+              sourceInputs = sourceInputs,
             )
-            for output <- scopedOutput(module, compile, session.native, SemanticDb.argv(session.repo, cell.version))
+            for
+              problems <- ZIO.succeed(new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]())
+              output   <- scopedOutput(
+                module,
+                compile,
+                session.native,
+                SemanticDb.argv(session.repo, cell.version),
+                problem =>
+                  val _ = problems.add(problem)
+                  (),
+              )
+                .tapBoth(
+                  _ =>
+                    ZIO.foreachDiscard(problems.iterator.asScala.toList)(problem =>
+                      execution.report(
+                        histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
+                      )
+                    ),
+                  _ =>
+                    ZIO.foreachDiscard(problems.iterator.asScala.toList)(problem =>
+                      execution.report(
+                        histos.zinc.CompileFeed.Diagnostic(cell.module, cell.version, cell.platform, problem)
+                      )
+                    ),
+                )
                 .mapError(failed)
                 .provideSomeLayer(zio.ZLayer.succeed(tools))
             yield (
@@ -254,14 +281,15 @@ private[histos] object TestCompile:
       request: CompileRequest,
       native: NativeOrigin,
       extra: List[String],
+      hear: CompileProblem => Unit,
   ): ZIO[GraphCompile.Fed & LockedTools, CompileError, histos.zinc.CompileOutput] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
       ZIO
         .fromEither(CellPlatform.of(module, request.toolchain.platform, tools.catalog, native))
         .flatMap:
-          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, _ => (), ZIO.unit, _ => ())
-          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra)
-          case placed: CellPlatform.Native => NativeCompile.compile(request, placed, extra)
+          case CellPlatform.Jvm            => JvmCompile.compilePooled(request, extra, hear, ZIO.unit, _ => ())
+          case js: CellPlatform.Js         => ScalaJs.compile(request, js, extra, hear)
+          case placed: CellPlatform.Native => NativeCompile.compile(request, placed, extra, hear)
 
   /** The framework a test target launches, or a refusal when that library is not a test dependency. A named test main
     * opts out of the framework.

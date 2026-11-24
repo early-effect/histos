@@ -53,6 +53,9 @@ enum PreviewError:
   case Publish(error: LocalPublishError)
   case Run(miss: RunMiss)
   case Pattern(error: SuitePatternError)
+  case Scoped(error: histos.testrun.ScopedTestFailure)
+  case Selection(error: histos.SelectionError)
+  case Test(error: histos.testrun.ModuleTestError)
 
   def message: String = this match
     case Target(error)    => error.message
@@ -62,6 +65,9 @@ enum PreviewError:
     case Publish(error)   => error.message
     case Run(miss)        => miss.message
     case Pattern(error)   => error.message
+    case Scoped(error)    => error.message
+    case Selection(error) => s"invalid platform selection: $error"
+    case Test(error)      => error.message
 
   def diagnose: Diagnostic = this match
     case Target(error)  => error.diagnose
