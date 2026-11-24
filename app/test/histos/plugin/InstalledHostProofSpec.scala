@@ -22,11 +22,13 @@ import histos.pack.{AssemblyFile, ClassJar, PackageKey}
 import histos.report.WireJson.given
 import histos.resolve.{
   Classpath,
+  ClasspathScope,
   DependencyLock,
   Repositories,
   ResolutionService,
   Resolve,
   ResolvedArtifact,
+  ResolveError,
   ToolRequest,
 }
 import histos.schedule.{ActionCache, CacheError, Digest, RemoteCache, ScheduleError}
@@ -424,20 +426,25 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           yield assertTrue(text == "true:histos.step.StepKind|refused|refused")
         }
       },
-      test("R13 a compile failure and a scheduler failure stay distinct through bind") {
+      test("R13 a compile lock failure and a scheduler failure stay distinct through bind") {
         hosted { (root, _) =>
           for
             compiled  <- faultKind(root.resolve("compile"), compileMain, ActionCache.miss)
             scheduled <- faultKind(root.resolve("schedule"), scheduleMain, brokenCache)
           yield
-            val compileSeen = compiled match
-              case Left(TaskError.Fault(PluginFault.Compiled(histos.zinc.GraphCompileError.NoRoot(name)))) =>
-                name == ProjectName("app")
-              case _ => false
+            val expectedCompile = Left(
+              TaskError.Fault(
+                PluginFault.Compiled(
+                  histos.zinc.GraphCompileError.Lock(
+                    ResolveError.LockDrift(ProjectName("app"), Scala3101, Platform.Jvm, ClasspathScope.Compile, Nil)
+                  )
+                )
+              )
+            )
             val scheduleSeen = scheduled match
               case Left(TaskError.Fault(PluginFault.Scheduled(ScheduleError.Cache(CacheError.Corrupt(_))))) => true
               case _                                                                                        => false
-            assertTrue(compileSeen, scheduleSeen, compiled != scheduled)
+            assertTrue(compiled == expectedCompile, scheduleSeen, compiled != scheduled)
         }
       },
       test("R14 a comment containing trait HistosBuild does not skip compilation") {

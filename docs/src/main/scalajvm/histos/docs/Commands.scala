@@ -127,7 +127,7 @@ Tests run the suites on the cells you select. A quick run skips a suite whose in
 have not changed. A full run does not. Watch reruns a command when you save a file.
 """,
     cite[histos.testrun.TestMode](_.token),
-    cite[histos.cli.AffectedChoice.type](_.select),
+    cite[histos.cli.AffectedChoice.type](_.selection),
     section("test")(
       md"""
 `histos test` runs the suites. Name projects to limit which modules run. `--quick` skips
