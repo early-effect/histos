@@ -77,6 +77,7 @@ final case class Module(
     runPlatform: Option[Platform] = None,
     jsOptimize: Option[JsOptimize] = None,
     jvmOptions: JvmOptions = JvmOptions.empty,
+    description: Option[PomText] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -679,6 +680,7 @@ object Projects:
             m.runPlatform,
             m.jsOptimize,
             m.jvmOptions,
+            m.described,
           )
 
   private def publicationOf(
@@ -1127,13 +1129,22 @@ final class Organized private (settings: Organized.Settings):
   def scm(value: Scm): Organized =
     withFacts(settings.facts.copy(scm = Some(value)))
 
-  /** The description a ship may replace. */
+  /** The description a ship or module may replace. */
   def description(text: PomText): Organized =
     withFacts(settings.facts.copy(description = Some(text)))
 
   /** The url a ship may replace. */
-  def url(value: HttpUrl): Organized =
+  def url(value: MetadataUri): Organized =
     withFacts(settings.facts.copy(url = Some(value)))
+
+  def organizationName(value: PomText): Organized =
+    withFacts(settings.facts.copy(organizationName = Some(value)))
+
+  def organizationHomepage(value: MetadataUri): Organized =
+    withFacts(settings.facts.copy(organizationHomepage = Some(value)))
+
+  def versionScheme(value: VersionScheme): Organized =
+    withFacts(settings.facts.copy(versionScheme = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized = Organized(settings.copy(facts = value))
 

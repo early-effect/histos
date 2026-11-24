@@ -174,21 +174,39 @@ enum ScmConnectionError:
 end ScmConnectionError
 
 /** One license. The pom writes `distribution` `repo` because Central requires that. */
-final case class License(name: LicenseName, url: HttpUrl)
+final case class License(name: LicenseName, url: MetadataUri)
 
-/** One developer. The id and the name are the pom fields. */
-final case class Developer(id: DeveloperId, name: PomText)
+/** One developer's publication identity. */
+final case class Developer(id: DeveloperId, name: PomText, email: Option[histos.supply.Email], url: Option[MetadataUri])
+
+object Developer:
+  def apply(id: DeveloperId, name: PomText): Developer = new Developer(id, name, None, None)
+
+  def apply(id: DeveloperId, name: PomText, email: histos.supply.Email, url: MetadataUri): Developer =
+    new Developer(id, name, Some(email), Some(url))
+end Developer
 
 /** One scm block. The written connection is also the developer connection. */
-final case class Scm(url: HttpUrl, connection: ScmConnection)
+final case class Scm(url: MetadataUri, connection: ScmConnection)
 
-/** Facts written once for the organization. A ship may replace description and url. */
+/** The Maven property describing how consumers interpret release versions. */
+enum VersionScheme:
+  case EarlySemver
+
+  def value: String = this match
+    case EarlySemver => "early-semver"
+end VersionScheme
+
+/** Organization defaults. Module descriptions override ship descriptions; ship URLs override the organization URL. */
 final case class OrganizationFacts(
     license: Option[License] = None,
     developer: Option[Developer] = None,
     scm: Option[Scm] = None,
     description: Option[PomText] = None,
-    url: Option[HttpUrl] = None,
+    url: Option[MetadataUri] = None,
+    organizationName: Option[PomText] = None,
+    organizationHomepage: Option[MetadataUri] = None,
+    versionScheme: Option[VersionScheme] = None,
 )
 
 object OrganizationFacts:

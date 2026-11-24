@@ -148,16 +148,16 @@ object build extends HistosBuild:
       )
     Projects
       .organization(organization"rocks.earlyeffect")
-      .license(License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt"))
+      .license(License(license"Apache-2.0", MetadataUri("https://www.apache.org/licenses/LICENSE-2.0.txt")))
       .developer(Developer(developer"russwyte", pom"Russ White"))
       .scm(
         Scm(
-          url"https://github.com/early-effect/histos",
+          MetadataUri("https://github.com/early-effect/histos"),
           connection"scm:git@github.com:early-effect/histos.git",
         )
       )
       .description(pom"Histos is a Scala build tool.")
-      .url(url"https://github.com/early-effect/histos")
+      .url(MetadataUri("https://github.com/early-effect/histos"))
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),

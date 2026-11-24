@@ -98,6 +98,9 @@ sealed trait ModuleDef[P] extends ProjectDef:
   ): ModuleDef[P] =
     rewriteTestAggregate(module +: rest.toList)
 
+  /** Replaces the ship or organization description for this module's POM. */
+  def description(text: PomText): ModuleDef[P]
+
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef[P]
 
@@ -285,7 +288,11 @@ private[histos] final class ModuleBody[P](
     val runPlatform: Option[Platform] = None,
     val jsOptimize: Option[JsOptimize] = None,
     val jvmOptions: JvmOptions = JvmOptions.empty,
+    val described: Option[PomText] = None,
 ) extends ModuleDef[P]:
+  override def description(text: PomText): ModuleDef[P] =
+    revise(described = Some(text))
+
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
 
@@ -430,6 +437,7 @@ private[histos] final class ModuleBody[P](
       runPlatform: Option[Platform] = this.runPlatform,
       jsOptimize: Option[JsOptimize] = this.jsOptimize,
       jvmOptions: JvmOptions = this.jvmOptions,
+      described: Option[PomText] = this.described,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -466,6 +474,7 @@ private[histos] final class ModuleBody[P](
       runPlatform,
       jsOptimize,
       jvmOptions,
+      described,
     )
 end ModuleBody
 

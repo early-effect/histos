@@ -433,14 +433,18 @@ object LocalPublish:
       case Revision.Release(_) => true
       case _                   => false
 
-  private def document(graph: ProjectGraph, ship: ShipName): PomDocument =
+  private[publish] def document(graph: ProjectGraph, ship: ShipName, module: Module): PomDocument =
     val row = graph.catalog.get(ship)
     PomDocument(
-      description = row.flatMap(_.description).orElse(graph.facts.description),
+      description = module.description.orElse(row.flatMap(_.description)).orElse(graph.facts.description),
       url = row.flatMap(_.url).orElse(graph.facts.url),
       license = graph.facts.license,
       developer = graph.facts.developer,
       scm = graph.facts.scm,
+      organizationName = graph.facts.organizationName,
+      organizationHomepage = graph.facts.organizationHomepage,
+      versionScheme = graph.facts.versionScheme,
+      name = Some(histos.PomText.trusted(module.published.fold(module.name.value)(_.value))),
     )
 
   private def publishedRevision(
@@ -542,7 +546,7 @@ object LocalPublish:
         job.revision,
         stamped,
         deps,
-        document(graph, job.ship),
+        document(graph, job.ship, module),
         Some(sourceBytes),
         javadoc,
         artifact,
