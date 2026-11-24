@@ -74,7 +74,7 @@ final class JvmCompatibilityAnalyzer(mima: MiMaLib) extends CompatibilityAnalyze
               .mapError(CompatibilityError.AnalysisFailed(input, _))
           yield result
 
-  // MiMa opens jar filesystems without closing them. Give it a scoped classfile directory instead.
+  // MiMa opens jar filesystems without closing them. Scala 3 classfiles also require their TASTy sidecars.
   private def classfiles(input: CompatibilityInput): ZIO[Scope, CompatibilityError, Path] =
     ZIO
       .attemptBlocking(Files.isDirectory(input.previous))
@@ -94,28 +94,31 @@ final class JvmCompatibilityAnalyzer(mima: MiMaLib) extends CompatibilityAnalyze
             entries <- ZIO
               .attemptBlocking(jar.entries().asScala.map[java.util.zip.ZipEntry](identity).toList)
               .mapError(CompatibilityError.AnalysisFailed(input, _))
-            _ <- ZIO.foreachDiscard(entries.filter(entry => !entry.isDirectory && entry.getName.endsWith(".class"))):
-              entry =>
-                ZIO
-                  .attempt(root.resolve(entry.getName).normalize())
-                  .mapError(_ => CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
-                  .flatMap: destination =>
-                    if !destination.startsWith(root) then
-                      ZIO.fail(CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
-                    else
-                      ZIO.scoped:
-                        for
-                          source <- ZIO.acquireRelease(
-                            ZIO
-                              .attemptBlocking(jar.getInputStream(entry))
-                              .mapError(CompatibilityError.AnalysisFailed(input, _))
-                          )(source => ZIO.attemptBlocking(source.close()).orDie)
-                          _ <- ZIO
-                            .attemptBlockingInterrupt:
-                              Option(destination.getParent).foreach(Files.createDirectories(_))
-                              Files.copy(source, destination)
+            _ <- ZIO.foreachDiscard(
+              entries.filter(entry =>
+                !entry.isDirectory && (entry.getName.endsWith(".class") || entry.getName.endsWith(".tasty"))
+              )
+            ): entry =>
+              ZIO
+                .attempt(root.resolve(entry.getName).normalize())
+                .mapError(_ => CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
+                .flatMap: destination =>
+                  if !destination.startsWith(root) then
+                    ZIO.fail(CompatibilityError.InvalidBaselineEntry(input.previous, entry.getName))
+                  else
+                    ZIO.scoped:
+                      for
+                        source <- ZIO.acquireRelease(
+                          ZIO
+                            .attemptBlocking(jar.getInputStream(entry))
                             .mapError(CompatibilityError.AnalysisFailed(input, _))
-                        yield ()
+                        )(source => ZIO.attemptBlocking(source.close()).orDie)
+                        _ <- ZIO
+                          .attemptBlockingInterrupt:
+                            Option(destination.getParent).foreach(Files.createDirectories(_))
+                            Files.copy(source, destination)
+                          .mapError(CompatibilityError.AnalysisFailed(input, _))
+                      yield ()
           yield root
 
   private def problem(found: Problem): CompatibilityProblem =

@@ -267,6 +267,23 @@ object CompatibilitySpec extends ZIOSpecDefault:
             .provideLayer(CompatibilityAnalyzer.jvm)
         yield assertTrue(result == Left(CompatibilityError.InvalidBaselineEntry(jar, "../Escape.class")))
     },
+    test("TASTy entries obey the same traversal and embedded-NUL jail") {
+      ZIO.scoped:
+        for
+          root    <- Workspace.work("tasty-jail")
+          old     <- products(root.resolve("old"), method = true)
+          now     <- products(root.resolve("now"), method = true)
+          results <- ZIO.foreach(List("../Escape.tasty", "fixture/Invalid\u0000.tasty").zipWithIndex) {
+            (entry, index) =>
+              for
+                jar    <- baselineJar(root.resolve(s"malignant-$index.jar"), old, entry)
+                result <- ZIO
+                  .serviceWithZIO[CompatibilityAnalyzer](_.analyze(CompatibilityInput(Platform.Jvm, jar, now)).either)
+                  .provideLayer(CompatibilityAnalyzer.jvm)
+              yield result == Left(CompatibilityError.InvalidBaselineEntry(jar, entry))
+          }
+        yield assertTrue(results == List(true, true))
+    },
     test("embedded-NUL classfile entries return the exact typed analyzer error") {
       ZIO.scoped:
         for
