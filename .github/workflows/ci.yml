@@ -1,6 +1,7 @@
 name: ci
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - "main"
@@ -21,7 +22,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight affected
       - id: affected
         env:
@@ -40,7 +41,7 @@ jobs:
           modules=$(./histos affected --base "$base" || echo '["all"]')
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
   publish:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -49,7 +50,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight publish
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -83,6 +84,8 @@ jobs:
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos compile api wire splice central engine app --platform jvm"
+      - run: ./histos doctor --area release
       - run: "./histos publish local"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
@@ -140,7 +143,7 @@ jobs:
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   test:
     needs: [affected, publish]
-    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
+    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -261,7 +264,7 @@ jobs:
           ' build.properties)
           [ -n "$pin" ] || { echo "build.properties has no histos.version" >&2; exit 1; }
           [ "$shown" != "histos $pin" ]
-      - run: "./histos test app --only '*LockInvocationSpec*' '*InstalledCompilerPayloadSpec*'"
+      - run: "./histos test app --only '*LockInvocationSpec*,*InstalledCompilerPayloadSpec*'"
       - run: "./histos test --affected '${{ needs.affected.outputs.modules }}'"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
@@ -280,7 +283,7 @@ jobs:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   versions:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -288,11 +291,27 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight versions
       - run: "./histos run versions"
+  compatibility:
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
+    needs: [affected]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos compile api wire splice central engine app --platform jvm"
+      - run: ./histos doctor --area release
   scaladoc:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected, publish]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -363,7 +382,7 @@ jobs:
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos run doc"
   format:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected, publish]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -406,7 +425,7 @@ jobs:
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos fmt --check"
   client:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected, publish]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -415,6 +434,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
@@ -471,7 +494,7 @@ jobs:
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos run host"
   docs:
-    if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    if: "github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || github.event_name == 'workflow_dispatch'"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -479,7 +502,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight docs
       - run: "./histos run dev.earlyeffect.specular/site"
       - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
@@ -487,8 +510,8 @@ jobs:
         with:
           path: "target/site"
   pages:
-    needs: docs
-    if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    needs: [docs, affected, workflow, supply-chain, test, versions, compatibility, scaladoc, format, client]
+    if: "(github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     environment:
@@ -515,7 +538,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight cache-seed
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -587,7 +610,7 @@ jobs:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   workflow:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -599,8 +622,10 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight workflow
+      - run: "./histos compile api wire splice central engine app --platform jvm"
+      - run: ./histos doctor --area release
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -630,13 +655,14 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
           key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}
           restore-keys: histos-osv-
       - run: ./histos doctor --preflight supply-chain
+      - run: ./histos compile --platform jvm
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -667,7 +693,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3e54ae8974da73c05e132915f77f18313c0c49be # 3e54ae8974da73c05e132915f77f18313c0c49be
+      - uses: early-effect/histos/.github/actions/setup@af16c748b1cc2cb95b936aaae601f900679c9ef2 # af16c748b1cc2cb95b936aaae601f900679c9ef2
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
         env:
