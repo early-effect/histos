@@ -50,7 +50,10 @@ object Program:
           errDone <- Promise.make[Nothing, Unit]
           _    <- readers.extend(read(process.getInputStream, outDone, ProgramEvent.Out(_), events, watch).forkScoped)
           _    <- readers.extend(read(process.getErrorStream, errDone, ProgramEvent.Err(_), events, watch).forkScoped)
-          code <- ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => refuse(s"$command was interrupted"))
+          // waitFor ignores Thread.interrupt, so cancellation has to kill the process before the scope can close.
+          code <- ZIO
+            .attemptBlockingCancelable(process.waitFor())(destroy(process))
+            .mapError(_ => refuse(s"$command was interrupted"))
           drained <- (outDone.await *> errDone.await).timeout(1.second)
           _       <- ZIO.when(drained.isEmpty)(
             destroy(process) *> ZIO.fail(refuse(s"$command exited $code and left a pipe open"))

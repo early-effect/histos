@@ -7,8 +7,9 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
-import zio.{Chunk, Queue, System, ZIO}
+import zio.{Chunk, Promise, Queue, Scope, ZIO, durationInt}
 import zio.test.*
 
 object RunPipeSpec extends ZIOSpecDefault:
@@ -74,7 +75,7 @@ object RunPipeSpec extends ZIOSpecDefault:
         val Fixture(java, classes, scratch, launch) = fixture
         for
           main   <- echo
-          queue  <- Queue.unbounded[RelayCommand]
+          queue  <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
           _      <- queue.offer(RelayCommand.Stdin(Chunk.fromArray("hello".getBytes(StandardCharsets.UTF_8))))
           _      <- queue.offer(RelayCommand.End)
           events <- ChildProcess
@@ -98,23 +99,49 @@ object RunPipeSpec extends ZIOSpecDefault:
     test("a native command uses the launch directory") {
       prepared: fixture =>
         val Fixture(_, _, _, launch) = fixture
-        ZIO.withSystem(System.SystemLive):
-          for
-            events <- ChildProcess
-              .command(List("/bin/pwd"), launch, Map("PATH" -> "/usr/bin:/bin"))
-              .runCollect
-            lines  = events.collect { case ChildEvent.Out(text) => text }.toList
-            exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
-            dirOk <- matches(lines.find(_.nonEmpty), launch)
-          yield assertTrue(exited == List(0), dirOk)
+        for
+          events <- ChildProcess
+            .command(List("/bin/pwd"), launch, Map("PATH" -> "/usr/bin:/bin"))
+            .runCollect
+          lines  = events.collect { case ChildEvent.Out(text) => text }.toList
+          exited = events.collect { case ChildEvent.Exited(code) => code.value }.toList
+          dirOk <- matches(lines.find(_.nonEmpty), launch)
+        yield assertTrue(exited == List(0), dirOk)
+    },
+    test("interrupting the stream ends the process") {
+      ZIO.scoped:
+        for
+          root <- ZIO.acquireRelease(
+            ZIO.attemptBlocking(Files.createTempDirectory("histos-interrupt")).orDie
+          )(root => ZIO.attemptBlocking(remove(root)).orDie)
+          seen <- Promise.make[Nothing, Long]
+          fiber <- ChildProcess
+            .command(
+              List("/bin/sh", "-c", "echo $$; exec sleep 30"),
+              root,
+              Map("PATH" -> "/usr/bin:/bin"),
+            )
+            .mapError(_.message)
+            .foreach:
+              case ChildEvent.Out(text) =>
+                text.toLongOption match
+                  case Some(pid) => seen.succeed(pid).unit
+                  case None      => ZIO.unit
+              case _ => ZIO.unit
+            .forkScoped
+          reported <- seen.await.timeout(10.seconds)
+          pid      <- ZIO.fromOption(reported).orElseFail("child did not report its pid")
+          _        <- fiber.interrupt
+          alive    <- ZIO.attemptBlocking(ProcessHandle.of(pid).toScala.fold(false)(_.isAlive)).orDie
+        yield assertTrue(!alive)
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock
+  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem
 
   private final case class Fixture(java: Path, classes: Path, scratch: Path, launch: Path)
 
-  private def prepared[A](use: Fixture => ZIO[Any, Any, A]): ZIO[Any, Any, A] =
+  private def prepared[A](use: Fixture => ZIO[Scope, Any, A]): ZIO[Any, Any, A] =
     ZIO.scoped:
       ZIO
         .acquireRelease(ZIO.attemptBlocking(Files.createTempDirectory("histos-child")).orDie)(root =>
@@ -136,15 +163,20 @@ object RunPipeSpec extends ZIOSpecDefault:
               Files.writeString(source, Echo)
               ()
             }.orDie
-            compiled <- ZIO.attemptBlocking {
-              val process =
-                new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString).start()
-              val err  = new String(process.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
-              val code = process.waitFor()
-              (code, err)
-            }.orDie
-            (code, err) = compiled
-            _   <- ZIO.unless(code == 0)(ZIO.fail(err))
+            env <- ZIO.systemWith(_.envs).orDie
+            heard <- ChildProcess
+              .command(
+                List(javac.toString, "-d", classes.toString, source.toString),
+                classes,
+                env,
+              )
+              .runCollect
+              .mapError(_.message)
+            code = heard.collect { case ChildEvent.Exited(exit) => exit.value }.toList
+            err  = heard.collect { case ChildEvent.Err(line) => line }.mkString("\n")
+            _ <- ZIO.unless(code == List(0))(
+              ZIO.fail(if err.isEmpty then s"javac exited $code" else err)
+            )
             ran <- use(Fixture(java, classes, scratch, launch))
           yield ran
 

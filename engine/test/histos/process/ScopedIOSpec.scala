@@ -1,15 +1,15 @@
 package histos.process
 
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Path
-import java.util.concurrent.TimeUnit
+import java.nio.file.{Files, Path}
 
-import zio.{Chunk, Scope, ZIO, durationInt}
+import zio.{Chunk, Queue, Scope, ZIO, durationInt}
 import zio.test.*
 
 object ScopedIOSpec extends ZIOSpecDefault:
   private enum ProbeError:
-    case Java, Start, IO, Deadline
+    case Java, Deadline
+    case Child(message: String)
 
   private enum InputEnd:
     case Open, Eof
@@ -39,67 +39,73 @@ object ScopedIOSpec extends ZIOSpecDefault:
 
   def spec = verified
 
-  private def child(mode: String): ZIO[Scope, ProbeError, Process] =
+  private def probe(mode: String, inputEnd: InputEnd) = ZIO.scoped:
     for
       java <- ZIO
         .systemWith(_.property("java.home"))
         .mapError(_ => ProbeError.Java)
         .flatMap(home => ZIO.fromOption(home.filter(_.nonEmpty)).orElseFail(ProbeError.Java))
         .map(home => Path.of(home, "bin", "java").toString)
-      process <- ZIO.acquireRelease(
-        ZIO
-          .attemptBlocking(
-            ProcessBuilder(
-              Path.of(java).toString,
-              "--enable-native-access=ALL-UNNAMED",
-              "-cp",
-              javaClassPath,
-              "histos.process.OwnedInputFixture",
-              mode,
-            ).start()
-          )
-          .mapError(_ => ProbeError.Start)
-      )(process =>
-        ZIO.attemptBlocking {
-          process.destroyForcibly()
-          process.waitFor()
-          process.getOutputStream.close()
-          process.getInputStream.close()
-          process.getErrorStream.close()
-        }.ignore
-      )
-    yield process
+      classpath <- ZIO
+        .systemWith(_.property("java.class.path"))
+        .mapError(_ => ProbeError.Java)
+        .flatMap(path => ZIO.fromOption(path.filter(_.nonEmpty)).orElseFail(ProbeError.Java))
+      env   <- ZIO.systemWith(_.envs).mapError(error => ProbeError.Child(error.getMessage))
+      work  <- directory
+      pipe  <- relay(inputEnd)
+      heard <- ChildProcess
+        .command(
+          List(
+            java,
+            "--enable-native-access=ALL-UNNAMED",
+            "-cp",
+            classpath,
+            "histos.process.OwnedInputFixture",
+            mode,
+          ),
+          work,
+          env,
+          pipe,
+          ChildProcess.Stdout.Bytes,
+        )
+        .runCollect
+        .mapError(error => ProbeError.Child(error.message))
+        .timeoutFail(ProbeError.Deadline)(15.seconds)
+      out  = stdout(heard)
+      text = heard.collect { case ChildEvent.Err(line) => line }.mkString("\n")
+      code = heard.collect { case ChildEvent.Exited(exit) => exit.value }.toList
+    yield assertTrue(code == List(0), out == payload, text.contains("owned input closed"))
 
-  private def javaClassPath: String = java.lang.System.getProperty("java.class.path")
-
-  private def probe(mode: String, inputEnd: InputEnd) = ZIO.scoped:
+  private def relay(inputEnd: InputEnd): ZIO[Scope, Nothing, RunRelay] =
     for
-      process <- child(mode)
-      _       <- ZIO
-        .attemptBlockingCancelable {
-          process.getOutputStream.write(payload.toArray)
-          process.getOutputStream.flush()
-          inputEnd match
-            case InputEnd.Eof  => process.getOutputStream.close()
-            case InputEnd.Open => ()
-        }(ZIO.succeed(process.destroyForcibly()))
-        .mapError(_ => ProbeError.IO)
-        .timeoutFail(ProbeError.Deadline)(5.seconds)
-      done   <- ZIO.attemptBlocking(process.waitFor(5, TimeUnit.SECONDS)).mapError(_ => ProbeError.IO)
-      result <-
-        if done then
-          ZIO
-            .attemptBlocking {
-              val out = Chunk.fromArray(process.getInputStream.readAllBytes())
-              val err = new String(process.getErrorStream.readAllBytes(), UTF_8)
-              assertTrue(
-                process.exitValue() == 0,
-                !process.isAlive,
-                out == payload,
-                err.contains("owned input closed"),
-              )
-            }
-            .mapError(_ => ProbeError.IO)
-        else ZIO.succeed(assertTrue(done))
-    yield result
+      queue <- ZIO.acquireRelease(Queue.unbounded[Option[RelayCommand]])(_.shutdown)
+      _     <- queue.offer(Some(RelayCommand.Stdin(payload)))
+      _     <- inputEnd match
+        case InputEnd.Eof  => queue.offer(Some(RelayCommand.End))
+        case InputEnd.Open => ZIO.unit
+      _ <- queue.offer(None)
+    yield RunRelay.Open(queue.take)
+
+  private def directory: ZIO[Scope, ProbeError, Path] =
+    ZIO.acquireRelease(
+      ZIO
+        .attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "owned-"))
+        .mapError(error => ProbeError.Child(error.getMessage))
+    )(root =>
+      ZIO
+        .attemptBlocking {
+          if Files.isDirectory(root) then
+            val entries = Files.list(root)
+            try entries.forEach(path => Files.deleteIfExists(path))
+            finally entries.close()
+          Files.deleteIfExists(root)
+          ()
+        }
+        .ignore
+    )
+
+  private def stdout(events: Chunk[ChildEvent]): Chunk[Byte] =
+    events.foldLeft(Chunk.empty[Byte]):
+      case (all, ChildEvent.Bytes(data)) => all ++ data
+      case (all, _)                      => all
 end ScopedIOSpec

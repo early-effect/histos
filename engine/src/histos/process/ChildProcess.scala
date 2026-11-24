@@ -122,7 +122,7 @@ object ChildProcess:
             classes <- launcher(java)
             child   <- spawn(startCommand(java, classes, argv, work, environment), Group.Own, stdout)
             _       <- pump(child.process, relay).forkScoped
-          yield attend(child, wait(child.process), Group.Own)
+          yield attend(child, wait(child.process, Group.Own), Group.Own)
 
   /** Collect [[events]] for a caller that wants the text after the process ends.
     */
@@ -135,7 +135,7 @@ object ChildProcess:
   ): ZStream[Any, ChildError, ChildEvent] =
     ZStream.unwrapScoped:
       spawn(start, group).map: child =>
-        attend(child, wait(child.process), group)
+        attend(child, wait(child.process, group), group)
 
   private def collect(
       events: ZStream[Any, ChildError, ChildEvent]
@@ -272,7 +272,7 @@ object ChildProcess:
       process: Process,
   ): IO[ChildError, ProcessExit] =
     for
-      code <- wait(process)
+      code <- wait(process, Group.Own)
       _    <- grouped(request.work)
     yield code
 
@@ -623,9 +623,11 @@ object ChildProcess:
       if status.text.trim.toIntOption.contains(0) then ZIO.unit
       else ZIO.fail(ChildError.Group(GroupOp.Set))
 
-  private def wait(process: Process): IO[ChildError, ProcessExit] =
+  /** `waitFor` ignores `Thread.interrupt`. Cancellation kills the process so the wait returns and the scope can close.
+    */
+  private def wait(process: Process, group: Group): IO[ChildError, ProcessExit] =
     ZIO
-      .attemptBlockingInterrupt(process.waitFor())
+      .attemptBlockingCancelable(process.waitFor())(stop(process, group))
       .mapBoth(_ => ChildError.Status, ProcessExit(_))
 
   private def read(path: Path): IO[ChildError, ProcessOutput] =
