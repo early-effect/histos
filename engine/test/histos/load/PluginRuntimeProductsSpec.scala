@@ -3,7 +3,7 @@ package histos.load
 import histos.*
 import histos.cache.{ContentStore, CacheProject}
 import histos.plugin.*
-import histos.resolve.{DependencyLock, ResolutionService, Resolve}
+import histos.resolve.{ResolutionService, Resolve}
 import histos.schedule.{ActionCache, RemoteCache, RemoteMode, RemoteError, Digest, PluginManifest}
 import zio.Chunk
 import java.nio.charset.StandardCharsets.UTF_8
@@ -11,6 +11,7 @@ import histos.version.Catalog
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
+import _root_.scala.jdk.OptionConverters.*
 
 import zio.{IO, Promise, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
@@ -39,8 +40,18 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
     ),
   )
 
+  private val previewId   = PluginTaskId(id.plugin, TaskName("preview"))
+  private val previewTask = DeclaredTask(
+    previewId.name,
+    Seal.Open,
+    Set(Need.Network),
+    List(DeclaredInput.Directory(RepoPath("site"))),
+    Nil,
+    List(TaskDep.Same(id.name)),
+  )
+
   private enum Behavior:
-    case Publish, Fail, Hold
+    case Publish, Fail, Hold, AssetsOnly
 
   private val tests = suite("runtime owned plugin products")(
     test("a real task publishes Directory/File results and failures retain pages, assets, stamp and source") {
@@ -99,9 +110,9 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
         ready <- Promise.make[Nothing, Unit]
         hold  <- Promise.make[Nothing, Unit]
         publication = ProductPublication(phase.get.flatMap {
-          case Behavior.Publish => ZIO.unit
-          case Behavior.Fail    => ZIO.fail(ProductError.Changed)
-          case Behavior.Hold    => ready.succeed(()) *> hold.await
+          case Behavior.Publish | Behavior.AssetsOnly => ZIO.unit
+          case Behavior.Fail                          => ZIO.fail(ProductError.Changed)
+          case Behavior.Hold                          => ready.succeed(()) *> hold.await
         })
         result <- fixture(
           f =>
@@ -202,6 +213,112 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
           count == 1,
           page == "old",
         )
+      }
+    },
+    test("Open tasks rerun effects but persist and restore the entire committed manifest") {
+      fixture(
+        f =>
+          for
+            _       <- write(f.repo.resolve("unowned/keep.txt"), "untouched").mapError(PluginFault.Task(_))
+            _       <- f.run("old")
+            first   <- f.runtime.committed(id)
+            before  <- snapshot(f.repo.resolve("site"))
+            _       <- f.run("old")
+            second  <- f.runtime.committed(id)
+            reruns  <- f.count.get
+            _       <- f.behavior.set(Behavior.AssetsOnly)
+            _       <- f.run("new")
+            third   <- f.runtime.committed(id)
+            changed <- snapshot(f.repo.resolve("site"))
+            asset   <- f.read("site/assets/client.js")
+            stamp   <- f.read("site/stamp")
+            blobs   <- ZIO.foreach(third.manifest.contentDigests)(digest =>
+              f.store.read(digest).mapError(error => PluginFault.Products(ProductError.Cache(error)))
+            )
+            _        <- f.runtime.cleanProducts(id)
+            restored <- ZIO.scoped {
+              f.products
+                .restore(
+                  ProductRequest(f.repo, task.copy(seal = Seal.Open), InvocationId.derive("restore-open")),
+                  third.manifest,
+                )
+                .provideSomeLayer[Scope](ZLayer.succeed(f.store))
+                .mapError(PluginFault.Products(_))
+            }
+            after   <- snapshot(f.repo.resolve("site"))
+            source  <- f.read("generated/Generated.scala")
+            sibling <- f.read("unowned/keep.txt")
+            count   <- f.count.get
+          yield assertTrue(
+            reruns == 2,
+            first.manifest == second.manifest,
+            first.manifest != third.manifest,
+            before.filterNot((path, _) => Set("assets/client.js", "stamp").contains(path)) ==
+              changed.filterNot((path, _) => Set("assets/client.js", "stamp").contains(path)),
+            before != changed,
+            asset == "new",
+            stamp == "new",
+            blobs.forall(_.nonEmpty),
+            restored match
+              case RestoreResult.Hit(outputs) => outputs.manifest == third.manifest
+              case RestoreResult.Miss         => false,
+            after == changed,
+            source == "old",
+            sibling == "untouched",
+            count == 3,
+          ),
+        seal = Seal.Open,
+      )
+    },
+    test("a real preview child holds its input lease across invocation close and reload until generation retirement") {
+      fixture { f =>
+        ZIO.scoped {
+          for
+            generation <- Scope.make
+            _          <- ZIO.addFinalizer(generation.close(zio.Exit.unit))
+            runtime    <- generation.extend(f.reload)
+            owner = f.copy(runtime = runtime)
+            output <- owner.runTask(previewId, "old")
+            parts = output.text.split(":").toList
+            address <- ZIO
+              .fromOption(parts match
+                case port :: pid :: Nil => port.toIntOption.zip(pid.toLongOption)
+                case _                  => None)
+              .orElseFail(PluginFault.Task(PluginRunError.Defect("preview address")))
+            (port, pid) = address
+            child <- ZIO
+              .fromOption(ProcessHandle.of(pid).toScala)
+              .orElseFail(PluginFault.Task(PluginRunError.Defect("preview child")))
+            old         <- page(port)
+            clean       <- runtime.cleanProducts(id).either
+            next        <- f.reload
+            _           <- f.copy(runtime = next).run("new")
+            newer       <- page(port)
+            afterReload <- next.cleanProducts(id).either
+            _           <- generation.close(zio.Exit.unit)
+            _           <- ZIO
+              .fromCompletionStage(child.onExit())
+              .orElseFail(PluginFault.Task(PluginRunError.Defect("preview exit")))
+            stopped <- ZIO.succeed(!child.isAlive)
+            rebound <- ZIO.acquireReleaseWith(
+              ZIO
+                .attemptBlocking(new java.net.ServerSocket(port))
+                .orElseFail(PluginFault.Task(PluginRunError.Defect("preview socket release")))
+            )(socket => ZIO.attemptBlocking(socket.close()).ignore)(_ => ZIO.succeed(true))
+            _      <- next.cleanProducts(id)
+            absent <- PluginProductFiles
+              .io(f.repo.resolve("site"), histos.workspace.IoFault.Stat)(!Files.exists(f.repo.resolve("site")))
+              .mapError(PluginFault.Products(_))
+          yield assertTrue(
+            old == "old",
+            clean == Left(PluginFault.Products(ProductError.ActiveReaders)),
+            newer == "new",
+            afterReload == Left(PluginFault.Products(ProductError.ActiveReaders)),
+            stopped,
+            rebound,
+            absent,
+          )
+        }
       }
     },
     test("fixed generation readers retain old bytes while preview uses the logical Directory and excludes clean") {
@@ -388,11 +505,18 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
       cache: ActionCache,
       resolve: Resolve,
       resolution: ResolutionService,
+      products: PluginProducts,
   ):
     def run(label: String): IO[PluginFault, PluginOutput]                      = run(label, RemoteCache.unconfigured)
     def run(label: String, remote: RemoteCache): IO[PluginFault, PluginOutput] =
+      runTask(id, label, remote)
+    def runTask(
+        taskId: PluginTaskId,
+        label: String,
+        remote: RemoteCache = RemoteCache.unconfigured,
+    ): IO[PluginFault, PluginOutput] =
       runtime
-        .run(id, PluginArgs(List(NamedText(ParamName("label"), label)), Set.empty))
+        .run(taskId, PluginArgs(List(NamedText(ParamName("label"), label)), Set.empty))
         .provide(
           ZLayer.succeed(store),
           ZLayer.succeed(cache),
@@ -405,6 +529,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
   private def fixture[A](
       use: Fixture => ZIO[Scope, PluginFault, A],
       publication: ProductPublication = ProductPublication.live,
+      seal: Seal = Seal.Hermetic,
   ): ZIO[Any, PluginFault, A] =
     ZIO
       .scoped {
@@ -418,7 +543,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
           hold      <- Promise.make[Nothing, Unit]
           storePath <- ZIO.attemptBlocking(Files.createDirectories(repo.resolve("store"))).orDie
           store  = counting(ContentStore.in(storePath), reads)
-          plugin = Producer(behavior, count, ready, hold)
+          plugin = Producer(behavior, count, ready, hold, task.copy(seal = seal))
           graph  = ProjectGraph.trusted(
             List(
               Module(
@@ -440,7 +565,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
           reload = (for
             leases  <- GenerationLeases.make
             _       <- ZIO.addFinalizer(leases.retire)
-            threads <- PluginThreads.make(getClass.getClassLoader)
+            threads <- leases.use(PluginThreads.make(getClass.getClassLoader))
             runtime <- PluginRuntime.loaded(
               repo,
               graph,
@@ -468,6 +593,7 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
               ContentStore.actions(store),
               resolve,
               resolution,
+              products,
             )
           )
         yield result
@@ -484,29 +610,60 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
       count: Ref[Int],
       ready: Promise[Nothing, Unit],
       hold: Promise[Nothing, Unit],
+      declared: DeclaredTask,
   ) extends HistosPlugin:
     val id: PluginId             = PluginRuntimeProductsSpec.id.plugin
-    def contribute: Contribution = Contribution(List(task), Nil, Nil)
+    def contribute: Contribution = Contribution(List(declared, previewTask), Nil, Nil)
     def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+      if request.id == previewId then preview(request)
+      else publish(request)
+
+    private def preview(request: RunRequest): ZIO[PluginScopes, PluginRunError, PluginOutput] =
       for
-        label <- ZIO.fromEither(request.args.require(ParamName("label")))
-        _     <- count.update(_ + 1)
-        dir   <- ZIO.fromEither(destination(request.directory(site), request.repo.resolve("site")))
-        file  <- ZIO.fromEither(destination(request.file(generated), request.repo.resolve("generated/Generated.scala")))
-        _     <- write(dir.resolve("index.html"), label)
-        _     <- write(dir.resolve("assets/client.js"), label)
-        _     <- write(dir.resolve("stamp"), label)
-        _     <- write(file, label)
+        scopes <- ZIO.service[PluginScopes]
+        ready  <- Promise.make[Nothing, String]
+        argv = List(
+          Path.of(sys.props.getOrElse("java.home", ".")).resolve("bin/java").toString,
+          "-cp",
+          sys.props.getOrElse("java.class.path", ""),
+          "histos.load.ProductPreviewProbe",
+          request.repo.resolve("site").toString,
+        )
+        watch = (event: ProgramEvent) =>
+          event match
+            case ProgramEvent.Out(line) if line.startsWith("ready:") => ready.succeed(line.stripPrefix("ready:")).unit
+            case ProgramEvent.Out(_) | ProgramEvent.Err(_)           => ZIO.unit
+        fiber   <- scopes(ResourceLife.Generation).extend(Program.start(argv, request.repo, request.events, watch))
+        address <- ready.await.raceFirst(fiber.join *> ZIO.fail(PluginRunError.Defect("preview ended before ready")))
+      yield PluginOutput(address, Nil)
+
+    private def publish(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      for
+        label <- ZIO.fromEither(request.args.require(ParamName("label"))).catchSome {
+          case PluginRunError.MissingArg(_) => ZIO.succeed("old")
+        }
+        _    <- count.update(_ + 1)
+        dir  <- ZIO.fromEither(destination(request.directory(site), request.repo.resolve("site")))
+        file <- ZIO.fromEither(destination(request.file(generated), request.repo.resolve("generated/Generated.scala")))
         selected <- behavior.get
-        _        <- selected match
-          case Behavior.Publish => ZIO.unit
-          case Behavior.Fail    => ZIO.fail(PluginRunError.Failed(PluginDetail("staged failure")))
-          case Behavior.Hold    => ready.succeed(()) *> hold.await
+        page = if selected == Behavior.AssetsOnly then "old" else label
+        _ <- write(dir.resolve("index.html"), page)
+        _ <- write(dir.resolve("metadata.json"), "metadata")
+        _ <- write(dir.resolve("guides/intro.html"), "guide")
+        _ <- write(dir.resolve("assets/theme.css"), "theme")
+        _ <- write(dir.resolve("assets/client.js"), label)
+        _ <- write(dir.resolve("stamp"), label)
+        _ <- write(file, page)
+        _ <- selected match
+          case Behavior.Publish | Behavior.AssetsOnly => ZIO.unit
+          case Behavior.Fail                          => ZIO.fail(PluginRunError.Failed(PluginDetail("staged failure")))
+          case Behavior.Hold                          => ready.succeed(()) *> hold.await
       yield PluginOutput(
         label,
         List(WrittenFile(generated, RepoPath("generated/Generated.scala"))),
         List(WrittenDirectory(site, RepoPath("site"))),
       )
+  end Producer
 
   private def destination(found: Either[PluginRunError, Path], legacy: Path): Either[PluginRunError, Path] = found match
     case Left(PluginRunError.MissingDestination(_)) => Right(legacy)
@@ -521,9 +678,68 @@ object PluginRuntimeProductsSpec extends ZIOSpecDefault:
       }
       .orElseFail(PluginRunError.Defect("write fixture"))
 
+  private def snapshot(root: Path): IO[PluginFault, List[(String, Option[Chunk[Byte]])]] =
+    (for
+      real    <- PluginProductFiles.io(root, histos.workspace.IoFault.Read)(root.toRealPath())
+      paths   <- PluginProductFiles.paths(real)
+      entries <- ZIO.foreach(paths.sortBy(real.relativize(_).toString)) { path =>
+        PluginProductFiles.io(path, histos.workspace.IoFault.Read) {
+          val bytes = if Files.isDirectory(path) then None else Some(Chunk.fromArray(Files.readAllBytes(path)))
+          real.relativize(path).toString -> bytes
+        }
+      }
+    yield entries).mapError(PluginFault.Products(_))
+
+  private def page(port: Int): IO[PluginFault, String] =
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking(java.net.http.HttpClient.newHttpClient())
+        .orElseFail(PluginFault.Task(PluginRunError.Defect("preview HTTP client")))
+    )(client => ZIO.attemptBlocking(client.close()).ignore) { client =>
+      ZIO
+        .attemptBlocking {
+          val request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(s"http://localhost:$port/")).build()
+          client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).body()
+        }
+        .orElseFail(PluginFault.Task(PluginRunError.Defect("preview HTTP")))
+    }
+
   private def hostFacts: UIO[Unit] =
     ZIO.foreachDiscard(List("user.home", "os.name", "os.arch", "java.home")): key =>
       Option(System.getProperty(key)) match
         case Some(value) if value.nonEmpty => TestSystem.putProperty(key, value)
         case _                             => ZIO.dieMessage(s"the test JVM has no $key")
 end PluginRuntimeProductsSpec
+
+object ProductPreviewProbe extends zio.ZIOAppDefault:
+  private def io[A](body: => A): IO[PluginRunError, A] =
+    ZIO.attemptBlockingInterrupt(body).orElseFail(PluginRunError.Defect("preview probe IO"))
+
+  def run: ZIO[zio.ZIOAppArgs & Scope, PluginRunError, Unit] =
+    ZIO.scoped {
+      for
+        args   <- getArgs
+        root   <- ZIO.fromOption(args.headOption).orElseFail(PluginRunError.Defect("preview root"))
+        server <- ZIO.acquireRelease(io(new java.net.ServerSocket(0)))(socket => io(socket.close()).ignore)
+        _      <- io {
+          java.lang.System.out.println(s"ready:${server.getLocalPort}:${ProcessHandle.current().pid()}")
+          java.lang.System.out.flush()
+        }
+        _ <- ZIO.scoped {
+          ZIO.acquireRelease(io(server.accept()))(socket => io(socket.close()).ignore).flatMap { socket =>
+            io {
+              val input = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream, UTF_8))
+              input.readLine()
+              val bytes  = Files.readAllBytes(Path.of(root).resolve("index.html"))
+              val output = socket.getOutputStream
+              output.write(
+                s"HTTP/1.1 200 OK\r\nContent-Length: ${bytes.length}\r\nConnection: close\r\n\r\n".getBytes(UTF_8)
+              )
+              output.write(bytes)
+              output.flush()
+            }
+          }
+        }.forever
+      yield ()
+    }
+end ProductPreviewProbe

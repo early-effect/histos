@@ -25,29 +25,25 @@ import histos.plugin.{
   OutputDestinations,
   OutputName,
 }
-import histos.schedule.Histos.given
 import histos.schedule.{
   Action,
   ActionCache,
   ActionDigest,
   ActionId,
-  Digest,
   Histos,
   Input,
   InputName,
   InputValue,
-  Outcome,
   Parallelism,
   PluginManifest,
   Policy,
   RemoteCache,
   ScheduleError,
   Scheduler,
-  StepFailure,
 }
 import histos.step.{Need, Step, StepId, StepInfo}
 import histos.task.{TaskError, TaskId, TaskResult}
-import histos.resolve.{Resolve, DependencyLock}
+import histos.resolve.Resolve
 import histos.zinc.GraphCompile
 import histos.{Module, ProjectGraph}
 
@@ -58,7 +54,7 @@ import histos.cache.{CacheProject, ContentStore}
 
 import scala.util.Try
 
-import zio.{Chunk, IO, NonEmptyChunk, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer}
 
 final case class PluginLink(
     id: PluginId,
@@ -176,6 +172,7 @@ object PluginRuntime:
       environment <- (Parallelism.live >>> Histos.live).build
       products    <- ZIO.service[PluginProducts]
       retained    <- Ref.make(Map.empty[PluginTaskId, CommittedOutputs])
+      inputReads  <- Ref.Synchronized.make(Set.empty[PluginTaskId])
     yield Running(
       repo,
       graph,
@@ -188,6 +185,7 @@ object PluginRuntime:
       provenance,
       products,
       retained,
+      inputReads,
     )
 
   private final class Running(
@@ -202,6 +200,7 @@ object PluginRuntime:
       provenance: List[ProvenanceResult],
       products: PluginProducts,
       retained: Ref[Map[PluginTaskId, CommittedOutputs]],
+      inputReads: Ref.Synchronized[Set[PluginTaskId]],
   ) extends PluginRuntime:
     def committed(id: PluginTaskId): IO[PluginFault, CommittedOutputs] =
       retained.get.flatMap(found => ZIO.fromOption(found.get(id)).orElseFail(PluginFault.MissingProduct(id)))
@@ -347,6 +346,9 @@ object PluginRuntime:
         machine <- Machine
           .load(repo)
           .mapError(error => ExecutionError.Plugin(PluginFault.Compiled(histos.zinc.GraphCompileError.Runtime(error))))
+        _ <- retainInputs(
+          completed.nodes.toList.collect { case histos.build.BuildNode.Generate(task) => task }
+        ).mapError(ExecutionError.Plugin(_))
         _ <- remembered(
           id,
           id,
@@ -526,6 +528,21 @@ object PluginRuntime:
       ZIO
         .serviceWithZIO[ContentStore](_.retain(CacheProject.of(repo), manifest.contentDigests))
         .mapError(error => PluginFault.Products(ProductError.Cache(error)))
+
+    /** Plugins can extend input-consuming effects into Generation. One reader per producer protects its retained trees
+      * across promotions without accumulating readers on every invocation. Logical request paths stay unchanged.
+      */
+    private def retainInputs(ids: List[PluginTaskId]): IO[PluginFault, Unit] =
+      ZIO.scoped {
+        leases.lease.mapError(PluginFault.Task(_)) *>
+          ZIO.foreachDiscard(ids.distinct.sortBy(_.render)) { id =>
+            inputReads.updateZIO { held =>
+              if held.contains(id) then ZIO.succeed(held)
+              else
+                committed(id).flatMap(output => leases.use(output.read).mapError(PluginFault.Products(_)).as(held + id))
+            }
+          }
+      }
 
     private def invoke(
         plugin: HistosPlugin,
