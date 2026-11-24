@@ -48,8 +48,8 @@ object Program:
           process <- ZIO.acquireRelease(launch(argv, directory))(destroy)
           outDone <- Promise.make[Nothing, Unit]
           errDone <- Promise.make[Nothing, Unit]
-          _    <- readers.extend(read(process.getInputStream, outDone, ProgramEvent.Out(_), events, watch).forkScoped)
-          _    <- readers.extend(read(process.getErrorStream, errDone, ProgramEvent.Err(_), events, watch).forkScoped)
+          _ <- readers.extend(read(process.getInputStream, outDone, ProgramEvent.Out(_), events, watch).forkScoped)
+          _ <- readers.extend(read(process.getErrorStream, errDone, ProgramEvent.Err(_), events, watch).forkScoped)
           // waitFor ignores Thread.interrupt, so cancellation has to kill the process before the scope can close.
           code <- ZIO
             .attemptBlockingCancelable(process.waitFor())(destroy(process))

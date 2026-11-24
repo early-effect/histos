@@ -92,16 +92,14 @@ object ScopedIOSpec extends ZIOSpecDefault:
         .attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "owned-"))
         .mapError(error => ProbeError.Child(error.getMessage))
     )(root =>
-      ZIO
-        .attemptBlocking {
-          if Files.isDirectory(root) then
-            val entries = Files.list(root)
-            try entries.forEach(path => Files.deleteIfExists(path))
-            finally entries.close()
-          Files.deleteIfExists(root)
-          ()
-        }
-        .ignore
+      ZIO.attemptBlocking {
+        if Files.isDirectory(root) then
+          val entries = Files.list(root)
+          try entries.forEach(path => Files.deleteIfExists(path))
+          finally entries.close()
+        Files.deleteIfExists(root)
+        ()
+      }.ignore
     )
 
   private def stdout(events: Chunk[ChildEvent]): Chunk[Byte] =

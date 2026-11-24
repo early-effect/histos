@@ -176,16 +176,14 @@ object RunStreamsSpec extends ZIOSpecDefault:
     )(remove)
 
   private def remove(root: Path): UIO[Unit] =
-    ZIO
-      .attemptBlocking {
-        if Files.isDirectory(root) then
-          val entries = Files.list(root)
-          try entries.forEach(path => Files.deleteIfExists(path))
-          finally entries.close()
-        Files.deleteIfExists(root)
-        ()
-      }
-      .ignore
+    ZIO.attemptBlocking {
+      if Files.isDirectory(root) then
+        val entries = Files.list(root)
+        try entries.forEach(path => Files.deleteIfExists(path))
+        finally entries.close()
+      Files.deleteIfExists(root)
+      ()
+    }.ignore
 
   private def stdout(events: Chunk[ChildEvent]): Chunk[Byte] =
     events.foldLeft(Chunk.empty[Byte]):

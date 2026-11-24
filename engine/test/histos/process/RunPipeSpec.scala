@@ -114,7 +114,7 @@ object RunPipeSpec extends ZIOSpecDefault:
           root <- ZIO.acquireRelease(
             ZIO.attemptBlocking(Files.createTempDirectory("histos-interrupt")).orDie
           )(root => ZIO.attemptBlocking(remove(root)).orDie)
-          seen <- Promise.make[Nothing, Long]
+          seen  <- Promise.make[Nothing, Long]
           fiber <- ChildProcess
             .command(
               List("/bin/sh", "-c", "echo $$; exec sleep 30"),
@@ -163,7 +163,7 @@ object RunPipeSpec extends ZIOSpecDefault:
               Files.writeString(source, Echo)
               ()
             }.orDie
-            env <- ZIO.systemWith(_.envs).orDie
+            env   <- ZIO.systemWith(_.envs).orDie
             heard <- ChildProcess
               .command(
                 List(javac.toString, "-d", classes.toString, source.toString),
