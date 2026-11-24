@@ -97,17 +97,17 @@ private[histos] object TestCompile:
         library <- standardLibrary(main.compiled)
           .mapError(ExecutionError.Test(_))
           .provideSomeLayer(zio.ZLayer.succeed(tools))
-        host <-
-          if fetched.needsHost then
-            histos.zinc.ScalacClasspath
-              .hostApi(session.repo)
-              .mapError(error => ExecutionError.Test(ModuleTestError.Compile(error)))
-              .map(List(_))
-          else ZIO.succeed(Nil)
+        host <- histos.zinc.ScalacClasspath
+          .substituted(session.repo, module, histos.load.ApiDep.modules(session.graph))
+          .mapError(error => ExecutionError.Test(ModuleTestError.Compile(error)))
         inherited = (main.classpath ++ selected.flatMap(_.classpath)).distinct
-        basePaths = (inherited ++ library ++ fetched.paths.filterNot(path =>
+        resolved  = inherited ++ library ++ fetched.paths.filterNot(path =>
           cell.platform != Platform.Js && JvmCompile.isStandardLibrary(path)
-        ) ++ host).distinct
+        )
+        kept =
+          if host.isEmpty then resolved
+          else resolved.filterNot(path => histos.load.ApiDep.resolvedJar(path) && !host.contains(path))
+        basePaths = (kept ++ host).distinct
         paths <- extendRuntime(
           session.coverage.filter(_ => histos.coverage.Cell.measures(cell.version, cell.platform)),
           main.compiled,

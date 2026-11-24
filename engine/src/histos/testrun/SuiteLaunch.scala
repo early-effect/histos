@@ -224,8 +224,11 @@ private[testrun] object SuiteLaunch:
           cell.platform match
             case Platform.Jvm =>
               for
+                permitted <- histos.zinc.ScalacClasspath
+                  .substituted(asked.repo, target.module, histos.load.ApiDep.modules(asked.graph))
+                  .mapError(ModuleTestError.Compile(_))
                 runner <- ZIO.serviceWithZIO[ProviderInstall](
-                  _.classes(asked.repo, cell.module, cell.version, asked.jdk, paths)
+                  _.classes(asked.repo, cell.module, cell.version, asked.jdk, paths, permitted)
                 )
                 scratch  <- TestCompile.fresh(work)
                 patterns <- exact(suites.map(_.name))

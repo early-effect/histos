@@ -53,7 +53,10 @@ private[histos] object TestExecutionFixtures:
       new BuildExecution(leaves, scheduler).ensure(ExecutionRequest(session, roots))
   end Fixture
 
-  def withGraph[E, A](graph: ProjectGraph)(use: Fixture => ZIO[Env & Scope, E, A]): ZIO[
+  def withGraph[E, A](
+      graph: ProjectGraph,
+      resolve: ZLayer[Any, Nothing, Resolve] = Resolve.coursier,
+  )(use: Fixture => ZIO[Env & Scope, E, A]): ZIO[
     Any,
     E | IoFailure | ToolchainError | ResolveError | GraphCompileError,
     A,
@@ -96,5 +99,5 @@ private[histos] object TestExecutionFixtures:
           LinkerStarts.live,
         )
       yield result
-    ZIO.withSystem(System.SystemLive)(effect).provide(Resolve.coursier)
+    ZIO.withSystem(System.SystemLive)(effect).provide(resolve)
 end TestExecutionFixtures
