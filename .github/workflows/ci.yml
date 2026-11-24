@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight affected
       - id: affected
         env:
@@ -50,7 +50,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight test
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -130,7 +130,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight versions
       - run: "./histos run versions"
   compatibility:
@@ -142,7 +142,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
@@ -170,7 +170,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight scaladoc
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
@@ -214,7 +214,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight format
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -230,7 +230,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight docs
       - run: "./histos run dev.earlyeffect.specular/site"
       - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
@@ -266,7 +266,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight cache-seed
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -350,7 +350,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight workflow
       - id: app
         continue-on-error: true
@@ -381,7 +381,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
@@ -419,7 +419,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@bafb93721c3ee97aa5c992b83391bc583e9d84cb # bafb93721c3ee97aa5c992b83391bc583e9d84cb
+      - uses: early-effect/histos/.github/actions/setup@b860521d1daebdf7a770038d1c61eeff0e708ff8 # b860521d1daebdf7a770038d1c61eeff0e708ff8
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
         env:
