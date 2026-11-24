@@ -12,8 +12,8 @@ import zio.{IO, ZIO}
 /** The scalac classpath of one cell over the upstream cells [[UpstreamCells.read]] picked. Compile, BSP, and scaladoc
   * call this. Each upstream's lock jars and classes directory are its own cell's, at that cell's Scala version.
   *
-  * `paths` is the runtime library, then the lock jars, then the upstream class directories. On the JVM and on Native
-  * the lock's copy of the JVM standard library is dropped, because the compiler already puts that runtime first. A
+  * `paths` is the runtime library, then the lock jars, then the upstream class directories. Tool-owned platform
+  * libraries are dropped from dependency jars and hashes. JS compile and link supply the requested library tool cell. A
   * class directory is named even when it does not exist yet: import runs before compile. `jars` is what compile places
   * after the upstream directories. `JvmCompile` prepends the output directory and the runtime, and an upstream class
   * has to beat a lock jar.
@@ -59,11 +59,23 @@ object ScalacClasspath:
             if seen.contains(id) then (kept, seen) else (kept :+ artifact, seen + id)
       val named =
         if pin then unique._1.filterNot(artifact => histos.load.ApiDep.resolvedName(artifact.name)) else unique._1
-      val kept = if dropJvmLibrary(platform) then named.filterNot(standardLibrary) else named
+      val kept = named.filterNot(artifact => toolLibrary(artifact.organization, artifact.name, version, platform))
       Some(kept.map(_.sha256))
 
-  private def standardLibrary(artifact: LockedArtifact): Boolean =
-    artifact.name == "scala-library" || artifact.name.startsWith("scala3-library_")
+  /** Platform libraries come from the requested tool cell, never a dependency's transitive runtime. */
+  private[zinc] def toolLibrary(
+      organization: String,
+      name: String,
+      version: ScalaVersion,
+      platform: Platform,
+  ): Boolean =
+    platform match
+      case Platform.Jvm | Platform.Native =>
+        name == "scala-library" || name.startsWith("scala3-library_")
+      case Platform.Js =>
+        histos.js.JsRequests
+          .libraryRoots(version, histos.ToolCatalog.default.js.revision)
+          .exists(root => root.organization == organization && root.name == name)
 
   /** Each upstream's compile cell at its own version, then `module`'s `scope` cell at `version`. */
   private def asked(
@@ -104,11 +116,10 @@ object ScalacClasspath:
         .foreach(asked(module, upstream, version, scope)):
           case (item, itemVersion, itemScope) => load(item, itemVersion, platform, lock, repositories, itemScope)
         .map(merge)
-      kept = if dropJvmLibrary(platform) then withoutStdlib(fetched) else fetched
       runtime <- runtimeOf(module, version, platform)
       host    <- if pin then hostApi(repo).map(Some(_)) else ZIO.none
     yield
-      val mine = host.fold(kept)(pickHost(kept, _))
+      val mine = host.fold(fetched)(pickHost(fetched, _))
       val dirs = directories(repo, module, upstream, version, platform, scope)
       val jars = mine.paths
       ScalacClasspath(runtime ++ jars ++ dirs, jars, mine.hashes, host.toList)
@@ -163,24 +174,14 @@ object ScalacClasspath:
         view.module(cell)
       .mapBoth(
         GraphCompileError.Lock(_),
-        classpath => fetched(classpath),
+        classpath =>
+          fetched(
+            classpath.copy(artifacts =
+              classpath.artifacts
+                .filterNot(artifact => toolLibrary(artifact.organization, artifact.name, version, platform))
+            )
+          ),
       )
-
-  /** JVM and Native compile do not keep a resolved `scala-library`. JavaScript supplies its own through `compileWith`.
-    */
-  private def dropJvmLibrary(platform: Platform): Boolean =
-    platform match
-      case Platform.Jvm | Platform.Native => true
-      case Platform.Js                    => false
-
-  /** JVM compile prepends `JvmCompile.runtime`. Native compile does too. The lock's copy of that library stays off.
-    */
-  private def withoutStdlib(fetched: Fetched): Fetched =
-    val kept = fetched.paths
-      .zip(fetched.hashes)
-      .filterNot:
-        case (path, _) => JvmCompile.isStandardLibrary(path)
-    Fetched(kept.map(_._1), kept.map(_._2))
 
   private def merge(fetched: List[Fetched]): Fetched =
     val paired             = fetched.flatMap(item => item.paths.zip(item.hashes))

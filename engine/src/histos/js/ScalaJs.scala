@@ -7,7 +7,6 @@ import histos.zinc.{
   CompileProblem,
   CompilePulse,
   CompileRequest,
-  JsLibraryMiss,
   JvmCompile,
   ScalaSeries,
 }
@@ -26,7 +25,7 @@ import histos.resolve.{
 
 import java.nio.file.Path
 
-import zio.{IO, ZIO}
+import zio.ZIO
 
 /** Scala.js compile for the Scala 3 compiler's own backend. The library replaces `scala-library` on the user classpath.
   */
@@ -95,10 +94,17 @@ object JsRequests:
       version: ScalaVersion,
       revision: JsVersion,
       repos: Repositories,
-      catalog: ToolCatalog,
+      _catalog: ToolCatalog,
   ): ToolRequest =
+    ToolRequest(
+      ToolId(ToolRole.JsLibraries, version, ToolVariant.Js(revision)),
+      libraryRoots(version, revision),
+      repos,
+    )
+
+  private[histos] def libraryRoots(version: ScalaVersion, revision: JsVersion): List[ToolRoot] =
     val single = Transitivity.Single
-    val roots  = List(
+    List(
       ToolRoots.of(
         Dep.trusted(
           "org.scala-lang",
@@ -171,11 +177,6 @@ object JsRequests:
         single,
         None,
       ),
-    )
-    ToolRequest(
-      ToolId(ToolRole.JsLibraries, version, ToolVariant.Js(revision)),
-      roots,
-      repos,
     )
 
   def compiler(env: JsEnv, catalog: ToolCatalog): ScalaVersion = env match
