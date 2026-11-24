@@ -23,7 +23,7 @@ enum CompatibilityIncomplete:
 enum CompatibilityEvidence:
   case FirstPublication
   case Compared(previous: ShipNumber, result: CompatibilityResult)
-  case Incomplete(reason: CompatibilityIncomplete)
+  case Incomplete(reason: CompatibilityIncomplete, baseline: Option[ShipNumber])
 
 /** Collects evidence for an exact coordinate, without deciding whether the catalog covers a break. */
 final class CompatibilityVerification(
@@ -52,18 +52,23 @@ final class CompatibilityVerification(
                       .analyze(CompatibilityInput(Platform.Jvm, jar, target.classes))
                       .mapError(CompatibilityIncomplete.AnalysisFailed(_))
                       .map(CompatibilityEvidence.Compared(previous, _))
-      .fold(CompatibilityEvidence.Incomplete(_), identity)
+                  .fold(CompatibilityEvidence.Incomplete(_, Some(previous)), identity)
+      .fold(CompatibilityEvidence.Incomplete(_, None), identity)
 
 object CompatibilityVerification:
   val layer: ZLayer[ReleaseFeed & CompatibilityBaseline & CompatibilityAnalyzer, Nothing, CompatibilityVerification] =
     ZLayer.fromFunction(CompatibilityVerification(_, _, _))
 
 /** Incomplete evidence fails the complete post-compile doctor gate, rather than becoming a skipped green check. */
-final case class IncompleteCompatibility(label: String, reason: CompatibilityIncomplete) extends Diagnostic:
+final case class IncompleteCompatibility(
+    label: String,
+    reason: CompatibilityIncomplete,
+    baseline: Option[ShipNumber],
+) extends Diagnostic:
   def check   = ShipChecks.binaryId
   def level   = Level.Error
   def title   = "JVM compatibility verification is incomplete"
-  def summary = s"$label: $reason"
+  def summary = s"$label${baseline.fold("")(number => s" against ${number.render}")}: $reason"
   def explain = "Every published JVM member and Scala version needs current classes and its own released baseline."
   def fixes   = ::(
     Fix.Steps(

@@ -44,9 +44,9 @@ final class PublicationCompatibility(verification: CompatibilityVerification):
           target = CompatibilityTarget(member.name, version, MavenModule(group, id), cell.classes)
           evidence <- verification.verify(target)
         yield evidence match
-          case CompatibilityEvidence.FirstPublication   => None
-          case CompatibilityEvidence.Incomplete(reason) =>
-            Some(failure(PublicationCompatibilityOutcome.Incomplete(PublicationCompatibility.gap(reason))))
+          case CompatibilityEvidence.FirstPublication             => None
+          case CompatibilityEvidence.Incomplete(reason, baseline) =>
+            Some(failure(PublicationCompatibilityOutcome.Incomplete(PublicationCompatibility.gap(reason), baseline)))
           case CompatibilityEvidence.Compared(previous, result) =>
             BinaryCheck.difference(ship.release, result) match
               case BinaryCheck.Difference.None                                                               => None
@@ -85,7 +85,7 @@ object PublicationCompatibility:
             member.name,
             version,
             PublicationCoordinate(group, ArtifactName.module(member, version, Platform.Jvm)),
-            PublicationCompatibilityOutcome.Incomplete(gap(CompatibilityIncomplete.AnalysisFailed(error))),
+            PublicationCompatibilityOutcome.Incomplete(gap(CompatibilityIncomplete.AnalysisFailed(error)), None),
           )
         ZIO
           .serviceWithZIO[PublicationCompatibility](_.check(graph, ships, group, cells))

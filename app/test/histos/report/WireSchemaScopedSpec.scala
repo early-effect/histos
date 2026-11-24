@@ -11,7 +11,12 @@ import zio.test.*
 object WireSchemaScopedSpec extends ZIOSpecDefault:
   def spec = suite("scoped execution schemas")(
     test("recursive result schemas expose scoped failures without losing their cases") {
+      val incomplete = Schema.derived[histos.publish.PublicationCompatibilityOutcome.Incomplete].doc
+      val baseline   = incomplete match
+        case SchemaDoc.Object(_, fields, _) => fields.exists(field => field.name == "baseline" && field.optional)
+        case _                              => false
       assertTrue(
+        baseline,
         labels[ScopedTestFailure].contains("MissingGenerated"),
         labels[ModuleTestError].contains("Scoped"),
         labels[PluginFault].contains("Scoped"),

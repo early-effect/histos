@@ -113,8 +113,9 @@ object CompatibilitySpec extends ZIOSpecDefault:
           report.errors == 2,
           report.oks == 0,
           report.skipped == 0,
-          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.BaselineFailed(_)) =>
-            ()
+          report.found.collect {
+            case IncompleteCompatibility(_, CompatibilityIncomplete.BaselineFailed(_), Some(`previous`)) =>
+              ()
           }.size == 2,
         )
     },
@@ -133,7 +134,7 @@ object CompatibilitySpec extends ZIOSpecDefault:
           report.exit == 1,
           report.errors == 2,
           report.oks == 0,
-          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.ListingFailed(_)) =>
+          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.ListingFailed(_), None) =>
             ()
           }.size == 2,
         )
@@ -148,7 +149,7 @@ object CompatibilitySpec extends ZIOSpecDefault:
           report.exit == 1,
           report.errors == 2,
           report.oks == 0,
-          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.MissingCurrent(_)) =>
+          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.MissingCurrent(_), None) =>
             ()
           }.size == 2,
         )
@@ -248,6 +249,7 @@ object CompatibilitySpec extends ZIOSpecDefault:
             case IncompleteCompatibility(
                   _,
                   CompatibilityIncomplete.AnalysisFailed(CompatibilityError.AnalysisFailed(_, _)),
+                  Some(`previous`),
                 ) =>
               ()
           }.size == 2,
@@ -294,8 +296,9 @@ object CompatibilitySpec extends ZIOSpecDefault:
           report.errors == 2,
           report.oks == 0,
           report.skipped == 0,
-          report.found.collect { case IncompleteCompatibility(_, CompatibilityIncomplete.AnalysisFailed(error)) =>
-            error
+          report.found.collect {
+            case IncompleteCompatibility(_, CompatibilityIncomplete.AnalysisFailed(error), Some(`previous`)) =>
+              error
           } == List.fill(2)(CompatibilityError.InvalidBaselineEntry(jar, entry)),
         )
     },
@@ -339,6 +342,7 @@ object CompatibilitySpec extends ZIOSpecDefault:
             case IncompleteCompatibility(
                   _,
                   CompatibilityIncomplete.AnalysisFailed(CompatibilityError.MissingPrevious(_)),
+                  Some(`previous`),
                 ) =>
               ()
           }.size == 2,

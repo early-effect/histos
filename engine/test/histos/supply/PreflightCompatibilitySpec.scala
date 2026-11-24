@@ -72,8 +72,8 @@ object PreflightCompatibilitySpec extends ZIOSpecDefault:
           gated.errors == 1,
           gated.skipped == 0,
           gated.found.exists:
-            case IncompleteCompatibility(_, CompatibilityIncomplete.MissingCurrent(_)) => true
-            case _                                                                     => false
+            case IncompleteCompatibility(_, CompatibilityIncomplete.MissingCurrent(_), None) => true
+            case _                                                                           => false
           ,
           SupplyYaml.preflight(graph, "workflow").exists(_.contains("doctor --preflight workflow")),
           Workflow.compatibilitySteps(graph).exists(_.contains("compile published --platform jvm")),

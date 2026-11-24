@@ -90,7 +90,7 @@ object ShipChecks:
             ZIO.succeed(
               List(
                 Outcome.Found(
-                  IncompleteCompatibility("JVM analyzer", CompatibilityIncomplete.AnalysisFailed(error))
+                  IncompleteCompatibility("JVM analyzer", CompatibilityIncomplete.AnalysisFailed(error), None)
                 )
               )
             )
@@ -241,15 +241,15 @@ object ShipChecks:
         if targets.isEmpty then ZIO.succeed(List(Outcome.Ok(binaryId, s"${line.name.value} has no JVM member")))
         else
           ZIO.foreach(targets):
-            case Left(reason)  => ZIO.succeed(Outcome.Found(IncompleteCompatibility(line.name.value, reason)))
+            case Left(reason)  => ZIO.succeed(Outcome.Found(IncompleteCompatibility(line.name.value, reason, None)))
             case Right(target) => verification.verify(target).map(judge(line, target, _))
 
   private def judge(ship: Ship.Line, target: CompatibilityTarget, evidence: CompatibilityEvidence): Outcome =
     evidence match
       case CompatibilityEvidence.FirstPublication =>
         Outcome.Ok(binaryId, s"${target.label}: first publication, no stable baseline")
-      case CompatibilityEvidence.Incomplete(reason) =>
-        Outcome.Found(IncompleteCompatibility(target.label, reason))
+      case CompatibilityEvidence.Incomplete(reason, baseline) =>
+        Outcome.Found(IncompleteCompatibility(target.label, reason, baseline))
       case CompatibilityEvidence.Compared(previous, result) =>
         BinaryCheck.difference(ship.number, result) match
           case BinaryCheck.Difference.None =>

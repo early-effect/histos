@@ -31,7 +31,7 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
     .scm(Scm(MetadataUri("https://example.test/repo"), ScmConnection("scm:git:example.test/repo")))
 
   private enum Fixture:
-    case Broken, Unavailable, Compatible, Covered, First, MissingCurrent, SecondVersion, Initialization
+    case Broken, Unavailable, Compatible, Covered, First, MissingCurrent, SecondVersion, Initialization, Corrupt
 
   private val writeSuites =
     List(PublishWrite.Local, PublishWrite.Snapshots, PublishWrite.Release).map: write =>
@@ -88,6 +88,28 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
             case _ => false,
         )
     },
+    test("a corrupt second baseline retains its selected revision and analysis detail before any callback") {
+      boundary(PublishWrite.Local, Fixture.Corrupt, subset = true).map: (result, callbacks, _, baselines) =>
+        assertTrue(
+          callbacks.isEmpty,
+          baselines.map(_.revision) == List(firstPrevious, previous),
+          result.left.exists:
+            case LocalPublishError.Compatibility(failures) =>
+              failures.size == 1 && failures.exists(failure =>
+                failure.member == ProjectName("second") && failure.version == version &&
+                  failure.coordinate == PublicationCoordinate(organization"example.test", "second-artifact_3") &&
+                  (failure.outcome match
+                    case PublicationCompatibilityOutcome.Incomplete(
+                          PublicationCompatibilityGap.Analysis(old, current),
+                          Some(`previous`),
+                        ) =>
+                      old.endsWith(Path.of("opaque-baseline.jar")) &&
+                      current.endsWith(Path.of(".histos", "classes", "second", version.value, "jvm"))
+                    case _ => false)
+              )
+            case _ => false,
+        )
+    },
     test("early-semver minor bump covers a second-member break") {
       boundary(PublishWrite.Local, Fixture.Covered, subset = true).map: (result, callbacks, _, _) =>
         assertTrue(result.exists(_.modules.nonEmpty), callbacks == List("first-artifact_3"))
@@ -103,7 +125,8 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
               failures.map(_.member).toSet == Set(ProjectName("first"), ProjectName("second")) &&
               failures.forall(
                 _.outcome == PublicationCompatibilityOutcome.Incomplete(
-                  PublicationCompatibilityGap.AnalyzerInitialization
+                  PublicationCompatibilityGap.AnalyzerInitialization,
+                  None,
                 )
               )
             case _ => false,
@@ -119,8 +142,9 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
           result.left.exists:
             case LocalPublishError.Compatibility(failures) =>
               failures.exists(_.outcome match
-                case PublicationCompatibilityOutcome.Incomplete(PublicationCompatibilityGap.MissingCurrent(_)) => true
-                case _                                                                                         => false)
+                case PublicationCompatibilityOutcome.Incomplete(PublicationCompatibilityGap.MissingCurrent(_), None) =>
+                  true
+                case _ => false)
             case _ => false
           ,
           callbacks.isEmpty,
@@ -151,7 +175,7 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
       failures.exists(failure =>
         failure.member == ProjectName("second") && failure.version == version &&
           failure.coordinate == PublicationCoordinate(organization"example.test", "second-artifact_3") &&
-          failure.outcome == PublicationCompatibilityOutcome.Incomplete(gap)
+          failure.outcome == PublicationCompatibilityOutcome.Incomplete(gap, Some(previous))
       )
     case _ => false
 
@@ -165,9 +189,11 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
       ship =
         if fixture == Fixture.Covered then Ship("library").next(0, 16, 0)(first, member)
         else Ship("library").next(0, 15, 1)(first, member)
-      graph     <- ZIO.fromEither(definitions(ships(ship), first, member))
-      _         <- Workspace.writeString(repo.resolve("releases"), "")
-      old       <- products(repo.resolve("old"), method = true)
+      graph <- ZIO.fromEither(definitions(ships(ship), first, member))
+      _     <- Workspace.writeString(repo.resolve("releases"), "")
+      old   <- products(repo.resolve("old"), method = true)
+      corrupt = repo.resolve("opaque-baseline.jar")
+      _         <- Workspace.writeString(corrupt, "not a jar")
       calls     <- Ref.make(List.empty[String])
       requested <- Ref.make(List.empty[BuildNode])
       fetched   <- Ref.make(List.empty[BaselineCoordinate])
@@ -183,6 +209,8 @@ object PublicationCompatibilitySpec extends ZIOSpecDefault:
           fetched.update(_ :+ coordinate) *> (
             if fixture == Fixture.Unavailable && coordinate.module.artifact.value == "second-artifact_3" then
               ZIO.fail(BaselineError.MissingJar(coordinate))
+            else if fixture == Fixture.Corrupt && coordinate.module.artifact.value == "second-artifact_3" then
+              ZIO.succeed(corrupt)
             else ZIO.succeed(old)
           )
       verification =

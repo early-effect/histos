@@ -24,7 +24,7 @@ enum PublicationCompatibilityGap:
   case Analysis(previous: Path, current: Path)
 
 enum PublicationCompatibilityOutcome:
-  case Incomplete(reason: PublicationCompatibilityGap)
+  case Incomplete(reason: PublicationCompatibilityGap, baseline: Option[ShipNumber])
   case Policy(previous: ShipNumber, required: BumpPart, problems: Int)
 
 final case class PublicationCompatibilityFailure(
