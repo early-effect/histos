@@ -5,6 +5,7 @@ import histos.{
   BuildNode,
   Cell,
   CompilationStage,
+  CompileExtent,
   ContractFault,
   JsOptimize,
   PlatformSelection,
@@ -30,6 +31,7 @@ private[histos] object WireStages extends WireSupport:
   given JsonCodec[PlatformSelection] = JsonCodec.derived
   given JsonCodec[ScalaToken]        = JsonCodec.derived
   given JsonCodec[ScalaSelection]    = JsonCodec.derived
+  given JsonCodec[CompileExtent]     = JsonCodec.derived
   given JsonCodec[TextListError]     = JsonCodec.derived
   given JsonCodec[SelectionError]    = JsonCodec.derived
   given JsonCodec[TestTargets]       = JsonCodec.derived

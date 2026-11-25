@@ -1,6 +1,7 @@
 import dev.earlyeffect.specular.{Site, SiteCi, Specular}
 import histos.*
 import histos.plugin.{BuildServices, NoteKey, NoteText, PluginId, SecretName, Site as _, SitePublish}
+import histos.doctor.DoctorPlacement
 import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 import zio.*
 
@@ -178,8 +179,10 @@ object build extends HistosBuild:
         )
       )
       .supplyChain(
-        SupplyChain(updates =
-          UpdatePolicy(author = PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY")))
+        SupplyChain(
+          updates =
+            UpdatePolicy(author = PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))),
+          placement = DoctorPlacement.WorkflowJobOnly,
         )
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))

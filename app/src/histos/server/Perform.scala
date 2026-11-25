@@ -33,7 +33,7 @@ object Perform:
   /** Clean adopts generated ownership. Graph-free recovery is a local launcher fallback. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_, _, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+      case Call.Compile(_, _, _, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
           Call.PublishWithdraw | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) |
           Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) |
           Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_, _, _) | Call.PreviewTest(_, _, _, _) |
@@ -118,7 +118,7 @@ object Perform:
                 )
 
             call match
-              case Call.Compile(projects, platforms, versions) =>
+              case Call.Compile(projects, platforms, versions, sources) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -132,6 +132,7 @@ object Perform:
                         build.plugins,
                         platforms,
                         versions,
+                        sources,
                       )
                     )
                   )

@@ -98,6 +98,7 @@ enum Command:
       projects: List[ProjectName],
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
       scala: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   )
   case Clean(projects: List[ProjectName], extent: histos.server.CleanExtent)
   case Assembly(modules: List[String])
@@ -326,7 +327,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | coverage [--scala <2.13|3|version>] [--platform jvm] [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] | clean [project ...] [--full] | assembly <module> ... | publish check [--base <sha|all>] [token ...] | publish local [--base <sha|all>] [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] | preview test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | completion [install] [zsh|bash])"
+    "usage: histos (version | graph | run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | coverage [--scala <2.13|3|version>] [--platform jvm] [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--tests] | clean [project ...] [--full] | assembly <module> ... | publish check [--base <sha|all>] [token ...] | publish local [--base <sha|all>] [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] | preview test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | completion [install] [zsh|bash])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -825,10 +826,11 @@ object Cli:
       case asked: Command.Coverage =>
         ZIO.serviceWithZIO[Machine]: machine =>
           stamped.flatMap(at => cover(repo, apiJar, machine, asked, at))
-      case Command.Affected(base)                         => affected(repo, apiJar, base)
-      case Command.Watch(inner, _)                        => watch(repo, apiJar, inner)
-      case Command.Compile(projects, platforms, versions) => compile(repo, apiJar, projects, platforms, versions)
-      case Command.Clean(projects, extent)                =>
+      case Command.Affected(base)                                  => affected(repo, apiJar, base)
+      case Command.Watch(inner, _)                                 => watch(repo, apiJar, inner)
+      case Command.Compile(projects, platforms, versions, sources) =>
+        compile(repo, apiJar, projects, platforms, versions, sources)
+      case Command.Clean(projects, extent) =>
         clean(repo, apiJar, projects, extent)
       case Command.Assembly(modules)          => assembly(repo, apiJar, modules)
       case Command.PublishCheck(tokens, base) =>
@@ -1290,8 +1292,16 @@ object Cli:
       projects: List[ProjectName],
       platforms: histos.PlatformSelection,
       versions: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects, platforms, versions)), platforms, versions)
+    compileAt(
+      repo,
+      projects,
+      locally(repo, apiJar, Call.Compile(projects, platforms, versions, sources)),
+      platforms,
+      versions,
+      sources,
+    )
 
   /** `miss` is forced only when the socket is missing or dead, so a hit never builds [[compileServices]]. */
   private[histos] def compileAt[R](
@@ -1300,8 +1310,9 @@ object Cli:
       miss: => URIO[R, Completed],
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
       versions: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    val call = Call.Compile(projects, platforms, versions)
+    val call = Call.Compile(projects, platforms, versions, sources)
     LockDisposition.unapplied(call, summon[LockChoice].mode) match
       case Some(mode) =>
         ZIO.succeed(held("", CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode)))))
@@ -2728,8 +2739,8 @@ object Cli:
   /** The call a batch command sends. Other commands stay on the JVM route. */
   private[histos] def callOf(command: Command): UIO[Option[Call]] =
     command match
-      case Command.Compile(projects, platforms, versions) =>
-        ZIO.succeed(Some(Call.Compile(projects, platforms, versions)))
+      case Command.Compile(projects, platforms, versions, sources) =>
+        ZIO.succeed(Some(Call.Compile(projects, platforms, versions, sources)))
       case Command.Test(projects, affected, mode, patterns, filter, platforms, versions) =>
         ZIO.succeed(
           Some(Call.Test(AffectedChoice.selection(projects, affected, platforms, versions), patterns, mode, filter))
@@ -2812,8 +2823,10 @@ object Cli:
                       withLocal(machine)(retarget(repo, api, inner, sealedCall).flatMap(run))
                     )
                   case _ => run(sealedCall)
-      case Command.Compile(projects, platforms, versions) =>
-        dispatched(line.command)(call => compileAt(repo, projects, compileServices(repo, call), platforms, versions))
+      case Command.Compile(projects, platforms, versions, sources) =>
+        dispatched(line.command)(call =>
+          compileAt(repo, projects, compileServices(repo, call), platforms, versions, sources)
+        )
       case Command.Fmt(targets, mode) =>
         served(repo, Call.Format(targets, mode))
       case Command.Clean(projects, extent) =>

@@ -23,6 +23,7 @@ import histos.report.WireJson.given JsonCodec[Path]
 import histos.report.WireJson.given JsonCodec[histos.MainClass]
 import histos.report.WireJson.given JsonCodec[histos.PlatformSelection]
 import histos.report.WireJson.given JsonCodec[histos.ScalaSelection]
+import histos.report.WireJson.given JsonCodec[histos.CompileExtent]
 import histos.report.WireJson.given JsonCodec[histos.TestSelection]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
@@ -237,6 +238,7 @@ enum Call derives JsonCodec:
       projects: List[ProjectName],
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
       scala: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   )
   case Test(
       selection: histos.TestSelection,

@@ -234,8 +234,9 @@ object Watching:
         names: List[ProjectName],
         platforms: histos.PlatformSelection,
         versions: histos.ScalaSelection = histos.ScalaSelection.All,
+        sources: histos.CompileExtent = histos.CompileExtent.Main,
     ) =
-      BuildRuntime.compileRoots(graph, names, platforms, versions).left.map(BuildFault.Test(_))
+      BuildRuntime.compileRoots(graph, names, platforms, versions, sources).left.map(BuildFault.Test(_))
     def tests(selection: histos.TestSelection) =
       histos.testrun.TestCells
         .plan(graph, selection)
@@ -269,14 +270,14 @@ object Watching:
         PluginTaskId.parse(id).left.map(BuildFault.PluginTask(_)).map(id => List(BuildNode.Generate(id)))
       else compile(Nil, histos.PlatformSelection.All)
     call match
-      case Call.Compile(names, platforms, versions)        => compile(names, platforms, versions)
-      case Call.PreviewCompile(names, platforms, versions) => compile(names, platforms, versions)
-      case Call.Test(selection, _, _, _)                   => tests(selection)
-      case Call.PreviewTest(selection, _, _, _)            => tests(selection)
-      case Call.Run(id, platforms, _, _, main, versions)   => run(id, platforms, main, versions)
-      case Call.PreviewRun(id, platforms, main, versions)  => run(id, platforms, main, versions)
-      case Call.Task(id, _)                                => task(id)
-      case Call.Watch(inner, _)                            => nodes(graph, inner)
+      case Call.Compile(names, platforms, versions, sources) => compile(names, platforms, versions, sources)
+      case Call.PreviewCompile(names, platforms, versions)   => compile(names, platforms, versions)
+      case Call.Test(selection, _, _, _)                     => tests(selection)
+      case Call.PreviewTest(selection, _, _, _)              => tests(selection)
+      case Call.Run(id, platforms, _, _, main, versions)     => run(id, platforms, main, versions)
+      case Call.PreviewRun(id, platforms, main, versions)    => run(id, platforms, main, versions)
+      case Call.Task(id, _)                                  => task(id)
+      case Call.Watch(inner, _)                              => nodes(graph, inner)
       case other @ (Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PublishWithdraw | Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) |
@@ -310,7 +311,7 @@ object Watching:
         case Left(_)     => WatchNames.Only(Nil)
     call match
       case Call.Test(selection, _, _, _)        => testNames(graph, selection)
-      case Call.Compile(names, _, _)            => listed(names)
+      case Call.Compile(names, _, _, _)         => listed(names)
       case Call.PreviewCompile(names, _, _)     => listed(names)
       case Call.PreviewTest(selection, _, _, _) => testNames(graph, selection)
       case Call.PublishCheck(tokens, _)         => publish(graph, tokens.map(_.value))

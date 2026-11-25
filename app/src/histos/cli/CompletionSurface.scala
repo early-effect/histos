@@ -206,7 +206,12 @@ object CompletionSurface:
     Node("help", sentence("help"), args = List(Pos(Slot.Free, many = true, name = "topic"))),
     Node("graph", sentence("graph")),
     Node("observe", sentence("observe")),
-    Node("compile", sentence("compile"), flags = List(platformFlag, scalaFlag), args = List(projects)),
+    Node(
+      "compile",
+      sentence("compile"),
+      flags = List(platformFlag, scalaFlag, Flag("--tests", "Compile test sources too")),
+      args = List(projects),
+    ),
     run,
     Node(
       "clean",

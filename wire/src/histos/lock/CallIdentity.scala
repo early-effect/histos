@@ -2,7 +2,7 @@ package histos.lock
 
 import histos.plugin.{CommandIdentity, CommandToken, PluginTaskId, ResolveVerb}
 import histos.server.{Call, CatalogQuery, ResolveAction}
-import histos.{PlatformSelection, ScalaSelection, TestSelection, TestTargets}
+import histos.{CompileExtent, PlatformSelection, ScalaSelection, TestSelection, TestTargets}
 import histos.report.WireJson.given
 import zio.json.*
 
@@ -10,7 +10,7 @@ import zio.json.*
 object CallIdentity:
   def identity(call: Call): CommandIdentity =
     call match
-      case Call.Compile(projects, platforms, versions)    => CommandIdentity.Compile(projects, platforms, versions)
+      case Call.Compile(projects, platforms, versions, _) => CommandIdentity.Compile(projects, platforms, versions)
       case Call.Test(selection, _, _, _)                  => CommandIdentity.Test(selection)
       case Call.Resolve(ResolveAction.Verify)             => CommandIdentity.Resolve(ResolveVerb.Verify)
       case Call.Resolve(ResolveAction.Update)             => CommandIdentity.Resolve(ResolveVerb.Update)
@@ -51,8 +51,11 @@ object CallIdentity:
 
   def words(call: Call): List[String] =
     call match
-      case Call.Compile(projects, selection, versions) =>
-        "compile" :: (projects.map(_.value) ++ platforms(selection) ++ scalas(versions))
+      case Call.Compile(projects, selection, versions, sources) =>
+        val tests = sources match
+          case CompileExtent.Main        => Nil
+          case CompileExtent.MainAndTest => List("--tests")
+        "compile" :: (projects.map(_.value) ++ platforms(selection) ++ scalas(versions) ++ tests)
       case Call.Test(selection, _, _, _)                  => "test" :: testWords(selection)
       case Call.Resolve(ResolveAction.Verify)             => List("resolve")
       case Call.Resolve(ResolveAction.Update)             => List("resolve", "--update")

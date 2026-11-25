@@ -128,6 +128,7 @@ object HistosMcp:
       truecolor: Option[Boolean] = None,
       platform: List[String] = Nil,
       scala: List[String] = Nil,
+      tests: Boolean = false,
   ) derives Schema,
         JsonCodec
   final case class TestArgs(
@@ -325,11 +326,12 @@ object HistosMcp:
       )
       compiling <- stopped.tool[CompileArgs](
         Names.compile,
-        "Compile modules. An empty list compiles every module. An aggregate name compiles its modules. platform is jvm, js, or native. scala is 2.13, 3, or a full version. Empty lists keep every declared platform and version.",
+        "Compile modules. An empty list compiles every module. An aggregate name compiles its modules. platform is jvm, js, or native. scala is 2.13, 3, or a full version. Empty lists keep every declared platform and version. tests compiles test sources as well as main and does not run suites.",
       )(args =>
         depthOf(args.color, args.truecolor).flatMap { depth =>
-          ZIO.fromEither(compileCall(args.projects, args.platform, args.scala)).mapError(refused).flatMap { call =>
-            Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
+          ZIO.fromEither(compileCall(args.projects, args.platform, args.scala, args.tests)).mapError(refused).flatMap {
+            call =>
+              Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
           }
         }
       )
@@ -497,12 +499,18 @@ object HistosMcp:
       projects: List[String],
       platforms: List[String] = Nil,
       versions: List[String] = Nil,
+      tests: Boolean = false,
   ): Either[Rejection, Call] =
     for
       found    <- names(projects)
       selected <- manyPlatforms(platforms)
       asked    <- manyScalas(versions)
-    yield Call.Compile(found, selected, asked)
+    yield Call.Compile(
+      found,
+      selected,
+      asked,
+      if tests then histos.CompileExtent.MainAndTest else histos.CompileExtent.Main,
+    )
 
   def testCall(
       projects: List[String],

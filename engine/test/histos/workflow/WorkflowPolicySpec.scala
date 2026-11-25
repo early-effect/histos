@@ -65,11 +65,12 @@ object WorkflowPolicySpec extends HistosSpec:
           .map(_.mkString("\n"))
         assertTrue(
           blocks.exists(body =>
-            body.contains("github.event_name == 'pull_request'") && body.contains("./histos run site/site")
+            body.contains("github.event_name == 'pull_request'") && body.contains("./histos run site/site") &&
+              body.contains("needs: [format, compile]") && body.contains("actions/cache/restore@")
           ),
           blocks.exists(body =>
             body.contains(
-              "needs: [docs, affected, workflow, supply-chain, test, versions, compatibility, scaladoc, format"
+              "needs: [docs, affected, compile, workflow, supply-chain, test, versions, compatibility, scaladoc, format"
             ) && body.contains("github.event_name == 'push'") && body.contains("needs.*.result") && body.contains(
               "actions/deploy-pages"
             ) && body.contains("browser-check")

@@ -201,13 +201,14 @@ object JobYaml:
     val grants =
       if upload then job.permissions.copy(grants = job.permissions.grants + Grant.ActionsWrite)
       else job.permissions
+    val needs = (Workflow.compileGate(graph).map(histos.plugin.JobName.trusted) ++ job.needs).distinct
     stepJob(
       graph,
       plugin,
       job.name,
       job.task,
       grants,
-      job.needs,
+      needs,
       Cond.AnyOf(List(Cond.Event(EventKind.PullRequest), Cond.DefaultBranchPush, Cond.Event(EventKind.Dispatch))),
       job.needsPolicy,
       job.runner,
@@ -218,6 +219,7 @@ object JobYaml:
       job.concurrency,
       upload = if upload then Some(job.site.dir.value) else None,
       matrix = Nil,
+      store = Workflow.compiles(graph),
     )
 
   private def stepJob(
@@ -237,6 +239,7 @@ object JobYaml:
       concurrency: Option[histos.plugin.Concurrency],
       upload: Option[String],
       matrix: List[Target],
+      store: Boolean = false,
   )(using RenderingShip): List[String] =
     val thirdParty = pre.nonEmpty
     val keys       = matrix.flatMap(_.env.map(_._1)).distinct
@@ -257,6 +260,7 @@ object JobYaml:
       CiInstall.steps(graph) ++
       SupplyYaml.preflight(graph, name.value) ++
       pre.flatMap(action => actionStep(graph.ci, action)) ++
+      (if store then Workflow.storeRestore else Nil) ++
       List(s"      - run: ${quote(runOf(plugin, task))}") ++
       upload.toList.flatMap(uploadStep)
 

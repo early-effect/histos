@@ -46,8 +46,8 @@ object Help:
     Entry(
       "compile",
       "build",
-      "histos compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>]",
-      "Compile the named projects, or every module. Repeat --platform or --scala, or use a comma list. --scala takes a series (2.13 or 3) or a full version. Named modules refuse a token that matches nothing and a series that matches two versions. Whole-build selection keeps every matching cell. Omission is every declared version. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--tests]",
+      "Compile the named projects, or every module. Repeat --platform or --scala, or use a comma list. --scala takes a series (2.13 or 3) or a full version. Named modules refuse a token that matches nothing and a series that matches two versions. Whole-build selection keeps every matching cell. Omission is every declared version. --tests also compiles test sources and does not run suites or link. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "run",

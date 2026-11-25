@@ -75,7 +75,8 @@ compilation prerequisites. `--platform jvm,js` or repeated `--platform` flags se
 platforms. `--scala 2.13`, `--scala 3`, or a full version such as `--scala 3.8.1`
 selects Scala versions the same way. Whole-build selection keeps matching cells;
 named modules refuse a platform or a Scala token they do not support, and a series
-that matches two versions. `--verbose` prints each compiler phase.
+that matches two versions. `--tests` also compiles test sources. It does not run
+suites and it does not link. `--verbose` prints each compiler phase.
 """,
       cite[histos.ScalaSelection]((asked, module: histos.ProjectName) => asked.require(module, _)),
     ),
@@ -146,7 +147,8 @@ Open task's effects must rerun.
       md"""
 `histos fmt` formats sources with the scalafmt version the build locked. Name projects,
 or pass `--file <path>` for specific files. `--check` reports what would change and
-writes nothing, which is what CI runs.
+writes nothing. CI runs `scala-cli fmt --check` before it installs a toolchain, using
+the same `.scalafmt.conf`.
 """
     ),
     section("assembly")(

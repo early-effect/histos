@@ -1178,6 +1178,7 @@ object Calls:
       plugins: histos.load.PluginRuntime,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
       versions: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   ): ZIO[
     Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
@@ -1188,7 +1189,9 @@ object Calls:
         val compile = ZIO
           .scoped {
             for
-              roots   <- ZIO.fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms, versions))
+              roots <- ZIO.fromEither(
+                histos.build.BuildRuntime.compileRoots(graph, projects, platforms, versions, sources)
+              )
               lock    <- ZIO.serviceWithZIO[histos.resolve.ResolutionService](_.current)
               runtime <- histos.build.BuildRuntime.open(
                 Some(plugins),

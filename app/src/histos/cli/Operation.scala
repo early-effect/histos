@@ -80,8 +80,9 @@ object Operation:
         Right(Call.Test(AffectedChoice.selection(projects, affected, platforms, versions), patterns, mode, filter))
       case Command.Affected(_) =>
         Left(CliParseError.Rejected)
-      case Command.Compile(projects, platforms, versions) => Right(Call.Compile(projects, platforms, versions))
-      case Command.Clean(projects, extent)                =>
+      case Command.Compile(projects, platforms, versions, sources) =>
+        Right(Call.Compile(projects, platforms, versions, sources))
+      case Command.Clean(projects, extent) =>
         if extent == CleanExtent.Full && projects.nonEmpty then
           Left(CliParseError.Pattern("clean --full does not take a project"))
         else Right(Call.Clean(projects, extent))

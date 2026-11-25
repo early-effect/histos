@@ -12,7 +12,7 @@ final case class LockChoice(mode: Option[LockMode])
 object LockGrammar:
   def subject(command: Command): DispositionSubject =
     command match
-      case Command.Compile(_, _, _) | Command.Test(_, _, _, _, _, _, _) | Command.Run(_, _, _, _, _) |
+      case Command.Compile(_, _, _, _) | Command.Test(_, _, _, _, _, _, _) | Command.Run(_, _, _, _, _) |
           Command.Plugin(_, _) | Command.PublishCheck(_, _) | Command.PublishLocal(_, _) | Command.PublishSnapshots(_) |
           Command.PublishRelease(_, _) | Command.Assembly(_) | Command.PreviewCompile(_, _, _) |
           Command.PreviewTest(_, _, _, _, _, _, _) | Command.PreviewPublishLocal(_) |

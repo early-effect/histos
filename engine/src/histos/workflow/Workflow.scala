@@ -384,10 +384,11 @@ object Workflow:
     val format = graph.formatting match
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(formatJob(graph))
-    val seed   = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
-    val verify = verification.map((task, cells) => verifyJob(graph, task, cells))
-    val body   =
-      List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ format ++ verify ++ planned.ci ++
+    val compile = if compiles(graph) then List(compileJob(graph)) else Nil
+    val seed    = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
+    val verify  = verification.map((task, cells) => verifyJob(graph, task, cells))
+    val body    =
+      format ++ List(affectedJob(graph)) ++ compile ++ test ++ versions ++ doc ++ coverage ++ verify ++ planned.ci ++
         seed ++ List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -1036,8 +1037,8 @@ object Workflow:
     val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole, NpmInstall.Off)
     (List(
       "  cache-seed:"
-    ) ++ afterAffected(Nil) ++ List(
-      s"    if: ${quote(OnDefaultPush)}",
+    ) ++ afterCompile(graph) ++ List(
+      s"    if: ${quote(s"($OnDefaultPush) && ($NoneFailed)")}",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
@@ -1058,27 +1059,25 @@ object Workflow:
     val install   = npmInstall(jobs, graph, lock, scope)
     val prepare   = steps(graph.runnerTools, graph.resolution, any, scope, install)
     val columns   = if matrix && any.any then ToolColumns.On else ToolColumns.Off
-    val depends   = "    needs: affected"
     val installed = coursierCli(graph, "test")
     jobs match
       case aggregate :: Nil =>
         List(
           "  test:"
-        ) ++ List(depends) ++ verifyNeeds ++ List(
+        ) ++ afterCompile(graph) ++ verifyNeeds ++ List(
           s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:",
-          "      actions: write",
           "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ installed ++ prepare ++ storeRestore ++ testRun(
           shellArgv(argv(aggregate))
-        ) ++ storeSave
+        )
       case _ =>
         List(
           "  test:"
-        ) ++ List(depends) ++ verifyNeeds ++ List(
+        ) ++ afterCompile(graph) ++ verifyNeeds ++ List(
           s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:",
@@ -1090,7 +1089,7 @@ object Workflow:
         ) ++ jobs.flatMap(job => include(job, graph, columns, install)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ installed ++ prepare ++ testRun("${{ matrix.command }}")
+        ) ++ installed ++ prepare ++ storeRestore ++ testRun("${{ matrix.command }}")
 
   private def include(
       job: TestJob,
@@ -1195,8 +1194,8 @@ object Workflow:
   /** Restore, then the work, then save. The work writes new products into the restored store. A taken key is deleted
     * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
     * restore hit, because a miss has no key to replace. A matrix is more than one writer, so it does not open this
-    * scope. The single test job restores and saves. The doc check restores and does not save. Format, versions, plugin
-    * docs, deploy, workflow, and release do not either.
+    * scope. The compile job restores and saves. Test, scaladoc, coverage, compatibility, and a site job restore and do
+    * not save. Format, versions, deploy, workflow, and release do not either.
     */
   private val StorePath = "~/.cache/histos"
 
@@ -1209,7 +1208,7 @@ object Workflow:
       "${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}"
     s"histos-store-$namespace-$${{ runner.os }}-$${{ runner.arch }}"
 
-  private def storeRestore: List[String] =
+  private[workflow] def storeRestore: List[String] =
     List(
       s"      - uses: $StoreRestore",
       "        id: store",
@@ -1330,7 +1329,7 @@ object Workflow:
     )
     val lines = List(
       "  scaladoc:"
-    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
+    ) ++ afterCompile(graph) ++ verifyNeeds ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
@@ -1357,7 +1356,7 @@ object Workflow:
       )
     val lines = List(
       "  coverage:"
-    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
+    ) ++ afterCompile(graph) ++ verifyNeeds ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:"
@@ -1370,28 +1369,80 @@ object Workflow:
     )
     lines.mkString("\n")
 
-  /** Beside the suite. It does not wait for the suite, and it compiles nothing, so it restores no store. */
+  /** No toolchain and no `needs`. Compile's condition refuses a failed format, so the compile does not start. */
   private def formatJob(graph: ProjectGraph)(using RenderingShip): String =
-    val prepare =
-      steps(
-        graph.runnerTools,
-        graph.resolution,
-        ToolNeed(Set.empty),
-        MatrixScope.Whole,
-        NpmInstall.Off,
-      )
     (List(
       "  format:"
-    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "format") ++ prepare ++ List(
-      s"      - run: ${quote("./histos fmt --check")}"
-    )).mkString("\n")
+    ) ++ script(scalaCliCheck(graph))).mkString("\n")
+
+  private val ScalaCliRelease = "1.14.0"
+
+  private val ScalaCliX64 =
+    "7a55547894ecbc9cbf8682c5b2eb3680df0a305dc490e80a491ab873601baaa7"
+
+  private val ScalaCliArm =
+    "cccd7f0226118c5ee84435d5760c58c12c08972f15f70c528592cb638d83c5ee"
+
+  /** `scala-cli fmt` reads `.scalafmt.conf`, including a configuration that is not at the repository root. */
+  private def scalaCliCheck(graph: ProjectGraph): String =
+    val conf = graph.formatting match
+      case Formatting.Scalafmt(histos.ScalafmtConf.At(path)) => s" --scalafmt-conf ${path.value}"
+      case Formatting.Scalafmt(histos.ScalafmtConf.Root)     => ""
+      case Formatting.Off                                    => ""
+    s"""set -euo pipefail
+       |case "$${{ runner.arch }}" in
+       |  X64) asset=scala-cli-x86_64-pc-linux; expected=$ScalaCliX64 ;;
+       |  ARM64) asset=scala-cli-aarch64-pc-linux; expected=$ScalaCliArm ;;
+       |  *) echo "scala-cli has no binary for $${{ runner.arch }}" >&2; exit 1 ;;
+       |esac
+       |dir="$${{ runner.temp }}/scala-cli"
+       |mkdir -p "$$dir"
+       |url="https://github.com/VirtusLab/scala-cli/releases/download/v$ScalaCliRelease/$$asset.gz"
+       |curl -fsSL "$$url" -o "$$dir/scala-cli.gz"
+       |got=$$(openssl dgst -sha256 "$$dir/scala-cli.gz" | awk '{print $$NF}')
+       |[ "$$got" = "$$expected" ] || { echo "scala-cli checksum mismatch" >&2; exit 1; }
+       |gzip -dc "$$dir/scala-cli.gz" > "$$dir/scala-cli"
+       |chmod +x "$$dir/scala-cli"
+       |"$$dir/scala-cli" fmt --check$conf .""".stripMargin
+
+  /** Every module, main and test. The saved store is what test, docs, scaladoc, coverage, and compatibility restore. */
+  private def compileJob(graph: ProjectGraph)(using RenderingShip): String =
+    val modules = graph.projects.collect { case module: Module => module }
+    val stages  = modules.flatMap: module =>
+      module.versions.all.flatMap: version =>
+        module.platforms.all.map: platform =>
+          histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)
+    val prepare = steps(
+      graph.runnerTools,
+      graph.resolution,
+      toolNeed(graph, stages, graph.runnerTools),
+      MatrixScope.Whole,
+      NpmInstall.Off,
+    )
+    val format = graph.formatting match
+      case Formatting.Off         => Nil
+      case Formatting.Scalafmt(_) => List("format")
+    (List(
+      s"  $compileJobName:"
+    ) ++ afterAffected(format) ++ verifyNeeds ++ List(
+      s"    runs-on: $Runner"
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:",
+      "      actions: write",
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli(graph, compileJobName) ++ prepare ++ storeRestore ++ cacheWrite(
+      cacheNamespace,
+      "./histos compile --tests",
+    ) ++ storeSave).mkString("\n")
 
   /** The required check. It runs on a pull request and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph)(using RenderingShip): String =
@@ -1429,21 +1480,23 @@ object Workflow:
     val coverage = graph.coverage match
       case CoverageJob.Off    => Nil
       case CoverageJob.Ask(_) => List("coverage")
+    val compiled = if compiles(graph) then List(compileJobName) else Nil
     List(
-      "affected",
+      "affected"
+    ) ++ compiled ++ List(
       "workflow",
       graph.supply.checkName.value,
     ) ++ suite ++ catalog ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
 
   private def compatibilityJob(graph: ProjectGraph)(using RenderingShip): String =
-    (List("  compatibility:") ++ verifyIf ++ afterAffected(Nil) ++ List(
+    (List("  compatibility:") ++ afterCompile(graph) ++ verifyNeeds ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ proofStep(
+    ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ storeRestore ++ proofStep(
       """./histos publish check --base "$base""""
     )).mkString("\n")
 
@@ -1466,6 +1519,27 @@ object Workflow:
   private def afterAffected(extra: List[String]): List[String] =
     val names = "affected" :: extra
     List(s"    needs: [${names.mkString(", ")}]")
+
+  /** Compile has saved the store. Format is a need when this graph checks it, so a format failure is a failure these
+    * jobs can see. A custom `if` would otherwise start them after a skipped compile.
+    */
+  private def afterCompile(graph: ProjectGraph): List[String] =
+    afterAffected(compileGate(graph))
+
+  /** Format, then compile. Empty when this graph has neither. */
+  private[workflow] def compileGate(graph: ProjectGraph): List[String] =
+    val format = graph.formatting match
+      case Formatting.Off         => Nil
+      case Formatting.Scalafmt(_) => List("format")
+    val compiled = if compiles(graph) then List(compileJobName) else Nil
+    format ++ compiled
+
+  private[workflow] val compileJobName = "compile"
+
+  private[workflow] def compiles(graph: ProjectGraph): Boolean =
+    graph.projects.exists:
+      case _: Module    => true
+      case _: Aggregate => false
 
   private def verifyJob(graph: ProjectGraph, task: VerifyTask, cells: Option[histos.testrun.TestCellPlan])(using
       RenderingShip

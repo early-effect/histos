@@ -1,7 +1,9 @@
 package histos.workflow
 
+import histos.doctor.DoctorPlacement
 import histos.plugin.{JobName, TaskName}
 import histos.suite.HistosSpec
+import histos.supply.SupplyChain
 import histos.{
   Axis,
   BuildError,
@@ -137,14 +139,14 @@ object VerifyJobSpec extends HistosSpec:
           slice(body, "workflow").contains("needs: [affected]") &&
           slice(body, "supply-chain").contains("needs: [affected]") &&
           slice(body, "dependency-snapshot").contains("needs: [affected]") &&
-          slice(body, "cache-seed").contains("needs: [affected]")
+          slice(body, "cache-seed").contains("needs: [affected, compile]")
         } == Right(true)
       )
     },
     test("a pin with no verify task keeps today's test job") {
       val text = render(Projects(api), NpmLock.Absent)
       assertTrue(
-        text.map(_.contains("    needs: affected")) == Right(true),
+        text.map(_.contains("    needs: [affected, compile]")) == Right(true),
         text.map(_.contains(Setup)) == Right(true),
         text.map(_.contains("publish:")) == Right(false),
         text.map(_.contains("install/histos toolchain install")) == Right(false),
@@ -157,8 +159,45 @@ object VerifyJobSpec extends HistosSpec:
       )
       assertTrue(text.exists: body =>
         !body.contains("\n  publish:\n") && !body.contains("\n  client:\n") && !body.contains("name: host") &&
-          slice(body, "test").contains(Setup) && slice(body, "test").contains("    needs: affected") &&
+          slice(body, "test").contains(Setup) &&
+          slice(body, "test").contains("    needs: [affected, format, compile]") &&
           slice(body, "compatibility").contains("./histos publish check"))
+    },
+    test("format fails before compile and compile saves the store later jobs restore") {
+      val text = render(
+        Projects.docCheck.scalafmt(ships(Ship("libs").next(0, 1, 0)(api)), api),
+        NpmLock.Absent,
+      )
+      assertTrue(text.exists: body =>
+        val format  = slice(body, "format")
+        val compile = slice(body, "compile")
+        val suite   = slice(body, "test")
+        val doc     = slice(body, "scaladoc")
+        val seed    = slice(body, "cache-seed")
+        !format.contains("needs:") && format.contains("scala-cli") && format.contains("fmt --check .") &&
+        format.contains("v1.14.0") &&
+        format.contains("7a55547894ecbc9cbf8682c5b2eb3680df0a305dc490e80a491ab873601baaa7") &&
+        !format.contains("./histos") && !format.contains("doctor") &&
+        compile.contains("needs: [affected, format]") && compile.contains("needs.*.result") &&
+        compile.contains("./histos compile --tests") && compile.contains("actions/cache/save@") &&
+        compile.contains("actions: write") && !compile.contains("npm ci") &&
+        suite.contains("needs: [affected, format, compile]") && suite.contains("actions/cache/restore@") &&
+        !suite.contains("actions/cache/save@") && !suite.contains("actions: write") &&
+        doc.contains("needs: [affected, format, compile]") && doc.contains("actions/cache/restore@") &&
+        doc.contains("needs.*.result") &&
+        seed.contains("needs: [affected, format, compile]") && seed.contains("needs.*.result"))
+    },
+    test("a workflow-only doctor drops preflight and keeps the supply-chain doctor") {
+      val text = render(
+        Projects.testLog.supplyChain(SupplyChain(placement = DoctorPlacement.WorkflowJobOnly))(api),
+        NpmLock.Absent,
+      )
+      assertTrue(text.exists: body =>
+        val supply = slice(body, "supply-chain")
+        !slice(body, "test").contains("--preflight") && !slice(body, "affected").contains("--preflight") &&
+        !slice(body, "compile").contains("--preflight") && !supply.contains("--preflight") &&
+        supply.contains("./histos doctor") && supply.contains("./histos workflow --check") &&
+        supply.contains("./histos deps audit"))
     },
     test("a pin verify task runs on the setup action and does not publish") {
       val task = VerifyTask(JobName("client"), host, ClientLink.Skip)
@@ -233,6 +272,7 @@ object VerifyJobSpec extends HistosSpec:
           val seed  = slice(body, "cache-seed")
           val doc   = slice(body, "scaladoc")
           suite.contains("npm ci") && !seed.contains("npm ci") && !doc.contains("npm ci") &&
+          !slice(body, "compile").contains("npm ci") && slice(body, "compile").contains("setup-node") &&
           seed.contains("setup-node") && doc.contains("setup-node")
         } == Right(true)
       )

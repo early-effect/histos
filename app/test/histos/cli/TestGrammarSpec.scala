@@ -213,6 +213,21 @@ object TestGrammarSpec extends HistosSpec:
         ),
       )
     },
+    test("compile --tests compiles test sources and other commands refuse it") {
+      for
+        compiled <- Grammar.parse(List("compile", "core", "--tests")).either
+        repeated <- Grammar.parse(List("compile", "--tests", "--tests")).either
+        refused  <- Grammar.parse(List("run", "app", "--tests")).either
+        preview  <- Grammar.parse(List("preview", "compile", "--tests")).either
+      yield assertTrue(
+        compiled == Right(
+          Command.Compile(List(ProjectName("core")), sources = histos.CompileExtent.MainAndTest)
+        ),
+        repeated == Left(CliParseError.Pattern("compile --tests is already set")),
+        refused == Left(CliParseError.Pattern("only compile takes --tests")),
+        preview == Left(CliParseError.Pattern("only compile takes --tests")),
+      )
+    },
     test("delimited and repeated list syntax obey the same law") {
       check(Gen.listOfBounded(1, 8)(Gen.elements("one", "two", "three"))): entries =>
         for

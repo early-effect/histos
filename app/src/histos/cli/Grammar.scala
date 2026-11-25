@@ -580,6 +580,7 @@ object Grammar:
       platforms: Option[histos.PlatformSelection] = None,
       main: Option[histos.MainClass] = None,
       versions: Option[histos.ScalaSelection] = None,
+      tests: Boolean = false,
   )
 
   private def prepared(args: List[String]): IO[CliParseError, Prepared] =
@@ -589,6 +590,7 @@ object Grammar:
           platforms = selected.platforms.orElse(coverage.platforms),
           main = selected.main.orElse(coverage.main),
           versions = selected.versions.orElse(coverage.versions),
+          tests = selected.tests,
         ))
 
   private def splitSelection(args: List[String]): Either[CliParseError, Prepared] =
@@ -599,12 +601,16 @@ object Grammar:
     val running = args match
       case "run" :: _ | "preview" :: "run" :: _ => true
       case _                                    => false
+    val compiling = args match
+      case "compile" :: _ => true
+      case _              => false
     def loop(
         rest: List[String],
         kept: List[String],
         platforms: List[String],
         versions: List[String],
         main: Option[histos.MainClass],
+        tests: Boolean,
     ): Either[CliParseError, Prepared] =
       rest match
         case Nil =>
@@ -625,11 +631,15 @@ object Grammar:
               case Some(histos.ScalaSelection.Only(first, more)) if running && more.nonEmpty =>
                 Left(CliParseError.Selection(histos.SelectionError.RunScalaMany(first :: more)))
               case _ => Right(())
-          yield Prepared(kept.reverse, Nil, Nil, chosen, main, scalas)
-        case "--platform" :: Nil                  => Left(CliParseError.Selection(histos.SelectionError.Empty))
-        case "--platform" :: value :: tail        => loop(tail, kept, value :: platforms, versions, main)
-        case "--scala" :: Nil                     => Left(CliParseError.Pattern("--scala needs a Scala version"))
-        case "--scala" :: value :: tail           => loop(tail, kept, platforms, value :: versions, main)
+          yield Prepared(kept.reverse, Nil, Nil, chosen, main, scalas, tests)
+        case "--platform" :: Nil            => Left(CliParseError.Selection(histos.SelectionError.Empty))
+        case "--platform" :: value :: tail  => loop(tail, kept, value :: platforms, versions, main, tests)
+        case "--scala" :: Nil               => Left(CliParseError.Pattern("--scala needs a Scala version"))
+        case "--scala" :: value :: tail     => loop(tail, kept, platforms, value :: versions, main, tests)
+        case "--tests" :: tail if compiling =>
+          if tests then Left(CliParseError.Pattern("compile --tests is already set"))
+          else loop(tail, kept, platforms, versions, main, true)
+        case "--tests" :: _                       => Left(CliParseError.Pattern("only compile takes --tests"))
         case "--main" :: Nil                      => Left(CliParseError.MainClass(histos.MainClassError.Empty))
         case "--main" :: value :: tail if running =>
           if main.isDefined then Left(CliParseError.Pattern("run --main is already set"))
@@ -638,15 +648,17 @@ object Grammar:
               .from(value)
               .left
               .map(CliParseError.MainClass(_))
-              .flatMap(found => loop(tail, kept, platforms, versions, Some(found)))
-        case token :: tail => loop(tail, token :: kept, platforms, versions, main)
-    if surface then loop(args, Nil, Nil, Nil, None) else Right(Prepared(args, Nil, Nil))
+              .flatMap(found => loop(tail, kept, platforms, versions, Some(found), tests))
+        case token :: tail => loop(tail, token :: kept, platforms, versions, main, tests)
+    if surface then loop(args, Nil, Nil, Nil, None, false) else Right(Prepared(args, Nil, Nil))
 
   private def withSelection(command: Command, ready: Prepared): IO[CliParseError, Command] =
     val platforms = ready.platforms.getOrElse(histos.PlatformSelection.All)
     val versions  = ready.versions.getOrElse(histos.ScalaSelection.All)
     command match
-      case found: Command.Compile        => ZIO.succeed(found.copy(platforms = platforms, scala = versions))
+      case found: Command.Compile =>
+        val sources = if ready.tests then histos.CompileExtent.MainAndTest else histos.CompileExtent.Main
+        ZIO.succeed(found.copy(platforms = platforms, scala = versions, sources = sources))
       case found: Command.PreviewCompile => ZIO.succeed(found.copy(platforms = platforms, scala = versions))
       case found: Command.Test           => ZIO.succeed(found)
       case found: Command.PreviewTest    => ZIO.succeed(found)
