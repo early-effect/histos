@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: early-effect/histos/.github/actions/setup@9b1ce3a73530cdfaf9017f482534a5fec02e5fdc # 9b1ce3a73530cdfaf9017f482534a5fec02e5fdc
+      - uses: early-effect/histos/.github/actions/setup@b65036079473fa28b23a2fb42601e51452526f24 # b65036079473fa28b23a2fb42601e51452526f24
       - id: authorized
         env:
           GH_TOKEN: ${{ github.token }}
