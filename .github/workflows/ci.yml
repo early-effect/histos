@@ -9,6 +9,30 @@ on:
 permissions:
   contents: read
 jobs:
+  format:
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          set -euo pipefail
+          case "${{ runner.arch }}" in
+            X64) asset=scala-cli-x86_64-pc-linux; expected=7a55547894ecbc9cbf8682c5b2eb3680df0a305dc490e80a491ab873601baaa7 ;;
+            ARM64) asset=scala-cli-aarch64-pc-linux; expected=cccd7f0226118c5ee84435d5760c58c12c08972f15f70c528592cb638d83c5ee ;;
+            *) echo "scala-cli has no binary for ${{ runner.arch }}" >&2; exit 1 ;;
+          esac
+          dir="${{ runner.temp }}/scala-cli"
+          mkdir -p "$dir"
+          url="https://github.com/VirtusLab/scala-cli/releases/download/v1.14.0/$asset.gz"
+          curl -fsSL "$url" -o "$dir/scala-cli.gz"
+          got=$(openssl dgst -sha256 "$dir/scala-cli.gz" | awk '{print $NF}')
+          [ "$got" = "$expected" ] || { echo "scala-cli checksum mismatch" >&2; exit 1; }
+          gzip -dc "$dir/scala-cli.gz" > "$dir/scala-cli"
+          chmod +x "$dir/scala-cli"
+          "$dir/scala-cli" fmt --check .
   affected:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -22,8 +46,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight affected
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - id: affected
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,8 +63,8 @@ jobs:
           fi
           modules=$(./histos affected --base "$base" || echo '["all"]')
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
-  test:
-    needs: affected
+  compile:
+    needs: [affected, format]
     if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -50,8 +73,69 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight test
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "25"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llvm
+        with:
+          path: "${{ runner.temp }}/llvm"
+          key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            expected="b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ -n "$LD_LIBRARY_PATH" ]; then
+            echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos compile --tests"
+        env:
+          HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
+          HISTOS_CACHE_MODE: "write"
+      - if: "always()"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORE_KEY: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+        run: |
+          if [ "${{ steps.store.outputs.cache-hit }}" = "true" ]; then
+            gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
+          fi
+      - if: "always()"
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+  test:
+    needs: [affected, format, compile]
+    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (!cancelled() && !contains(needs.*.result, 'failure'))"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "25"
@@ -108,19 +192,6 @@ jobs:
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
           HISTOS_CACHE_MODE: "write"
-      - if: "always()"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STORE_KEY: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
-        run: |
-          if [ "${{ steps.store.outputs.cache-hit }}" = "true" ]; then
-            gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
-          fi
-      - if: "always()"
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: "~/.cache/histos"
-          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   versions:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
     needs: [affected]
@@ -130,23 +201,27 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight versions
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - run: "./histos run versions"
   compatibility:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
-    needs: [affected]
+    needs: [affected, format, compile]
+    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: |
           base=all
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -162,16 +237,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
   scaladoc:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
-    needs: [affected]
+    needs: [affected, format, compile]
+    if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight scaladoc
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
@@ -205,24 +279,9 @@ jobs:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos run doc"
-  format:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
-    needs: [affected]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight format
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: "~/.cache/coursier/v1"
-          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
-      - run: "./histos fmt --check"
   docs:
-    if: "github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || github.event_name == 'workflow_dispatch'"
+    needs: [format, compile]
+    if: "(github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -230,15 +289,19 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight docs
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos run dev.earlyeffect.specular/site"
       - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: "target/site"
   pages:
-    needs: [docs, affected, workflow, supply-chain, test, versions, compatibility, scaladoc, format]
+    needs: [docs, affected, compile, workflow, supply-chain, test, versions, compatibility, scaladoc, format]
     if: "(github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -257,8 +320,8 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
   cache-seed:
-    needs: [affected]
-    if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    needs: [affected, format, compile]
+    if: "(github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -266,8 +329,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight cache-seed
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "25"
@@ -350,8 +412,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight workflow
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -381,13 +442,12 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
           key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}
           restore-keys: histos-osv-
-      - run: ./histos doctor --preflight supply-chain
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -418,8 +478,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@3de8808842c49cdd9cd133c2132fea68346418ed # 3de8808842c49cdd9cd133c2132fea68346418ed
-      - run: ./histos doctor --preflight dependency-snapshot
+      - uses: early-effect/histos/.github/actions/setup@4c1616353bb92097489bffbafea104143a64f55a # 4c1616353bb92097489bffbafea104143a64f55a
       - run: ./histos deps snapshot --submit
         env:
           GH_TOKEN: ${{ github.token }}
