@@ -64,7 +64,10 @@ enum ScopedTestFailure derives JsonCodec:
   def message: String = this match
     case DuplicateSuite(name, modules) =>
       s"duplicate test suite ${name.value}: ${modules.toList.map(_.value).mkString(", ")}"
-    case Selection(error)                             => s"invalid test selection: $error"
+    case Selection(error) =>
+      error match
+        case TestSelectionError.Selection(found) => found.message
+        case other                               => s"invalid test selection: $other"
     case Declaration(error)                           => error.message
     case RootContract(error)                          => error.message
     case Node(failure, node)                          => s"test build node $failure: $node"

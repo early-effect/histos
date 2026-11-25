@@ -35,6 +35,6 @@ enum ContractFault:
     case Cycle(path)                    => s"build stage cycle ${path.mkString(" -> ")}"
     case TestModule(name)               => s"test selection ${name.value} is not a module"
     case TestPlatform(module, platform) => s"test selection ${module.value} does not build $platform"
-    case TestSelection(error)           => s"invalid test selection: $error"
+    case TestSelection(error)           => error.message
     case Parallelism(max)               => s"a parallelism max is at least 1, not $max"
 end ContractFault

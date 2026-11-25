@@ -413,8 +413,8 @@ object Grammar:
       case histos.server.WatchPolicy.After   => ZIO.succeed(command)
       case histos.server.WatchPolicy.Restart =>
         command match
-          case Command.Run(id, _, _, _) if !id.builtIn => ZIO.succeed(command)
-          case _                                       =>
+          case Command.Run(id, _, _, _, _) if !id.builtIn => ZIO.succeed(command)
+          case _                                          =>
             ZIO.fail(CliParseError.WatchCommand("--restart watches a program"))
 
   /** Tokens after a run's `--` are the program's arguments. Any other command keeps its text. */
@@ -484,7 +484,8 @@ object Grammar:
         tested(
           "test",
           tokens,
-          Command.Test.apply,
+          (projects, affected, mode, patterns, filter, platforms, versions) =>
+            Command.Test(projects, affected, mode, patterns, filter, platforms, versions),
         )
       case Wire.Coverage(projects, raw) =>
         ZIO
@@ -547,7 +548,8 @@ object Grammar:
         tested(
           "preview test",
           tokens,
-          Command.PreviewTest.apply,
+          (projects, affected, mode, patterns, filter, platforms, versions) =>
+            Command.PreviewTest(projects, affected, mode, patterns, filter, platforms, versions),
         )
       case Wire.PreviewPublishLocal(tokens) =>
         publishTokens(tokens).map(Command.PreviewPublishLocal(_))
@@ -577,11 +579,17 @@ object Grammar:
       files: List[String],
       platforms: Option[histos.PlatformSelection] = None,
       main: Option[histos.MainClass] = None,
+      versions: Option[histos.ScalaSelection] = None,
   )
 
   private def prepared(args: List[String]): IO[CliParseError, Prepared] =
     ZIO.fromEither(splitSelection(args).flatMap: selected =>
-      splitCoverage(selected.args).map(coverage => coverage.copy(platforms = selected.platforms, main = selected.main)))
+      splitCoverage(selected.args).map: coverage =>
+        coverage.copy(
+          platforms = selected.platforms.orElse(coverage.platforms),
+          main = selected.main.orElse(coverage.main),
+          versions = selected.versions.orElse(coverage.versions),
+        ))
 
   private def splitSelection(args: List[String]): Either[CliParseError, Prepared] =
     val surface = args match
@@ -595,19 +603,33 @@ object Grammar:
         rest: List[String],
         kept: List[String],
         platforms: List[String],
+        versions: List[String],
         main: Option[histos.MainClass],
     ): Either[CliParseError, Prepared] =
       rest match
         case Nil =>
-          val selection = if platforms.isEmpty then Right(None)
-          else histos.PlatformSelection.from(platforms.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
-          selection.flatMap: chosen =>
-            chosen match
+          val selection =
+            if platforms.isEmpty then Right(None)
+            else histos.PlatformSelection.from(platforms.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
+          val asked =
+            if versions.isEmpty then Right(None)
+            else histos.ScalaSelection.from(versions.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
+          for
+            chosen <- selection
+            scalas <- asked
+            _      <- chosen match
               case Some(histos.PlatformSelection.Only(values)) if running && values.all.distinct.size != 1 =>
                 Left(CliParseError.Selection(histos.SelectionError.RunMany(values)))
-              case _ => Right(Prepared(kept.reverse, Nil, Nil, chosen, main))
+              case _ => Right(())
+            _ <- scalas match
+              case Some(histos.ScalaSelection.Only(first, more)) if running && more.nonEmpty =>
+                Left(CliParseError.Selection(histos.SelectionError.RunScalaMany(first :: more)))
+              case _ => Right(())
+          yield Prepared(kept.reverse, Nil, Nil, chosen, main, scalas)
         case "--platform" :: Nil                  => Left(CliParseError.Selection(histos.SelectionError.Empty))
-        case "--platform" :: value :: tail        => loop(tail, kept, value :: platforms, main)
+        case "--platform" :: value :: tail        => loop(tail, kept, value :: platforms, versions, main)
+        case "--scala" :: Nil                     => Left(CliParseError.Pattern("--scala needs a Scala version"))
+        case "--scala" :: value :: tail           => loop(tail, kept, platforms, value :: versions, main)
         case "--main" :: Nil                      => Left(CliParseError.MainClass(histos.MainClassError.Empty))
         case "--main" :: value :: tail if running =>
           if main.isDefined then Left(CliParseError.Pattern("run --main is already set"))
@@ -616,30 +638,48 @@ object Grammar:
               .from(value)
               .left
               .map(CliParseError.MainClass(_))
-              .flatMap(found => loop(tail, kept, platforms, Some(found)))
-        case token :: tail => loop(tail, token :: kept, platforms, main)
-    if surface then loop(args, Nil, Nil, None) else Right(Prepared(args, Nil, Nil))
+              .flatMap(found => loop(tail, kept, platforms, versions, Some(found)))
+        case token :: tail => loop(tail, token :: kept, platforms, versions, main)
+    if surface then loop(args, Nil, Nil, Nil, None) else Right(Prepared(args, Nil, Nil))
 
   private def withSelection(command: Command, ready: Prepared): IO[CliParseError, Command] =
     val platforms = ready.platforms.getOrElse(histos.PlatformSelection.All)
+    val versions  = ready.versions.getOrElse(histos.ScalaSelection.All)
     command match
-      case found: Command.Compile                  => ZIO.succeed(found.copy(platforms = platforms))
-      case found: Command.PreviewCompile           => ZIO.succeed(found.copy(platforms = platforms))
-      case found: Command.Test                     => ZIO.succeed(found)
-      case found: Command.PreviewTest              => ZIO.succeed(found)
+      case found: Command.Compile        => ZIO.succeed(found.copy(platforms = platforms, scala = versions))
+      case found: Command.PreviewCompile => ZIO.succeed(found.copy(platforms = platforms, scala = versions))
+      case found: Command.Test           => ZIO.succeed(found)
+      case found: Command.PreviewTest    => ZIO.succeed(found)
+      case found: Command.Coverage       =>
+        ready.platforms match
+          case None =>
+            ZIO.succeed(found.copy(scala = versions))
+          case Some(histos.PlatformSelection.Only(values)) if values.all.distinct == List(histos.Platform.Jvm) =>
+            ZIO.succeed(found.copy(scala = versions))
+          case Some(_) =>
+            ZIO.fail(CliParseError.Pattern("coverage measures the JVM only"))
       case found: Command.Run if !found.id.builtIn =>
-        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main))
+        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main, scala = ready.versions))
       case found: Command.PreviewRun if !found.id.builtIn =>
-        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main))
-      case _ if ready.platforms.isDefined || ready.main.isDefined =>
-        ZIO.fail(CliParseError.Pattern("only module runs take --platform or --main"))
+        ZIO.succeed(found.copy(platform = ready.platforms, main = ready.main, scala = ready.versions))
+      case _ if ready.platforms.isDefined || ready.main.isDefined || ready.versions.isDefined =>
+        ZIO.fail(CliParseError.Pattern("only module runs take --platform, --scala, or --main"))
       case other => ZIO.succeed(other)
 
   private def splitCoverage(args: List[String]): Either[CliParseError, Prepared] =
     args match
       case "coverage" :: rest =>
-        takeExcludes(rest, Nil, Nil, Nil).map: (kept, classlikes, files) =>
-          Prepared("coverage" :: kept, classlikes.reverse, files.reverse)
+        takeExcludes(rest, Nil, Nil, Nil, Nil, Nil).flatMap: (kept, classlikes, files, platforms, versions) =>
+          val chosen =
+            if platforms.isEmpty then Right(None)
+            else histos.PlatformSelection.from(platforms.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
+          val asked =
+            if versions.isEmpty then Right(None)
+            else histos.ScalaSelection.from(versions.reverse).left.map(CliParseError.Selection(_)).map(Some(_))
+          for
+            selected <- chosen
+            scalas   <- asked
+          yield Prepared("coverage" :: kept, classlikes.reverse, files.reverse, selected, None, scalas)
       case _ => Right(Prepared(args, Nil, Nil))
 
   private def takeExcludes(
@@ -647,33 +687,41 @@ object Grammar:
       classlikes: List[String],
       files: List[String],
       kept: List[String],
-  ): Either[CliParseError, (List[String], List[String], List[String])] =
+      platforms: List[String],
+      versions: List[String],
+  ): Either[CliParseError, (List[String], List[String], List[String], List[String], List[String])] =
     args match
-      case Nil                      => Right((kept.reverse, classlikes, files))
+      case Nil                      => Right((kept.reverse, classlikes, files, platforms, versions))
       case "--exclude-class" :: Nil =>
         Left(CliParseError.Pattern("coverage --exclude-class needs a regex"))
       case "--exclude-class" :: value :: rest =>
-        takeExcludes(rest, value :: classlikes, files, kept)
+        takeExcludes(rest, value :: classlikes, files, kept, platforms, versions)
       case "--exclude-file" :: Nil =>
         Left(CliParseError.Pattern("coverage --exclude-file needs a regex"))
       case "--exclude-file" :: value :: rest =>
-        takeExcludes(rest, classlikes, value :: files, kept)
+        takeExcludes(rest, classlikes, value :: files, kept, platforms, versions)
+      case "--platform" :: Nil           => Left(CliParseError.Selection(histos.SelectionError.Empty))
+      case "--platform" :: value :: rest =>
+        takeExcludes(rest, classlikes, files, kept, value :: platforms, versions)
+      case "--scala" :: Nil           => Left(CliParseError.Pattern("--scala needs a Scala version"))
+      case "--scala" :: value :: rest =>
+        takeExcludes(rest, classlikes, files, kept, platforms, value :: versions)
       case flag :: Nil if histos.FloorName.known(flag) =>
         Left(CliParseError.Pattern(s"coverage $flag needs an integer"))
       case flag :: value :: rest if histos.FloorName.known(flag) =>
         if kept.contains(flag) then Left(CliParseError.Pattern(s"coverage $flag is already set"))
-        else takeExcludes(rest, classlikes, files, value :: flag :: kept)
+        else takeExcludes(rest, classlikes, files, value :: flag :: kept, platforms, versions)
       case head :: rest =>
-        takeExcludes(rest, classlikes, files, head :: kept)
+        takeExcludes(rest, classlikes, files, head :: kept, platforms, versions)
 
   private def withExcludes(command: Command, ready: Prepared): IO[CliParseError, Command] =
     command match
-      case Command.Coverage(projects, floors, _) =>
+      case found: Command.Coverage =>
         ZIO
           .fromEither(histos.coverage.Excludes.check(ready.classlikes, ready.files))
           .mapBoth(
             error => CliParseError.Pattern(error.message),
-            excludes => Command.Coverage(projects, floors, excludes),
+            excludes => found.copy(excludes = excludes),
           )
       case other => ZIO.succeed(other)
 
@@ -708,6 +756,7 @@ object Grammar:
           List[SuitePattern],
           TestFilter,
           histos.PlatformSelection,
+          histos.ScalaSelection,
       ) => Command,
   ): IO[CliParseError, Command] =
     ZIO.fromEither(splitTest(command, tokens)).flatMap { parts =>
@@ -720,7 +769,7 @@ object Grammar:
             ZIO.fail(CliParseError.Pattern(s"$command --suite cannot be combined with named projects"))
           else ZIO.unit
         scoped = parts.suite.fold(picked)(eligible => AffectedChoice.Within(eligible, picked))
-      yield build(names, scoped, parts.mode, patterns, parts.filter, parts.platforms)
+      yield build(names, scoped, parts.mode, patterns, parts.filter, parts.platforms, parts.versions)
     }
 
   private def cleaned(
@@ -742,6 +791,7 @@ object Grammar:
       filter: TestFilter,
       platforms: histos.PlatformSelection,
       suite: Option[List[ProjectName]],
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   )
 
   /** Every list flag consumes one escaped text list; project placement is independent of flags. */
@@ -751,6 +801,14 @@ object Grammar:
       case "--quick" :: tail =>
         if parts.mode == TestMode.Quick then Left(CliParseError.Pattern(s"$command --quick is already set"))
         else loop(tail, parts.copy(mode = TestMode.Quick))
+      case "--scala" :: Nil           => Left(CliParseError.Pattern("--scala needs a Scala version"))
+      case "--scala" :: value :: tail =>
+        histos.ScalaSelection
+          .from(List(value))
+          .left
+          .map(CliParseError.Selection(_))
+          .flatMap: selected =>
+            loop(tail, parts.copy(versions = histos.ScalaSelection.union(parts.versions, selected)))
       case "--platform" :: Nil           => Left(CliParseError.Selection(histos.SelectionError.Empty))
       case "--platform" :: value :: tail =>
         histos.PlatformSelection

@@ -27,7 +27,7 @@ object RunArgsSpec extends HistosSpec:
           )
         )
         .map:
-          case Command.Run(id, platform, args, main) =>
+          case Command.Run(id, platform, args, main, _) =>
             assertTrue(
               id.value == "app",
               platform.contains(PlatformSelection.only(Platform.Jvm)),
@@ -43,7 +43,7 @@ object RunArgsSpec extends HistosSpec:
         )
         call <- Operation.call(command)
       yield call match
-        case histos.server.Call.Run(id, platform, _, args, main) =>
+        case histos.server.Call.Run(id, platform, _, args, main, _) =>
           assertTrue(
             id == "app",
             platform.contains(PlatformSelection.only(Platform.Jvm)),
@@ -65,8 +65,8 @@ object RunArgsSpec extends HistosSpec:
       Grammar
         .parse(List("run", "app"))
         .map:
-          case Command.Run(id, platform, args, main) =>
-            assertTrue(id.value == "app", platform.isEmpty, main.isEmpty, args.isEmpty)
+          case Command.Run(id, platform, args, main, versions) =>
+            assertTrue(id.value == "app", platform.isEmpty, main.isEmpty, args.isEmpty, versions.isEmpty)
           case _ => assertTrue(false)
     },
     test("run option placement is independent of the module") {
@@ -93,8 +93,8 @@ object RunArgsSpec extends HistosSpec:
           CliParseError.Selection(SelectionError.RunMany(histos.Platforms(Platform.Jvm, List(Platform.Js))))
         ),
         one.exists:
-          case Command.Run(_, selection, _, _) => selection.contains(PlatformSelection.only(Platform.Jvm))
-          case _                               => false,
+          case Command.Run(_, selection, _, _, _) => selection.contains(PlatformSelection.only(Platform.Jvm))
+          case _                                  => false,
       )
     },
     test("a built-in task takes neither module selectors nor program arguments") {

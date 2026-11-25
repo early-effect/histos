@@ -466,6 +466,7 @@ object Calls:
       relay: histos.process.RunRelay = histos.process.RunRelay.Closed,
       main: Option[histos.MainClass] = None,
       plugins: Option[histos.load.PluginRuntime] = None,
+      versions: Option[histos.ScalaSelection] = None,
   ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     opened(say) { remote =>
       CompileConsole
@@ -490,6 +491,7 @@ object Calls:
                   console.announce((text, role) => status(say, text, role).ignore) *> compiled,
                   main,
                   plugins,
+                  versions,
                 )
                 .provideSomeLayer(ZLayer.succeed(remote))
                 .foreach:
@@ -1175,6 +1177,7 @@ object Calls:
       say: Say,
       plugins: histos.load.PluginRuntime,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   ): ZIO[
     Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
@@ -1185,7 +1188,7 @@ object Calls:
         val compile = ZIO
           .scoped {
             for
-              roots   <- ZIO.fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+              roots   <- ZIO.fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms, versions))
               lock    <- ZIO.serviceWithZIO[histos.resolve.ResolutionService](_.current)
               runtime <- histos.build.BuildRuntime.open(
                 Some(plugins),
@@ -1257,12 +1260,15 @@ object Calls:
       say: Say,
       plugins: histos.load.PluginRuntime,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   ): IO[ServerError, Unit] =
     ZIO
-      .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+      .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms, versions))
       .mapError(error => BuildFault.Preview(histos.preview.PreviewError.Test(error)))
       .flatMap { roots =>
-        previewUsing(graph, plugins, roots)(generated => Plan.show(repo, graph, projects, generated, platforms))
+        previewUsing(graph, plugins, roots)(generated =>
+          Plan.show(repo, graph, projects, generated, platforms, versions)
+        )
       }
       .foldZIO(error => fault(say, error), text => told(say, text) *> ok(say))
 
@@ -1347,8 +1353,9 @@ object Calls:
       platform: Option[histos.PlatformSelection],
       say: Say,
       main: Option[histos.MainClass] = None,
+      versions: Option[histos.ScalaSelection] = None,
   ): IO[ServerError, Unit] =
-    Plan.runSelected(graph, id, platform, main) match
+    Plan.runSelected(graph, id, platform, main, versions) match
       case Left(error) => fault(say, BuildFault.Preview(Plan.failure(error)))
       case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
@@ -1442,8 +1449,12 @@ object Calls:
                     console.announce((text, role) => status(say, text, role)) *>
                       notes.announce((text, role) => status(say, text, role)) *>
                       totals.get.flatMap { count =>
-                        ZIO.foreachDiscard(Lines.suites(count.passed, count.failed, count.cached, count.modules.size))(
-                          line => status(say, line, if count.failed == 0 then Role.TallyOk else Role.TallyBad)
+                        val lines =
+                          Lines.versionTallies(count.versions.toList.map { (version, row) =>
+                            Lines.VersionTally(version, row.passed, row.failed, row.cached)
+                          }) ++ Lines.suites(count.passed, count.failed, count.cached, count.modules.size).toList
+                        ZIO.foreachDiscard(lines)(line =>
+                          status(say, line, if count.failed == 0 then Role.TallyOk else Role.TallyBad)
                         )
                       }
                   val ran =
@@ -1645,17 +1656,34 @@ object Calls:
     console.hear(feed) *> say(Message.Event(BuildEvent.Compile(feed)))
 
   private def remember(totals: Ref[SuiteCount], feed: TestFeed): UIO[Unit] =
+    def bump(version: String)(adjust: SuiteCount.VersionCount => SuiteCount.VersionCount): SuiteCount => SuiteCount =
+      count =>
+        val current = count.versions.getOrElse(version, SuiteCount.VersionCount(0, 0, 0))
+        count.copy(versions = count.versions.updated(version, adjust(current)))
     feed match
       case TestFeed.Done(cell) =>
-        val name = cell.module.value
+        val name    = cell.module.value
+        val version = cell.version.value
         cell.status match
           case TestStatus.Passed =>
-            totals.update(count => count.copy(passed = count.passed + 1, modules = count.modules + name))
+            totals.update(count =>
+              bump(version)(row => row.copy(passed = row.passed + 1))(
+                count.copy(passed = count.passed + 1, modules = count.modules + name)
+              )
+            )
           case TestStatus.Failed(_) =>
-            totals.update(count => count.copy(failed = count.failed + 1, modules = count.modules + name))
+            totals.update(count =>
+              bump(version)(row => row.copy(failed = row.failed + 1))(
+                count.copy(failed = count.failed + 1, modules = count.modules + name)
+              )
+            )
           case TestStatus.NoTests | TestStatus.Unmatched => ZIO.unit
-      case TestFeed.Cached(module, _, _, _) =>
-        totals.update(count => count.copy(cached = count.cached + 1, modules = count.modules + module.value))
+      case TestFeed.Cached(module, version, _, _) =>
+        totals.update(count =>
+          bump(version.value)(row => row.copy(cached = row.cached + 1))(
+            count.copy(cached = count.cached + 1, modules = count.modules + module.value)
+          )
+        )
       case TestFeed.Begin(_, _, _) | TestFeed.Out(_, _, _, _) | TestFeed.Err(_, _, _, _) =>
         ZIO.unit
 
@@ -1675,9 +1703,16 @@ object Calls:
       }
       ZIO.foreachDiscard(lines)(line => TestLogs.append(repo, module, version, platform, line))
 
-  private final case class SuiteCount(passed: Int, failed: Int, cached: Int, modules: Set[String])
+  private final case class SuiteCount(
+      passed: Int,
+      failed: Int,
+      cached: Int,
+      modules: Set[String],
+      versions: Map[String, SuiteCount.VersionCount] = Map.empty,
+  )
 
   private object SuiteCount:
+    final case class VersionCount(passed: Int, failed: Int, cached: Int)
     val empty: SuiteCount = SuiteCount(0, 0, 0, Set.empty)
 
   private def failedSuite(status: TestStatus): Boolean =

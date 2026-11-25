@@ -70,6 +70,7 @@ final case class CoverageRequest(
     floors: CoverageFloors,
     excludes: Excludes,
     at: Long,
+    scala: histos.ScalaSelection = histos.ScalaSelection.All,
 )
 
 /** Live compiler and test lines. The report is the result, not these lines. */
@@ -81,14 +82,23 @@ object Run:
       lines: CoverageLines,
       plugins: Option[PluginRuntime] = None,
   ): ZIO[Resolve & histos.cache.ContentStore, CoverageFailure, CoverageResult] =
-    val CoverageRequest(repo, graph, names, jdk, runtimes, floors, excludes, at) = request
+    val CoverageRequest(repo, graph, names, jdk, runtimes, floors, excludes, at, chosen) = request
     val modules = graph.projects.collect { case module: Module => module }
     for
       selected <- ZIO.fromEither(Selection.select(graph, names)).mapError(CoverageFailure.Selected(_))
+      _        <- ZIO
+        .fromEither(
+          if names.isEmpty then Right(())
+          else
+            selected.modules.foldLeft[Either[histos.SelectionError, Unit]](Right(())): (acc, module) =>
+              acc.flatMap(_ => chosen.require(module.name, module.versions.all).map(_ => ()))
+        )
+        .mapError(error => CoverageFailure.Test(TestFailures(histos.testrun.TestSelectionError.Selection(error))))
       closed    = Module.closure(modules, selected.modules.map(_.name).toSet)
       selection = TestSelection(
         TestTargets.Filtered(selected.modules.map(_.name)),
         PlatformSelection.only(Platform.Jvm),
+        scala = chosen,
       )
       tests <- ZIO
         .fromEither(TestCells.plan(graph, selection, TestCellPolicy.MeasuredJvm))
@@ -112,7 +122,7 @@ object Run:
         requested = Some(selection),
         cellPolicy = TestCellPolicy.MeasuredJvm,
       )
-      refused <- run(asked, lines, plugins)
+      refused <- run(asked, lines, plugins, graph.moduleColumn)
       parts   <- read(repo, closed)
       summed  = Report.sum(parts.map((rows, invoked) => Report.of(rows, invoked)))
       skipped = Cell.skipped(selected.modules)
@@ -127,6 +137,7 @@ object Run:
       asked: TestRun,
       lines: CoverageLines,
       plugins: Option[PluginRuntime],
+      column: Int,
   ): ZIO[Resolve & histos.cache.ContentStore, CoverageFailure, Boolean] =
     val session = ZStream.unwrapScoped:
       for
@@ -140,7 +151,7 @@ object Run:
           )
       yield runtime.tests(asked)
     session
-      .tap(feed => speak(feed, lines))
+      .tap(feed => speak(feed, lines, column))
       .runFold(Heard(false, Nil))(note)
       .mapError(CoverageFailure.Test(_))
       .flatMap: heard =>
@@ -148,11 +159,13 @@ object Run:
           case head :: _ => ZIO.fail(CoverageFailure.Compiled(head))
           case Nil       => ZIO.succeed(heard.refused)
 
-  private def speak(feed: SessionFeed, lines: CoverageLines): UIO[Unit] =
+  private def speak(feed: SessionFeed, lines: CoverageLines, column: Int): UIO[Unit] =
     feed match
-      case SessionFeed.Test(TestFeed.Out(_, _, _, text)) => lines.out(text)
-      case SessionFeed.Test(TestFeed.Err(_, _, _, text)) => lines.err(text)
-      case _                                             => ZIO.unit
+      case SessionFeed.Test(TestFeed.Out(module, version, platform, text)) =>
+        lines.out(histos.cli.Lines.cell(module, version, platform, text, column))
+      case SessionFeed.Test(TestFeed.Err(module, version, platform, text)) =>
+        lines.err(histos.cli.Lines.cell(module, version, platform, text, column))
+      case _ => ZIO.unit
 
   private def fetch(
       graph: ProjectGraph,

@@ -19,8 +19,8 @@ object SelectionCiSpec extends HistosSpec:
   private val graph = Projects(Splits.of(Axis.Module, Axis.Platform), upstream, first, second, owner)
 
   private def selection(command: Command): Either[CliParseError, TestSelection] = command match
-    case Command.Test(names, affected, _, _, _, platforms) =>
-      Right(AffectedChoice.selection(names, affected, platforms))
+    case Command.Test(names, affected, _, _, _, platforms, versions) =>
+      Right(AffectedChoice.selection(names, affected, platforms, versions))
     case _ => Left(CliParseError.Rejected)
 
   private def renderedRequests(

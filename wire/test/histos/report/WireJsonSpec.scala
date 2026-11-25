@@ -41,6 +41,11 @@ object WireJsonSpec extends HistosSpec:
     SelectionError.Unsupported(module, Platform.Js),
     SelectionError.RunMany(platforms),
     SelectionError.RunAmbiguous(module, platforms),
+    SelectionError.UnknownScala("wasm"),
+    SelectionError.UnsupportedScala(module, ScalaToken.Series2(13)),
+    SelectionError.AmbiguousScala(module, ScalaToken.Series3, List(ScalaVersion("3.3.6"), ScalaVersion("3.7.1"))),
+    SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)),
+    SelectionError.RunScalaAmbiguous(module, List(ScalaVersion("2.13.18"), ScalaVersion("3.10.1"))),
   )
 
   private val stages = for

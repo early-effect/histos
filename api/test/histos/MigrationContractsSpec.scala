@@ -382,6 +382,60 @@ object MigrationContractsSpec extends HistosSpec:
         ambiguous.exists(_.contains(Left(SelectionError.RunAmbiguous(ProjectName("cross"), Platforms(Jvm, List(Js)))))),
       )
     },
+    test("scala tokens select a series or one version, and run starts one") {
+      val older                                        = scala"3.3.6"
+      val newer                                        = scala"3.7.1"
+      val scala2                                       = scala"2.13.18"
+      val cross                                        = module("cross", Jvm)(older, newer)
+      val both                                         = module("both", Jvm)(scala2, older)
+      val only                                         = module("only", Jvm)(scala2)
+      val series                                       = ScalaSelection.Only(ScalaToken.Series3, Nil)
+      val exact                                        = ScalaSelection.Only(ScalaToken.Exact(older), Nil)
+      def built(project: ModuleDef[?]): Option[Module] =
+        Projects(project).toOption.flatMap(_.projects.collect { case module: Module => module }.headOption)
+      assertTrue(
+        ScalaSelection.from(List("2.13")) == Right(ScalaSelection.Only(ScalaToken.Series2(13), Nil)),
+        ScalaSelection.from(List("3")) == Right(series),
+        ScalaSelection.from(List("2.13.18")) == Right(ScalaSelection.Only(ScalaToken.Exact(scala2), Nil)),
+        ScalaSelection.from(List("wasm")) == Left(SelectionError.UnknownScala("wasm")),
+        ScalaSelection.from(List("3.3")) == Left(SelectionError.UnknownScala("3.3")),
+        ScalaSelection.from(List("2")) == Left(SelectionError.UnknownScala("2")),
+        series.filter(List(older, newer)) == List(older, newer),
+        exact.filter(List(older, newer)) == List(older),
+        ScalaSelection.Only(ScalaToken.Series2(13), Nil).filter(List(older, newer)).isEmpty,
+        series.require(ProjectName("cross"), List(older, newer)) == Left(
+          SelectionError.AmbiguousScala(ProjectName("cross"), ScalaToken.Series3, List(older, newer))
+        ),
+        exact.require(ProjectName("cross"), List(older, newer)) == Right(List(older)),
+        ScalaSelection.Only(ScalaToken.Series2(13), Nil).require(ProjectName("cross"), List(older, newer)) == Left(
+          SelectionError.UnsupportedScala(ProjectName("cross"), ScalaToken.Series2(13))
+        ),
+        SelectionError.UnknownScala("wasm").message == "'wasm' is not a Scala series or a full version",
+        SelectionError.UnsupportedScala(ProjectName("core"), ScalaToken.Series2(13)).message ==
+          "core does not build 2.13",
+        SelectionError.AmbiguousScala(ProjectName("core"), ScalaToken.Series3, List(older, newer)).message ==
+          "core 3 matches 3.3.6 and 3.7.1",
+        SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)).message ==
+          "run requires one Scala version, not 2.13,3",
+        SelectionError.RunScalaAmbiguous(ProjectName("core"), List(scala2, scala3)).message ==
+          "run core requires --scala 2.13.18|3.10.1",
+        built(only).map(module => RunScala.resolve(module, None)) == Some(Right(scala2)),
+        built(both).map(module => RunScala.resolve(module, None)) == Some(
+          Left(SelectionError.RunScalaAmbiguous(ProjectName("both"), List(scala2, older)))
+        ),
+        built(cross).map(module => RunScala.resolve(module, Some(series))) == Some(
+          Left(SelectionError.RunScalaAmbiguous(ProjectName("cross"), List(older, newer)))
+        ),
+        built(both).map(module =>
+          RunScala.resolve(module, Some(ScalaSelection.Only(ScalaToken.Series2(13), List(ScalaToken.Series3))))
+        ) == Some(
+          Left(SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)))
+        ),
+        built(only).map(module => RunScala.resolve(module, Some(series))) == Some(
+          Left(SelectionError.UnsupportedScala(ProjectName("only"), ScalaToken.Series3))
+        ),
+      )
+    },
     test("text lists merge repeats, preserve escaped delimiters, and reject malformed entries") {
       assertTrue(
         TextList.parse(List("a,b", "b,c")) == Right(List("a", "b", "c")),
@@ -505,9 +559,21 @@ object MigrationContractsSpec extends HistosSpec:
         graph.map(_.runnerTools.jdk.map(_.value)) == Right(Some(25)),
         graph.map(_.verify) == Right(List(verify)),
         verify.run.command == "test core --platform jvm",
+        VerifyRun
+          .Tests(
+            selection.copy(scala = ScalaSelection.Only(ScalaToken.Series2(13), Nil))
+          )
+          .command == "test core --platform jvm --scala 2.13",
         VerifyRun.Tests(TestSelection(platforms = PlatformSelection.only(Jvm, Js, Native))).command ==
           "test --platform jvm,js,native",
         contractFault(Projects.verify(unsupported)(core)).contains(ContractFault.TestPlatform(ProjectName("core"), Js)),
+        contractFault(
+          Projects.verify(
+            verify.copy(run = VerifyRun.Tests(selection.copy(scala = ScalaSelection.Only(ScalaToken.Series2(13), Nil))))
+          )(core)
+        ).contains(
+          ContractFault.TestSelection(SelectionError.UnsupportedScala(ProjectName("core"), ScalaToken.Series2(13)))
+        ),
         JdkFloor.from(0) == Left(JdkFloorError.NotPositive(0)),
       )
     },

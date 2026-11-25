@@ -174,10 +174,15 @@ object Watching:
   /** The compile a restart runs before it touches the program: the program's module, or the build. */
   def compileFor(call: Call): Call =
     call match
-      case Call.Run(id, platforms, _, _, _) =>
+      case Call.Run(id, platforms, _, _, _, versions) =>
         ProjectName.from(id) match
-          case Right(name) => Call.Compile(List(name), platforms.getOrElse(histos.PlatformSelection.All))
-          case Left(_)     => Call.Compile(Nil)
+          case Right(name) =>
+            Call.Compile(
+              List(name),
+              platforms.getOrElse(histos.PlatformSelection.All),
+              versions.getOrElse(histos.ScalaSelection.All),
+            )
+          case Left(_) => Call.Compile(Nil)
       case _ => Call.Compile(Nil)
 
   /** A change replaces the program when the compile it ran succeeded and the change is one of the program's roots. A
@@ -225,8 +230,12 @@ object Watching:
 
   private def nodes(graph: ProjectGraph, call: Call): Either[BuildFault, List[histos.build.BuildNode]] =
     import histos.build.{BuildNode, BuildRuntime}
-    def compile(names: List[ProjectName], platforms: histos.PlatformSelection) =
-      BuildRuntime.compileRoots(graph, names, platforms).left.map(BuildFault.Test(_))
+    def compile(
+        names: List[ProjectName],
+        platforms: histos.PlatformSelection,
+        versions: histos.ScalaSelection = histos.ScalaSelection.All,
+    ) =
+      BuildRuntime.compileRoots(graph, names, platforms, versions).left.map(BuildFault.Test(_))
     def tests(selection: histos.TestSelection) =
       histos.testrun.TestCells
         .plan(graph, selection)
@@ -235,26 +244,39 @@ object Watching:
           BuildFault.Test(histos.testrun.ModuleTestError.Scoped(histos.testrun.ScopedTestFailure.Selection(error)))
         )
         .map(_.compileStageRoots.map(BuildNode.Compile(_)))
-    def run(id: String, platforms: Option[histos.PlatformSelection], main: Option[histos.MainClass]) =
-      histos.preview.Plan.runSelected(graph, id, platforms, main).left.map(BuildFault.Preview(_)).flatMap { plan =>
-        plan.unit match
-          case histos.preview.RunUnit.Module(name, platform, _) =>
-            compile(List(name), histos.PlatformSelection.only(platform))
-          case histos.preview.RunUnit.Task(id) => task(id)
-      }
+    def run(
+        id: String,
+        platforms: Option[histos.PlatformSelection],
+        main: Option[histos.MainClass],
+        versions: Option[histos.ScalaSelection],
+    ) =
+      histos.preview.Plan
+        .runSelected(graph, id, platforms, main, versions)
+        .left
+        .map(BuildFault.Preview(_))
+        .flatMap { plan =>
+          plan.unit match
+            case histos.preview.RunUnit.Module(name, platform, _, version) =>
+              compile(
+                List(name),
+                histos.PlatformSelection.only(platform),
+                histos.ScalaSelection.Only(histos.ScalaToken.Exact(version), Nil),
+              )
+            case histos.preview.RunUnit.Task(id) => task(id)
+        }
     def task(id: String): Either[BuildFault, List[BuildNode]] =
       if id.contains("/") then
         PluginTaskId.parse(id).left.map(BuildFault.PluginTask(_)).map(id => List(BuildNode.Generate(id)))
       else compile(Nil, histos.PlatformSelection.All)
     call match
-      case Call.Compile(names, platforms)        => compile(names, platforms)
-      case Call.PreviewCompile(names, platforms) => compile(names, platforms)
-      case Call.Test(selection, _, _, _)         => tests(selection)
-      case Call.PreviewTest(selection, _, _, _)  => tests(selection)
-      case Call.Run(id, platforms, _, _, main)   => run(id, platforms, main)
-      case Call.PreviewRun(id, platforms, main)  => run(id, platforms, main)
-      case Call.Task(id, _)                      => task(id)
-      case Call.Watch(inner, _)                  => nodes(graph, inner)
+      case Call.Compile(names, platforms, versions)        => compile(names, platforms, versions)
+      case Call.PreviewCompile(names, platforms, versions) => compile(names, platforms, versions)
+      case Call.Test(selection, _, _, _)                   => tests(selection)
+      case Call.PreviewTest(selection, _, _, _)            => tests(selection)
+      case Call.Run(id, platforms, _, _, main, versions)   => run(id, platforms, main, versions)
+      case Call.PreviewRun(id, platforms, main, versions)  => run(id, platforms, main, versions)
+      case Call.Task(id, _)                                => task(id)
+      case Call.Watch(inner, _)                            => nodes(graph, inner)
       case other @ (Call.PublishCheck(_, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PublishWithdraw | Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) |
@@ -288,8 +310,8 @@ object Watching:
         case Left(_)     => WatchNames.Only(Nil)
     call match
       case Call.Test(selection, _, _, _)        => testNames(graph, selection)
-      case Call.Compile(names, _)               => listed(names)
-      case Call.PreviewCompile(names, _)        => listed(names)
+      case Call.Compile(names, _, _)            => listed(names)
+      case Call.PreviewCompile(names, _, _)     => listed(names)
       case Call.PreviewTest(selection, _, _, _) => testNames(graph, selection)
       case Call.PublishCheck(tokens, _)         => publish(graph, tokens.map(_.value))
       case Call.PublishLocal(tokens, _)         => publish(graph, tokens.map(_.value))
@@ -298,7 +320,7 @@ object Watching:
       case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)
       case Call.PreviewClean(names, _)          => listed(names)
       case Call.Clean(names, _)                 => listed(names)
-      case Call.PreviewRun(id, _, _)            => one(id)
-      case Call.Run(id, _, _, _, _)             => one(id)
+      case Call.PreviewRun(id, _, _, _)         => one(id)
+      case Call.Run(id, _, _, _, _, _)          => one(id)
       case _                                    => WatchNames.Every
 end Watching

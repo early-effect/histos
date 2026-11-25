@@ -78,6 +78,7 @@ enum RunUnit:
       module: ProjectName,
       platform: Platform,
       upstreams: List[ProjectName],
+      version: ScalaVersion,
   )
   case Task(id: String)
 
@@ -117,8 +118,11 @@ object Plan:
       projects: List[ProjectName],
       generated: GeneratedRoots = GeneratedRoots.Existing,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   ): IO[ProjectionError, String] =
-    modulePlan(repo, graph, projects, Tree.Main, generated, platforms).map(units => render(repo, CompilePlan(units)))
+    modulePlan(repo, graph, projects, Tree.Main, generated, platforms, asked = versions).map(units =>
+      render(repo, CompilePlan(units))
+    )
 
   def compile(
       repo: Path,
@@ -229,9 +233,10 @@ object Plan:
       id: String,
       platform: Option[histos.PlatformSelection],
       main: Option[histos.MainClass],
+      versions: Option[histos.ScalaSelection] = None,
   ): Either[PreviewError, RunPlan] =
     if TaskId.from(id).toOption.exists(_.builtIn) || id.contains("/") then
-      if platform.nonEmpty || main.nonEmpty then
+      if platform.nonEmpty || main.nonEmpty || versions.nonEmpty then
         Left(PreviewError.Run(RunMiss.BadId(s"run $id does not take module selectors")))
       else run(graph, id, None)
     else
@@ -242,10 +247,14 @@ object Plan:
           case Some(module: Module) =>
             if main.orElse(module.application).isEmpty then Left(PreviewError.Run(RunMiss.NoMain(name)))
             else
-              histos.RunPlatform.resolve(module, platform).left.map(PreviewError.Selection(_)).map { selected =>
+              for
+                selected <- histos.RunPlatform.resolve(module, platform).left.map(PreviewError.Selection(_))
+                version  <- histos.RunScala.resolve(module, versions).left.map(PreviewError.Selection(_))
+              yield
                 val modules = graph.projects.collect { case module: Module => module }
-                RunPlan(RunUnit.Module(name, selected, Module.chain(module, modules, selected).map(_.name)))
-              }
+                RunPlan(
+                  RunUnit.Module(name, selected, Module.chain(module, modules, selected).map(_.name), version)
+                )
       }
 
   /** The module or task `run` would start. Does not start it. */
@@ -292,10 +301,10 @@ object Plan:
 
   def renderRun(plan: RunPlan): String =
     val body = plan.unit match
-      case RunUnit.Module(module, platform, upstreams) =>
+      case RunUnit.Module(module, platform, upstreams, version) =>
         val names = upstreams.map(_.value).mkString(" ")
         val line  = if names.isEmpty then "upstreams" else s"upstreams $names"
-        List(s"${module.value} ${platform.token}", line)
+        List(s"${module.value} ${platform.token} ${version.value}", line)
       case RunUnit.Task(id) => List(id)
     body.mkString("\n")
 
@@ -311,13 +320,14 @@ object Plan:
       generated: GeneratedRoots,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
       selection: Option[histos.TestSelection] = None,
+      asked: histos.ScalaSelection = histos.ScalaSelection.All,
   ): IO[ProjectionError, List[PlanUnit]] =
     val modules = graph.projects.collect { case module: Module => module }
     for
       nodes <- tree match
         case Tree.Main =>
           ZIO
-            .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
+            .fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms, asked))
             .mapError(PreviewError.Test(_))
         case Tree.Test =>
           ZIO
@@ -544,7 +554,10 @@ object Plan:
             module.application match
               case None    => Left(PreviewError.Run(RunMiss.NoMain(name)))
               case Some(_) =>
-                pick(module, platform).map: chosen =>
+                for
+                  chosen  <- pick(module, platform)
+                  version <- histos.RunScala.resolve(module, None).left.map(PreviewError.Selection(_))
+                yield
                   val modules = graph.projects.collect { case item: Module =>
                     item
                   }
@@ -553,6 +566,7 @@ object Plan:
                       module.name,
                       chosen,
                       Module.chain(module, modules, chosen).map(_.name),
+                      version,
                     )
                   )
 

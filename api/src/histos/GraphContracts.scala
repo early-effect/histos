@@ -28,11 +28,15 @@ private[histos] object GraphContracts:
                 modules.find(_.name == name) match
                   case None         => List(ContractFault.TestModule(name))
                   case Some(module) =>
-                    selection.platforms.validate(name, module.platforms) match
+                    val platforms = selection.platforms.validate(name, module.platforms) match
                       case Left(SelectionError.Unsupported(_, platform)) =>
                         List(ContractFault.TestPlatform(name, platform))
                       case Left(error) => List(ContractFault.TestSelection(error))
                       case Right(_)    => Nil
+                    val versions = selection.scala.require(name, module.versions.all) match
+                      case Left(error) => List(ContractFault.TestSelection(error))
+                      case Right(_)    => Nil
+                    platforms ++ versions
     problem.headOption.toLeft(()).left.map(BuildError.Contract(_))
 
   private def moduleShapes(modules: List[Module]): Either[BuildError, Unit] =

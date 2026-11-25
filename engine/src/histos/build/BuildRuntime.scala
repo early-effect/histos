@@ -38,6 +38,7 @@ object BuildRuntime:
       graph: histos.ProjectGraph,
       names: List[histos.ProjectName],
       platforms: histos.PlatformSelection,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
   ): Either[ModuleTestError, List[BuildNode]] =
     val selected = if names.isEmpty then Right(graph.projects.collect { case module: Module => module })
     else histos.select.Selection.select(graph, names).left.map(ModuleTestError.Target(_)).map(_.modules)
@@ -54,11 +55,24 @@ object BuildRuntime:
                   histos.testrun.ScopedTestFailure.Selection(histos.testrun.TestSelectionError.Selection(error))
                 )
               )
-          chosen.map(values =>
-            nodes ++ (for
-              version  <- module.versions.all
-              platform <- values
-            yield BuildNode.Compile(CompilationStage(histos.Cell(module.name, version, platform), SourceSet.Main)))
+          val versions =
+            if names.isEmpty then Right(scala.filter(module.versions.all))
+            else
+              scala
+                .require(module.name, module.versions.all)
+                .left
+                .map(error =>
+                  ModuleTestError.Scoped(
+                    histos.testrun.ScopedTestFailure.Selection(histos.testrun.TestSelectionError.Selection(error))
+                  )
+                )
+          chosen.flatMap(values =>
+            versions.map(picked =>
+              nodes ++ (for
+                version  <- picked
+                platform <- values
+              yield BuildNode.Compile(CompilationStage(histos.Cell(module.name, version, platform), SourceSet.Main)))
+            )
           )
         }
       }

@@ -11,6 +11,8 @@ import histos.{
   PlatformSelection,
   Platforms,
   RootKind,
+  ScalaSelection,
+  ScalaToken,
   ScopedRoot,
   SelectionError,
   TestSelection,
@@ -27,6 +29,8 @@ private object WireSchemaStages extends WireSchemaSupport:
 
   given Schema[Platforms]         = Schema.derived
   given Schema[PlatformSelection] = Schema.derived
+  given Schema[ScalaToken]        = Schema.derived
+  given Schema[ScalaSelection]    = Schema.derived
   given Schema[TextListError]     = Schema.derived
   given Schema[SelectionError]    = Schema.derived
   given Schema[TestTargets]       = Schema.derived

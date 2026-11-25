@@ -66,7 +66,7 @@ enum PreviewError:
     case Run(miss)        => miss.message
     case Pattern(error)   => error.message
     case Scoped(error)    => error.message
-    case Selection(error) => s"invalid platform selection: $error"
+    case Selection(error) => error.message
     case Test(error)      => error.message
 
   def diagnose: Diagnostic = this match

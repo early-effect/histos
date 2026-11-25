@@ -163,6 +163,8 @@ enum Rejection:
   case Namespace(error: NamespaceError)
   case Flag(error: FlagNameError)
   case TaskPlatform(name: String)
+  case TaskScala(name: String)
+  case Selection(error: histos.SelectionError)
   case CommandHelp(names: List[String])
   case FormatMode(raw: String)
   case FormatTargets
@@ -198,6 +200,8 @@ enum Rejection:
     case Namespace(error)      => error.message
     case Flag(error)           => error.message
     case TaskPlatform(name)    => s"run $name does not take a platform"
+    case TaskScala(name)       => s"run $name does not take a Scala version"
+    case Selection(error)      => error.message
     case FormatMode(raw)       => s"'$raw' is not a fmt mode. It is write or check"
     case FormatTargets         => "fmt takes projects or files, not both"
     case FormatPath(raw)       => s"'$raw' is not a path relative to the repository"

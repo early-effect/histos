@@ -35,8 +35,9 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, IO, Queue, Ref, UIO, ZIO}
 import zio.stream.{Take, ZStream}
 
-/** Run the class a module names, on one platform. The main classpath only. No test classes and no classpath scan. A
-  * module that builds more than one platform does not compile and does not start until `choice` names one of them.
+/** Run the class a module names, on one platform and one Scala version. The main classpath only. No test classes and no
+  * classpath scan. A module that builds more than one platform, or more than one Scala version, does not compile and
+  * does not start until the choice names one of each.
   */
 object Program:
   def console(
@@ -53,6 +54,7 @@ object Program:
       afterCompile: UIO[Unit],
       mainOverride: Option[histos.MainClass] = None,
       plugins: Option[histos.load.PluginRuntime] = None,
+      versions: Option[histos.ScalaSelection] = None,
   ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService & RemoteCache, ProgramError, ProgramFeed] =
     ZStream.unwrapScoped:
       for
@@ -64,9 +66,10 @@ object Program:
           Binary.from(main.value).left.map(ProgramError.Main(_))
         )
         platform <- ZIO.fromEither(histos.RunPlatform.resolve(module, choice)).mapError(ProgramError.Selection(_))
+        version  <- ZIO.fromEither(histos.RunScala.resolve(module, versions)).mapError(ProgramError.Selection(_))
         lock     <- ZIO.serviceWithZIO[ResolutionService](_.current)
         runtime  <- histos.build.BuildRuntime.open(plugins, parallelism = Parallelism.of(graph.parallelism))
-        roots = module.versions.all.map(version =>
+        roots = List(
           histos.build.BuildNode.Compile(
             histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)
           )
@@ -84,10 +87,13 @@ object Program:
         cells = products.stages.toList
           .collect {
             case (stage, product)
-                if stage.scope == histos.plugin.SourceSet.Main && stage.cell.module == module.name && stage.cell.platform == platform =>
+                if stage.scope == histos.plugin.SourceSet.Main && stage.cell.module == module.name &&
+                  stage.cell.platform == platform && stage.cell.version == version =>
               product.compiled
           }
-          .sortBy(_.version.value)
+        _ <- ZIO.when(cells.isEmpty)(
+          ZIO.fail(ProgramError.Process(module.name, version, "compile produced no classes"))
+        )
         continue <- Ref.make(true)
         store    <- ZIO.service[ContentStore]
       yield ZStream

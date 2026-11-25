@@ -13,6 +13,8 @@ import histos.{
   ProjectDep,
   ProjectGraph,
   ProjectName,
+  ScalaSelection,
+  ScalaToken,
   ScalaVersion,
   ScalaVersions,
   SelectionError,
@@ -335,6 +337,60 @@ object TestCellsSpec extends HistosSpec:
           }) == Right(true),
         )
       }
+    },
+    test("a named exact version keeps that version and one native aggregate") {
+      val asked = TestSelection(
+        TestTargets.Named(ownerName, Nil),
+        PlatformSelection.only(Platform.Native),
+        scala = ScalaSelection.Only(ScalaToken.Exact(v2), Nil),
+      )
+      val planned = TestCells.plan(graph, asked)
+      assertTrue(
+        planned.map(_.requestedCells) == Right(List(cell(owner, v2), cell(core, v2), cell(wire, v2))),
+        planned.map(_.executionGroups) == Right(List(aggregate(v2, true))),
+      )
+    },
+    test("a named series that matches two versions is ambiguous") {
+      val asked = TestSelection(
+        TestTargets.Named(coreName, Nil),
+        PlatformSelection.only(Platform.Jvm),
+        scala = ScalaSelection.Only(ScalaToken.Series3, Nil),
+      )
+      assertTrue(
+        TestCells.plan(graph, asked) == Left(
+          TestSelectionError.Selection(SelectionError.AmbiguousScala(coreName, ScalaToken.Series3, List(v1, v2)))
+        )
+      )
+    },
+    test("a whole-build version filter keeps matches and a missing series drops members") {
+      val kept     = TestCells.plan(graph, TestSelection(scala = ScalaSelection.Only(ScalaToken.Exact(v2), Nil)))
+      val v213     = scala"2.13.18"
+      val owner213 =
+        module(ownerName, native, ScalaVersions(v213, List(v2))).copy(testAggregates = List(coreName, wireName))
+      val core213 = module(coreName, cross, ScalaVersions(v213, List(v2)))
+      val wire3   = module(wireName, cross, ScalaVersions(v2, Nil))
+      val mixed   = ProjectGraph.trusted(List(core213, wire3, owner213))
+      val asked   = TestSelection(
+        TestTargets.Named(ownerName, Nil),
+        PlatformSelection.only(Platform.Native),
+        scala = ScalaSelection.Only(ScalaToken.Series2(13), Nil),
+      )
+      val planned   = TestCells.plan(mixed, asked)
+      val ownerCell = Cell(ownerName, v213, Platform.Native)
+      val coreCell  = Cell(coreName, v213, Platform.Native)
+      assertTrue(
+        kept.map(_.requestedCells.forall(_.version == v2)) == Right(true),
+        kept.map(_.executionGroups.collect { case group: TestExecutionGroup.NativeAggregate => group }) == Right(
+          List(aggregate(v2, true))
+        ),
+        TestCells.plan(graph, TestSelection(scala = ScalaSelection.Only(ScalaToken.Series2(13), Nil))) == Right(
+          TestCellPlan(Nil, Nil, Nil)
+        ),
+        planned.map(_.requestedCells) == Right(List(ownerCell, coreCell)),
+        planned.map(_.executionGroups) == Right(
+          List(TestExecutionGroup.Direct(ownerCell), TestExecutionGroup.Direct(coreCell))
+        ),
+      )
     },
   )
 end TestCellsSpec

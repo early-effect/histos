@@ -33,11 +33,11 @@ object Perform:
   /** Clean adopts generated ownership. Graph-free recovery is a local launcher fallback. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+      case Call.Compile(_, _, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
           Call.PublishWithdraw | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishAssets(_) |
-          Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) |
-          Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_, _) | Call.PreviewTest(_, _, _, _) |
-          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _) |
+          Call.PublishDrop(_) | Call.Graph | Call.Run(_, _, _, _, _, _) | Call.Task(_, _) | Call.Workflow(_) |
+          Call.Format(_, _) | Call.Assembly(_) | Call.PreviewCompile(_, _, _) | Call.PreviewTest(_, _, _, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _, _, _) |
           Call.CacheVerify(_) | Call.Catalog(_) =>
         true
       case Call.Clean(Nil, _) =>
@@ -118,11 +118,21 @@ object Perform:
                 )
 
             call match
-              case Call.Compile(projects, platforms) =>
+              case Call.Compile(projects, platforms, versions) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
-                      Calls.compile(repo, build.graph, projects, jdk, machine, say, build.plugins, platforms)
+                      Calls.compile(
+                        repo,
+                        build.graph,
+                        projects,
+                        jdk,
+                        machine,
+                        say,
+                        build.plugins,
+                        platforms,
+                        versions,
+                      )
                     )
                   )
                 )
@@ -218,7 +228,7 @@ object Perform:
                 held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
               case Call.Assembly(modules) =>
                 held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, modules, say))))
-              case Call.Run(id, platform, launch, args, main) =>
+              case Call.Run(id, platform, launch, args, main, versions) =>
                 held(build =>
                   follow(
                     withJdk(jdk =>
@@ -236,6 +246,7 @@ object Perform:
                         relay,
                         main,
                         Some(build.plugins),
+                        versions,
                       )
                     )
                   )
@@ -264,8 +275,10 @@ object Perform:
                 held(build => Calls.clean(repo, build.graph, projects, say, build.plugins))
               case Call.Clean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewCompile(projects, platforms) =>
-                held(build => Calls.previewCompile(repo, build.graph, projects, say, build.plugins, platforms))
+              case Call.PreviewCompile(projects, platforms, versions) =>
+                held(build =>
+                  Calls.previewCompile(repo, build.graph, projects, say, build.plugins, platforms, versions)
+                )
               case Call.PreviewTest(projects, patterns, _, _) =>
                 held(build => Calls.previewTest(repo, build.graph, projects, patterns, say, build.plugins))
               case Call.PreviewPublishLocal(tokens) =>
@@ -280,8 +293,8 @@ object Perform:
                 held(build => Calls.previewClean(repo, build.graph, projects, say))
               case Call.PreviewClean(_, CleanExtent.Full) =>
                 Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.PreviewProjects)))
-              case Call.PreviewRun(id, platform, main) =>
-                held(build => Calls.previewRun(build.graph, id, platform, say, main))
+              case Call.PreviewRun(id, platform, main, versions) =>
+                held(build => Calls.previewRun(build.graph, id, platform, say, main, versions))
               case Call.Version =>
                 Calls.version(repo, version, say)
               case Call.CachePath =>

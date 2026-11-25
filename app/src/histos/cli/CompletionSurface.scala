@@ -112,10 +112,18 @@ object CompletionSurface:
 
   private val platformFlag =
     Flag("--platform", "Select platforms, repeat or use commas", Some(fixed("jvm", "js", "native")), many = true)
-  private val runFlags = List(platformFlag, Flag("--main", "Select a main class", Some(Slot.Free)))
+  private val scalaFlag =
+    Flag(
+      "--scala",
+      "Select a Scala series or a full version, repeat or use commas",
+      Some(fixed("2.13", "3")),
+      many = true,
+    )
+  private val runFlags = List(platformFlag, scalaFlag, Flag("--main", "Select a main class", Some(Slot.Free)))
 
   private val testFlags = List(
     platformFlag,
+    scalaFlag,
     Flag("--quick", "Skip a suite whose stamp still matches"),
     Flag("--only", "Run suites that match, repeat or use commas", Some(Slot.Free), many = true),
     Flag("--affected", "Intersect with modules from histos affected", Some(Slot.Free)),
@@ -198,7 +206,7 @@ object CompletionSurface:
     Node("help", sentence("help"), args = List(Pos(Slot.Free, many = true, name = "topic"))),
     Node("graph", sentence("graph")),
     Node("observe", sentence("observe")),
-    Node("compile", sentence("compile"), flags = List(platformFlag), args = List(projects)),
+    Node("compile", sentence("compile"), flags = List(platformFlag, scalaFlag), args = List(projects)),
     run,
     Node(
       "clean",
@@ -217,7 +225,7 @@ object CompletionSurface:
       args = List(projects),
     ),
     Node("test", sentence("test"), flags = testFlags, args = List(projects)),
-    Node("coverage", sentence("coverage"), flags = floors, args = List(projects)),
+    Node("coverage", sentence("coverage"), flags = scalaFlag :: floors, args = List(projects)),
     Node("affected", sentence("affected"), flags = List(Flag("--base", "The base commit", Some(Slot.Free)))),
     Node("new", sentence("new"), flags = scaffold, args = List(Pos(Slot.Free, name = "name"))),
     Node(
@@ -349,7 +357,7 @@ object CompletionSurface:
       "preview",
       sentence("preview"),
       children = List(
-        Node("compile", "Show the compile plan", flags = List(platformFlag), args = List(projects)),
+        Node("compile", "Show the compile plan", flags = List(platformFlag, scalaFlag), args = List(projects)),
         Node("test", "Show the test plan", flags = testFlags, args = List(projects)),
         Node(
           "publish",

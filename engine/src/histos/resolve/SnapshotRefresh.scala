@@ -25,7 +25,7 @@ object SnapshotRefresh:
   def selectors(command: CommandIdentity): List[ProjectName] =
     command match
       case CommandIdentity.Refresh(names) => names
-      case CommandIdentity.Compile(_, _) | CommandIdentity.Test(_) | CommandIdentity.Run(_, _, _) |
+      case CommandIdentity.Compile(_, _, _) | CommandIdentity.Test(_) | CommandIdentity.Run(_, _, _, _) |
           CommandIdentity.Resolve(_) | CommandIdentity.Task(_) | CommandIdentity.Format | CommandIdentity.Publish |
           CommandIdentity.Other(_) =>
         Nil

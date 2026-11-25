@@ -92,5 +92,22 @@ object ColumnSpec extends HistosSpec:
       val (out, err) = Show.transcript(repo, events)
       assertTrue(out == Chunk("api    3.10.1 jvm compiling"), err.isEmpty)
     },
+    test("two Scala versions print a tally each and one version does not") {
+      val two = Lines.versionTallies(
+        List(
+          Lines.VersionTally("3.10.1", 3, 0, 0),
+          Lines.VersionTally("2.13.18", 3, 0, 0),
+        )
+      )
+      val one = Lines.versionTallies(List(Lines.VersionTally("3.10.1", 6, 0, 0)))
+      assertTrue(
+        two == List(
+          "2.13.18 passed: 3 failed: 0 cached: 0",
+          "3.10.1 passed: 3 failed: 0 cached: 0",
+        ),
+        one.isEmpty,
+        Lines.suites(6, 0, 0, 6).contains("tests passed: 6 failed: 0 cached: 0 modules: 6"),
+      )
+    },
   )
 end ColumnSpec

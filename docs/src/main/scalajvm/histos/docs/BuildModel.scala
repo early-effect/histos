@@ -33,8 +33,15 @@ There are three platforms. `Jvm` is a JVM program or library. `Js` is Scala.js. 
 is Scala Native. On the command line the tokens are `jvm`, `js`, and `native`.
 `histos run <module> --platform js` selects that module's Scala.js cell, if it
 supports Scala.js. Positional platform tokens are not run selectors.
+
+`--scala 2.13` and `--scala 3` select a series. `--scala 2.13.18` selects that full
+version. Omission keeps every declared version of the modules you asked for. A named
+module refuses a token that matches nothing and a series that matches two of its
+versions. `histos run` starts one process, so it needs one Scala version and one
+platform.
 """,
       cite[histos.Platform](_.token),
+      cite[histos.ScalaSelection]((asked, module: histos.ProjectName) => asked.require(module, _)),
     ),
     section("Versions and dependencies are checked when the build file compiles")(
       md"""

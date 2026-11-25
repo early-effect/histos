@@ -31,8 +31,12 @@ enum VerifyRun:
         case PlatformSelection.All          => Nil
         case PlatformSelection.Only(chosen) =>
           List("--platform", chosen.all.distinct.map(_.token).mkString(","))
+      val versions = selection.scala match
+        case ScalaSelection.All               => Nil
+        case ScalaSelection.Only(first, rest) =>
+          List("--scala", (first :: rest).map(_.label).mkString(","))
       val affected = selection.affected.toList.flatMap(names => List("--affected", jsonModules(names)))
-      (List("test") ++ modules ++ platforms ++ affected).mkString(" ")
+      (List("test") ++ modules ++ platforms ++ versions ++ affected).mkString(" ")
 
   private def jsonModules(modules: List[ProjectName]): String =
     "'[" + modules.distinct.map(name => "\"" + name.value + "\"").mkString(",") + "]'"

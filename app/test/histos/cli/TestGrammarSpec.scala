@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.testrun.{SuitePattern, TagName, TagNameError, TestFilter, TestMode, TestTerm, TestTermError}
-import histos.ProjectName
+import histos.{Platform, PlatformSelection, ProjectName, ScalaSelection, ScalaToken, SelectionError}
 import histos.suite.HistosSpec
 
 import zio.test.*
@@ -171,6 +171,44 @@ object TestGrammarSpec extends HistosSpec:
           Command.PreviewCompile(
             List(ProjectName("api")),
             histos.PlatformSelection.only(histos.Platform.Jvm, histos.Platform.Js),
+          )
+        ),
+      )
+    },
+    test("scala series, a comma list, a run of two tokens, and non-jvm coverage are typed") {
+      val series = ScalaSelection.Only(ScalaToken.Series2(13), Nil)
+      val both   = ScalaSelection.Only(ScalaToken.Series2(13), List(ScalaToken.Series3))
+      for
+        tested   <- Grammar.parse(List("test", "core", "--scala", "2.13", "--platform", "js")).either
+        compiled <- Grammar.parse(List("compile", "core", "--scala", "2.13,3")).either
+        refused  <- Grammar.parse(List("run", "app", "--scala", "2.13,3")).either
+        missing  <- Grammar.parse(List("compile", "--scala")).either
+        coverage <- Grammar.parse(List("coverage", "--platform", "js")).either
+        measured <- Grammar.parse(List("coverage", "core", "--platform", "jvm", "--scala", "3")).either
+      yield assertTrue(
+        tested == Right(
+          Command.Test(
+            List(ProjectName("core")),
+            AffectedChoice.Unset,
+            TestMode.Run,
+            Nil,
+            TestFilter.empty,
+            PlatformSelection.only(Platform.Js),
+            series,
+          )
+        ),
+        compiled == Right(Command.Compile(List(ProjectName("core")), scala = both)),
+        refused == Left(
+          CliParseError.Selection(SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)))
+        ),
+        missing == Left(CliParseError.Pattern("--scala needs a Scala version")),
+        coverage == Left(CliParseError.Pattern("coverage measures the JVM only")),
+        measured == Right(
+          Command.Coverage(
+            List(ProjectName("core")),
+            histos.CoverageFloors(),
+            histos.coverage.Excludes(Nil, Nil),
+            ScalaSelection.Only(ScalaToken.Series3, Nil),
           )
         ),
       )

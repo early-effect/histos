@@ -74,6 +74,7 @@ enum Command:
       platform: Option[histos.PlatformSelection],
       args: List[String],
       main: Option[histos.MainClass] = None,
+      scala: Option[histos.ScalaSelection] = None,
   )
   case Plugin(id: PluginTaskId, args: PluginArgs)
   case Test(
@@ -83,15 +84,21 @@ enum Command:
       patterns: List[SuitePattern],
       filter: TestFilter,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
   )
   case Coverage(
       projects: List[ProjectName],
       floors: histos.CoverageFloors,
       excludes: histos.coverage.Excludes,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
   )
   case Affected(base: String)
   case Watch(command: Command, args: List[String])
-  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
+  case Compile(
+      projects: List[ProjectName],
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
+  )
   case Clean(projects: List[ProjectName], extent: histos.server.CleanExtent)
   case Assembly(modules: List[String])
   case PublishCheck(tokens: List[histos.publish.PublishToken], base: Option[String])
@@ -119,7 +126,11 @@ enum Command:
   case Reboot
   case Stop
   case Cancel(id: RunId)
-  case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
+  case PreviewCompile(
+      projects: List[ProjectName],
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
+  )
   case PreviewTest(
       projects: List[ProjectName],
       affected: AffectedChoice,
@@ -127,11 +138,17 @@ enum Command:
       patterns: List[SuitePattern],
       filter: TestFilter,
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
   )
   case PreviewPublishLocal(tokens: List[histos.publish.PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: histos.server.CleanExtent)
-  case PreviewRun(id: TaskId, platform: Option[histos.PlatformSelection], main: Option[histos.MainClass] = None)
+  case PreviewRun(
+      id: TaskId,
+      platform: Option[histos.PlatformSelection],
+      main: Option[histos.MainClass] = None,
+      scala: Option[histos.ScalaSelection] = None,
+  )
   case PreviewPlugin(id: PluginTaskId)
   case Observe
   case New(name: String, choice: ScaffoldChoice, branch: Option[String])
@@ -195,6 +212,7 @@ enum CliParseError:
   case TextList(error: histos.TextListError)
   case MainClass(error: histos.MainClassError)
   case TaskPlatform(name: String)
+  case TaskScala(name: String)
   case Retired(word: String, use: String)
   case Pattern(detail: String)
   case ProjectName(error: ProjectNameError)
@@ -224,6 +242,7 @@ enum CliParseError:
     case TextList(error)      => SelectionText.text(error)
     case MainClass(error)     => error.message
     case TaskPlatform(name)   => s"run $name does not take a platform"
+    case TaskScala(name)      => s"run $name does not take a Scala version"
     case Retired(word, use)   => s"$word was removed\nuse $use"
     case Pattern(detail)      => detail
     case ProjectName(error)   => error.message
@@ -307,7 +326,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [--platform <jvm|js|native>] [--main <class>] | test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] [--platform <jvm,js,native>] | clean [project ...] [--full] | assembly <module> ... | publish check [--base <sha|all>] [token ...] | publish local [--base <sha|all>] [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] [--platform <jvm,js,native>] | preview test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [--platform <jvm|js|native>] [--main <class>] | completion [install] [zsh|bash])"
+    "usage: histos (version | graph | run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | coverage [--scala <2.13|3|version>] [--platform jvm] [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | ~ <command> | compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] | clean [project ...] [--full] | assembly <module> ... | publish check [--base <sha|all>] [token ...] | publish local [--base <sha|all>] [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | cache forget <namespace|module> | cache verify [module ...] | resolve [--update | --check | --refresh [module ...]] [--lock=offer|update|local|frozen] | workflow [--check | --update] | --explain <check-id> | doctor [project ...] [--area <area>] [--json] [--preflight <job>] [--verbose] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] | preview test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>] | preview publish local [token ...] | preview publish snapshots [token ...] | preview clean [project ...] [--full] | preview run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] | completion [install] [zsh|bash])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -475,6 +494,7 @@ object Cli:
                               floors,
                               excludes,
                               at,
+                              asked.scala,
                             ),
                             histos.coverage.CoverageLines(
                               out = line => Console.printLine(line).ignore,
@@ -788,19 +808,27 @@ object Cli:
         )
       case Command.ToolchainClient =>
         toolchainClient
-      case Command.Graph                         => graph(repo, apiJar)
-      case Command.Run(id, platform, args, main) => run(repo, apiJar, id, platform, args, main)
-      case Command.Plugin(id, pluginArgs)        =>
+      case Command.Graph                                   => graph(repo, apiJar)
+      case Command.Run(id, platform, args, main, versions) =>
+        run(repo, apiJar, id, platform, args, main, versions)
+      case Command.Plugin(id, pluginArgs) =>
         plugin(repo, apiJar, id, pluginArgs)
-      case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
-        test(repo, apiJar, AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
+      case Command.Test(projects, affected, mode, patterns, filter, platforms, versions) =>
+        test(
+          repo,
+          apiJar,
+          AffectedChoice.selection(projects, affected, platforms, versions),
+          patterns,
+          mode,
+          filter,
+        )
       case asked: Command.Coverage =>
         ZIO.serviceWithZIO[Machine]: machine =>
           stamped.flatMap(at => cover(repo, apiJar, machine, asked, at))
-      case Command.Affected(base)               => affected(repo, apiJar, base)
-      case Command.Watch(inner, _)              => watch(repo, apiJar, inner)
-      case Command.Compile(projects, platforms) => compile(repo, apiJar, projects, platforms)
-      case Command.Clean(projects, extent)      =>
+      case Command.Affected(base)                         => affected(repo, apiJar, base)
+      case Command.Watch(inner, _)                        => watch(repo, apiJar, inner)
+      case Command.Compile(projects, platforms, versions) => compile(repo, apiJar, projects, platforms, versions)
+      case Command.Clean(projects, extent)                =>
         clean(repo, apiJar, projects, extent)
       case Command.Assembly(modules)          => assembly(repo, apiJar, modules)
       case Command.PublishCheck(tokens, base) =>
@@ -840,23 +868,23 @@ object Cli:
       case Command.Fmt(targets, mode) =>
         val call = Call.Format(targets, mode)
         attach(repo, call, locally(repo, apiJar, call))
-      case Command.Reload                              => reload(repo)
-      case Command.Reboot                              => reboot(repo)
-      case Command.Stop                                => stop(repo)
-      case Command.Cancel(id)                          => cancel(repo, id)
-      case Command.PreviewCompile(projects, platforms) =>
-        val call = Call.PreviewCompile(projects, platforms)
+      case Command.Reload                                        => reload(repo)
+      case Command.Reboot                                        => reboot(repo)
+      case Command.Stop                                          => stop(repo)
+      case Command.Cancel(id)                                    => cancel(repo, id)
+      case Command.PreviewCompile(projects, platforms, versions) =>
+        val call = Call.PreviewCompile(projects, platforms, versions)
         attach(repo, call, locally(repo, apiJar, call))
-      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
-        previewTest(repo, apiJar, projects, affected, mode, patterns, filter, platforms)
+      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms, versions) =>
+        previewTest(repo, apiJar, projects, affected, mode, patterns, filter, platforms, versions)
       case Command.PreviewPublishLocal(tokens) =>
         previewPublishLocal(repo, apiJar, tokens)
       case Command.PreviewPublishSnapshots(tokens) =>
         previewPublishSnapshots(repo, apiJar, tokens)
       case Command.PreviewClean(projects, extent) =>
         previewClean(repo, apiJar, projects, extent)
-      case Command.PreviewRun(id, platform, main) =>
-        previewRun(repo, apiJar, id.value, platform, main)
+      case Command.PreviewRun(id, platform, main, versions) =>
+        previewRun(repo, apiJar, id.value, platform, main, versions)
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None, None)
       case Command.Observe                   => observe(repo)
@@ -1249,10 +1277,11 @@ object Cli:
       platform: Option[histos.PlatformSelection],
       args: List[String],
       main: Option[histos.MainClass],
+      versions: Option[histos.ScalaSelection] = None,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
     val built =
       if id.builtIn then ZIO.succeed(Call.Task(id.value, PluginArgs.empty))
-      else histos.process.Shells.capture.map(launch => Call.Run(id.value, platform, launch, args, main))
+      else histos.process.Shells.capture.map(launch => Call.Run(id.value, platform, launch, args, main, versions))
     built.flatMap(call => attach(repo, call, locally(repo, apiJar, call)))
 
   private def compile(
@@ -1260,8 +1289,9 @@ object Cli:
       apiJar: Path,
       projects: List[ProjectName],
       platforms: histos.PlatformSelection,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects, platforms)), platforms)
+    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects, platforms, versions)), platforms, versions)
 
   /** `miss` is forced only when the socket is missing or dead, so a hit never builds [[compileServices]]. */
   private[histos] def compileAt[R](
@@ -1269,8 +1299,9 @@ object Cli:
       projects: List[ProjectName],
       miss: => URIO[R, Completed],
       platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    val call = Call.Compile(projects, platforms)
+    val call = Call.Compile(projects, platforms, versions)
     LockDisposition.unapplied(call, summon[LockChoice].mode) match
       case Some(mode) =>
         ZIO.succeed(held("", CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode)))))
@@ -1489,8 +1520,10 @@ object Cli:
       patterns: List[SuitePattern],
       filter: TestFilter,
       platforms: histos.PlatformSelection,
+      versions: histos.ScalaSelection = histos.ScalaSelection.All,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    val call = Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
+    val call =
+      Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms, versions), patterns, mode, filter)
     attach(repo, call, locally(repo, apiJar, call))
 
   private def previewPublishLocal(
@@ -1591,11 +1624,12 @@ object Cli:
       id: String,
       platform: Option[histos.PlatformSelection],
       main: Option[histos.MainClass],
+      versions: Option[histos.ScalaSelection] = None,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
     attach(
       repo,
-      Call.PreviewRun(id, platform, main),
-      locally(repo, apiJar, Call.PreviewRun(id, platform, main)),
+      Call.PreviewRun(id, platform, main, versions),
+      locally(repo, apiJar, Call.PreviewRun(id, platform, main, versions)),
     )
 
   private def previewRunLocal(
@@ -1698,7 +1732,7 @@ object Cli:
     val call = Call.PublishAssets(tokens)
     attach(repo, call, locally(repo, apiJar, call))
 
-  /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite.
+  /** Compile the selected cells, then one subprocess per cell. `no tests` is success and is not a passing suite.
     */
   private def test(
       repo: Path,
@@ -2694,12 +2728,16 @@ object Cli:
   /** The call a batch command sends. Other commands stay on the JVM route. */
   private[histos] def callOf(command: Command): UIO[Option[Call]] =
     command match
-      case Command.Compile(projects, platforms) => ZIO.succeed(Some(Call.Compile(projects, platforms)))
-      case Command.Test(projects, affected, mode, patterns, filter, platforms) =>
-        ZIO.succeed(Some(Call.Test(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)))
-      case Command.Run(id, platform, args, main) =>
+      case Command.Compile(projects, platforms, versions) =>
+        ZIO.succeed(Some(Call.Compile(projects, platforms, versions)))
+      case Command.Test(projects, affected, mode, patterns, filter, platforms, versions) =>
+        ZIO.succeed(
+          Some(Call.Test(AffectedChoice.selection(projects, affected, platforms, versions), patterns, mode, filter))
+        )
+      case Command.Run(id, platform, args, main, versions) =>
         if id.builtIn then ZIO.succeed(Some(Call.Task(id.value, PluginArgs.empty)))
-        else histos.process.Shells.capture.map(launch => Some(Call.Run(id.value, platform, launch, args, main)))
+        else
+          histos.process.Shells.capture.map(launch => Some(Call.Run(id.value, platform, launch, args, main, versions)))
       case Command.Clean(projects, extent) => ZIO.succeed(Some(Call.Clean(projects, extent)))
       case Command.Fmt(targets @ (histos.format.FormatTargets.Build | histos.format.FormatTargets.Projects(_)), mode) =>
         ZIO.succeed(Some(Call.Format(targets, mode)))
@@ -2739,7 +2777,7 @@ object Cli:
         toolchainClient
       case Command.Graph =>
         attach(repo, Call.Graph, inProcessReady(repo)((api, machine) => withLoader(machine)(graphLocal(repo, api))))
-      case Command.Run(_, _, _, _) =>
+      case Command.Run(_, _, _, _, _) =>
         dispatched(line.command)(call => served(repo, call))
       case Command.Plugin(id, pluginArgs) =>
         served(repo, Call.Task(id.render, pluginArgs))
@@ -2774,8 +2812,8 @@ object Cli:
                       withLocal(machine)(retarget(repo, api, inner, sealedCall).flatMap(run))
                     )
                   case _ => run(sealedCall)
-      case Command.Compile(projects, platforms) =>
-        dispatched(line.command)(call => compileAt(repo, projects, compileServices(repo, call), platforms))
+      case Command.Compile(projects, platforms, versions) =>
+        dispatched(line.command)(call => compileAt(repo, projects, compileServices(repo, call), platforms, versions))
       case Command.Fmt(targets, mode) =>
         served(repo, Call.Format(targets, mode))
       case Command.Clean(projects, extent) =>
@@ -2861,14 +2899,15 @@ object Cli:
         stop(repo)
       case Command.Cancel(id) =>
         cancel(repo, id)
-      case Command.PreviewCompile(projects, platforms) =>
+      case Command.PreviewCompile(projects, platforms, versions) =>
         attach(
           repo,
-          Call.PreviewCompile(projects, platforms),
-          compileServices(repo, Call.PreviewCompile(projects, platforms)),
+          Call.PreviewCompile(projects, platforms, versions),
+          compileServices(repo, Call.PreviewCompile(projects, platforms, versions)),
         )
-      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms) =>
-        val call = Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms), patterns, mode, filter)
+      case Command.PreviewTest(projects, affected, mode, patterns, filter, platforms, versions) =>
+        val call =
+          Call.PreviewTest(AffectedChoice.selection(projects, affected, platforms, versions), patterns, mode, filter)
         attach(repo, call, compileServices(repo, call))
       case Command.PreviewPublishLocal(tokens) =>
         val call  = Call.PreviewPublishLocal(tokens)
@@ -2903,11 +2942,11 @@ object Cli:
               if projects.isEmpty then previewCleanAll(repo)
               else loadedMiss(repo)(previewCleanLocal(repo, _, projects)),
             )
-      case Command.PreviewRun(id, platform, main) =>
+      case Command.PreviewRun(id, platform, main, versions) =>
         attach(
           repo,
-          Call.PreviewRun(id.value, platform, main),
-          compileServices(repo, Call.PreviewRun(id.value, platform, main)),
+          Call.PreviewRun(id.value, platform, main, versions),
+          compileServices(repo, Call.PreviewRun(id.value, platform, main, versions)),
         )
       case Command.PreviewPlugin(id) =>
         attach(repo, Call.PreviewRun(id.render, None), loadedMiss(repo)(previewRunLocal(_, id.render, None)))
