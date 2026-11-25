@@ -64,8 +64,9 @@ the handoff without relying on a temporary source-launcher script.
       md"""
 `histos publish check` compiles the published JVM members the diff selects and compares
 them. It writes no Ivy files and moves no snapshot pointer. `histos publish local` writes
-the snapshot coordinate of your current commit into the local Ivy repository, so another
-project on this machine can depend on it before you publish anywhere else. Both follow
+the snapshot coordinate of your current commit into the local Ivy repository and does not
+upload it, so another project on this machine can depend on it before you publish anywhere
+else. Both follow
 the same selection as `histos affected`: a build file, a failed diff, `--base all`, or no
 base compares every published JVM member. A member the diff did not select is named and
 is not reported as compatible.
@@ -108,10 +109,10 @@ binary problems require a minor bump. A catalog number that already covers the r
 component passes.
 
 Job preflight is product-independent: it checks prerequisites before compilation,
-not compatibility of classes that do not exist yet. A pin host's compatibility job runs
-`histos publish check`. A local host's publish job runs `histos publish local`. Neither
-compiles the world and then asks doctor to read classfiles. Missing or incomplete
-evidence fails closed.
+not compatibility of classes that do not exist yet. A catalog's `compatibility` job runs
+`histos publish check`. Generated workflows do not run `histos publish local`. Preflight
+does not compile the world and then ask doctor to read classfiles. Missing or incomplete
+evidence fails the check.
 
 `publish check` compiles only the selected closure, because it writes nothing. `publish
 local`, `publish snapshots`, and `publish release` still compile and write what they

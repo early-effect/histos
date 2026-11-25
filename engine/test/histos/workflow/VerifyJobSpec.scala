@@ -27,8 +27,6 @@ import zio.test.*
 object VerifyJobSpec extends ZIOSpecDefault:
   private val ShipCommit = "0123456789abcdef0123456789abcdef01234567"
   private val Setup      = "early-effect/histos/.github/actions/setup@"
-  private val NoClient   = "install/histos toolchain install --no-client"
-  private val WithClient = "install/histos toolchain install --client"
   private val api        = module("api", Jvm)(ScalaVersion("3.10.1"))
   private val host       = VerifyRun.BuiltIn(TaskName("host"))
 
@@ -115,18 +113,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
         job.contains("PR_BASE") && !job.contains("doctor --area release") && !job.contains("./histos compile") &&
         !job.contains("continue-on-error") && !job.contains("--preflight") &&
         !job.contains("HISTOS_CACHE_MODE") &&
-        slice(body, "supply-chain").contains("./histos compile --platform jvm"))
-    },
-    test("a local suite does not reserve the compatibility job name") {
-      val task = VerifyTask(JobName("compatibility"), host)
-      val text = render(
-        Projects.publishLocalSuite.verify(task)(ships(Ship("libs").next(0, 1, 0)(api)), api),
-        NpmLock.Absent,
-      )
-      assertTrue(text.exists: body =>
-        slice(body, "compatibility").contains("./histos run host") &&
-          !body.contains("./histos publish check") &&
-          slice(body, "publish").contains("./histos publish local --base \"$base\""))
+        !slice(body, "supply-chain").contains("./histos compile"))
     },
     test("a user job cannot collide with the complete compatibility check") {
       val task = VerifyTask(JobName("compatibility"), host)
@@ -162,47 +149,15 @@ object VerifyJobSpec extends ZIOSpecDefault:
         text.map(_.contains("install/histos toolchain install")) == Right(false),
       )
     },
-    test("a local suite publishes, and the suite installs that jar") {
-      val task = VerifyTask(JobName("client"), host, ClientLink.Native)
+    test("a catalog with docs and format installs the pin and checks compatibility") {
       val text = render(
-        Projects.runnerTools(llvm).docCheck.scalafmt.publishLocalSuite.verify(task)(api),
+        Projects.docCheck.scalafmt(ships(Ship("libs").next(0, 1, 0)(api)), api),
         NpmLock.Absent,
       )
-      assertTrue(
-        text.map(body =>
-          !body.contains("HISTOS_SESSION") && !body.contains("HISTOS_BRANCH") &&
-            !body.contains("\n  compatibility:\n") &&
-            slice(body, "publish").contains("./histos publish local --base \"$base\"") &&
-            slice(body, "publish").contains("base=all") &&
-            slice(body, "publish").contains("PR_BASE") &&
-            !slice(body, "publish").contains("doctor --area release") &&
-            !slice(body, "workflow").contains("doctor --area release")
-        ) == Right(true),
-        text.map(body => publishHost(slice(body, "publish")) && publishStores(slice(body, "publish"))) == Right(
-          true
-        ),
-        text.map(body =>
-          suiteInstall(slice(body, "test")) && restoresStore(slice(body, "test")) && slice(body, "test").contains(
-            "    needs: [affected, publish]"
-          ) && slice(body, "test").contains("*LockInvocationSpec*") && slice(body, "test").contains(
-            "*InstalledCompilerPayloadSpec*"
-          )
-        ) == Right(true),
-        text.map(body =>
-          suiteInstall(slice(body, "scaladoc")) && restoresStore(slice(body, "scaladoc")) &&
-            slice(body, "scaladoc").contains("    needs: [affected, publish]") &&
-            !slice(body, "scaladoc").contains("actions/cache/save@")
-        ) == Right(true),
-        text.map(body =>
-          suiteInstall(slice(body, "format")) && slice(body, "format").contains(
-            "    needs: [affected, publish]"
-          ) && !slice(body, "format").contains("~/.cache/histos")
-        ) == Right(true),
-        text.map(body =>
-          clientJob(slice(body, "client")) && !slice(body, "client").contains("~/.cache/histos")
-        ) == Right(true),
-        text.map(body => seedStays(slice(body, "cache-seed"))) == Right(true),
-      )
+      assertTrue(text.exists: body =>
+        !body.contains("\n  publish:\n") && !body.contains("\n  client:\n") && !body.contains("name: host") &&
+          slice(body, "test").contains(Setup) && slice(body, "test").contains("    needs: affected") &&
+          slice(body, "compatibility").contains("./histos publish check"))
     },
     test("a pin verify task runs on the setup action and does not publish") {
       val task = VerifyTask(JobName("client"), host, ClientLink.Skip)
@@ -295,43 +250,6 @@ object VerifyJobSpec extends ZIOSpecDefault:
 
   private def bare(job: String): Boolean =
     !job.contains("setup-node") && !job.contains("npm ci")
-
-  private def publishHost(job: String): Boolean =
-    job.contains("./histos publish local") && job.contains("name: host") && job.contains(Setup) &&
-      job.contains("id: llvm")
-
-  private def publishStores(job: String): Boolean =
-    val restoreAt = job.indexOf("actions/cache/restore@")
-    val publishAt = job.indexOf("./histos publish local")
-    val saveAt    = job.indexOf("actions/cache/save@")
-    restoreAt >= 0 && publishAt > restoreAt && saveAt > publishAt &&
-    job.contains("path: \"~/.cache/histos\"") &&
-    job.contains("histos-store-") &&
-    job.contains("HISTOS_CACHE_NAMESPACE:") &&
-    job.contains("HISTOS_CACHE_MODE: \"write\"")
-
-  private def restoresStore(job: String): Boolean =
-    job.contains("actions/cache/restore@") &&
-      job.contains("path: \"~/.cache/histos\"") &&
-      job.contains("histos-store-")
-
-  private def suiteInstall(job: String): Boolean =
-    job.contains(NoClient) && !job.contains(Setup) && pinsEnv(job)
-
-  /** The job selects the jar it just installed. Later steps see `GITHUB_ENV`. The pin file stays. */
-  private def pinsEnv(job: String): Boolean =
-    job.contains("printf 'HISTOS_PIN=%s\\n' \"$version\" >> \"$GITHUB_ENV\"") &&
-      job.contains("export HISTOS_PIN=\"$version\"") &&
-      !job.contains("mkdir -p .histos") &&
-      !job.contains("> .histos/toolchain")
-
-  private def clientJob(job: String): Boolean =
-    job.contains(WithClient) && pinsEnv(job) && job.contains("./histos run host") && job.contains("id: llvm") &&
-      job.contains("path: \"~/.cache/coursier/v1\"") && !job.contains(Setup) && !job.contains("setup-node") &&
-      !job.contains("playwright")
-
-  private def seedStays(job: String): Boolean =
-    job.contains(Setup) && job.contains("github.event_name == 'push'") && job.contains("needs: [affected]")
 
   private def render(
       built: Either[BuildError, ProjectGraph],

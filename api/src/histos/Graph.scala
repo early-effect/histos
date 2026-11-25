@@ -170,7 +170,6 @@ final case class ProjectGraph private (
     theme: Theme = Theme.standard,
     intent: ResolutionIntent = ResolutionIntent.Inherit,
     verify: List[VerifyTask] = Nil,
-    suiteHost: SuiteHost = SuiteHost.Pin,
 ):
   /** Width of the longest project name. Compile and test lines pad the name to it. */
   val moduleColumn: Int =
@@ -245,7 +244,6 @@ object ProjectGraph:
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
       verify: List[VerifyTask] = Nil,
-      suiteHost: SuiteHost = SuiteHost.Pin,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -271,7 +269,6 @@ object ProjectGraph:
       theme,
       intent,
       verify,
-      suiteHost,
     )
 end ProjectGraph
 
@@ -310,9 +307,6 @@ object Projects:
 
   /** Appends one task the verify section runs. A second call appends. */
   def verify(task: VerifyTask): Organized = Organized.empty.verify(task)
-
-  /** Test, scaladoc, format, and verify install Histos from `./histos publish local`. */
-  def publishLocalSuite: Organized = Organized.empty.publishLocalSuite
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
@@ -459,7 +453,6 @@ object Projects:
             settings.theme,
             settings.intent,
             settings.verify,
-            settings.suiteHost,
           )
         )
       _ <- GraphContracts.verify(builtGraph)
@@ -1098,10 +1091,6 @@ final class Organized private (settings: Organized.Settings):
   def verify(task: VerifyTask): Organized =
     Organized(settings.copy(verify = settings.verify :+ task))
 
-  /** Test, scaladoc, format, and verify install Histos from `./histos publish local`. A second call stays local. */
-  def publishLocalSuite: Organized =
-    Organized(settings.copy(suiteHost = SuiteHost.Local))
-
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
@@ -1245,7 +1234,6 @@ object Organized:
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
       verify: List[VerifyTask] = Nil,
-      suiteHost: SuiteHost = SuiteHost.Pin,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())

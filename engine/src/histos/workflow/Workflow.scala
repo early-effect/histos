@@ -26,7 +26,6 @@ import histos.{
   Publishing,
   Resolution,
   RunnerTools,
-  SuiteHost,
   ToolRevision,
   VerifyTask,
 }
@@ -254,7 +253,7 @@ object Workflow:
     val taken         = graph.verify.exists(_.name == compatibility) || graph.plugins.exists(
       _.contribution.jobs.exists(_.name == compatibility)
     )
-    if emitsCompatibility(graph) && taken then Left(CiError.Fault(histos.CiFault.RenderedJob(compatibility)))
+    if graph.catalog.ships.nonEmpty && taken then Left(CiError.Fault(histos.CiFault.RenderedJob(compatibility)))
     else Right(())
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
@@ -374,7 +373,7 @@ object Workflow:
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             =>
-        val proof = if emitsCompatibility(graph) then List(compatibilityJob(graph)) else Nil
+        val proof = if graph.catalog.ships.nonEmpty then List(compatibilityJob(graph)) else Nil
         List(versionsJob(graph)) ++ proof
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
@@ -385,13 +384,10 @@ object Workflow:
     val format = graph.formatting match
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(formatJob(graph))
-    val seed    = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
-    val publish = graph.suiteHost match
-      case SuiteHost.Pin   => Nil
-      case SuiteHost.Local => List(publishJob(graph))
+    val seed   = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
     val verify = verification.map((task, cells) => verifyJob(graph, task, cells))
     val body   =
-      List(affectedJob(graph)) ++ publish ++ test ++ versions ++ doc ++ coverage ++ format ++ verify ++ planned.ci ++
+      List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ format ++ verify ++ planned.ci ++
         seed ++ List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -1055,18 +1051,15 @@ object Workflow:
     ) ++ storeSave).mkString("\n")
 
   private def testJob(jobs: List[TestJob], graph: ProjectGraph, lock: NpmLock)(using RenderingShip): List[String] =
-    val needs   = jobs.map(job => toolNeed(graph, stagesOf(job), graph.runnerTools))
-    val any     = needs.foldLeft(ToolNeed(Set.empty))(_ || _)
-    val matrix  = jobs.size > 1
-    val scope   = if matrix then MatrixScope.Cell else MatrixScope.Whole
-    val install = npmInstall(jobs, graph, lock, scope)
-    val prepare = steps(graph.runnerTools, graph.resolution, any, scope, install)
-    val columns = if matrix && any.any then ToolColumns.On else ToolColumns.Off
-    val depends = graph.suiteHost match
-      case SuiteHost.Pin   => "    needs: affected"
-      case SuiteHost.Local => "    needs: [affected, publish]"
-    val installed = suiteCli(graph, "test")
-    val proved    = suiteProof(graph)
+    val needs     = jobs.map(job => toolNeed(graph, stagesOf(job), graph.runnerTools))
+    val any       = needs.foldLeft(ToolNeed(Set.empty))(_ || _)
+    val matrix    = jobs.size > 1
+    val scope     = if matrix then MatrixScope.Cell else MatrixScope.Whole
+    val install   = npmInstall(jobs, graph, lock, scope)
+    val prepare   = steps(graph.runnerTools, graph.resolution, any, scope, install)
+    val columns   = if matrix && any.any then ToolColumns.On else ToolColumns.Off
+    val depends   = "    needs: affected"
+    val installed = coursierCli(graph, "test")
     jobs match
       case aggregate :: Nil =>
         List(
@@ -1079,20 +1072,16 @@ object Workflow:
           "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ installed ++ prepare ++ storeRestore ++ proved ++ testRun(
+        ) ++ installed ++ prepare ++ storeRestore ++ testRun(
           shellArgv(argv(aggregate))
         ) ++ storeSave
       case _ =>
-        val actions = graph.suiteHost match
-          case SuiteHost.Pin   => Nil
-          case SuiteHost.Local => List("      actions: read")
         List(
           "  test:"
         ) ++ List(depends) ++ verifyNeeds ++ List(
           s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
-          "    permissions:"
-        ) ++ actions ++ List(
+          "    permissions:",
           "      contents: read",
           "    strategy:",
           "      fail-fast: false",
@@ -1101,7 +1090,7 @@ object Workflow:
         ) ++ jobs.flatMap(job => include(job, graph, columns, install)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ installed ++ prepare ++ proved ++ testRun("${{ matrix.command }}")
+        ) ++ installed ++ prepare ++ testRun("${{ matrix.command }}")
 
   private def include(
       job: TestJob,
@@ -1206,9 +1195,8 @@ object Workflow:
   /** Restore, then the work, then save. The work writes new products into the restored store. A taken key is deleted
     * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
     * restore hit, because a miss has no key to replace. A matrix is more than one writer, so it does not open this
-    * scope. A local suite's publish restores and saves: test and scaladoc install that jar and compile the same
-    * sources. The doc check restores and does not save. Versions, plugin docs, deploy, workflow, and release do not
-    * either.
+    * scope. The single test job restores and saves. The doc check restores and does not save. Format, versions, plugin
+    * docs, deploy, workflow, and release do not either.
     */
   private val StorePath = "~/.cache/histos"
 
@@ -1265,20 +1253,13 @@ object Workflow:
   /** A writing step. The namespace is the caller's. The mode is write, and a laptop that copies this file still opens
     * as read.
     */
-  /** The same base script as `affected`, then one publish command. Cache write stays on the local publish job. */
-  private def proofStep(command: String, writeCache: Boolean): List[String] =
-    val cache =
-      if writeCache then
-        List(
-          s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
-          s"          ${CacheConfig.ModeKey}: ${quote("write")}",
-        )
-      else Nil
+  /** The same base script as `affected`, then `publish check`. */
+  private def proofStep(command: String): List[String] =
     script(diffBase + "\n" + command) ++ List(
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
       "          PR_BASE: ${{ github.event.pull_request.base.sha }}",
-    ) ++ cache
+    )
 
   private def cacheWrite(namespace: String, command: String): List[String] =
     List(
@@ -1349,12 +1330,14 @@ object Workflow:
     )
     val lines = List(
       "  scaladoc:"
-    ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
-    ) ++ jobLimit(graph) ++ readPermissions(graph.suiteHost == SuiteHost.Local) ++ List(
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ suiteCli(graph, "scaladoc") ++ prepare ++ storeRestore ++ List(
+    ) ++ coursierCli(graph, "scaladoc") ++ prepare ++ storeRestore ++ List(
       s"      - run: ${quote("./histos run doc")}"
     )
     lines.mkString("\n")
@@ -1399,12 +1382,14 @@ object Workflow:
       )
     (List(
       "  format:"
-    ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
-    ) ++ jobLimit(graph) ++ readPermissions(graph.suiteHost == SuiteHost.Local) ++ List(
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ suiteCli(graph, "format") ++ prepare ++ List(
+    ) ++ coursierCli(graph, "format") ++ prepare ++ List(
       s"      - run: ${quote("./histos fmt --check")}"
     )).mkString("\n")
 
@@ -1428,10 +1413,6 @@ object Workflow:
       "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
-  /** Pin with a catalog renders `compatibility`. Local renders `publish` instead. */
-  private def emitsCompatibility(graph: ProjectGraph): Boolean =
-    graph.suiteHost == SuiteHost.Pin && graph.catalog.ships.nonEmpty
-
   def requiredJobs(graph: ProjectGraph): List[String] =
     val suite = if graph.projects.exists:
         case module: Module => module.lane == histos.TestLane.Suite
@@ -1440,11 +1421,9 @@ object Workflow:
     else Nil
     val catalog =
       if graph.catalog.ships.isEmpty then Nil
-      else if emitsCompatibility(graph) then List("versions", "compatibility")
-      else List("versions")
-    val publish = if graph.suiteHost == SuiteHost.Local then List("publish") else Nil
-    val doc     = if graph.docCheck == DocCheck.On then List("scaladoc") else Nil
-    val format  = graph.formatting match
+      else List("versions", "compatibility")
+    val doc    = if graph.docCheck == DocCheck.On then List("scaladoc") else Nil
+    val format = graph.formatting match
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List("format")
     val coverage = graph.coverage match
@@ -1454,7 +1433,7 @@ object Workflow:
       "affected",
       "workflow",
       graph.supply.checkName.value,
-    ) ++ suite ++ catalog ++ publish ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
+    ) ++ suite ++ catalog ++ doc ++ format ++ coverage ++ graph.verify.map(_.name.value)
 
   private def compatibilityJob(graph: ProjectGraph)(using RenderingShip): String =
     (List("  compatibility:") ++ verifyIf ++ afterAffected(Nil) ++ List(
@@ -1465,8 +1444,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ CiInstall.steps(graph) ++ coursierStep(graph.resolution) ++ proofStep(
-      """./histos publish check --base "$base"""",
-      writeCache = false,
+      """./histos publish check --base "$base""""
     )).mkString("\n")
 
   private def versionsJob(graph: ProjectGraph)(using RenderingShip): String =
@@ -1484,63 +1462,17 @@ object Workflow:
       "      - run: \"./histos run versions\""
     )).mkString("\n")
 
-  /** Test, scaladoc, and format. Pin is the setup action. Local downloads the publish artifact and does not. */
-  private def suiteCli(graph: ProjectGraph, job: String)(using RenderingShip): List[String] =
-    graph.suiteHost match
-      case SuiteHost.Pin   => coursierCli(graph, job)
-      case SuiteHost.Local =>
-        CiInstall.jdk(graph.runnerTools.jdk) ++ hostedInstall(ClientLink.Skip) ++ SupplyYaml.preflight(graph, job)
-
-  /** The published jar is not the `histos.version` pin. The first line is the toolchain. A server adds a second line.
-    */
-  private def suiteProof(graph: ProjectGraph): List[String] =
-    graph.suiteHost match
-      case SuiteHost.Pin   => Nil
-      case SuiteHost.Local =>
-        script(proofBody) ++ List(
-          s"      - run: ${quote("./histos test app --only '*LockInvocationSpec*,*InstalledCompilerPayloadSpec*'")}"
-        )
-
   /** `affected` installs the toolchain. Every later job in this workflow waits for that install. */
   private def afterAffected(extra: List[String]): List[String] =
     val names = "affected" :: extra
     List(s"    needs: [${names.mkString(", ")}]")
-
-  private def hostedNeeds(graph: ProjectGraph): List[String] =
-    graph.suiteHost match
-      case SuiteHost.Pin   => afterAffected(Nil)
-      case SuiteHost.Local => afterAffected(List("publish"))
-
-  /** A download needs `actions: read`. Pin keeps contents read alone, which is what those jobs emit today. */
-  private def readPermissions(download: Boolean): List[String] =
-    val actions = if download then List("      actions: read") else Nil
-    List("    permissions:") ++ actions ++ List("      contents: read")
-
-  private def publishJob(graph: ProjectGraph)(using RenderingShip): String =
-    val lines = List(
-      "  publish:"
-    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
-      s"    runs-on: $Runner"
-    ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
-      "      actions: write",
-      "      contents: read",
-      "    steps:",
-      s"      - uses: $Checkout",
-    ) ++ CiInstall.steps(graph) ++ SupplyYaml.preflight(graph, "publish") ++
-      coursierStep(graph.resolution) ++
-      llvmStep(graph.runnerTools.llvm, MatrixScope.Whole) ++ storeRestore ++ proofStep(
-        """./histos publish local --base "$base"""",
-        writeCache = true,
-      ) ++ script(stageBody) ++ uploadHost ++ storeSave
-    lines.mkString("\n")
 
   private def verifyJob(graph: ProjectGraph, task: VerifyTask, cells: Option[histos.testrun.TestCellPlan])(using
       RenderingShip
   ): String =
     val lines = List(
       s"  ${task.name.value}:"
-    ) ++ verifyIf ++ hostedNeeds(graph) ++ List(
+    ) ++ verifyIf ++ afterAffected(Nil) ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
@@ -1567,105 +1499,7 @@ object Workflow:
       case histos.VerifyRun.BuiltIn(name)    => s"./histos run ${name.value}"
       case histos.VerifyRun.Plugin(id)       => s"./histos run ${id.render}"
     val run = List(s"      - run: ${quote(command)}")
-    graph.suiteHost match
-      case SuiteHost.Pin   => CiInstall.steps(graph) ++ selected ++ clang ++ run
-      case SuiteHost.Local =>
-        CiInstall.jdk(graph.runnerTools.jdk) ++ selected ++ clang ++ hostedInstall(task.link) ++ coursierStep(
-          graph.resolution
-        ) ++ run
-
-  private def hostedInstall(link: ClientLink): List[String] =
-    val flag = link match
-      case ClientLink.Native => "--client"
-      case ClientLink.Skip   => "--no-client"
-    downloadHost ++ script(installBody(flag))
-
-  private def downloadHost: List[String] =
-    List(
-      s"      - uses: ${ActionPins.downloadArtifact.line}",
-      "        with:",
-      "          name: host",
-      "          path: host",
-    )
-
-  private def uploadHost: List[String] =
-    List(
-      s"      - uses: ${ActionPins.uploadArtifact.line}",
-      "        with:",
-      "          name: host",
-      "          path: host",
-      "          if-no-files-found: error",
-    )
-
-  /** A key on its own line, the same read `install/histos` uses. A missing key prints nothing. */
-  private def jsonStringShell: String =
-    """json_string() {
-      |  awk -v key="$2" '
-      |    {
-      |      line = $0
-      |      gsub(/^[ \t]+/, "", line)
-      |      needle = "\"" key "\""
-      |      if (index(line, needle) == 1) {
-      |        n = split(line, parts, "\"")
-      |        if (n >= 4) { print parts[4]; exit }
-      |      }
-      |    }
-      |  ' "$1"
-      |}""".stripMargin
-
-  private def installBody(flag: String): String =
-    s"""set -eu
-       |${jsonStringShell}
-       |manifest=host/assets/manifest.json
-       |version=$$(json_string "$$manifest" version)
-       |[ -n "$$version" ] || { echo "manifest has no version" >&2; exit 1; }
-       |assets="$$GITHUB_WORKSPACE/host/assets"
-       |ivy="$$GITHUB_WORKSPACE/host/ivy"
-       |HISTOS_ASSETS="$$assets" HISTOS_IVY="$$ivy" install/histos toolchain install $flag "$$version"
-       |printf 'HISTOS_PIN=%s\\n' "$$version" >> "$$GITHUB_ENV"
-       |export HISTOS_PIN="$$version"""".stripMargin
-
-  private def stageBody: String =
-    "set -eu\n" + jsonStringShell + "\n" +
-      """manifest=dist/install/manifest.json
-        |[ -f "$manifest" ] || { echo "dist/install/manifest.json is missing" >&2; exit 1; }
-        |mkdir -p host/assets
-        |cp "$manifest" host/assets/manifest.json
-        |kit=$(json_string "$manifest" clientKit)
-        |version=$(json_string "$manifest" version)
-        |org=$(json_string "$manifest" ivyOrganisation)
-        |module=$(json_string "$manifest" ivyModule)
-        |rev=$(json_string "$manifest" ivyRevision)
-        |[ -n "$kit" ] && [ -n "$version" ] && [ -n "$org" ] && [ -n "$module" ] && [ -n "$rev" ] || { echo "manifest is missing a host field" >&2; exit 1; }
-        |src="dist/install/$kit"
-        |[ -f "$src" ] || { echo "client kit is missing" >&2; exit 1; }
-        |cp "$src" "host/assets/$kit"
-        |jar="$HOME/.histos/toolchains/$version/histos.jar"
-        |[ -f "$jar" ] || { echo "toolchain jar is missing" >&2; exit 1; }
-        |dest="host/ivy/$org/$module/$rev/jars"
-        |mkdir -p "$dest"
-        |cp "$jar" "$dest/$module.jar"""".stripMargin
-
-  private def proofBody: String =
-    "set -eu\n" + jsonStringShell + "\n" +
-      """version=$(json_string host/assets/manifest.json version)
-        |[ -n "$version" ] || { echo "manifest has no version" >&2; exit 1; }
-        |shown=$(./histos version | awk 'NR == 1 { print; exit }')
-        |[ "$shown" = "histos $version" ]
-        |pin=$(awk '
-        |  {
-        |    line = $0
-        |    gsub(/^[ \t]+/, "", line)
-        |    if (index(line, "histos.version=") == 1) {
-        |      value = substr(line, 16)
-        |      gsub(/[ \t\r]+$/, "", value)
-        |      print value
-        |      exit
-        |    }
-        |  }
-        |' build.properties)
-        |[ -n "$pin" ] || { echo "build.properties has no histos.version" >&2; exit 1; }
-        |[ "$shown" != "histos $pin" ]""".stripMargin
+    CiInstall.steps(graph) ++ selected ++ clang ++ run
 
   private def script(body: String): List[String] =
     List("      - run: |") ++ body.linesIterator.map(line => "          " + line).toList

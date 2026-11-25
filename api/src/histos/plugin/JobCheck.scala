@@ -11,7 +11,6 @@ import histos.{
   PluginGraphFault,
   ProjectGraph,
   ProjectName,
-  SuiteHost,
 }
 
 /** One rendered job, the plugin that contributed it, and the workflow file it belongs in. */
@@ -75,9 +74,7 @@ object JobCheck:
       case Formatting.Off         => Nil
       case Formatting.Scalafmt(_) => List(JobName.trusted("format"))
     val versions = if graph.catalog != Catalog.Empty then List(JobName.trusted("versions")) else Nil
-    val publish  =
-      if graph.suiteHost == SuiteHost.Local then List(JobName.trusted("publish")) else Nil
-    (base ++ suite ++ doc ++ coverage ++ format ++ versions ++ publish).toSet
+    (base ++ suite ++ doc ++ coverage ++ format ++ versions).toSet
 
   private def verifyTasks(graph: ProjectGraph): Either[BuildError, Unit] =
     val names = graph.verify.map(_.name)
@@ -95,9 +92,7 @@ object JobCheck:
       plugin.contribution.jobs.flatMap: job =>
         job.render.map(render => Item(plugin.id, job, render))
 
-  /** A static reserved name stays reserved. A name this graph renders, including `publish` when the suite host is local
-    * and any verify task, is taken too.
-    */
+  /** A static reserved name stays reserved. A name this graph renders, including a verify task, is taken too. */
   private def reserved(graph: ProjectGraph, items: List[Item]): Either[BuildError, Unit] =
     val taken = generated(graph)
     val names = items.map(item => nameOf(item.render))
