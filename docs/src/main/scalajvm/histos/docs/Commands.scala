@@ -372,8 +372,10 @@ what the build would generate.
     section("workflow")(
       md"""
 `histos workflow --check` fails when the generated workflows in the tree are stale.
-`histos workflow --update` writes them. Commit the result. Neither form publishes, and
-neither changes the Histos pin. The CI page says what a generated workflow contains.
+`histos workflow --update` writes them. Run it after `histos update`, then commit the
+files. The order is update, then generate, for a release pin and for a snapshot pin.
+Neither form publishes, and neither changes the Histos pin. The CI page says what a
+generated workflow contains and why the check fails if you skip the regenerate.
 """
     ),
     section("doctor")(
@@ -465,6 +467,10 @@ the newest release. A pin that ends in `-SNAPSHOT`, including a commit coordinat
 defaults to `--follow`, which writes the newest line pointer. `--freeze` writes the
 timestamp that pointer's channel file names now. A timestamp pin defaults to `--freeze`.
 `--follow` and `--freeze` are opposites.
+
+A project that commits generated workflows runs `histos workflow --update` next and
+commits what it writes. That follows a release update and a snapshot update. The CI
+page says why.
 """
     ),
     section("self update")(

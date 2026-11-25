@@ -80,10 +80,23 @@ ends in `-SNAPSHOT`, a line pointer or a commit coordinate, defaults to `--follo
 writes the newest line pointer, `<line>-SNAPSHOT`. `--freeze` writes the timestamp that
 pointer's channel file names now. A timestamp pin defaults to `--freeze`. `--follow` and
 `--freeze` are opposites.
+
+After that update, regenerate the project's workflows and commit them:
+
+```sh
+histos update
+histos workflow --update
+```
+
+The second command writes the workflow files for the Histos you just installed. Do this
+when the pin moved to a release and when it followed a snapshot. The CI page says what
+those files contain. A line pointer can keep the same text while the installed jar
+changes, and the workflows still need regenerating.
 """,
       cite[histos.publish.LauncherPin.type](_.from),
       cite[histos.publish.LauncherChoice].signature,
       cite[histos.version.Revision.type](_.parse),
+      cite[histos.publish.LauncherPin.type](_.update),
     ),
     section("One command, one toolchain")(
       md"""

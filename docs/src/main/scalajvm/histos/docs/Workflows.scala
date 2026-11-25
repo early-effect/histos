@@ -17,6 +17,32 @@ would write. `histos workflow --update` writes them. Neither command publishes a
 and neither changes the Histos version pinned in `build.properties`.
 """,
     cite[histos.cli.Help.type](_.render),
+    section("Update Histos, then regenerate")(
+      md"""
+When a project moves to a newer Histos, regenerate its workflows with that Histos and
+commit them. The order is update, then generate:
+
+```sh
+histos update
+histos workflow --update
+```
+
+`histos update` installs the newer toolchain. It rewrites `histos.version` when the pin
+moves. A release pin moves to the newest release. A snapshot pin follows its line unless
+you pass `--freeze`. `histos workflow --update` then writes the workflow files that
+toolchain would write. The setup action in those files names the commit of the Histos
+that wrote them. Commit the files and push.
+
+Do this for a release and for a snapshot. A line pointer can keep the same text in
+`build.properties` while the installed jar changes. Regenerate anyway. CI runs
+`histos workflow --check` against the Histos the pin resolves to. Files written by an
+older Histos fail that check.
+
+Changing Histos itself is the extra case. Publish that snapshot before `histos update`,
+so the update installs the jar that contains the workflow change. Every other project
+starts at `histos update`.
+"""
+    ),
     section("Which Histos a job runs")(
       md"""
 A generated job installs the Histos named by `histos.version` in `build.properties`.
