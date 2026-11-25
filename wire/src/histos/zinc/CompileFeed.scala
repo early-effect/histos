@@ -52,6 +52,7 @@ enum CompileFeed:
       problem: CompileProblem,
   )
   case Miss(module: ProjectName, version: ScalaVersion, platform: Platform, change: KeyMiss)
+  case Cache(module: ProjectName, version: ScalaVersion, platform: Platform, note: CacheNote)
   case Pulse(module: ProjectName, version: ScalaVersion, platform: Platform, pulse: CompilePulse)
   case Done(cell: CompiledCell)
   case Failed(error: GraphCompileError)

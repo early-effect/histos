@@ -657,8 +657,8 @@ object Bsp:
                           case histos.plugin.SourceSet.Test => testUri(repo, module.value, version, platform)
                         publish(uri, problem)
                       case histos.zinc.CompileFeed.Began(_, _, _) | histos.zinc.CompileFeed.Miss(_, _, _, _) |
-                          histos.zinc.CompileFeed.Pulse(_, _, _, _) | histos.zinc.CompileFeed.Done(_) |
-                          histos.zinc.CompileFeed.Failed(_) =>
+                          histos.zinc.CompileFeed.Cache(_, _, _, _) | histos.zinc.CompileFeed.Pulse(_, _, _, _) |
+                          histos.zinc.CompileFeed.Done(_) | histos.zinc.CompileFeed.Failed(_) =>
                         ZIO.unit,
                 )
               )

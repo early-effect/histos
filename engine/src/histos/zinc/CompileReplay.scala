@@ -137,17 +137,17 @@ object CompileReplay:
       runtime: List[Path],
       compiler: List[Path],
       bridge: Path,
-  ): IO[CompileError, Option[CompileOutput]] =
+  ): IO[CompileError, Either[CacheLookup, CompileOutput]] =
     keyed(key).flatMap: id =>
       store
         .read(id)
         .mapError(CompileError.Stored(_))
         .flatMap:
-          case None        => ZIO.none
+          case None        => ZIO.left(CacheLookup.NoBlob)
           case Some(bytes) =>
             decode(bytes) match
               case Left(ArchiveFault.Former) =>
-                store.remove(id).mapError(CompileError.Stored(_)).as(None)
+                store.remove(id).mapError(CompileError.Stored(_)).as(Left(CacheLookup.Former))
               case Left(_) =>
                 ZIO.fail(CompileError.Stored(CacheError.Corrupt(id)))
               case Right(decoded) =>
@@ -221,6 +221,7 @@ object CompileReplay:
               tools.runtime,
               tools.compiler,
               tools.bridge,
+              CacheNote.Disk,
             )
           )
 
@@ -314,19 +315,21 @@ object CompileReplay:
       runtime: List[Path],
       compiler: List[Path],
       bridge: Path,
-  ): IO[CompileError, Option[CompileOutput]] =
+  ): IO[CompileError, Either[CacheLookup, CompileOutput]] =
     for
       _        <- ZIO.fromEither(install(request, decoded))
       output   <- ZIO.fromEither(finish(id, key, request, runtime, compiler, bridge))
       fresh    <- SourceStale.current(request)
       orphaned <- ZIO.fromEither(TastyProducts.orphans(request.classes))
       kept     <-
-        if !fresh || orphaned.nonEmpty then
-          store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(None)
+        if !fresh then
+          store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(Left(CacheLookup.Stamps))
+        else if orphaned.nonEmpty then
+          store.remove(id).mapError(CompileError.Stored(_)) *> dropMarker(request).as(Left(CacheLookup.Orphans))
         else
           withoutNir(store, id, request).flatMap:
-            case true  => ZIO.none
-            case false => stamp(request, key, runtime, compiler, bridge).as(Some(output))
+            case true  => ZIO.left(CacheLookup.Nir)
+            case false => stamp(request, key, runtime, compiler, bridge).as(Right(output))
     yield kept
 
   private def archive(request: CompileRequest): Either[CompileError, Chunk[Byte]] =
@@ -472,6 +475,7 @@ object CompileReplay:
                   runtime,
                   compiler,
                   bridge,
+                  CacheNote.Store,
                 )
 
   private def readAnalysis(

@@ -98,6 +98,9 @@ object GraphCompile:
         )
         _      <- request.report(CompileFeed.Began(module.name, stage.cell.version, stage.cell.platform))
         result <- reported(work, files, request.report).mapError(ExecutionError.Compile(_))
+        _      <- request.report(
+          CompileFeed.Cache(module.name, stage.cell.version, stage.cell.platform, result.note)
+        )
         recorded = analysisRoot(plan, module.name, stage.cell.version, stage.cell.platform)
         api <- ZIO
           .fromEither(ApiDigest.read(recorded))
@@ -659,7 +662,8 @@ object GraphCompile:
             case Some(change) =>
               tell(CompileFeed.Miss(module.name, version, platform, change))
             case None => ZIO.unit
-          noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
+          tell(CompileFeed.Cache(module.name, version, platform, result.note)) *> noted *>
+            tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
       )
 
   private def reported(
@@ -731,6 +735,7 @@ object GraphCompile:
       closure: Option[List[Path]],
       toolchain: Option[CapturedToolchain],
       classpath: List[Path],
+      note: CacheNote,
   )
 
   /** Lock checksums and source bytes. A hit does not open a compiler. A module that compiles against the host api still
@@ -897,6 +902,7 @@ object GraphCompile:
             closure,
             Some(CapturedToolchain(output.runtime, output.compiler, output.bridge)),
             (classes :: paths).distinct,
+            output.note,
           )
       _        <- copyResources(plan, module, version, platform, files, compiled.cell.classes)
       recorded <- (compiled.closure, compiled.toolchain) match
@@ -1024,6 +1030,7 @@ object GraphCompile:
             None,
             None,
             (classes :: classpath).distinct,
+            CacheNote.Vacant,
           )
         )
 

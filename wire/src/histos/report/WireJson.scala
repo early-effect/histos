@@ -155,6 +155,10 @@ import histos.watch.WatchError
 import histos.workflow.CiError
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{
+  CacheLookup,
+  CacheNote,
+  CacheSave,
+  CacheSkip,
   ClasspathBan,
   CompileDiagnostic,
   CompileError,
@@ -672,6 +676,10 @@ private object WireEvent extends WireSupport:
   given JsonCodec[CompiledCell]    = JsonCodec.derived
   given JsonCodec[CompileInput]    = JsonCodec.derived
   given JsonCodec[KeyMiss]         = JsonCodec.derived
+  given JsonCodec[CacheLookup]     = JsonCodec.derived
+  given JsonCodec[CacheSkip]       = JsonCodec.derived
+  given JsonCodec[CacheSave]       = JsonCodec.derived
+  given JsonCodec[CacheNote]       = JsonCodec.derived
   given JsonCodec[CompilePulse]    = JsonCodec.derived
   given JsonCodec[CompileFeed]     = JsonCodec.derived
   given JsonCodec[TestFeed]        = JsonCodec.derived
