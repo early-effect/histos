@@ -2,7 +2,7 @@ package histos.server
 
 import histos.ApiClock
 import histos.jdk.JdkRuntime
-import histos.bsp.{Bsp, Frame, Rpc}
+import histos.bsp.{Bsp, Frame, FrameQueue, Rpc}
 import histos.cli.Operation
 import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild}
@@ -18,7 +18,7 @@ import histos.toolchain.Runtimes
 import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectGraph, ProjectName, Resolution}
 
-import java.io.{InputStream, OutputStream}
+import java.io.InputStream
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
 import java.nio.channels.{Channels, ServerSocketChannel, SocketChannel}
 import java.nio.file.{Files, Path, StandardCopyOption}
@@ -270,13 +270,14 @@ object Client:
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
         input  = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _        <- Frame.write(output, envelope.toJson).mapError(written(socket))
+        sink     <- FrameQueue.open(output)
+        _        <- sink.offer(envelope.toJson).mapError(written(socket))
         first    <- Frame.read(input).mapError(read(socket))
         _        <- ZIO.fromEither(CommandFrame.ready(first))
         attached <- ZIO.scopeWith(_.fork)
         // Close before the input scope joins its readers and any blocked socket writer.
         _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
-        _ <- attached.extend[Any](attachInput(terminal, envelope.call, output))
+        _ <- attached.extend[Any](attachInput(terminal, envelope.call, sink))
       yield frames(input, socket)
     }
 
@@ -288,14 +289,13 @@ object Client:
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
         input  = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
+        sink   <- FrameQueue.open(output)
         posted <- CallerFacts.bsp(Call.Bsp)
-        _      <- Frame
-          .write(output, posted.toJson)
-          .mapError(written(socket))
-        first <- Frame.read(input).mapError(read(socket))
-        _     <- ZIO.fromEither(CommandFrame.ready(first))
-        _     <- copyStdin(output, channel, socket).forkScoped
-        code  <- copyToStdout(input, socket)
+        _      <- sink.offer(posted.toJson).mapError(written(socket))
+        first  <- Frame.read(input).mapError(read(socket))
+        _      <- ZIO.fromEither(CommandFrame.ready(first))
+        _      <- copyStdin(sink, channel, socket).forkScoped
+        code   <- copyToStdout(input, socket)
       yield code
     }
 
@@ -303,18 +303,18 @@ object Client:
   private def attachInput(
       terminal: Terminal,
       call: Call,
-      output: OutputStream,
+      sink: FrameQueue,
   ): ZIO[Scope, Nothing, Unit] =
     StdinFeed.of(terminal, call.attendance) match
       case StdinFeed.Live =>
         for
           queue <- ZIO.acquireRelease(Queue.unbounded[RelayCommand])(_.shutdown)
           _     <- LiveInput.serve(queue)
-          _     <- forward(output, queue).forkScoped
+          _     <- forward(sink, queue).forkScoped
         yield ()
       case StdinFeed.Closed => ZIO.unit
 
-  private def forward(output: OutputStream, queue: Queue[RelayCommand]): UIO[Unit] =
+  private def forward(sink: FrameQueue, queue: Queue[RelayCommand]): UIO[Unit] =
     def step: UIO[Unit] =
       queue.take
         .flatMap: command =>
@@ -322,7 +322,7 @@ object Client:
             case RelayCommand.Stdin(bytes) => RunInput.Stdin(RunBytes.encode(bytes))
             case RelayCommand.End          => RunInput.StdinEnd
             case RelayCommand.Interrupt    => RunInput.Interrupt
-          Frame.write(output, frame.toJson).foldZIO(_ => ZIO.unit, _ => step)
+          sink.offer(frame.toJson).foldZIO(_ => ZIO.unit, _ => step)
         .catchAllCause(cause => if cause.isInterruptedOnly then ZIO.unit else ZIO.failCause(cause))
     step
 
@@ -344,7 +344,7 @@ object Client:
           case Right(feed)            => ZStream.succeed(feed) ++ frames(input, socket)
 
   private def copyStdin(
-      output: OutputStream,
+      sink: FrameQueue,
       channel: SocketChannel,
       socket: Path,
   ): IO[ServerError, Unit] =
@@ -359,7 +359,7 @@ object Client:
               .mapError(_ => ServerError.Io(ServerIo.Write(socket)))
               .unit
           case Some(payload) =>
-            Frame.write(output, payload).mapError(written(socket)) *> loop
+            sink.offer(payload).mapError(written(socket)) *> loop
     loop
 
   private def copyToStdout(
@@ -685,247 +685,251 @@ object Daemon:
           InvocationEnvelope.decode(payload) match
             case Left(_)         => ZIO.fail(ServerError.Protocol)
             case Right(envelope) =>
-              Ref.make[Option[PluginEvents.Invocation]](None).flatMap { eventsRef =>
-                Queue.unbounded[LockReply].flatMap { replies =>
-                  val asked = envelope.call
-                  val say   = Say.frames(output, bound)
-                  ConsentDesk
-                    .open(
-                      repo,
-                      ConsentDesk.strategy(envelope.context.execution, envelope.lock),
-                      ConsentDesk.command,
-                      ConsentDesk.preparer(repo),
-                      ConsentDesk.feed(say),
-                    )
-                    .flatMap { desk =>
-                      /** Reload and bsp own the process. Reboot replaces it and does not read the graph. */
-                      def adopts(target: Call): Boolean =
-                        Perform.needsGraph(target) || (target match
-                          case Call.Reload | Call.Bsp => true
-                          case _                      => false)
-
-                      def edges(
-                          out: Say,
-                          compiled: UIO[Unit],
-                          relay: RunRelay,
-                      ): Perform.Edges[
-                        Served
-                      ] =
-                        Perform.Edges(
-                          watch = (inner, policy, edge) => watched(inner, policy, edge, relay),
-                          reload = Calls.finish(out, CallResult.Reported(Report.empty)),
-                          reboot = onto => reboot(repo, bound, server, life, output, onto),
-                          stop = halt(repo, bound, server, life, output),
-                          bsp = bsp(
-                            repo,
-                            apiJar,
-                            version,
-                            bound,
-                            jdk,
-                            machine,
-                            warm,
-                            permit,
-                            build,
-                            input,
-                            output,
-                          ),
-                          compiled = compiled,
+              ZIO.scoped {
+                FrameQueue.open(output).flatMap { sink =>
+                  Ref.make[Option[PluginEvents.Invocation]](None).flatMap { eventsRef =>
+                    Queue.unbounded[LockReply].flatMap { replies =>
+                      val asked = envelope.call
+                      val say   = Say.frames(sink, bound)
+                      ConsentDesk
+                        .open(
+                          repo,
+                          ConsentDesk.strategy(envelope.context.execution, envelope.lock),
+                          ConsentDesk.command,
+                          ConsentDesk.preparer(repo),
+                          ConsentDesk.feed(say),
                         )
+                        .flatMap { desk =>
+                          /** Reload and bsp own the process. Reboot replaces it and does not read the graph. */
+                          def adopts(target: Call): Boolean =
+                            Perform.needsGraph(target) || (target match
+                              case Call.Reload | Call.Bsp => true
+                              case _                      => false)
 
-                      def execute(
-                          target: Call,
-                          out: Say,
-                          loaded: Either[BuildFault, Option[LoadedBuild]],
-                          chosen: histos.jdk.Machine,
-                          compiled: UIO[Unit],
-                          relay: RunRelay,
-                      ): ZIO[
-                        Served,
-                        ServerError,
-                        Unit,
-                      ] =
-                        eventsRef.get
-                          .flatMap { held =>
-                            val events = held match
-                              case Some(found) => found
-                              case None        => PluginEvents.closedInvocation
-                            Perform
-                              .run(
+                          def edges(
+                              out: Say,
+                              compiled: UIO[Unit],
+                              relay: RunRelay,
+                          ): Perform.Edges[
+                            Served
+                          ] =
+                            Perform.Edges(
+                              watch = (inner, policy, edge) => watched(inner, policy, edge, relay),
+                              reload = Calls.finish(out, CallResult.Reported(Report.empty)),
+                              reboot = onto => reboot(repo, bound, server, life, sink, onto),
+                              stop = halt(repo, bound, server, life, sink),
+                              bsp = bsp(
                                 repo,
                                 apiJar,
-                                loaded,
-                                chosen,
-                                runs,
-                                track = true,
                                 version,
-                                target,
-                                out,
-                                edges(out, compiled, relay),
-                                desk,
-                                relay,
-                                caller = Some(envelope.context),
-                                events = events,
-                                lock = envelope.lock,
-                              )
-                          }
-                          .provideSomeEnvironment[Served](_.add(warm.formatters))
-
-                      def run(
-                          target: Call,
-                          out: Say,
-                          relay: RunRelay,
-                      ): ZIO[
-                        Served,
-                        ServerError,
-                        Unit,
-                      ] =
-                        ApiClock.admit(repo).flatMap { admitted =>
-                          val noted = admitted match
-                            case ApiClock.Admit.Warn(line) =>
-                              out(Message.Event(histos.build.BuildEvent.Err(line)))
-                            case ApiClock.Admit.Rebuild(_, fact, _) =>
-                              out(Message.Event(histos.build.BuildEvent.Err(fact)))
-                            case ApiClock.Admit.Go => ZIO.unit
-                          noted *>
-                            (if adopts(target) then withGraph(target, out, relay)
-                             else
-                               val chosen = target match
-                                 case Call.Resolve(_) =>
-                                   histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
-                                 case _ =>
-                                   ZIO.succeed(machine)
-                               chosen.flatMap { fresh =>
-                                 occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit, relay))
-                               })
-                        }
-
-                      def watched(
-                          inner: Call,
-                          policy: WatchPolicy,
-                          out: Say,
-                          relay: RunRelay,
-                      ): ZIO[
-                        Served,
-                        ServerError,
-                        Unit,
-                      ] =
-                        Operation.underWatch(inner, policy) match
-                          case Left(error) =>
-                            Calls.finish(out, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
-                          case Right(call) =>
-                            policy match
-                              case WatchPolicy.Restart =>
-                                Watching.beside(
-                                  out,
-                                  run(call, out, relay),
-                                  watchRoots(call),
-                                  changed => replace(call, changed, out, relay),
-                                )
-                              case WatchPolicy.After =>
-                                Watching.session(
-                                  repo,
-                                  out,
-                                  run(call, out.dropExit, relay),
-                                  watchRoots(call),
-                                  woke => desk.onChange(woke),
-                                )
-
-                      /** Compile before the fork is touched. A failed compile keeps it. A successful compile replaces
-                        * it only when the change is one of the program's roots.
-                        */
-                      def replace(
-                          call: Call,
-                          changed: List[Path],
-                          out: Say,
-                          relay: RunRelay,
-                      ): ZIO[
-                        Served,
-                        ServerError,
-                        Boolean,
-                      ] =
-                        val compile = Watching.compileFor(call)
-                        Ref
-                          .make(Option.empty[CallResult])
-                          .flatMap: finished =>
-                            run(compile, out.dropExitInto(finished), relay) *>
-                              finished.get
-                                .zip(watchRoots(call))
-                                .map((result, watched) => Watching.restarts(result, changed, watched))
-
-                      def watchRoots(call: Call): ZIO[
-                        Served,
-                        ServerError,
-                        Watching.Watched,
-                      ] =
-                        adopt(repo, apiJar, version, bound, warm).flatMap:
-                          case Left(_) =>
-                            ZIO.succeed(Watching.Watched(List(repo.resolve("histos.scala")), Set.empty))
-                          case Right(held) =>
-                            ZIO
-                              .succeed(Watching.watched(repo, call, held.graph))
-                              .ensuring(release(held))
-
-                      /** A graph command adopts a generation. Reload forces one. Bsp drops that lease before the
-                        * session, which adopts its own. A missing machine finishes as a fault and still releases the
-                        * lease.
-                        */
-                      def withGraph(
-                          target: Call,
-                          out: Say,
-                          relay: RunRelay,
-                      ): ZIO[
-                        Served,
-                        ServerError,
-                        Unit,
-                      ] =
-                        val loaded =
-                          target match
-                            case Call.Reload =>
-                              force(repo, apiJar, version, bound, warm)
-                            case _ => adopt(repo, apiJar, version, bound, warm)
-                        loaded.flatMap:
-                          case Left(error) =>
-                            Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
-                          case Right(held) =>
-                            val have = Right(
-                              Some(
-                                LoadedBuild(
-                                  held.graph,
-                                  held.plugins,
-                                  held.build,
-                                  buildFileClasspath = held.buildFileClasspath,
-                                )
-                              )
+                                bound,
+                                jdk,
+                                machine,
+                                warm,
+                                permit,
+                                build,
+                                input,
+                                sink,
+                              ),
+                              compiled = compiled,
                             )
-                            def ran(compiled: UIO[Unit]) =
-                              target match
-                                case Call.Bsp | Call.Reload =>
-                                  execute(target, out, have, machine, compiled, relay)
-                                case _ =>
-                                  histos.jdk.Machine
-                                    .load(repo)
-                                    .foldZIO(
-                                      error => Calls.finish(out, CallResult.Fault(BuildFault.Toolchain(error))),
-                                      fresh => execute(target, out, have, fresh, compiled, relay),
-                                    )
-                            def leased(compiled: UIO[Unit]) =
-                              target match
-                                case Call.Bsp => release(held) *> ran(compiled)
-                                case _        => ran(compiled).ensuring(release(held))
-                            lease(permit, target)(leased)
 
-                      ZIO.scoped {
-                        ZIO.addFinalizer(desk.discard) *>
-                          warm.live.get.flatMap { generation =>
-                            generation.desk.open(envelope.context).flatMap { lease =>
-                              eventsRef.set(Some(printing(say, lease.invocation))) *>
-                                replies.take.flatMap(reply => hear(desk, say, reply)).forever.forkScoped *>
-                                write(output, wire(Message.Ready), bound) *>
-                                attended(asked, socket, input, replies)(relay => run(asked, say, relay))
+                          def execute(
+                              target: Call,
+                              out: Say,
+                              loaded: Either[BuildFault, Option[LoadedBuild]],
+                              chosen: histos.jdk.Machine,
+                              compiled: UIO[Unit],
+                              relay: RunRelay,
+                          ): ZIO[
+                            Served,
+                            ServerError,
+                            Unit,
+                          ] =
+                            eventsRef.get
+                              .flatMap { held =>
+                                val events = held match
+                                  case Some(found) => found
+                                  case None        => PluginEvents.closedInvocation
+                                Perform
+                                  .run(
+                                    repo,
+                                    apiJar,
+                                    loaded,
+                                    chosen,
+                                    runs,
+                                    track = true,
+                                    version,
+                                    target,
+                                    out,
+                                    edges(out, compiled, relay),
+                                    desk,
+                                    relay,
+                                    caller = Some(envelope.context),
+                                    events = events,
+                                    lock = envelope.lock,
+                                  )
+                              }
+                              .provideSomeEnvironment[Served](_.add(warm.formatters))
+
+                          def run(
+                              target: Call,
+                              out: Say,
+                              relay: RunRelay,
+                          ): ZIO[
+                            Served,
+                            ServerError,
+                            Unit,
+                          ] =
+                            ApiClock.admit(repo).flatMap { admitted =>
+                              val noted = admitted match
+                                case ApiClock.Admit.Warn(line) =>
+                                  out(Message.Event(histos.build.BuildEvent.Err(line)))
+                                case ApiClock.Admit.Rebuild(_, fact, _) =>
+                                  out(Message.Event(histos.build.BuildEvent.Err(fact)))
+                                case ApiClock.Admit.Go => ZIO.unit
+                              noted *>
+                                (if adopts(target) then withGraph(target, out, relay)
+                                 else
+                                   val chosen = target match
+                                     case Call.Resolve(_) =>
+                                       histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
+                                     case _ =>
+                                       ZIO.succeed(machine)
+                                   chosen.flatMap { fresh =>
+                                     occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit, relay))
+                                   })
                             }
+
+                          def watched(
+                              inner: Call,
+                              policy: WatchPolicy,
+                              out: Say,
+                              relay: RunRelay,
+                          ): ZIO[
+                            Served,
+                            ServerError,
+                            Unit,
+                          ] =
+                            Operation.underWatch(inner, policy) match
+                              case Left(error) =>
+                                Calls.finish(out, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
+                              case Right(call) =>
+                                policy match
+                                  case WatchPolicy.Restart =>
+                                    Watching.beside(
+                                      out,
+                                      run(call, out, relay),
+                                      watchRoots(call),
+                                      changed => replace(call, changed, out, relay),
+                                    )
+                                  case WatchPolicy.After =>
+                                    Watching.session(
+                                      repo,
+                                      out,
+                                      run(call, out.dropExit, relay),
+                                      watchRoots(call),
+                                      woke => desk.onChange(woke),
+                                    )
+
+                          /** Compile before the fork is touched. A failed compile keeps it. A successful compile
+                            * replaces it only when the change is one of the program's roots.
+                            */
+                          def replace(
+                              call: Call,
+                              changed: List[Path],
+                              out: Say,
+                              relay: RunRelay,
+                          ): ZIO[
+                            Served,
+                            ServerError,
+                            Boolean,
+                          ] =
+                            val compile = Watching.compileFor(call)
+                            Ref
+                              .make(Option.empty[CallResult])
+                              .flatMap: finished =>
+                                run(compile, out.dropExitInto(finished), relay) *>
+                                  finished.get
+                                    .zip(watchRoots(call))
+                                    .map((result, watched) => Watching.restarts(result, changed, watched))
+
+                          def watchRoots(call: Call): ZIO[
+                            Served,
+                            ServerError,
+                            Watching.Watched,
+                          ] =
+                            adopt(repo, apiJar, version, bound, warm).flatMap:
+                              case Left(_) =>
+                                ZIO.succeed(Watching.Watched(List(repo.resolve("histos.scala")), Set.empty))
+                              case Right(held) =>
+                                ZIO
+                                  .succeed(Watching.watched(repo, call, held.graph))
+                                  .ensuring(release(held))
+
+                          /** A graph command adopts a generation. Reload forces one. Bsp drops that lease before the
+                            * session, which adopts its own. A missing machine finishes as a fault and still releases
+                            * the lease.
+                            */
+                          def withGraph(
+                              target: Call,
+                              out: Say,
+                              relay: RunRelay,
+                          ): ZIO[
+                            Served,
+                            ServerError,
+                            Unit,
+                          ] =
+                            val loaded =
+                              target match
+                                case Call.Reload =>
+                                  force(repo, apiJar, version, bound, warm)
+                                case _ => adopt(repo, apiJar, version, bound, warm)
+                            loaded.flatMap:
+                              case Left(error) =>
+                                Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
+                              case Right(held) =>
+                                val have = Right(
+                                  Some(
+                                    LoadedBuild(
+                                      held.graph,
+                                      held.plugins,
+                                      held.build,
+                                      buildFileClasspath = held.buildFileClasspath,
+                                    )
+                                  )
+                                )
+                                def ran(compiled: UIO[Unit]) =
+                                  target match
+                                    case Call.Bsp | Call.Reload =>
+                                      execute(target, out, have, machine, compiled, relay)
+                                    case _ =>
+                                      histos.jdk.Machine
+                                        .load(repo)
+                                        .foldZIO(
+                                          error => Calls.finish(out, CallResult.Fault(BuildFault.Toolchain(error))),
+                                          fresh => execute(target, out, have, fresh, compiled, relay),
+                                        )
+                                def leased(compiled: UIO[Unit]) =
+                                  target match
+                                    case Call.Bsp => release(held) *> ran(compiled)
+                                    case _        => ran(compiled).ensuring(release(held))
+                                lease(permit, target)(leased)
+
+                          ZIO.scoped {
+                            ZIO.addFinalizer(desk.discard) *>
+                              warm.live.get.flatMap { generation =>
+                                generation.desk.open(envelope.context).flatMap { lease =>
+                                  eventsRef.set(Some(printing(say, lease.invocation))) *>
+                                    replies.take.flatMap(reply => hear(desk, say, reply)).forever.forkScoped *>
+                                    write(sink, wire(Message.Ready), bound) *>
+                                    attended(asked, socket, input, replies)(relay => run(asked, say, relay))
+                                }
+                              }
                           }
-                      }
+                        }
                     }
+                  }
                 }
               }
   end handle
@@ -1205,12 +1209,12 @@ object Daemon:
       bound: Path,
       server: ServerSocketChannel,
       life: Lifecycle,
-      output: OutputStream,
+      sink: FrameQueue,
       onto: Successor,
   ): ZIO[Any, ServerError, Unit] =
     for
       _ <- write(
-        output,
+        sink,
         wire(Message.Done(CallResult.Reported(Report.empty))),
         bound,
       )
@@ -1227,10 +1231,10 @@ object Daemon:
       bound: Path,
       server: ServerSocketChannel,
       life: Lifecycle,
-      output: OutputStream,
+      sink: FrameQueue,
   ): ZIO[Any, ServerError, Unit] =
     for
-      _ <- write(output, wire(Message.Done(CallResult.Reported(Report.empty))), bound)
+      _ <- write(sink, wire(Message.Done(CallResult.Reported(Report.empty))), bound)
       _ <- life.armed.set(false)
       _ <- remove(repo, bound)
       _ <- life.stopping.succeed(())
@@ -1248,13 +1252,13 @@ object Daemon:
       permit: Semaphore,
       build: Bsp.BuildFileNotes,
       input: InputStream,
-      output: OutputStream,
+      sink: FrameQueue,
   ): ZIO[
     Served,
     ServerError,
     Unit,
   ] =
-    val send = (line: String) => Frame.write(output, line).mapError(_ => ServerError.Io(ServerIo.Write(bound)))
+    val send = (line: String) => sink.offer(line).mapError(_ => ServerError.Io(ServerIo.Write(bound)))
     val next = Frame.read(input).mapError(_ => ServerError.Io(ServerIo.Read(bound)))
     ZIO.scoped {
       outbox(send).flatMap { box =>
@@ -1506,13 +1510,11 @@ object Daemon:
     message.toJson
 
   private def write(
-      output: OutputStream,
+      sink: FrameQueue,
       payload: String,
       socket: Path,
   ): IO[ServerError, Unit] =
-    Frame
-      .write(output, payload)
-      .mapError(_ => ServerError.Io(ServerIo.Write(socket)))
+    sink.offer(payload).mapError(_ => ServerError.Io(ServerIo.Write(socket)))
 
   private def remove(repo: Path, socket: Path): UIO[Unit] =
     ZIO.attemptBlocking(Files.deleteIfExists(Record.file(repo))).ignore *>

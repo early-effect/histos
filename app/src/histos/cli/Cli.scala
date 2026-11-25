@@ -3,7 +3,7 @@ package histos.cli
 import heddle.LinePipe
 import histos.ApiClock
 import histos.doctor.FaultText
-import histos.bsp.{Bsp, Connection, Frame}
+import histos.bsp.{Bsp, Connection, Frame, FrameQueue}
 import histos.central.{PortalServer, ReleaseFeed}
 import histos.client.CallerFacts
 import histos.build.{Beat, Build, BuildEvent}
@@ -2556,75 +2556,77 @@ object Cli:
                       )
                     ),
                 jdk =>
-                  val output = java.lang.System.out
-                  val notify = (line: String) => histos.bsp.Frame.write(output, line).ignore
-                  Runtimes
-                    .read(env.get[Machine], loaded.graph.runnerTools.nodePath)
-                    .flatMap: runtimes =>
-                      Bsp
-                        .open(
-                          repo,
-                          loaded.graph,
-                          jdk,
-                          runtimes,
-                          loaded.buildFileClasspath,
-                          notify,
-                          classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
-                          compile => compile,
-                          None,
-                          Some(loaded.plugins),
-                        )
-                        .either
-                        .flatMap:
-                          case Left(error) =>
-                            ZIO.succeed(
-                              Completed(
-                                CliExit.Failed,
-                                "",
-                                error.message,
-                                Playback.Held,
+                  FrameQueue.open(java.lang.System.out).flatMap { sink =>
+                    val notify = (line: String) => sink.offer(line).ignore
+                    Runtimes
+                      .read(env.get[Machine], loaded.graph.runnerTools.nodePath)
+                      .flatMap: runtimes =>
+                        Bsp
+                          .open(
+                            repo,
+                            loaded.graph,
+                            jdk,
+                            runtimes,
+                            loaded.buildFileClasspath,
+                            notify,
+                            classpath => loader.reportBuild(repo, classpath).provideEnvironment(env),
+                            compile => compile,
+                            None,
+                            Some(loaded.plugins),
+                          )
+                          .either
+                          .flatMap:
+                            case Left(error) =>
+                              ZIO.succeed(
+                                Completed(
+                                  CliExit.Failed,
+                                  "",
+                                  error.message,
+                                  Playback.Held,
+                                )
                               )
-                            )
-                          case Right(session) =>
-                            histos.resolve.ResolutionService
-                              .open(repo, loaded.graph)
-                              .mapError(ServerError.Resolve(_))
-                              .flatMap { report =>
-                                histos.zinc.CompileMemo
-                                  .provide(
-                                    histos.zinc.Compilers
-                                      .provide(Parallelism.of(loaded.graph.parallelism).cpu)(
-                                        speak(session).provideSomeLayer(zio.ZLayer.succeed(report))
+                            case Right(session) =>
+                              histos.resolve.ResolutionService
+                                .open(repo, loaded.graph)
+                                .mapError(ServerError.Resolve(_))
+                                .flatMap { report =>
+                                  histos.zinc.CompileMemo
+                                    .provide(
+                                      histos.zinc.Compilers
+                                        .provide(Parallelism.of(loaded.graph.parallelism).cpu)(
+                                          speak(session, sink).provideSomeLayer(zio.ZLayer.succeed(report))
+                                        )
+                                    )
+                                }
+                                .foldZIO(
+                                  error =>
+                                    ZIO.succeed(
+                                      Completed(
+                                        CliExit.Failed,
+                                        "",
+                                        error.message,
+                                        Playback.Held,
                                       )
-                                  )
-                              }
-                              .foldZIO(
-                                error =>
-                                  ZIO.succeed(
-                                    Completed(
-                                      CliExit.Failed,
-                                      "",
-                                      error.message,
-                                      Playback.Held,
-                                    )
-                                  ),
-                                code =>
-                                  ZIO.succeed(
-                                    Completed(
-                                      if code == 0 then CliExit.Success
-                                      else CliExit.Failed,
-                                      "",
-                                      "",
-                                      Playback.Held,
-                                    )
-                                  ),
-                              ),
+                                    ),
+                                  code =>
+                                    ZIO.succeed(
+                                      Completed(
+                                        if code == 0 then CliExit.Success
+                                        else CliExit.Failed,
+                                        "",
+                                        "",
+                                        Playback.Held,
+                                      )
+                                    ),
+                                )
+                  },
               ),
         )
 
   /** Same reader and writer as a server splice. Stdio has no histos exit marker. */
   private def speak(
-      session: Bsp.Session
+      session: Bsp.Session,
+      sink: FrameQueue,
   ): ZIO[
     Resolve & ContentStore & Scope & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
@@ -2633,7 +2635,7 @@ object Cli:
     val stdin  = Path.of("stdin")
     val stdout = Path.of("stdout")
     val send   =
-      (line: String) => Frame.write(java.lang.System.out, line).mapError(_ => ServerError.Io(ServerIo.Write(stdout)))
+      (line: String) => sink.offer(line).mapError(_ => ServerError.Io(ServerIo.Write(stdout)))
     val next = Frame.read(java.lang.System.in).mapError(_ => ServerError.Io(ServerIo.Read(stdin)))
     session.follow *>
       Daemon.outbox(send).flatMap { box =>

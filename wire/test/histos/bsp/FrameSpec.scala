@@ -4,7 +4,6 @@ import histos.suite.HistosSpec
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, OutputStream}
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicReference
 
 import zio.ZIO
 import zio.test.*
@@ -14,52 +13,54 @@ object FrameSpec extends HistosSpec:
   private val each    = 20
 
   def spec = suite("a frame is one write")(
-    test("two cells writing one stream leave whole frames") {
-      ZIO.attemptBlocking(together).map { found =>
-        val summary = found match
-          case Left(error)   => Left(error.message)
-          case Right(bodies) =>
-            Right((bodies.length, bodies.toSet == payloads.toSet))
-        assertTrue(summary == Right((payloads.length, true)))
+    test("parallel offers on one stream leave whole frames") {
+      val chunks = new ConcurrentLinkedQueue[Array[Byte]]
+      val out    = yielding(chunks)
+      ZIO.scoped {
+        FrameQueue.open(out).flatMap { sink =>
+          ZIO.foreachParDiscard(payloads)(sink.offer).map { _ =>
+            val summary = readAll(new ByteArrayInputStream(bytes(chunks)), Nil) match
+              case Left(error)  => Left(error.message)
+              case Right(found) => Right((found.length, found.toSet == payloads.toSet))
+            assertTrue(summary == Right((payloads.length, true)))
+          }
+        }
       }
-    }
+    },
+    test("a broken stream fails the frame in hand and the one behind it") {
+      val out = new OutputStream:
+        override def write(b: Int): Unit = throw new java.io.IOException("closed")
+      ZIO.scoped {
+        FrameQueue.open(out).flatMap { sink =>
+          for
+            first  <- sink.offer(payload(1, 1)).either
+            second <- sink.offer(payload(1, 2)).either
+          yield assertTrue(first == Left(Frame.FrameError.Io), second == Left(Frame.FrameError.Io))
+        }
+      }
+    },
   )
 
-  /** Each worker writes its own payloads. The result is every body. */
-  private def together: Either[Frame.FrameError, List[String]] =
-    val chunks  = new ConcurrentLinkedQueue[Array[Byte]]
-    val refused = new AtomicReference[Option[Frame.FrameError]](None)
-    val out     = new OutputStream:
+  /** Each `write` records its bytes, then yields. Two callers would split a frame. Offers share one writer. */
+  private def yielding(chunks: ConcurrentLinkedQueue[Array[Byte]]): OutputStream =
+    new OutputStream:
       override def write(b: Int): Unit = write(Array(b.toByte))
 
       override def write(buf: Array[Byte], off: Int, len: Int): Unit =
         val copy = new Array[Byte](len)
         System.arraycopy(buf, off, copy, 0, len)
         chunks.add(copy)
-        var spins = 0
-        while spins < 32 do
-          Thread.`yield`()
-          spins += 1
+        spin(32)
 
-    val threads = (1 to workers).toList.map { worker =>
-      new Thread(() =>
-        var n = 1
-        while n <= each && refused.get.isEmpty do
-          Frame.put(out, payload(worker, n)) match
-            case Left(error) => refused.set(Some(error))
-            case Right(_)    => ()
-          n += 1
-      )
-    }
-    threads.foreach(_.start())
-    threads.foreach(_.join())
-    refused.get match
-      case Some(error) => Left(error)
-      case None        =>
-        val raw = new ByteArrayOutputStream
-        chunks.forEach(raw.write(_))
-        readAll(new ByteArrayInputStream(raw.toByteArray), Nil)
-  end together
+  private def spin(left: Int): Unit =
+    if left > 0 then
+      Thread.`yield`()
+      spin(left - 1)
+
+  private def bytes(chunks: ConcurrentLinkedQueue[Array[Byte]]): Array[Byte] =
+    val raw = new ByteArrayOutputStream
+    chunks.forEach(raw.write(_))
+    raw.toByteArray
 
   private def readAll(in: ByteArrayInputStream, seen: List[String]): Either[Frame.FrameError, List[String]] =
     Frame.take(in) match
