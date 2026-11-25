@@ -1,6 +1,7 @@
 package histos.docs
 
 import histos.cli.Help
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 
@@ -9,7 +10,7 @@ import scala.jdk.CollectionConverters.*
 import zio.test.*
 
 /** A command or a flag in `histos help` that no reference page names. */
-object HelpCoverageSpec extends ZIOSpecDefault:
+object HelpCoverageSpec extends HistosSpec:
 
   /** The repo root, walking up from the process directory. A test starts in the module directory. */
   private def root: Either[String, Path] =

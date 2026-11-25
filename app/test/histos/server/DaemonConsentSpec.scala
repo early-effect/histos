@@ -51,6 +51,7 @@ import histos.report.WireJson
 import histos.workspace.Workspace
 import histos.ProjectName
 import histos.bsp.BspConsent
+import histos.suite.HistosSpec
 
 import WireJson.given
 
@@ -62,7 +63,7 @@ import zio.json.*
 import zio.{Chunk, Exit, IO, Queue, Ref, UIO, ZIO}
 import zio.test.*
 
-object DaemonConsentSpec extends ZIOSpecDefault:
+object DaemonConsentSpec extends HistosSpec:
   private val utf8  = StandardCharsets.UTF_8
   private val app   = PluginCoordinate.Module(ProjectName("app"))
   private val tools = PluginCoordinate.Module(ProjectName("tools"))

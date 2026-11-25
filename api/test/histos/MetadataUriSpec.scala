@@ -1,12 +1,13 @@
 package publication.consumer
 
 import histos.*
+import histos.suite.HistosSpec
 
 import _root_.scala.compiletime.testing.typeChecks
 
 import zio.test.*
 
-object MetadataUriSpec extends ZIOSpecDefault:
+object MetadataUriSpec extends HistosSpec:
   def spec = suite("MetadataUri")(
     test("metadata literals preserve HTTP and HTTPS without granting a network HttpUrl") {
       val http  = MetadataUri("http://www.apache.org/licenses/LICENSE-2.0.txt")

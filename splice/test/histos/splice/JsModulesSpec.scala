@@ -1,8 +1,10 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
-object JsModulesSpec extends ZIOSpecDefault:
+object JsModulesSpec extends HistosSpec:
 
   def spec =
     suite("JsModules")(

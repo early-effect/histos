@@ -11,30 +11,38 @@ object build extends HistosBuild:
     val zio           = dep"dev.zio::zio:2.1.27"
     val zioTest       = zio.module("zio-test")
     val zioTestSbt    = zio.module("zio-test-sbt")
-    val zioStreams    = zio.module("zio-streams")
-    val zioJson       = dep"dev.zio::zio-json:1.1.1"
-    val api           = module("api", Jvm, Native)(scala3)
+    val suite         = module("suite", Jvm, Native)(scala3)
+      .clang(ClangMajor(21))
+      .nativeVersion(nativeNightly)
+      .testDependencies(zioTest, zioTestSbt)
+    val zioStreams = zio.module("zio-streams")
+    val zioJson    = dep"dev.zio::zio-json:1.1.1"
+    val api        = module("api", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
+      .testDependsOn(suite)
     val pluginTestkit = module("plugin-testkit", Jvm)(scala3)
       .dependsOn(api)
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
+      .testDependsOn(suite)
     val wire = module("wire", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
       .testDependencies(zioTest, zioTestSbt)
+      .testDependsOn(suite)
     val heddle    = dep"rocks.earlyeffect::heddle:0.15.0"
     val heddleMcp = heddle.module("heddle-mcp")
     val central   = module("central", Jvm)(scala3)
       .dependsOn(api, wire)
       .libraryDependencies(zio, heddle)
       .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.3.0")
+      .testDependsOn(suite)
     val scalaCompiler   = dep"org.scala-lang::scala3-compiler:3.10.1"
     val scaladoc        = scalaCompiler.module("scaladoc")
     val asm             = dep"org.ow2.asm:asm:9.11.1"
@@ -63,6 +71,7 @@ object build extends HistosBuild:
         dep"org.graalvm.js:js-language:25.2.4",
         dep"org.graalvm.truffle:truffle-runtime:25.2.4",
       )
+      .testDependsOn(suite)
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api, wire, splice)
       .libraryDependencies(
@@ -102,6 +111,7 @@ object build extends HistosBuild:
         dep"rocks.earlyeffect::slayer:0.3.0",
         grpcStub,
       )
+      .testDependsOn(suite)
     val client = module("client", Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
@@ -127,6 +137,7 @@ object build extends HistosBuild:
         asm,
         asmTree,
       )
+      .testDependsOn(suite)
     val library =
       Ship("histos").next(0, 5, 0)(api, wire, splice, central, engine, app).toolchain(launcher = app, client = client)
     val docs = module("docs", Jvm, Js)(scala3)
@@ -146,6 +157,7 @@ object build extends HistosBuild:
         zioTest.on(Jvm),
         zioTestSbt.on(Jvm),
       )
+      .testDependsOn(Jvm)(suite)
     Projects
       .organization(organization"rocks.earlyeffect")
       .license(License(license"Apache-2.0", MetadataUri("https://www.apache.org/licenses/LICENSE-2.0.txt")))
@@ -186,6 +198,7 @@ object build extends HistosBuild:
         engine,
         app,
         pluginTestkit,
+        suite,
         docs,
       )
 

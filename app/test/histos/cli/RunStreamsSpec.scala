@@ -3,6 +3,7 @@ package histos.cli
 import histos.build.{Beat, BuildEvent}
 import histos.process.{ChildEvent, ChildProcess, RelayCommand, RunRelay}
 import histos.server.{Attendance, Call, RunLaunch, WatchPolicy}
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -10,7 +11,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Console, Queue, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object RunStreamsSpec extends ZIOSpecDefault:
+object RunStreamsSpec extends HistosSpec:
   private given Appearance = Appearance.plain
   private val repo         = Path.of("/repo")
   private val call         = Call.Run("fixture", None, RunLaunch.Tool(Map.empty, None), Nil)

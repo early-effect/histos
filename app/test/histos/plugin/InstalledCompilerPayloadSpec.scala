@@ -3,6 +3,7 @@ package histos.plugin
 import histos.cache.ContentStore
 import histos.toolchain.{HostCompilerError, HostCompilerInputs, HostToolRole}
 import histos.workspace.{IoFailure, IoFault, Workspace}
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 
@@ -12,7 +13,7 @@ import zio.ZIO
 /** The installed distribution. `HISTOS_JAR` is the payload and `HISTOS_REPO` is the checkout. A missing value fails the
   * assertion. This does not solve. A solved checkout has no `dependencies.lock`, and materialize must not create one.
   */
-object InstalledCompilerPayloadSpec extends ZIOSpecDefault:
+object InstalledCompilerPayloadSpec extends HistosSpec:
   def spec = suite("installed compiler payload")(
     test("materialize checks the installed jar and does not write a lock") {
       val jar  = named("HISTOS_JAR")

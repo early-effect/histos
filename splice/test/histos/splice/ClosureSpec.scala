@@ -1,11 +1,13 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.*
 import zio.test.*
 
 import java.nio.file.{Files, Path}
 
-object ClosureSpec extends ZIOSpecDefault:
+object ClosureSpec extends HistosSpec:
 
   def spec =
     suite("Closure")(

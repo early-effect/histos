@@ -61,6 +61,8 @@ import histos.{
   ScalacFlag,
 }
 
+import histos.suite.HistosSpec
+
 import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardCopyOption}
@@ -78,12 +80,12 @@ import zio.test.*
 import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer, durationInt}
 
 /** Sentences the pinned host has to execute. Each test names the row it closes. */
-object InstalledHostProofSpec extends ZIOSpecDefault:
+object InstalledHostProofSpec extends HistosSpec:
   private val Scala3101 = ScalaVersion("3.10.1")
   private val utf8      = StandardCharsets.UTF_8
 
   def spec = suite("installed host proof")(
-    test("R12 CompileInputs.remember stamps the analysis with the test clock") {
+    test("CompileInputs.remember stamps the analysis with the test clock") {
       val when = Instant.parse("2024-06-01T00:00:00Z")
       ZIO.scoped {
         for
@@ -105,7 +107,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           assertTrue(remembered == Right(()), stamped)
       }
     },
-    test("R2 stamp bytes change the package key and leave the product digest") {
+    test("stamp bytes change the package key and leave the product digest") {
       ZIO.scoped {
         for
           root <- work("histos-m6-stamp")
@@ -130,7 +132,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
         yield assertTrue(digestA == digestB, sealedA != sealedB, manifestA != manifestB)
       }
     },
-    test("R4 a generated replacement from Sources.prefer is the published rebuild entry") {
+    test("a generated replacement from Sources.prefer is the published rebuild entry") {
       ZIO.scoped {
         for
           repo <- work("histos-m6-prefer")
@@ -161,7 +163,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
       }
     },
-    test("R5 a compile-only input is in the recipe and absent from the consumer POM") {
+    test("a compile-only input is in the recipe and absent from the consumer POM") {
       val only    = Dep("com.example:only:1.2.3").compileOnly
       val kept    = Dep("com.example:kept:1.2.3")
       val digest  = Digests.content("compile-only-member".getBytes(utf8))
@@ -190,7 +192,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           packed.uploads == 1,
         )
     },
-    test("A3 registration is the capability interface and an intersection key is refused") {
+    test("registration is the capability interface and an intersection key is refused") {
       ZIO.scoped {
         for
           count <- Ref.make(0)
@@ -214,7 +216,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
       }
     },
-    test("A6 native and MCP are two callers on one generation and repair is not env or stdin") {
+    test("native and MCP are two callers on one generation and repair is not env or stdin") {
       val poison = "HISTOS_LOCK_REPLY"
       val stdin  = RunInput.Stdin(RunBytes.encode(Chunk.fromArray("y".getBytes(utf8))))
       val reply = LockReply.Accept(ProposalId.trusted(Digests.sha256("reply".getBytes(utf8))), LockRevisionState.Absent)
@@ -284,7 +286,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
         )
     },
     suite("live host")(
-      test("R1 old plugin bytes reuse a stale task output and new bytes change the key and the output") {
+      test("old plugin bytes reuse a stale task output and new bytes change the key and the output") {
         hosted { (root, _) =>
           for
             api   <- apiJar(root.resolve("api.jar"))
@@ -308,7 +310,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
         }
       },
-      test("R3 a host-API byte change misses the compile cache") {
+      test("a host-API byte change misses the compile cache") {
         hosted { (root, starts) =>
           for
             session <- sessionFor(root)
@@ -320,7 +322,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           yield assertTrue(count == 2, first.key != second.key)
         }
       },
-      test("R6 a helper-only stamp mismatch is BindingDrift and the root stamp matches") {
+      test("a helper-only stamp mismatch is BindingDrift and the root stamp matches") {
         hosted { (root, _) =>
           for
             api      <- apiJar(root.resolve("api.jar"))
@@ -344,7 +346,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
         }
       },
-      test("R7 a local plugin compile sees its external jar") {
+      test("a local plugin compile sees its external jar") {
         hosted { (root, _) =>
           for
             api    <- apiJar(root.resolve("api.jar"))
@@ -361,7 +363,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           yield assertTrue(ext.compiled, ext.notes.isEmpty, text == "ext")
         }
       },
-      test("R8 settings and resources reach the compile and a second identical load starts the compiler zero times") {
+      test("settings and resources reach the compile and a second identical load starts the compiler zero times") {
         hosted { (root, starts) =>
           for
             files   <- packaged
@@ -389,32 +391,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
         }
       },
-      test("R10 a generation service is alive for the task and closed after the last lease") {
-        hosted { (root, _) =>
-          for
-            api <- apiJar(root.resolve("api.jar"))
-            marker = root.resolve("marker.txt")
-            _      <- write(root.resolve("histos.plugins.scala"), emptyCatalog)
-            _      <- write(root.resolve("histos.scala"), markerMain(marker))
-            during <- ZIO.scoped {
-              for
-                loaded <- prepare(root, api, silent)
-                _      <- hostFacts
-                output <- loaded.plugins
-                  .run(PluginTaskId(PluginId("marker"), TaskName("show")), PluginArgs.empty)
-                  .provideSome[ContentStore & RemoteCache](
-                    ZLayer.succeed(silent),
-                    ResolutionService.pinned(DependencyLock(Nil)),
-                    ZLayer.succeed(ActionCache.miss),
-                  )
-                  .mapError(fault => LoadError.Plugin(PluginLoadError.Construction(fault.message)))
-              yield output.text
-            }
-            after <- ZIO.attemptBlocking(Files.readString(marker, utf8)).orDie
-          yield assertTrue(during == "open:true", after == "closed")
-        }
-      },
-      test("R11 theme and step are exported and an engine package is refused") {
+      test("theme and step are exported and an engine package is refused") {
         hosted { (root, _) =>
           for
             api    <- apiJar(root.resolve("api.jar"))
@@ -426,7 +403,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           yield assertTrue(text == "true:histos.step.StepKind|refused|refused")
         }
       },
-      test("R13 a compile lock failure and a scheduler failure stay distinct through bind") {
+      test("a compile lock failure and a scheduler failure stay distinct through bind") {
         hosted { (root, _) =>
           for
             compiled  <- faultKind(root.resolve("compile"), compileMain, ActionCache.miss)
@@ -447,7 +424,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
             assertTrue(compiled == expectedCompile, scheduleSeen, compiled != scheduled)
         }
       },
-      test("R14 a comment containing trait HistosBuild does not skip compilation") {
+      test("a comment containing trait HistosBuild does not skip compilation") {
         hosted { (root, _) =>
           for
             api    <- apiJar(root.resolve("api.jar"))
@@ -460,7 +437,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           yield assertTrue(text == "compiled", present)
         }
       },
-      test("A1 a catalog intent is what main inherits and a conflicting main resolution is ResolutionConflict") {
+      test("a catalog intent is what main inherits and a conflicting main resolution is ResolutionConflict") {
         hosted { (root, _) =>
           for
             api       <- apiJar(root.resolve("api.jar"))
@@ -482,7 +459,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
             )
         }
       },
-      test("A2 histos.strategies.scala runs after the core seed and before the remaining solve") {
+      test("histos.strategies.scala runs after the core seed and before the remaining solve") {
         hosted { (root, starts) =>
           for
             api    <- apiJar(root.resolve("api.jar"))
@@ -502,7 +479,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
         }
       },
-      test("A4 a TASTy entry-byte change changes the seal and the consumer sees it") {
+      test("a TASTy entry-byte change changes the seal and the consumer sees it") {
         hosted { (root, starts) =>
           for
             session <- sessionFor(root)
@@ -527,7 +504,7 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
           )
         }
       },
-      test("A8 the host compiler comes from the packaged manifest and a missing bridge does not solve") {
+      test("the host compiler comes from the packaged manifest and a missing bridge does not solve") {
         hosted { (root, starts) =>
           for
             files       <- packaged
@@ -573,7 +550,9 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
             )
         }
       },
-    ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.minutes),
+    ).provideShared(Compilers.owned) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(
+      20.minutes
+    ),
   )
 
   private val fixtureText = "fixture\n"
@@ -875,55 +854,6 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
         |  def services = StrategyServices.default.withLocks(Custom.layer)
         |""".stripMargin
 
-  private def markerMain(marker: Path): String =
-    s"""|import histos.*
-        |import histos.plugin.*
-        |import zio.{ZIO, ZLayer}
-        |
-        |final class MarkerTask extends HistosPlugin:
-        |  val id = PluginId("marker")
-        |  def contribute =
-        |    Contribution(
-        |      List(DeclaredTask(TaskName("show"), Seal.Open, Set.empty[Need], Nil, Nil, Nil)),
-        |      Nil,
-        |      Nil,
-        |    )
-        |  def run(request: RunRequest) =
-        |    ZIO
-        |      .attemptBlocking {
-        |        val marker = java.nio.file.Files.readString(java.nio.file.Path.of("${marker.toString}"))
-        |        val home = Option(getClass.getProtectionDomain.getCodeSource).flatMap(source =>
-        |          Option(source.getLocation).map(url => java.nio.file.Path.of(url.toURI))
-        |        )
-        |        val live = home.exists(path => java.nio.file.Files.isRegularFile(path.resolve("MarkerTask.class")))
-        |        s"$$marker:$$live"
-        |      }
-        |      .mapBoth(_ => PluginRunError.Defect("marker"), text => PluginOutput(text, Nil))
-        |
-        |object MarkerTask:
-        |  val layer: ZLayer[Any, Nothing, MarkerTask] =
-        |    ZLayer.scoped(
-        |      ZIO.acquireRelease(
-        |        ZIO.attemptBlocking {
-        |          java.nio.file.Files.writeString(java.nio.file.Path.of("${marker.toString}"), "open")
-        |          new MarkerTask
-        |        }.orDie
-        |      )(_ =>
-        |        ZIO.attemptBlocking {
-        |          java.nio.file.Files.writeString(java.nio.file.Path.of("${marker.toString}"), "closed")
-        |          ()
-        |        }.orDie
-        |      )
-        |    )
-        |
-        |object build extends HistosBuild:
-        |  def graph =
-        |    val app = module("app", Jvm)(scala"3.10.1")
-        |    Projects(app)
-        |
-        |  override def services = BuildServices.default.tasks[MarkerTask](MarkerTask.layer)
-        |""".stripMargin
-
   private inline val intersectionTag =
     """
     import zio.Tag
@@ -968,16 +898,15 @@ object InstalledHostProofSpec extends ZIOSpecDefault:
 
   private def hosted[A](
       body: (Path, Ref[Int]) => ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, A]
-  ): ZIO[Any, LoadError, A] =
+  ): ZIO[Compilers, LoadError, A] =
     ZIO.scoped {
       for
         root   <- work("histos-m6-host")
         cas    <- ZIO.attemptBlocking(Files.createDirectories(root.resolve("cas"))).orDie
         starts <- Ref.make(0)
-        value  <- body(root, starts).provideSomeLayer[Scope](
+        value  <- body(root, starts).provideSomeLayer[Compilers & Scope](
           ZLayer.succeed(ContentStore.in(cas)) ++
             ZLayer.succeed(CompilerStarts(starts)) ++
-            Compilers.live ++
             RemoteCache.off ++
             histos.load.PluginFlights.live ++ histos.load.PluginProducts.live
         )

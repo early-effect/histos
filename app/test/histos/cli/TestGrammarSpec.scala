@@ -2,12 +2,13 @@ package histos.cli
 
 import histos.testrun.{SuitePattern, TagName, TagNameError, TestFilter, TestMode, TestTerm, TestTermError}
 import histos.ProjectName
+import histos.suite.HistosSpec
 
 import zio.test.*
 import zio.ZIO
 import zio.json.*
 
-object TestGrammarSpec extends ZIOSpecDefault:
+object TestGrammarSpec extends HistosSpec:
   private val selected = TestFilter(
     tests = List(TestTerm("one"), TestTerm("two")),
     tags = List(TagName("slow")),
@@ -23,7 +24,7 @@ object TestGrammarSpec extends ZIOSpecDefault:
   )
 
   def spec = suite("test selection")(
-    test("review F4: another flag owns its selector-looking value") {
+    test("another flag owns its selector-looking value") {
       val cases = List(
         "--test"       -> CliParseError.TestTerm(TestTermError.Flag("--platform")),
         "--tag"        -> CliParseError.TagName(TagNameError.Flag("--platform")),

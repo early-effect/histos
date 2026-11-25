@@ -3,6 +3,7 @@ package histos.load
 import histos.jdk.Sha256Digest
 import histos.plugin.{ApiDigest, ContentHash, LockRevision}
 import histos.resolve.{Classpath, LockCodec, Repository, Resolve, ResolvedArtifact}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.Dep
 
@@ -16,7 +17,7 @@ import zio.test.*
 import zio.{Chunk, Scope, UIO, ZIO, ZLayer, durationInt}
 
 /** A custom lock strategy reads the file revision, the catalog intent, and the plugin diff. */
-object PluginLockContextSpec extends ZIOSpecDefault:
+object PluginLockContextSpec extends HistosSpec:
   def spec = suite("plugin lock context")(
     test("an added catalog coordinate is a present revision, the catalog intent, and one added entry") {
       observe(seedLock, catalog).map: text =>

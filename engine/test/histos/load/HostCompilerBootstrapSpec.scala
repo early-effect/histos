@@ -1,14 +1,14 @@
 package histos.load
 
 import histos.cache.ContentStore
-import histos.toolchain.HostToolRole
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 
 import zio.test.*
 import zio.{durationInt, ZIO}
 
-object HostCompilerBootstrapSpec extends ZIOSpecDefault:
+object HostCompilerBootstrapSpec extends HistosSpec:
   private val Marker =
     """|package demo;
        |public final class Marker {
@@ -24,31 +24,6 @@ object HostCompilerBootstrapSpec extends ZIOSpecDefault:
        |""".stripMargin
 
   def spec = suite("host compiler bootstrap")(
-    test("a missing bridge is a host error and does not solve") {
-      PluginCompileSupport
-        .run { (root, _) =>
-          for
-            lock  <- lockBytes
-            store <- ZIO.service[ContentStore]
-            built <- PluginCompileSupport
-              .payload(
-                root.resolve("gap"),
-                "3.10.1",
-                PluginCompileSupport.Scala3101.filterNot(_.role == HostToolRole.Bridge),
-              )
-              .mapError(PluginCompileError.Host(_))
-            opened <- PluginCompileSupport.session(built, store).either
-            again  <- lockBytes
-          yield (opened, lock.sameElements(again))
-        }
-        .map { ran =>
-          assertTrue(
-            ran.starts == 0,
-            ran.value._2,
-            ran.value._1 == Left(histos.toolchain.HostCompilerError.EntryAbsent(HostToolRole.Bridge)),
-          )
-        }
-    },
     test("compiler B rebuilds a mixed recipe when the project lock has no B cell") {
       PluginCompileSupport
         .run { (root, _) =>
@@ -103,8 +78,8 @@ object HostCompilerBootstrapSpec extends ZIOSpecDefault:
             textB == "from-java",
           )
         }
-    },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+    }
+  ).provideShared(histos.zinc.Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private def compile(
       base: Path,

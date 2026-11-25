@@ -17,11 +17,12 @@ import histos.plugin.{
   TaskName,
 }
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 
 import zio.json.*
 import zio.test.*
 
-object WireJsonSpec extends ZIOSpecDefault:
+object WireJsonSpec extends HistosSpec:
   private val module    = ProjectName("docs")
   private val other     = ProjectName("client")
   private val member    = ProjectName("core")

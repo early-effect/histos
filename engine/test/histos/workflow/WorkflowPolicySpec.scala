@@ -2,11 +2,12 @@ package histos.workflow
 
 import histos.*
 import histos.plugin.{Cond, JobName, JobPermissions, PluginId, RepoPath, Site, SiteArrange, SiteShape, TaskName}
+import histos.suite.HistosSpec
 
 import zio.ZIO
 import zio.test.*
 
-object WorkflowPolicySpec extends ZIOSpecDefault:
+object WorkflowPolicySpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
   private val api     = module("api", Jvm)(version)
   private val built   = Projects.docCheck.scalafmt(ships(Ship("libs").next(0, 1, 0)(api)), api)

@@ -32,6 +32,7 @@ import histos.plugin.{
   PluginEvents,
   ResolutionIntent,
 }
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.{ArtifactBase, Organization, Platform, ProjectName, SbtSeries}
 
@@ -41,7 +42,7 @@ import java.nio.file.{Files, Path}
 import zio.{Exit, IO, Promise, Ref, Scope, UIO, ZIO}
 import zio.test.*
 
-object LockTransactionSpec extends ZIOSpecDefault:
+object LockTransactionSpec extends HistosSpec:
   private val app      = PluginCoordinate.Module(ProjectName("app"))
   private val tools    = PluginCoordinate.Module(ProjectName("tools"))
   private val shots    = LocatorName("shots")

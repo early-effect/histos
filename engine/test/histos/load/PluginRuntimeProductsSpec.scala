@@ -5,6 +5,7 @@ import histos.cache.{ContentStore, CacheProject}
 import histos.plugin.*
 import histos.resolve.{ResolutionService, Resolve}
 import histos.schedule.{ActionCache, RemoteCache, RemoteMode, RemoteError, Digest, PluginManifest}
+import histos.suite.HistosSpec
 import zio.Chunk
 import java.nio.charset.StandardCharsets.UTF_8
 import histos.version.Catalog
@@ -16,7 +17,7 @@ import _root_.scala.jdk.OptionConverters.*
 import zio.{IO, Promise, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PluginRuntimeProductsSpec extends ZIOSpecDefault:
+object PluginRuntimeProductsSpec extends HistosSpec:
   private val site      = OutputName("site")
   private val generated = OutputName("generated")
   private val id        = PluginTaskId(PluginId("site"), TaskName("build"))

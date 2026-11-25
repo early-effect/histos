@@ -1,12 +1,14 @@
 package histos.server
 
+import histos.suite.HistosSpec
+
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 import zio.{Clock, Ref, ZIO, durationInt}
 import zio.test.*
 
-object ServerWaitSpec extends ZIOSpecDefault:
+object ServerWaitSpec extends HistosSpec:
   private val socket = Path.of("sock")
 
   def spec = suite("a spawned server that exits")(

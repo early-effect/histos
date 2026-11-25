@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.server.CatalogQuery
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 
@@ -11,7 +12,7 @@ import zio.cli.completion.Completion
 import zio.test.*
 import zio.{UIO, ZIO}
 
-object CompletionSpec extends ZIOSpecDefault:
+object CompletionSpec extends HistosSpec:
   def spec = suite("shell completion")(
     test("an empty command line offers the help names and no retired verb") {
       for words <- offered(List("histos", ""))

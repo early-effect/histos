@@ -3,12 +3,13 @@ package histos.server
 import histos.lock.{LockMode, LockTransactionError}
 import histos.plugin.{Digests, ProposalId}
 import histos.task.{HostProof, HostVerdict}
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets
 
 import zio.test.*
 
-object HostTaskSpec extends ZIOSpecDefault:
+object HostTaskSpec extends HistosSpec:
   private val consent: String =
     LockTransactionError
       .ConsentRequired(ProposalId.trusted(Digests.sha256("host".getBytes(StandardCharsets.UTF_8))))

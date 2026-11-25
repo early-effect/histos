@@ -1,10 +1,12 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
 import java.nio.file.Path
 
-object SourceMapsSpec extends ZIOSpecDefault:
+object SourceMapsSpec extends HistosSpec:
 
   def spec =
     suite("SourceMaps")(

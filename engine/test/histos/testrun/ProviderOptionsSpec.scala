@@ -5,12 +5,13 @@ import histos.build.BuildNode
 import histos.pack.MainClass
 import histos.plugin.SourceSet
 import histos.process.ChildProcess
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object ProviderOptionsSpec extends ZIOSpecDefault:
+object ProviderOptionsSpec extends HistosSpec:
   private val tests = suite("provider JVM options")(
     test("a real child sees a provider system property, not a program argument") {
       val version = TestExecutionFixtures.version
@@ -95,4 +96,5 @@ object ProviderOptionsSpec extends ZIOSpecDefault:
             )
     },
   )
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(3.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(3.minutes)).provideShared(histos.zinc.Compilers.owned)

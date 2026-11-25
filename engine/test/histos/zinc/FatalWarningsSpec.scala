@@ -3,6 +3,7 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.{JdkRuntime, Sha256Digest}
 import histos.load.{PluginCompileError, PluginCompileSupport}
+import histos.suite.HistosSpec
 import histos.toolchain.{HostCompilerError, HostCompilerSession, HostToolRole, MaterializedTool, RuntimeIdentity}
 import histos.{Platform, ScalacFlag, ScalacFlags}
 
@@ -11,7 +12,7 @@ import java.nio.file.Path
 import zio.test.*
 import zio.{Chunk, Exit, durationInt, ZIO}
 
-object FatalWarningsSpec extends ZIOSpecDefault:
+object FatalWarningsSpec extends HistosSpec:
   def spec = suite("fatal warnings")(
     test("-Werror is the fatal-warnings flag and no other case here borrows it") {
       val fatal = ScalacFlags.of(ScalacFlag.FatalWarnings)
@@ -52,7 +53,7 @@ object FatalWarningsSpec extends ZIOSpecDefault:
           assertTrue(refusal(fatal) == "failed", plain.classFiles > 0)
         }
     },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private def unusedSource: String =
     """|object Probe:

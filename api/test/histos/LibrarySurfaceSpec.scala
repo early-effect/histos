@@ -1,11 +1,13 @@
 package histos
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
 /** The module surface a library build writes: extra sources, native libraries, one native test binary, and a verify
   * lane.
   */
-object LibrarySurfaceSpec extends ZIOSpecDefault:
+object LibrarySurfaceSpec extends HistosSpec:
   private val scala3 = scala"3.10.1"
 
   private val core = module("core", Jvm, Native)(scala3).clang(ClangMajor(21))

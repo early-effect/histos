@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.file.Files
@@ -7,7 +8,7 @@ import java.nio.file.Files
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object LocalWithdrawSpec extends ZIOSpecDefault:
+object LocalWithdrawSpec extends HistosSpec:
   private val revision = "0.5.0-abcdefabcdef-SNAPSHOT"
   private val kept     = "0.5.0-111111111111-SNAPSHOT"
 

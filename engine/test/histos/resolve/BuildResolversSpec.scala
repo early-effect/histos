@@ -1,8 +1,10 @@
 package histos.resolve
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
-object BuildResolversSpec extends ZIOSpecDefault:
+object BuildResolversSpec extends HistosSpec:
   private val snapshots =
     Repository.Maven(RepoUrl.trusted("https://central.sonatype.com/repository/maven-snapshots/"))
 

@@ -15,6 +15,7 @@ import histos.resolve.{
   ResolvedArtifact,
   ToolRequest,
 }
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.{ClasspathBan, CompileError, ScalacClasspath}
 
@@ -23,7 +24,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PluginTestApiSpec extends ZIOSpecDefault:
+object PluginTestApiSpec extends HistosSpec:
   private val version    = TestExecutionFixtures.version
   private val api        = dep"rocks.earlyeffect::histos-api:0.5.0-SNAPSHOT".compileOnly
   private val zioTest    = dep"dev.zio::zio-test:2.1.27"
@@ -62,7 +63,8 @@ object PluginTestApiSpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   private val mainStage = CompilationStage(Cell(ProjectName("plug"), version, Jvm), SourceSet.Main)
   private val testStage = mainStage.copy(scope = SourceSet.Test)

@@ -18,6 +18,7 @@ import histos.plugin.{
   StageInputs,
   StageRestrictions,
 }
+import histos.suite.HistosSpec
 import histos.toolchain.HostCompilerSession
 import histos.zinc.ProductDigest
 import histos.ProjectName
@@ -27,7 +28,7 @@ import java.nio.file.{Files, Path}
 import zio.test.*
 import zio.{durationInt, Ref, ZIO}
 
-object PluginCompileCacheSpec extends ZIOSpecDefault:
+object PluginCompileCacheSpec extends HistosSpec:
   def spec = suite("plugin compile cache")(
     test("a second identical compile does not start the compiler") {
       PluginCompileSupport
@@ -124,7 +125,7 @@ object PluginCompileCacheSpec extends ZIOSpecDefault:
           )
         }
     },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(histos.zinc.Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private def directoryClosure(closure: List[ClosureArtifact]): Boolean =
     closure match

@@ -2,11 +2,12 @@ package histos.contracts
 
 import histos.load.ProvenanceResult
 import histos.plugin.{InputRecord, RecipeError, RebuildRecipe, SealedArtifactManifest}
+import histos.suite.HistosSpec
 import histos.zinc.CompilationCapture
 
 import zio.test.*
 
-object ContractModelsSpec extends ZIOSpecDefault:
+object ContractModelsSpec extends HistosSpec:
   def spec = suite("contract models")(
     test("unverified provenance is not an empty artifact list") {
       val verified = ContractFixtures.verifiedEmpty.map(ProvenanceResult.artifacts)

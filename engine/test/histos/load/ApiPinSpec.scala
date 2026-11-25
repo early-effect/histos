@@ -20,6 +20,7 @@ import histos.resolve.{
 }
 import histos.schedule.RemoteCache
 import histos.cache.ContentStore
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.{GraphCompile, ScalacClasspath}
 
@@ -28,7 +29,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object ApiPinSpec extends ZIOSpecDefault:
+object ApiPinSpec extends HistosSpec:
   private val version = scala"3.10.1"
   private val apiDep  = dep"rocks.earlyeffect::histos-api:0.5.0-SNAPSHOT".compileOnly
 

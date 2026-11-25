@@ -1,6 +1,7 @@
 package histos.workflow
 
 import histos.plugin.{JobName, TaskName}
+import histos.suite.HistosSpec
 import histos.{
   Axis,
   BuildError,
@@ -24,7 +25,7 @@ import histos.{
 
 import zio.test.*
 
-object VerifyJobSpec extends ZIOSpecDefault:
+object VerifyJobSpec extends HistosSpec:
   private val ShipCommit = "0123456789abcdef0123456789abcdef01234567"
   private val Setup      = "early-effect/histos/.github/actions/setup@"
   private val api        = module("api", Jvm)(ScalaVersion("3.10.1"))
@@ -37,7 +38,7 @@ object VerifyJobSpec extends ZIOSpecDefault:
     RunnerTools(Some(NodeFloor(25)), None, Some(ToolRevision("1.62.1")))
 
   def spec = suite("verify jobs")(
-    test("review OpenSSL: matrix libraries do not depend on a pinned LLVM requirement") {
+    test("matrix libraries do not depend on a pinned LLVM requirement") {
       val native = histos
         .module("native", histos.Native)(ScalaVersion("3.10.1"))
         .clang(histos.ClangMajor(21))

@@ -22,6 +22,7 @@ import histos.native.NativeOrigin
 import histos.plugin.*
 import histos.resolve.{LockedTools, Resolve, ResolutionService}
 import histos.schedule.{ActionCache, Histos, Parallelism, RemoteCache}
+import histos.suite.HistosSpec
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
@@ -30,7 +31,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object GeneratedDagSpec extends ZIOSpecDefault:
+object GeneratedDagSpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
   private type Env = BuildEnv & LinkerStarts
 
@@ -138,7 +139,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             results.forall(result => jars.contains(result._4)),
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("module Text and File resources overlay the conventional classpath entry") {
       ZIO
@@ -168,7 +169,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
           }
         }
         .map(_.foldLeft(assertTrue(true))(_ && _))
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("a cold named consumer builds its host File producer after linking the relay") {
       ZIO
@@ -227,7 +228,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             },
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("the docs diamond shares a File producer and Main ignores broken Test sources") {
       ZIO
@@ -291,7 +292,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             ),
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("Main resources are copied after class restore and stale owned entries disappear on a warm hit") {
       ZIO
@@ -341,7 +342,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             removed,
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("legacy Compile is test-complete and a broken Test source prevents its task from running") {
       ZIO
@@ -390,7 +391,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             calls == 0,
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("generated read leases outlive node staging and close with the caller's scope") {
       ZIO
@@ -447,7 +448,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             closed <- readClosed.isDone
           yield assertTrue(observed == ("leased", true, false, true), closed)
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("a source-free Native aggregate has an actual empty Main product, not fabricated member cells") {
       ZIO
@@ -480,7 +481,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
               ),
           )
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("interrupting an invocation closes its running producer scope") {
       ZIO
@@ -505,7 +506,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             closed <- released.isDone
           yield assertTrue(exit.isInterrupted, closed)
         }
-        .provide(Resolve.coursier)
+        .provideSomeLayer[Compilers](Resolve.coursier)
     },
     test("an indirect compile/link/generate cycle is refused before a leaf can run") {
       for
@@ -548,7 +549,8 @@ object GeneratedDagSpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(Compilers.owned)
 
   private def execute(
       repo: Path,
@@ -564,7 +566,7 @@ object GeneratedDagSpec extends ZIOSpecDefault:
       producer: (ExecutionRequest, PluginTaskId, ExecutionProducts) => ZIO[Env & Scope, ExecutionError, GeneratedTask[
         ExecutionError
       ]]
-  ): ZIO[Resolve & Scope, ExecutionError | histos.resolve.ResolveError | IoFailure, ExecutionProducts] =
+  ): ZIO[Resolve & Compilers & Scope, ExecutionError | histos.resolve.ResolveError | IoFailure, ExecutionProducts] =
     for
       _ <- ZIO.foreachDiscard(List("user.home", "os.name", "os.arch", "java.home")) { key =>
         ZIO.foreachDiscard(sys.props.get(key))(TestSystem.putProperty(key, _))
@@ -585,13 +587,12 @@ object GeneratedDagSpec extends ZIOSpecDefault:
             report,
           )
         )
-        .provideSome[Resolve & Scope](
+        .provideSome[Resolve & Compilers & Scope](
           ZLayer.succeed(resolution),
           ZLayer.succeed(ContentStore.in(cas)),
           ZLayer.succeed(ActionCache.miss),
           RemoteCache.off,
           CompilerStarts.live,
-          Compilers.live,
           CompileMemo.live,
           LinkerStarts.live,
         )

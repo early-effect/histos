@@ -1,11 +1,12 @@
 package histos.cli
 
 import histos.{MainClass, Platform, PlatformSelection, SelectionError}
+import histos.suite.HistosSpec
 
 import zio.test.*
 import zio.json.*
 
-object RunArgsSpec extends ZIOSpecDefault:
+object RunArgsSpec extends HistosSpec:
   def spec = suite("run arguments")(
     test("platform and main flags keep forwarded arguments unchanged") {
       Grammar

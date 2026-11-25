@@ -2,6 +2,7 @@ package histos.program
 
 import histos.native.NativeLink
 import histos.server.RunLaunch
+import histos.suite.HistosSpec
 import histos.{Module, Platform, Platforms, ProjectName, ScalaVersion, ScalaVersions, SourcePos, ThreadStack}
 
 import java.nio.file.{Files, Path}
@@ -11,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import zio.ZIO
 import zio.test.*
 
-object RunLaunchSpec extends ZIOSpecDefault:
+object RunLaunchSpec extends HistosSpec:
   private val server = Map(
     "PATH"        -> "/server/bin",
     "ONLY_SERVER" -> "kept",

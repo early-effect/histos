@@ -1,6 +1,7 @@
 package histos.testrun
 
 import histos.plugin.SourceSet
+import histos.suite.HistosSpec
 import histos.{
   Aggregate,
   Cell,
@@ -27,7 +28,7 @@ import _root_.scala.compiletime.testing.typeChecks
 import zio.NonEmptyChunk
 import zio.test.*
 
-object TestCellsSpec extends ZIOSpecDefault:
+object TestCellsSpec extends HistosSpec:
   private val v1          = scala"3.9.2"
   private val v2          = scala"3.10.1"
   private val position    = SourcePos("TestCellsSpec.scala", 1, 1)

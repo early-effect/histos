@@ -1,9 +1,11 @@
 package histos.process
 
+import histos.suite.HistosSpec
+
 import zio.Exit
 import zio.test.*
 
-object AttendanceSpec extends ZIOSpecDefault:
+object AttendanceSpec extends HistosSpec:
   def spec = suite("attendance")(
     test("a descendant that still holds the pipe is an orphan") {
       for outcome <- Attendance.settle(ProcessExit(0)).exit

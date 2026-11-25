@@ -1,5 +1,6 @@
 package histos.pack
 
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.charset.StandardCharsets
@@ -11,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import zio.ZIO
 import zio.test.*
 
-object PublishJarSpec extends ZIOSpecDefault:
+object PublishJarSpec extends HistosSpec:
   def spec = suite("a published jar")(
     test("the javadoc jar is one page") {
       ZIO.scoped {

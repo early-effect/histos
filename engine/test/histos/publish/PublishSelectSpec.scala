@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.suite.HistosSpec
 import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.{
   Dep,
@@ -17,7 +18,7 @@ import histos.{
 
 import zio.test.*
 
-object PublishSelectSpec extends ZIOSpecDefault:
+object PublishSelectSpec extends HistosSpec:
   private val plugin = ProjectName("plugin")
   private val ship   = ShipName.trusted("plugin")
 

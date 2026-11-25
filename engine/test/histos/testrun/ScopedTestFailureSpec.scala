@@ -4,6 +4,7 @@ import histos.*
 import histos.build.{BuildNode, ExecutionError}
 import histos.plugin.{OutputKind, OutputName, PluginId, PluginTaskId, TaskName}
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 import histos.zinc.{GeneratedRootId, StageRootError}
 import histos.native.NativeError
 
@@ -12,7 +13,7 @@ import java.nio.file.Path
 import zio.json.*
 import zio.test.*
 
-object ScopedTestFailureSpec extends ZIOSpecDefault:
+object ScopedTestFailureSpec extends HistosSpec:
   def spec = suite("scoped Test boundary errors")(
     test("root ownership and effective link identity survive typed adaptation and wire round trips") {
       val task   = PluginTaskId(PluginId("generated"), TaskName("resource"))

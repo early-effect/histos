@@ -1,5 +1,6 @@
 package histos.pack
 
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.ToolchainIdentity
 
@@ -9,7 +10,7 @@ import java.nio.file.Path
 import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
-object ScaladocSiteSpec extends ZIOSpecDefault:
+object ScaladocSiteSpec extends HistosSpec:
   def spec = suite("scaladoc refuses a packed launcher")(
     test("a stamped jar is not a tool classpath") {
       ZIO.scoped:

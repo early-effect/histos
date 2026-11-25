@@ -4,6 +4,7 @@ import histos.jdk.Sha256
 import histos.native.{ClangTarget, ClangText, ClangVersion, NativeKey}
 import histos.pack.{MainClass, MainClassError}
 import histos.publish.DistLayout
+import histos.suite.HistosSpec
 import histos.{ClangMajor, NativeVersion, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -13,7 +14,7 @@ import scala.jdk.CollectionConverters.*
 import zio.ZIO
 import zio.test.*
 
-object ClientInstallSpec extends ZIOSpecDefault:
+object ClientInstallSpec extends HistosSpec:
   private enum KeyInputs:
     case Clang(error: ClangText)
     case Main(error: MainClassError)

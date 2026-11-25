@@ -3,11 +3,12 @@ package histos.plugin.testkit
 import histos.Resolution
 import histos.lock.*
 import histos.plugin.*
+import histos.suite.HistosSpec
 
 import zio.{Promise, Ref, Scope, ZIO, ZLayer}
 import zio.test.*
 
-object PluginHarnessSpec extends ZIOSpecDefault:
+object PluginHarnessSpec extends HistosSpec:
   private val policy: LockStrategy = new LockStrategy:
     def decide(context: LockContext): zio.IO[LockStrategyError, LockDecision] =
       ZIO.succeed:

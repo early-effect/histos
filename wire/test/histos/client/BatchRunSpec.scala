@@ -6,11 +6,12 @@ import histos.plugin.Interaction
 import histos.server.{Call, CatalogQuery, ResolveAction}
 import histos.ProjectName
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 
 import zio.json.*
 import zio.test.*
 
-object BatchRunSpec extends ZIOSpecDefault:
+object BatchRunSpec extends HistosSpec:
   def spec = suite("run arguments on the native client")(
     test("tokens after -- are the program arguments and jvm stays the platform") {
       assertTrue(

@@ -1,12 +1,13 @@
 package histos
 
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 import histos.supply.Email
 
 import zio.json.*
 import zio.test.*
 
-object PomMetadataJsonSpec extends ZIOSpecDefault:
+object PomMetadataJsonSpec extends HistosSpec:
   private val facts = OrganizationFacts(
     license = Some(License(LicenseName("Apache-2.0"), MetadataUri("http://www.apache.org/licenses/LICENSE-2.0.txt"))),
     developer = Some(

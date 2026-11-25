@@ -20,6 +20,7 @@ import histos.plugin.{ClientId, CommandIdentity, Digests, PluginDetail, Proposal
 import histos.server.ResolveAction
 import histos.ProjectName
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets
 
@@ -27,7 +28,7 @@ import zio.{Ref, ZIO}
 import zio.json.*
 import zio.test.*
 
-object LockOfferSpec extends ZIOSpecDefault:
+object LockOfferSpec extends HistosSpec:
   private val utf8 = StandardCharsets.UTF_8
 
   private def parsed(args: String*) =

@@ -59,6 +59,10 @@ private[histos] object Compilers:
   def live: ZLayer[Scope, Nothing, Compilers] =
     live(Parallelism.default.cpu)
 
+  /** Owns the scope `live` requires, so one pool stays open for the layer's lifetime. */
+  def owned: ZLayer[Any, Nothing, Compilers] =
+    ZLayer.scoped(live.build.map(_.get[Compilers]))
+
   /** Opens compilers for `effect` and closes them when it ends. */
   def provide[R, E, A](width: Int)(effect: ZIO[R & Compilers, E, A]): ZIO[R, E, A] =
     ZIO.scoped(

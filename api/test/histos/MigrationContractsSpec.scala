@@ -1,11 +1,12 @@
 package histos
 
 import histos.plugin.*
+import histos.suite.HistosSpec
 import java.nio.file.Path
 import _root_.scala.compiletime.testing.typeChecks
 import zio.test.*
 
-object MigrationContractsSpec extends ZIOSpecDefault:
+object MigrationContractsSpec extends HistosSpec:
   private val scala3     = scala"3.10.1"
   private val core       = module("core", Jvm)(scala3)
   private val page       = OutputName("page")

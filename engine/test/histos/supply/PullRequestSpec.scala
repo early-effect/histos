@@ -1,5 +1,6 @@
 package histos.supply
 
+import histos.suite.HistosSpec
 import histos.version.CommitSha
 
 import java.nio.file.Files
@@ -7,7 +8,7 @@ import java.nio.file.Files
 import zio.{IO, Ref, ZIO}
 import zio.test.*
 
-object PullRequestSpec extends ZIOSpecDefault:
+object PullRequestSpec extends HistosSpec:
   private val main     = CommitSha.trusted("f" * 40)
   private val weekly   = BranchName.trusted("histos/deps")
   private val security = BranchName.trusted("histos/security")

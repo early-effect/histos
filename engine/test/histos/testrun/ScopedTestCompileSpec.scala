@@ -1,6 +1,7 @@
 package histos.testrun
 
 import histos.*
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.file.Files
@@ -8,7 +9,7 @@ import java.nio.file.Files
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object ScopedTestCompileSpec extends ZIOSpecDefault:
+object ScopedTestCompileSpec extends HistosSpec:
   private val version = TestExecutionFixtures.version
   private val tests   = suite("scoped Test compilation")(
     test("a downstream Test reads upstream fixtures and logical resources without executing upstream suites") {
@@ -33,18 +34,10 @@ object ScopedTestCompileSpec extends ZIOSpecDefault:
                 fixture.repo.resolve("fixtures/test/lib/Fixture.scala"),
                 "package lib\nobject Fixture:\n  def text: String = \"fixture\"\n",
               )
-              _ <- Workspace.writeString(
-                fixture.repo.resolve("fixtures/test/lib/UpstreamSpec.scala"),
-                """package lib
-                |import zio.*
-                |import zio.test.*
-                |object UpstreamSpec extends ZIOSpecDefault:
-                |  def spec = test("must not execute") {
-                |    ZIO.attempt(java.nio.file.Files.writeString(java.nio.file.Path.of(sys.env.getOrElse("HISTOS_REPO", "."), "upstream-counter"), "ran"))
-                |      .as(assertTrue(false))
-                |  }
-                |""".stripMargin,
+              upstream <- TestExecutionFixtures.checkout(
+                "engine/src/test/resources/fixtures/scoped-test-compile/UpstreamSpec.scala"
               )
+              _ <- Workspace.writeString(fixture.repo.resolve("fixtures/test/lib/UpstreamSpec.scala"), upstream)
               _ <- Workspace.writeString(fixture.repo.resolve("fixtures/src/test/resources/fixture.txt"), "resource")
               _ <- Workspace.writeString(
                 fixture.repo.resolve("consumer/test/demo/Check.scala"),
@@ -116,7 +109,9 @@ object ScopedTestCompileSpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = (tests + macroTests) @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec = ((tests + macroTests) @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(
+    histos.zinc.Compilers.owned
+  )
 
   private def validator(accepted: String): String =
     s"""|package lib

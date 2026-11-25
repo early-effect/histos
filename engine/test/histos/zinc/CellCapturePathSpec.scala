@@ -4,6 +4,7 @@ import histos.*
 import histos.jdk.{JdkVersion, VersionError}
 import histos.plugin.SourceSet
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 import histos.workspace.{IoFailure, Workspace}
 
 import java.nio.file.Path
@@ -12,7 +13,7 @@ import zio.{ZIO, durationInt}
 import zio.json.*
 import zio.test.*
 
-object CellCapturePathSpec extends ZIOSpecDefault:
+object CellCapturePathSpec extends HistosSpec:
   private val stage = CompilationStage(Cell(ProjectName("capture"), ScalaVersion("3.10.1"), Jvm), SourceSet.Test)
   private val tests = suite("capture path safety")(
     test("readable malformed filenames remain path failures, including literal Unix backslashes") {

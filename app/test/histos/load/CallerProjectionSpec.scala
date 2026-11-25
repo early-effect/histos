@@ -14,6 +14,7 @@ import histos.task.RunId
 import histos.testrun.ScopedTestFailure
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers}
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 
@@ -21,7 +22,7 @@ import zio.*
 import zio.json.*
 import zio.test.*
 
-object CallerProjectionSpec extends ZIOSpecDefault:
+object CallerProjectionSpec extends HistosSpec:
   import WireJson.given
 
   private val version     = ScalaVersion("3.10.1")

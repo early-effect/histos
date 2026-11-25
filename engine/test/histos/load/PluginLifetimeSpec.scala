@@ -2,6 +2,7 @@ package histos.load
 
 import histos.plugin.{PluginEvents, PluginRunError, PluginScopes, Program, ProgramEvent, ResourceLife}
 import histos.resolve.{Repository, Resolve}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.Dep
 
@@ -17,7 +18,7 @@ import zio.test.*
 import zio.{Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 
 /** A wiring file is not a load input. Generation leases still close with their last holder. */
-object PluginLifetimeSpec extends ZIOSpecDefault:
+object PluginLifetimeSpec extends HistosSpec:
   def spec = lifetime @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private val lifetime = suite("plugin lifetime")(

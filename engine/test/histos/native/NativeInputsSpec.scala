@@ -6,6 +6,7 @@ import histos.cache.LinkerStarts
 import histos.pack.MainClass
 import histos.plugin.SourceSet
 import histos.process.{ChildEvent, ChildProcess}
+import histos.suite.HistosSpec
 import histos.testrun.{TestExecutionFixtures, SuiteStamp, SuiteName, QuickRecord}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
@@ -17,7 +18,7 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object NativeInputsSpec extends ZIOSpecDefault:
+object NativeInputsSpec extends HistosSpec:
   private val version    = TestExecutionFixtures.version
   private val appName    = ProjectName("app")
   private val memberName = ProjectName("member")
@@ -134,7 +135,8 @@ object NativeInputsSpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes) @@ TestAspect.sequential
+  def spec = (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes) @@ TestAspect.sequential)
+    .provideShared(histos.zinc.Compilers.owned)
 
   private def quickDigest(classes: Path, classpath: List[Path]) =
     for

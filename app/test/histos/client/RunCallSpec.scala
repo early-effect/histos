@@ -3,10 +3,11 @@ package histos.client
 import histos.Platform
 import histos.plugin.PluginArgs
 import histos.server.{Call, RunLaunch}
+import histos.suite.HistosSpec
 
 import zio.test.*
 
-object RunCallSpec extends ZIOSpecDefault:
+object RunCallSpec extends HistosSpec:
   def spec = suite("an mcp run")(
     test("omitted arguments are an empty tool overlay and an empty argv") {
       val call = Session.runCall("app", None, PluginArgs.empty)

@@ -1,10 +1,12 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
 import java.nio.file.{Files, Path}
 
-object SmokeSiteSpec extends ZIOSpecDefault:
+object SmokeSiteSpec extends HistosSpec:
 
   def spec =
     suite("smoke site")(

@@ -1,12 +1,13 @@
 package histos.coverage
 
 import histos.*
+import histos.suite.HistosSpec
 import histos.testrun.TestExecutionFixtures
 import histos.workspace.Workspace
 import zio.{Ref, ZIO, durationInt}
 import zio.test.*
 
-object CoverageRunSpec extends ZIOSpecDefault:
+object CoverageRunSpec extends HistosSpec:
   private val version = ScalaVersion("2.13.18")
   private val name    = ProjectName("app")
   private val tests   = suite("actual coverage execution")(
@@ -89,5 +90,6 @@ object CoverageRunSpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 end CoverageRunSpec

@@ -44,6 +44,7 @@ import histos.resolve.{
   ToolRequest,
 }
 import histos.schedule.RemoteCache
+import histos.suite.HistosSpec
 import histos.version.{ReleaseVersion, ShipNumber}
 import histos.workspace.Workspace
 import histos.zinc.{
@@ -67,7 +68,7 @@ import java.util.zip.ZipFile
 import zio.{Chunk, Ref, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PluginPublicationSpec extends ZIOSpecDefault:
+object PluginPublicationSpec extends HistosSpec:
   private val version  = ScalaVersion("3.10.1")
   private val revision = Revision.Release(ReleaseVersion(ShipNumber("0.1.0")))
   private val node     = RecipeNodeId("plug")

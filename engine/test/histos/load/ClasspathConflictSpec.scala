@@ -2,6 +2,7 @@ package histos.load
 
 import histos.plugin.Digests
 import histos.plugin.PluginLoadError
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
@@ -10,7 +11,7 @@ import java.util.zip.{ZipEntry, ZipOutputStream}
 import zio.{UIO, ZIO}
 import zio.test.*
 
-object ClasspathConflictSpec extends ZIOSpecDefault:
+object ClasspathConflictSpec extends HistosSpec:
   def spec = suite("a classpath conflict names both jars")(
     test("the toolchain api is named ahead of the resolved coordinate") {
       ZIO.scoped {

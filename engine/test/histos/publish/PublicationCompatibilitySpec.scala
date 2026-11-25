@@ -10,6 +10,7 @@ import histos.plugin.{ApiDigest, SourceSet}
 import histos.publish.*
 import histos.resolve.Resolve
 import histos.schedule.RemoteCache
+import histos.suite.HistosSpec
 import histos.version.{BumpPart, Session, ShipNumber}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompiledCell, GraphCompile, ProductDigest}
@@ -18,7 +19,7 @@ import org.objectweb.asm.{ClassWriter, Opcodes}
 import zio.*
 import zio.test.*
 
-object PublicationCompatibilitySpec extends ZIOSpecDefault:
+object PublicationCompatibilitySpec extends HistosSpec:
   private val version       = ScalaVersion("3.10.1")
   private val previous      = ShipNumber.trusted(0, 15, 0)
   private val firstPrevious = ShipNumber.trusted(0, 14, 2)

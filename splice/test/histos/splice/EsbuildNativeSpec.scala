@@ -1,5 +1,7 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 import zio.*
 
@@ -7,7 +9,7 @@ import java.nio.file.{Files, Path}
 import java.util.Comparator
 import scala.util.Using
 
-object EsbuildNativeSpec extends ZIOSpecDefault:
+object EsbuildNativeSpec extends HistosSpec:
 
   def spec = suite("EsbuildNative")(
     test("this host has a pinned esbuild") {

@@ -2,6 +2,7 @@ package histos.pack
 
 import histos.load.BuildClasspath
 import histos.publish.PublishedShim
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.ToolchainIdentity
 
@@ -14,7 +15,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object DistributionSpec extends ZIOSpecDefault:
+object DistributionSpec extends HistosSpec:
   def spec = suite("a packed classpath")(
     test("is a distribution, drops ide data, and keeps the application identity") {
       ZIO.scoped {

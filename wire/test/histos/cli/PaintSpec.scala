@@ -2,6 +2,7 @@ package histos.cli
 
 import histos.build.BuildEvent
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 import histos.theme.{Color, Emphasis, Role, Style, Theme}
 
 import java.nio.file.Path
@@ -10,7 +11,7 @@ import zio.Chunk
 import zio.json.*
 import zio.test.*
 
-object PaintSpec extends ZIOSpecDefault:
+object PaintSpec extends HistosSpec:
   private val repo  = Path.of("/repo")
   private val blue  = Style(Color.Blue, Emphasis.Plain)
   private val loud  = Role.values.foldLeft(Theme.empty)((theme, role) => theme.set(role, blue))

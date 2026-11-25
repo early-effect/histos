@@ -3,6 +3,7 @@ package histos.cli
 import histos.build.BuildEvent
 import histos.theme.Role
 import histos.zinc.{CompileFeed, CompilePulse}
+import histos.suite.HistosSpec
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -10,7 +11,7 @@ import java.nio.file.Path
 import zio.Chunk
 import zio.test.*
 
-object ColumnSpec extends ZIOSpecDefault:
+object ColumnSpec extends HistosSpec:
   private val api     = ProjectName("api")
   private val engine  = ProjectName("engine")
   private val version = ScalaVersion("3.10.1")

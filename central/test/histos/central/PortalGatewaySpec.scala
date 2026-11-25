@@ -1,5 +1,7 @@
 package histos.central
 
+import histos.suite.HistosSpec
+
 import heddle.{Handler, Method, Request, Response, Routes, Server, Status}
 import heddle.route.PathDsl.*
 import heddle.server.Port
@@ -7,7 +9,7 @@ import heddle.server.Port
 import zio.*
 import zio.test.*
 
-object PortalGatewaySpec extends ZIOSpecDefault:
+object PortalGatewaySpec extends HistosSpec:
   private val id = DeploymentId("11111111-1111-1111-1111-111111111111")
 
   private val retried =

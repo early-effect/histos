@@ -2,6 +2,7 @@ package histos.plugin
 
 import histos.doctor.Noted
 import histos.lock.{ExecutionKind, LockContext, LockDecision, LockStrategy}
+import histos.suite.HistosSpec
 import histos.{Platform, PluginPublication}
 
 import java.nio.charset.StandardCharsets
@@ -52,7 +53,7 @@ object CheckedReviewLabel:
       if value.isBlank then ZIO.fail(LabelSetupError.Empty)
       else ZIO.succeed[ReviewLabel](LiveReviewLabel(value))
 
-object PluginContractsSpec extends ZIOSpecDefault:
+object PluginContractsSpec extends HistosSpec:
   private inline val digest = "0000000000000000000000000000000000000000000000000000000000000000"
   private val node          = RecipeNodeId("root")
 
