@@ -40,16 +40,17 @@ object Frame:
   def write(out: OutputStream, payload: String): IO[FrameError, Unit] =
     ZIO.attemptBlocking(put(out, payload)).mapError(_ => FrameError.Io).flatMap(ZIO.fromEither)
 
-  /** One frame, on the calling thread. */
+  /** One frame, on the calling thread. The header and the body are written together when callers share the stream. */
   def put(out: OutputStream, payload: String): Either[FrameError, Unit] =
     val bytes = payload.getBytes(StandardCharsets.UTF_8)
     if bytes.length > BodyLimit then Left(FrameError.TooLarge)
     else
       try
-        val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
-        out.write(header)
-        out.write(bytes)
-        out.flush()
+        out.synchronized:
+          val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
+          out.write(header)
+          out.write(bytes)
+          out.flush()
         Right(())
       catch case _: java.io.IOException => Left(FrameError.Io)
 
