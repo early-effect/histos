@@ -73,7 +73,7 @@ enum ProgramError:
     case Directory(fault) => fault.message
     case Root(path)       => s"could not read $path"
     case Kit(detail)      => s"could not write the client kit\n$detail"
-    case Selection(error) => s"invalid run selection: $error"
+    case Selection(error) => error.message
     case Scoped(error)    => error.message
 
   def diagnose: Diagnostic = this match

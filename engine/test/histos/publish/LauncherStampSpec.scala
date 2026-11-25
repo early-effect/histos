@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.jdk.Sha256
 import histos.pack.ClassJar
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.ToolchainIdentity
 
@@ -14,7 +15,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object LauncherStampSpec extends ZIOSpecDefault:
+object LauncherStampSpec extends HistosSpec:
   private val digest   = Sha256.trusted("ab" * 32)
   private val identity = ToolchainIdentity(
     "0.5.0-aaaaaaaaaaaa-SNAPSHOT",

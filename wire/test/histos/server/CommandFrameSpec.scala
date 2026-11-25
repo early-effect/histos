@@ -2,12 +2,13 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.report.CallResult
+import histos.suite.HistosSpec
 
 import zio.Chunk
 import zio.json.*
 import zio.test.*
 
-object CommandFrameSpec extends ZIOSpecDefault:
+object CommandFrameSpec extends HistosSpec:
   private val line  = BuildEvent.Out("heddle compiling")
   private val bytes = Chunk[Byte](1, 2, 3)
   private val done  = CallResult.reported()

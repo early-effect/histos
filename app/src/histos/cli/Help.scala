@@ -46,14 +46,14 @@ object Help:
     Entry(
       "compile",
       "build",
-      "histos compile [project ...] [--platform <jvm,js,native>]",
-      "Compile the named projects, or every module. Repeat --platform or use a comma list to select platforms. Named modules refuse unsupported platforms; whole-build selection keeps matching cells. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos compile [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--tests]",
+      "Compile the named projects, or every module. Repeat --platform or --scala, or use a comma list. --scala takes a series (2.13 or 3) or a full version. Named modules refuse a token that matches nothing and a series that matches two versions. Whole-build selection keeps every matching cell. Omission is every declared version. --tests also compiles test sources and does not run suites or link. A source prints when it finishes. --verbose prints each compiler phase. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "run",
       "build",
-      "histos run <name> [--platform <jvm|js|native>] [--main <class>] [-- arg ...]",
-      "Run a module main, inspect, versions, or doc. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. An ambiguous module requires --platform. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program. Program stdout stays byte-for-byte stdout; build and status diagnostics use stderr.",
+      "histos run <name> [--platform <jvm|js|native>] [--scala <2.13|3|version>] [--main <class>] [-- arg ...]",
+      "Run a module main, inspect, versions, or doc. The command starts one process: one platform and one Scala version. --platform selects exactly one supported platform; otherwise the module default, then its sole platform, wins. --scala selects one series or one full version; omission uses the module's only version, and two declared versions require the flag. A series that matches two versions, or a comma list, is refused before anything starts. Built-in names and plugin tasks do not take --platform or --scala. Positional platforms were removed. --main selects one of multiple mains. Tokens after -- are the program's arguments. The program sees the caller's environment and working directory. Standard input is copied as a pipe, and Ctrl-C is delivered to the program. Program stdout stays byte-for-byte stdout; build and status diagnostics use stderr.",
     ),
     Entry(
       "clean",
@@ -76,14 +76,14 @@ object Help:
     Entry(
       "test",
       "test",
-      "histos test [project ...] [--platform <jvm,js,native>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
-      "Run the selected suites, not their compilation dependencies. --platform, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list and intersects the original selection. Whole-suite filters exclude Verify and unsupported platforms; explicitly named invalid platforms still fail even under an empty affected filter. --suite is a JSON eligibility list for whole-suite CI rows, cannot combine with named projects, and never changes a singleton into a focused named request. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
+      "histos test [project ...] [--platform <jvm,js,native>] [--scala <2.13|3|version>] [--suite <json>] [--affected <json>] [--quick] [--only <patterns>] [--test <terms>] [--tag <names>] [--ignore-tag <names>]",
+      "Run the selected suites, not their compilation dependencies. --platform, --scala, --only, --test, --tag, and --ignore-tag accept repeated flags and comma lists. --scala takes a series (2.13 or 3) or a full version. Named modules refuse a token that matches nothing and a series that matches two versions. Whole-build selection keeps every matching cell. Omission is every declared version. When a run covers more than one full version, the tally prints one line per version before the combined line. Escape literal commas and backslashes with a backslash; empty entries are rejected. Each flag consumes one value and may appear before or after projects. --affected remains a JSON list and intersects the original selection. Whole-suite filters exclude Verify and unsupported platforms; explicitly named invalid platforms still fail even under an empty affected filter. --suite is a JSON eligibility list for whole-suite CI rows, cannot combine with named projects, and never changes a singleton into a focused named request. --only runs suites that match. --test is a substring of a test label; any term keeps the test. --tag is exact; any listed tag keeps a test that has it. --ignore-tag is exact; a test that has one is dropped. --quick skips a suite whose stamp still matches, and a filter does not change that. --color, --no-color, --truecolor, and --no-truecolor apply.",
     ),
     Entry(
       "coverage",
       "test",
-      "histos coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...]",
-      "Instrument Scala 3 and Scala 2.13 on the JVM, run the suites, and write the report.",
+      "histos coverage [--scala <2.13|3|version>] [--platform jvm] [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...]",
+      "Instrument Scala 3 and Scala 2.13 on the JVM, run the suites, and write the report. --scala selects versions the same way test does. --platform must be jvm; omission stays on the JVM.",
     ),
     Entry("affected", "test", "histos affected --base <sha>", "Print modules that differ from the base."),
     Entry("~", "test", "histos ~ <command>", "Re-run a command when a source file is saved."),

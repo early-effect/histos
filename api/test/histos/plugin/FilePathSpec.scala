@@ -1,12 +1,13 @@
 package histos.plugin
 
 import histos.ProjectPath
+import histos.suite.HistosSpec
 
 import scala.compiletime.testing.typeChecks
 
 import zio.test.*
 
-object FilePathSpec extends ZIOSpecDefault:
+object FilePathSpec extends HistosSpec:
   private val safe = List(
     "vendor/escape-string-regexp@5.0.0.js",
     "assets/@scope/client+v1.js",

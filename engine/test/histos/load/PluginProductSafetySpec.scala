@@ -2,12 +2,13 @@ package histos.load
 
 import histos.plugin.*
 import histos.schedule.PluginManifest
+import histos.suite.HistosSpec
 import java.nio.file.{Files, LinkOption}
 import zio.*
 import zio.test.*
 import zio.json.*
 
-object PluginProductSafetySpec extends ZIOSpecDefault:
+object PluginProductSafetySpec extends HistosSpec:
   private val tests = suite("owned product safety review")(
     test("owned cache API retains a committed-generation capability") {
       val errors = scala.compiletime.testing.typeCheckErrors("""

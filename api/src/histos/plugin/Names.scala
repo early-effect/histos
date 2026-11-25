@@ -113,7 +113,7 @@ enum CommandNameError:
 end CommandNameError
 
 /** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `affected`, `launcher`, `scaladoc`,
-  * `coverage`, `format`, `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
+  * `coverage`, `format`, `compile`, `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
   */
 opaque type JobName = String
 
@@ -129,6 +129,7 @@ object JobName:
     trusted("scaladoc"),
     trusted("coverage"),
     trusted("format"),
+    trusted("compile"),
     trusted("pages"),
     trusted("cache-seed"),
     trusted("supply-chain"),

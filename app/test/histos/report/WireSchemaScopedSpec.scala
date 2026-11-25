@@ -6,9 +6,10 @@ import histos.preview.PreviewError
 import histos.publish.LocalPublishError
 import histos.testrun.{ModuleTestError, ScopedTestFailure}
 import histos.report.WireSchema.given
+import histos.suite.HistosSpec
 import zio.test.*
 
-object WireSchemaScopedSpec extends ZIOSpecDefault:
+object WireSchemaScopedSpec extends HistosSpec:
   def spec = suite("scoped execution schemas")(
     test("recursive result schemas expose scoped failures without losing their cases") {
       val incomplete = Schema.derived[histos.publish.PublicationCompatibilityOutcome.Incomplete].doc

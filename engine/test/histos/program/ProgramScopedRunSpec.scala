@@ -2,13 +2,14 @@ package histos.program
 
 import histos.*
 import histos.server.RunLaunch
+import histos.suite.HistosSpec
 import histos.testrun.TestExecutionFixtures
 import histos.workspace.Workspace
 import java.nio.charset.StandardCharsets.UTF_8
 import zio.{Chunk, ZIO, durationInt}
 import zio.test.*
 
-object ProgramScopedRunSpec extends ZIOSpecDefault:
+object ProgramScopedRunSpec extends HistosSpec:
   private val tests = suite("scoped program commands")(
     test("module-run resolves inherited and explicit Full to the same mode-separated JS products") {
       val tools     = ToolCatalog.default.copy(js = ToolCatalog.default.js.copy(optimize = JsOptimize.Full))
@@ -137,5 +138,5 @@ object ProgramScopedRunSpec extends ZIOSpecDefault:
     events.collect { case ProgramFeed.Bytes(data) => new String(data.toArray, UTF_8) }.mkString
 
   private val checked = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
-  def spec            = checked
+  def spec            = checked.provideShared(histos.zinc.Compilers.owned)
 end ProgramScopedRunSpec

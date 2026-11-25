@@ -4,13 +4,14 @@ import histos.*
 import histos.jdk.Sha256Digest
 import histos.js.JsRequests
 import histos.resolve.{ClasspathScope, DependencyLock, LockedArtifact, LockedCell, Repository}
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets
 
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object JsClasspathSpec extends ZIOSpecDefault:
+object JsClasspathSpec extends HistosSpec:
   private val version  = scala"3.10.1"
   private val revision = JsVersion("1.23.0")
 

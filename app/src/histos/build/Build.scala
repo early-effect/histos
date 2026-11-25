@@ -10,6 +10,7 @@ import histos.process.{StdinFeed, Terminal}
 import histos.client.CallerFacts
 import histos.lock.InvocationEnvelope
 import histos.server.{Call, Client, ConsentDesk, Feed, Message, Perform, Say, ServerError}
+import histos.schedule.Parallelism
 import histos.task.RunId
 
 import java.nio.file.Path
@@ -109,8 +110,11 @@ object Build:
                 .open(repo, mode)
                 .mapError(ServerError.Resolve(_))
                 .flatMap { report =>
+                  val width = loaded match
+                    case Right(Some(have)) => Parallelism.of(have.graph.parallelism).cpu
+                    case _                 => Parallelism.default.cpu
                   histos.zinc.CompileMemo.provide(
-                    histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                    histos.zinc.Compilers.provide(width)(
                       relay(terminal, call)(stdin =>
                         envelope(call).flatMap: ready =>
                           // This process is the session. The daemon desk is not in scope.

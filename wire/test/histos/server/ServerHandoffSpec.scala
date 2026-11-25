@@ -1,8 +1,10 @@
 package histos.server
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
-object ServerHandoffSpec extends ZIOSpecDefault:
+object ServerHandoffSpec extends HistosSpec:
   def spec = suite("a server record moves with the process")(
     test("a listening server at this version is kept") {
       assertTrue(ServerHandoff.step(recorded = true, listening = true, same = true) == ServerHandoff.Step.Use)

@@ -22,7 +22,8 @@ import histos.testrun.{SuitePattern, TagName, TestFilter, TestMode, TestTerm}
 import histos.workflow.WorkflowAction
 import histos.doctor.{DoctorLaunch, FaultText}
 import histos.select.SelectError
-import histos.{ProjectName, ProjectNameError}
+import histos.task.TaskId
+import histos.{PlatformSelection, ProjectName, ProjectNameError, ScalaSelection, SelectionError}
 
 import ClientJson.given
 
@@ -117,6 +118,7 @@ object HistosMcp:
       env: List[NamedArg] = Nil,
       directory: Option[String] = None,
       args: List[String] = Nil,
+      scala: Option[String] = None,
   ) derives Schema,
         JsonCodec
   final case class CancelArgs(id: String) derives Schema, JsonCodec
@@ -124,6 +126,9 @@ object HistosMcp:
       projects: List[String] = Nil,
       color: Boolean = false,
       truecolor: Option[Boolean] = None,
+      platform: List[String] = Nil,
+      scala: List[String] = Nil,
+      tests: Boolean = false,
   ) derives Schema,
         JsonCodec
   final case class TestArgs(
@@ -135,6 +140,8 @@ object HistosMcp:
       mode: TestMode = TestMode.Run,
       color: Boolean = false,
       truecolor: Option[Boolean] = None,
+      platform: List[String] = Nil,
+      scala: List[String] = Nil,
   ) derives Schema,
         JsonCodec
   final case class PublishArgs(place: PublishPlace, tokens: List[String] = Nil) derives Schema, JsonCodec
@@ -167,6 +174,8 @@ object HistosMcp:
       patterns: List[String] = Nil,
       mode: TestMode = TestMode.Run,
       extent: CleanExtent = CleanExtent.Products,
+      platform: List[String] = Nil,
+      scala: List[String] = Nil,
   ) derives Schema,
         JsonCodec
   final case class DoctorArgs(
@@ -284,7 +293,7 @@ object HistosMcp:
       listed  <- base.tool[NoArgs](Names.graph, "Show the project graph")(_ => ask(Call.Graph))
       running <- listed.tool[RunArgs](
         Names.run,
-        "Run a main, or inspect, versions, or a plugin task. platform is jvm, js, or native. texts and flags are the plugin arguments. env overlays the server environment and is omitted as empty. directory must already exist inside the repo, and an omitted directory stays under .histos/run. args are the program arguments. stdin is not attached.",
+        "Run a main, or inspect, versions, or a plugin task. platform is jvm, js, or native. scala is one series (2.13 or 3) or one full version. A module run starts one process. texts and flags are the plugin arguments. env overlays the server environment and is omitted as empty. directory must already exist inside the repo, and an omitted directory stays under .histos/run. args are the program arguments. stdin is not attached.",
       )(args =>
         val asked = arguments(args.texts, args.flags).left
           .map(BuildFault.Rejected(_))
@@ -296,7 +305,7 @@ object HistosMcp:
             directory match
               case None =>
                 ZIO
-                  .fromEither(Session.runCall(args.id, args.platform, parsed, env, None, argv))
+                  .fromEither(Session.runCall(args.id, args.platform, parsed, env, None, argv, args.scala))
                   .mapError(Session.CallProblem.Fault(_))
               case Some(path) =>
                 histos.program.RunDirectory
@@ -306,7 +315,7 @@ object HistosMcp:
                   )
                   .flatMap(real =>
                     ZIO
-                      .fromEither(Session.runCall(args.id, args.platform, parsed, env, Some(real), argv))
+                      .fromEither(Session.runCall(args.id, args.platform, parsed, env, Some(real), argv, args.scala))
                       .mapError(Session.CallProblem.Fault(_))
                   )
           }
@@ -317,21 +326,33 @@ object HistosMcp:
       )
       compiling <- stopped.tool[CompileArgs](
         Names.compile,
-        "Compile modules. An empty list compiles every module. An aggregate name compiles its modules, on every platform each module builds.",
+        "Compile modules. An empty list compiles every module. An aggregate name compiles its modules. platform is jvm, js, or native. scala is 2.13, 3, or a full version. Empty lists keep every declared platform and version. tests compiles test sources as well as main and does not run suites.",
       )(args =>
         depthOf(args.color, args.truecolor).flatMap { depth =>
-          ZIO.fromEither(compileCall(args.projects)).mapError(refused).flatMap { call =>
-            Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
+          ZIO.fromEither(compileCall(args.projects, args.platform, args.scala, args.tests)).mapError(refused).flatMap {
+            call =>
+              Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
           }
         }
       )
       testing <- compiling.tool[TestArgs](
         Names.test,
-        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs. tests are label substrings, tags and ignoreTags are exact tag names. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
+        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs. tests are label substrings, tags and ignoreTags are exact tag names. mode is run or quick, and an absent mode is run. platform and scala narrow the cells. Empty lists keep every declared platform and version. A named module refuses a series that matches two versions.",
       )(args =>
         depthOf(args.color, args.truecolor).flatMap { depth =>
           ZIO
-            .fromEither(testCall(args.projects, args.patterns, args.mode, args.tests, args.tags, args.ignoreTags))
+            .fromEither(
+              testCall(
+                args.projects,
+                args.patterns,
+                args.mode,
+                args.tests,
+                args.tags,
+                args.ignoreTags,
+                args.platform,
+                args.scala,
+              )
+            )
             .mapError(refused)
             .flatMap { call =>
               Session.deliver(Session.perform(repo, apiJar, machine, desk, call, depth))
@@ -474,8 +495,22 @@ object HistosMcp:
       case found: ProjectNameError => DoctorText(found.message)
       case found: SelectError      => DoctorText(FaultText.show(found.diagnose))
 
-  def compileCall(projects: List[String]): Either[Rejection, Call] =
-    names(projects).map(Call.Compile(_))
+  def compileCall(
+      projects: List[String],
+      platforms: List[String] = Nil,
+      versions: List[String] = Nil,
+      tests: Boolean = false,
+  ): Either[Rejection, Call] =
+    for
+      found    <- names(projects)
+      selected <- manyPlatforms(platforms)
+      asked    <- manyScalas(versions)
+    yield Call.Compile(
+      found,
+      selected,
+      asked,
+      if tests then histos.CompileExtent.MainAndTest else histos.CompileExtent.Main,
+    )
 
   def testCall(
       projects: List[String],
@@ -484,14 +519,23 @@ object HistosMcp:
       tests: List[String] = Nil,
       tags: List[String] = Nil,
       ignoreTags: List[String] = Nil,
+      platforms: List[String] = Nil,
+      versions: List[String] = Nil,
   ): Either[Rejection, Call] =
     for
-      found   <- names(projects)
-      globs   <- suitePatterns(patterns)
-      terms   <- terms(tests)
-      kept    <- tagNames(tags)
-      ignored <- tagNames(ignoreTags)
-    yield Call.Test(histos.TestSelection.named(found), globs, mode, TestFilter(terms, kept, ignored))
+      found    <- names(projects)
+      globs    <- suitePatterns(patterns)
+      terms    <- terms(tests)
+      kept     <- tagNames(tags)
+      ignored  <- tagNames(ignoreTags)
+      selected <- manyPlatforms(platforms)
+      asked    <- manyScalas(versions)
+    yield Call.Test(
+      histos.TestSelection.named(found, selected, asked),
+      globs,
+      mode,
+      TestFilter(terms, kept, ignored),
+    )
 
   /** Projects and files are two scopes, so asking for both is refused. No scope is the build. */
   def fmtCall(args: FmtArgs): Either[Rejection, Call] =
@@ -552,12 +596,19 @@ object HistosMcp:
 
   def previewCall(args: PreviewArgs): Either[Rejection, Call] =
     args.operation match
-      case PreviewOp.Compile => names(args.projects).map(Call.PreviewCompile(_))
-      case PreviewOp.Test    =>
+      case PreviewOp.Compile =>
         for
-          found <- names(args.projects)
-          globs <- suitePatterns(args.patterns)
-        yield Call.PreviewTest(histos.TestSelection.named(found), globs, args.mode, TestFilter.empty)
+          found    <- names(args.projects)
+          selected <- manyPlatforms(args.platform)
+          asked    <- manyScalas(args.scala)
+        yield Call.PreviewCompile(found, selected, asked)
+      case PreviewOp.Test =>
+        for
+          found    <- names(args.projects)
+          globs    <- suitePatterns(args.patterns)
+          selected <- manyPlatforms(args.platform)
+          asked    <- manyScalas(args.scala)
+        yield Call.PreviewTest(histos.TestSelection.named(found, selected, asked), globs, args.mode, TestFilter.empty)
       case PreviewOp.Local =>
         publishTokens(args.projects).map(Call.PreviewPublishLocal(_))
       case PreviewOp.Snapshots =>
@@ -567,7 +618,42 @@ object HistosMcp:
         else names(args.projects).map(found => Call.PreviewClean(found, args.extent))
       case PreviewOp.Run =>
         if args.id.isEmpty then Left(Rejection.MissingRunName)
-        else Right(Call.PreviewRun(args.id, None))
+        else
+          val task = args.id.contains("/") || TaskId.from(args.id).toOption.exists(_.builtIn)
+          if task && args.platform.nonEmpty then Left(Rejection.TaskPlatform(args.id))
+          else if task && args.scala.nonEmpty then Left(Rejection.TaskScala(args.id))
+          else if task then Right(Call.PreviewRun(args.id, None))
+          else
+            for
+              selected <- onePlatform(args.platform)
+              asked    <- oneScala(args.scala)
+            yield Call.PreviewRun(args.id, selected, scala = asked)
+
+  private def manyPlatforms(raw: List[String]): Either[Rejection, PlatformSelection] =
+    if raw.isEmpty then Right(PlatformSelection.All)
+    else PlatformSelection.from(raw).left.map(Rejection.Selection(_))
+
+  private def manyScalas(raw: List[String]): Either[Rejection, ScalaSelection] =
+    if raw.isEmpty then Right(ScalaSelection.All)
+    else ScalaSelection.from(raw).left.map(Rejection.Selection(_))
+
+  private def onePlatform(raw: List[String]): Either[Rejection, Option[PlatformSelection]] =
+    if raw.isEmpty then Right(None)
+    else
+      PlatformSelection.from(raw).left.map(Rejection.Selection(_)).flatMap {
+        case PlatformSelection.Only(values) if values.all.distinct.size != 1 =>
+          Left(Rejection.Selection(SelectionError.RunMany(values)))
+        case other => Right(Some(other))
+      }
+
+  private def oneScala(raw: List[String]): Either[Rejection, Option[ScalaSelection]] =
+    if raw.isEmpty then Right(None)
+    else
+      ScalaSelection.from(raw).left.map(Rejection.Selection(_)).flatMap {
+        case ScalaSelection.Only(first, rest) if rest.nonEmpty =>
+          Left(Rejection.Selection(SelectionError.RunScalaMany(first :: rest)))
+        case other => Right(Some(other))
+      }
 
   /** A word the grammar removed. The tool list does not register it, so a caller asks here. */
   def removed(name: String): Option[Rejection] =

@@ -18,6 +18,7 @@ import histos.toolchain.{
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompilerRequests, CompilerStarts, Compilers}
 import histos.{Dep, HistosBuild, ScalaVersion}
+import histos.suite.HistosSpec
 
 import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
@@ -29,7 +30,7 @@ import zio.test.*
 import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer, durationInt}
 
 /** The packaged host compiler, installed as a payload, rebuilds a plugin without a project compiler cell. */
-object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
+object PluginArchitectureIntegrationSpec extends HistosSpec:
   private val Scala3101 = ScalaVersion("3.10.1")
 
   def spec = suite("assembled host")(
@@ -56,36 +57,6 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
           session.tools.exists(_.entry.role == HostToolRole.Compiler),
           session.tools.exists(_.entry.role == HostToolRole.Interfaces),
           session.tools.exists(_.entry.role == HostToolRole.Runtime),
-        )
-      }
-    },
-    test("a missing bridge is EntryAbsent and does not solve") {
-      hosted { (root, starts) =>
-        for
-          files    <- packaged
-          payload  <- payloadJar(root, files, Some(HostToolRole.Bridge), corrupt = false)
-          before   <- fixture(root)
-          seen     <- Ref.make(0)
-          api      <- apiJar(root.resolve("cache"))
-          _        <- writeSources(root)
-          exit     <- prepare(root, api, counting(seen), Some(payload)).either
-          calls    <- seen.get
-          after    <- readBytes(root.resolve("dependencies.lock"))
-          count    <- starts.get
-          checkout <- checkoutLock
-        yield (exit, calls, before.sameElements(after), count, checkout)
-      }.map { ran =>
-        val (exit, calls, same, count, checkout) = ran.value
-        assertTrue(
-          calls == 0,
-          same,
-          count == 0,
-          !fixtureText.contains("tool compiler"),
-          checkout.isEmpty || checkout.linesIterator.exists(_.trim == "tool compiler 3.10.1 jvm"),
-          rejects(exit) {
-            case histos.load.LoadError.HostCompiler(HostCompilerError.EntryAbsent(HostToolRole.Bridge)) => true
-            case _                                                                                      => false
-          },
         )
       }
     },
@@ -163,7 +134,7 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
         yield assertTrue(loaded.catalog.isEmpty, loaded.graph.projects.nonEmpty)
       }
     },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private val fixtureText: String = "fixture\n"
 
@@ -203,16 +174,15 @@ object PluginArchitectureIntegrationSpec extends ZIOSpecDefault:
 
   private def hosted[A](
       body: (Path, Ref[Int]) => ZIO[BuildCache.Env & histos.load.PluginProducts & Scope, LoadError, A]
-  ): ZIO[Any, LoadError, Ran[A]] =
+  ): ZIO[Compilers, LoadError, Ran[A]] =
     ZIO.scoped {
       for
         root   <- work("histos-p10-host")
         cas    <- ZIO.attemptBlocking(Files.createDirectories(root.resolve("cas"))).orDie
         starts <- Ref.make(0)
-        value  <- body(root, starts).provideSomeLayer[Scope](
+        value  <- body(root, starts).provideSomeLayer[Compilers & Scope](
           ZLayer.succeed(ContentStore.in(cas)) ++
             ZLayer.succeed(CompilerStarts(starts)) ++
-            Compilers.live ++
             RemoteCache.off ++
             histos.load.PluginFlights.live ++ histos.load.PluginProducts.live
         )

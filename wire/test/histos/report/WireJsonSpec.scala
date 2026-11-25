@@ -17,11 +17,12 @@ import histos.plugin.{
   TaskName,
 }
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 
 import zio.json.*
 import zio.test.*
 
-object WireJsonSpec extends ZIOSpecDefault:
+object WireJsonSpec extends HistosSpec:
   private val module    = ProjectName("docs")
   private val other     = ProjectName("client")
   private val member    = ProjectName("core")
@@ -40,6 +41,11 @@ object WireJsonSpec extends ZIOSpecDefault:
     SelectionError.Unsupported(module, Platform.Js),
     SelectionError.RunMany(platforms),
     SelectionError.RunAmbiguous(module, platforms),
+    SelectionError.UnknownScala("wasm"),
+    SelectionError.UnsupportedScala(module, ScalaToken.Series2(13)),
+    SelectionError.AmbiguousScala(module, ScalaToken.Series3, List(ScalaVersion("3.3.6"), ScalaVersion("3.7.1"))),
+    SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)),
+    SelectionError.RunScalaAmbiguous(module, List(ScalaVersion("2.13.18"), ScalaVersion("3.10.1"))),
   )
 
   private val stages = for
@@ -62,6 +68,7 @@ object WireJsonSpec extends ZIOSpecDefault:
     ),
     ContractFault.TestModule(other),
     ContractFault.TestPlatform(module, Platform.Native),
+    ContractFault.Parallelism(0),
   ) ++ selections.map(ContractFault.TestSelection(_)) ++ (for
     expected <- OutputKind.values.toList
     actual   <- OutputKind.values.toList

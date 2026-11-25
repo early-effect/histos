@@ -3,12 +3,13 @@ package histos.testrun
 import histos.*
 import histos.build.BuildNode
 import histos.plugin.SourceSet
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object JsScopedTestSpec extends ZIOSpecDefault:
+object JsScopedTestSpec extends HistosSpec:
   private val tests = suite("actual JS scoped Test execution")(
     test("a JS Test main imports an upstream Test fixture and runs only the requested target") {
       val version  = TestExecutionFixtures.version
@@ -69,7 +70,8 @@ object JsScopedTestSpec extends ZIOSpecDefault:
             )
     }
   )
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   private def hostClasspath[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E | histos.workspace.IoFailure, A] =
     val property = "java.class.path"

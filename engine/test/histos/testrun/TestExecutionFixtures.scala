@@ -15,7 +15,7 @@ import histos.jdk.{Machine, ToolchainError}
 import histos.resolve.{LockedTools, ResolutionService, Resolve, ResolveError}
 import histos.schedule.{ActionCache, Histos, Parallelism, RemoteCache}
 import histos.toolchain.Runtimes
-import histos.workspace.{IoFailure, Workspace}
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileMemo, CompileSession, CompilerStarts, Compilers, GraphCompile, GraphCompileError}
 
 import java.nio.file.Path
@@ -57,7 +57,7 @@ private[histos] object TestExecutionFixtures:
       graph: ProjectGraph,
       resolve: ZLayer[Any, Nothing, Resolve] = Resolve.coursier,
   )(use: Fixture => ZIO[Env & Scope, E, A]): ZIO[
-    Any,
+    Compilers,
     E | IoFailure | ToolchainError | ResolveError | GraphCompileError,
     A,
   ] =
@@ -86,7 +86,7 @@ private[histos] object TestExecutionFixtures:
           new BuildExecution(leaves, scheduler),
           scheduler,
         )
-        result <- use(fixture).provideSome[Resolve & Scope](
+        result <- use(fixture).provideSome[Resolve & Compilers & Scope](
           ZLayer.succeed(resolution),
           ZLayer.succeed(tools),
           ZLayer.succeed(provider),
@@ -94,10 +94,18 @@ private[histos] object TestExecutionFixtures:
           ZLayer.succeed(ActionCache.miss),
           RemoteCache.off,
           CompilerStarts.live,
-          Compilers.live,
           CompileMemo.live,
           LinkerStarts.live,
         )
       yield result
-    ZIO.withSystem(System.SystemLive)(effect).provide(resolve)
+    ZIO.withSystem(System.SystemLive)(effect).provideSomeLayer[Compilers](resolve)
+
+  def checkout(relative: String): ZIO[Any, IoFailure, String] =
+    val path = Path.of(relative)
+    ZIO
+      .attemptBlocking(Option(java.lang.System.getenv("HISTOS_REPO")))
+      .mapError(_ => IoFailure(path, IoFault.Read))
+      .flatMap:
+        case Some(root) if root.nonEmpty => Workspace.readString(Path.of(root).resolve(relative))
+        case _                           => ZIO.fail(IoFailure(path, IoFault.Read))
 end TestExecutionFixtures

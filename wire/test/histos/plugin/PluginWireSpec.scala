@@ -3,6 +3,7 @@ package histos.plugin
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.report.WireJson.given
 import histos.zinc.{CompilationCapture, CompilationSnapshot}
+import histos.suite.HistosSpec
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -11,7 +12,7 @@ import zio.json.*
 import zio.json.ast.Json
 import zio.test.*
 
-object PluginWireSpec extends ZIOSpecDefault:
+object PluginWireSpec extends HistosSpec:
   private val bytes = "histos-wire".getBytes(StandardCharsets.UTF_8)
   private val hash  = Digests.content(bytes)
   private val jdk   = JdkVersion.trusted("21", JdkMajor.trusted(21))

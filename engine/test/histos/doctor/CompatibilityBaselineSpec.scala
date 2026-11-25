@@ -2,6 +2,7 @@ package histos.doctor
 
 import histos.Organization
 import histos.central.{ArtifactId, MavenModule}
+import histos.suite.HistosSpec
 import histos.version.ShipNumber
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
@@ -12,7 +13,7 @@ import java.util.jar.{JarEntry, JarOutputStream}
 import zio.{IO, ZIO}
 import zio.test.*
 
-object CompatibilityBaselineSpec extends ZIOSpecDefault:
+object CompatibilityBaselineSpec extends HistosSpec:
   private val revision = ShipNumber.trusted(0, 15, 0)
   private val group    = Organization("example.test")
 

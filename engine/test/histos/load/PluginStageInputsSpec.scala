@@ -2,6 +2,7 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.plugin.{FrozenEnv, StageAssurance, StageContract, StageContractError, StageInputs}
+import histos.suite.HistosSpec
 import histos.toolchain.HostCompilerSession
 
 import java.net.{ServerSocket, SocketTimeoutException}
@@ -11,7 +12,7 @@ import java.nio.file.{Files, Path}
 import zio.test.*
 import zio.{durationInt, Ref, Scope, ZIO}
 
-object PluginStageInputsSpec extends ZIOSpecDefault:
+object PluginStageInputsSpec extends HistosSpec:
   private val Macro =
     """|package stage
        |import scala.quoted.*
@@ -140,7 +141,7 @@ object PluginStageInputsSpec extends ZIOSpecDefault:
           assertTrue(ran.value._1 == "src/Main.scala", ran.value._2 == "src/Main.scala")
         }
     },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(histos.zinc.Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private final case class Ready(session: HostCompilerSession, macros: Path)
 

@@ -181,7 +181,7 @@ object LocalPublish:
         resolution <- histos.resolve.ResolutionService.open(repo, graph).mapError(LocalPublishError.Classpath(_))
         lock       <- resolution.current
         runtime    <- histos.build.BuildRuntime
-          .open(plugins)
+          .open(plugins, parallelism = Parallelism.of(graph.parallelism))
           .provideSomeLayer(ZLayer.succeed(remote) ++ ZLayer.succeed(resolution))
         compiler = PublishCompiler[zio.Scope, histos.build.ExecutionError](roots =>
           runtime.ensure(

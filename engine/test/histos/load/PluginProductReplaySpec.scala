@@ -14,10 +14,11 @@ import histos.schedule.{
   ScheduleError,
   Scheduler,
 }
+import histos.suite.HistosSpec
 import zio.{IO, Ref, ZEnvironment, ZIO, ZLayer}
 import zio.test.*
 
-object PluginProductReplaySpec extends ZIOSpecDefault:
+object PluginProductReplaySpec extends HistosSpec:
   private val tests = suite("scheduled plugin product replay")(
     test("a cache hit restores deleted owned products and stale entries without running the producer") {
       ProductFixture.use: fixture =>

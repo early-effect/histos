@@ -231,7 +231,11 @@ private[histos] object TestCompile:
               .map(capture => cellProduct.copy(capture = capture))
         api            <- ZIO.fromEither(ApiDigest.read(analysis)).mapError(failed)
         implementation <- CellCapture.implementation(classes).mapError(failed)
-        _              <- execution.report(histos.zinc.CompileFeed.Done(compiled))
+        note = output.fold(histos.zinc.CacheNote.Vacant)(_.note)
+        _ <- execution.report(
+          histos.zinc.CompileFeed.Cache(cell.module, cell.version, cell.platform, note)
+        )
+        _ <- execution.report(histos.zinc.CompileFeed.Done(compiled))
       yield StageProduct(stage, compiled, analysis, api, implementation, (classes :: paths).distinct)
 
   private def scopedUpstream(

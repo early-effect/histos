@@ -14,12 +14,13 @@ import histos.plugin.{
   TaskJob,
   TaskName,
 }
+import histos.suite.HistosSpec
 import histos.version.Catalog
 
 import zio.ZIO
 import zio.test.*
 
-object VerifyTaskSpec extends ZIOSpecDefault:
+object VerifyTaskSpec extends HistosSpec:
   private val host = VerifyRun.BuiltIn(TaskName("host"))
 
   private val api = module("api", Jvm)(scala"3.10.1")

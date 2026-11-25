@@ -1,9 +1,11 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import org.scalajs.ir.Trees.JSNativeLoadSpec
 import zio.test.*
 
-object SpliceIRSpec extends ZIOSpecDefault:
+object SpliceIRSpec extends HistosSpec:
 
   def spec =
     suite("SpliceIR")(

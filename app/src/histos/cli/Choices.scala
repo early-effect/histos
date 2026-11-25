@@ -78,21 +78,9 @@ enum DoctorScopeError:
 end DoctorScopeError
 
 object SelectionText:
-  def message(error: histos.SelectionError): String = error match
-    case histos.SelectionError.Empty                         => "--platform needs at least one platform"
-    case histos.SelectionError.Text(error)                   => text(error)
-    case histos.SelectionError.UnknownPlatform(raw)          => s"'$raw' is not jvm, js, or native"
-    case histos.SelectionError.Unsupported(module, platform) => s"${module.value} does not support ${platform.token}"
-    case histos.SelectionError.RunMany(platforms)            =>
-      s"run requires one platform, not ${platforms.all.map(_.token).mkString(",")}"
-    case histos.SelectionError.RunAmbiguous(module, platforms) =>
-      s"run ${module.value} requires --platform ${platforms.all.map(_.token).mkString("|")}"
+  def message(error: histos.SelectionError): String = error.message
 
-  def text(error: histos.TextListError): String = error match
-    case histos.TextListError.EmptyEntry(raw)             => s"'$raw' contains an empty list entry"
-    case histos.TextListError.TrailingEscape(raw)         => s"'$raw' ends with an incomplete escape"
-    case histos.TextListError.InvalidEscape(raw, escaped) =>
-      s"'$raw' escapes '$escaped'; only comma and backslash may be escaped"
+  def text(error: histos.TextListError): String = histos.SelectionError.Text(error).message
 end SelectionText
 
 object FixFlags:

@@ -27,7 +27,8 @@ import histos.server.{
   Watching,
 }
 import histos.task.{RunId, TaskId}
-import histos.Platform
+import histos.schedule.Parallelism
+import histos.{Platform, ScalaSelection, SelectionError}
 
 import java.nio.file.Path
 
@@ -190,6 +191,7 @@ object Session:
       env: Map[String, String] = Map.empty,
       directory: Option[java.nio.file.Path] = None,
       argv: List[String] = Nil,
+      versions: Option[String] = None,
   ): Either[BuildFault, Call] =
     TaskId
       .from(id)
@@ -200,17 +202,31 @@ object Session:
         if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
         else if task && (env.nonEmpty || directory.isDefined || argv.nonEmpty) then
           Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
+        else if task && platform.isDefined then Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
+        else if task && versions.isDefined then Left(BuildFault.Rejected(Rejection.TaskScala(id)))
+        else if task then Right(Call.Task(id, args))
         else
           val launch = histos.server.RunLaunch.Tool(env, directory)
-          platform match
-            case Some(_) if task =>
-              Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
-            case Some(raw) =>
-              Platform.from(raw) match
-                case Left(error)  => Left(BuildFault.Platform(error))
-                case Right(found) => Right(Call.Run(id, Some(histos.PlatformSelection.only(found)), launch, argv))
-            case None if task => Right(Call.Task(id, args))
-            case None         => Right(Call.Run(id, None, launch, argv))
+          for
+            chosen <- platform match
+              case None      => Right(None)
+              case Some(raw) =>
+                Platform.from(raw) match
+                  case Left(error)  => Left(BuildFault.Platform(error))
+                  case Right(found) => Right(Some(histos.PlatformSelection.only(found)))
+            asked <- versions match
+              case None      => Right(None)
+              case Some(raw) =>
+                ScalaSelection
+                  .from(List(raw))
+                  .left
+                  .map(error => BuildFault.Rejected(Rejection.Selection(error)))
+                  .flatMap {
+                    case ScalaSelection.Only(first, rest) if rest.nonEmpty =>
+                      Left(BuildFault.Rejected(Rejection.Selection(SelectionError.RunScalaMany(first :: rest))))
+                    case found => Right(Some(found))
+                  }
+          yield Call.Run(id, chosen, launch, argv, scala = asked)
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
   def spoken(repo: Path, feeds: List[Feed], paint: Option[Depth] = None): Either[TransportError, CallResult] =
@@ -316,8 +332,11 @@ object Session:
               ConsentDesk.feed(say),
             )
             .flatMap: consent =>
+              val width = loaded match
+                case Right(Some(have)) => Parallelism.of(have.graph.parallelism).cpu
+                case _                 => Parallelism.default.cpu
               histos.zinc.CompileMemo.provide(
-                histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                histos.zinc.Compilers.provide(width)(
                   Perform
                     .run(
                       repo,

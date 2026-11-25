@@ -1,10 +1,11 @@
 package histos.doctor
 
+import histos.suite.HistosSpec
 import histos.version.{BumpPart, ShipNumber}
 
 import zio.test.*
 
-object BinaryCoversSpec extends ZIOSpecDefault:
+object BinaryCoversSpec extends HistosSpec:
   private val previous = ShipNumber.trusted(0, 15, 0)
 
   def spec = suite("binary bump coverage")(

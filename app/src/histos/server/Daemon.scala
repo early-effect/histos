@@ -10,7 +10,7 @@ import histos.plugin.{FlagName, InvocationPluginEvent, NamedText, ParamName, Plu
 import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
-import histos.schedule.CacheNamespace
+import histos.schedule.{CacheNamespace, Parallelism}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.process.{LiveInput, RelayCommand, RunRelay, StdinFeed, Terminal}
@@ -527,7 +527,7 @@ object Daemon:
             )
             .unit
           _ <- histos.zinc.CompileMemo.provide(
-            histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+            histos.zinc.Compilers.provide(Parallelism.of(graph.parallelism).cpu)(
               accept(
                 channel,
                 repo,
@@ -1164,16 +1164,16 @@ object Daemon:
     */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
-          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _) | Call.Assembly(_) |
+      case Call.Compile(_, _, _, _) | Call.Test(_, _, _, _) | Call.PublishCheck(_, _) | Call.PublishLocal(_, _) |
+          Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.Run(_, _, _, _, _, _) | Call.Assembly(_) |
           Call.Clean(_, _) | Call.Format(_, _) | Call.CacheVerify(_) | Call.CacheForget(ForgetTarget.Module(_)) =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishWithdraw | Call.PublishAssets(_) | Call.Graph |
           Call.Task(_, _) | Call.Cancel(_) | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot(_) |
           Call.Stop | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_, _) |
+          Call.CacheForget(ForgetTarget.Namespace(_)) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_, _, _) |
           Call.PreviewTest(_, _, _, _) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewClean(_, _) | Call.PreviewRun(_, _, _) | Call.Catalog(_) =>
+          Call.PreviewClean(_, _) | Call.PreviewRun(_, _, _, _) | Call.Catalog(_) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(
@@ -1190,7 +1190,7 @@ object Daemon:
       body: UIO[Unit] => ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     call match
-      case Call.Run(_, _, _, _, _) =>
+      case Call.Run(_, _, _, _, _, _) =>
         for
           held     <- Promise.make[Nothing, Unit]
           compiled <- Promise.make[Nothing, Unit]

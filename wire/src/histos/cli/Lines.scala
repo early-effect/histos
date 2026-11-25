@@ -13,6 +13,8 @@ import zio.Chunk
 /** The lines a compile or a test prints. The daemon and the local command use the same text.
   */
 object Lines:
+  /** Suite counts for one full Scala version. */
+  final case class VersionTally(version: String, passed: Int, failed: Int, cached: Int)
   def compiling(
       module: ProjectName,
       version: ScalaVersion,
@@ -214,6 +216,15 @@ object Lines:
   ): String =
     val id = begin(module, version, platform, column)
     if text.isEmpty then id else s"$id $text"
+
+  /** One Scala version's suite counts. Printed only when a run covered more than one version.
+    */
+  def versionTallies(rows: List[VersionTally]): List[String] =
+    if rows.length <= 1 then Nil
+    else
+      rows
+        .sortBy(_.version)
+        .map(row => s"${row.version} passed: ${row.passed} failed: ${row.failed} cached: ${row.cached}")
 
   /** Suite counts. Absent when this run did not test.
     */

@@ -46,6 +46,7 @@ import histos.workspace.Workspace
 import histos.report.{Rejection, WireJson}
 import histos.testrun.TestMode
 import histos.ProjectName
+import histos.suite.HistosSpec
 
 import WireJson.given
 
@@ -56,7 +57,7 @@ import zio.{Queue, Ref, Scope, UIO, ZIO}
 import zio.json.*
 import zio.test.*
 
-object LockInvocationSpec extends ZIOSpecDefault:
+object LockInvocationSpec extends HistosSpec:
   private val utf8 = StandardCharsets.UTF_8
 
   private final case class Heard(context: InvocationContext, events: List[InvocationPluginEvent], built: Int)

@@ -7,6 +7,7 @@ import histos.load.{PluginCompileError, PluginCompileSupport}
 import histos.native.NativeOrigin
 import histos.resolve.{LockedTools, Resolve, ResolutionService}
 import histos.schedule.RemoteCache
+import histos.suite.HistosSpec
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 
@@ -15,7 +16,7 @@ import java.nio.file.Path
 import zio.{Chunk, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object CompileTimeInputsSpec extends ZIOSpecDefault:
+object CompileTimeInputsSpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
 
   private val tests = suite("compile-time implementation inputs")(

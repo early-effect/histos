@@ -1,5 +1,7 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.*
 import zio.test.*
 
@@ -14,7 +16,7 @@ import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 import java.util.jar.{JarEntry, JarOutputStream}
 
-object ResolveSpec extends ZIOSpecDefault:
+object ResolveSpec extends HistosSpec:
 
   import SpliceLib.sha256
 

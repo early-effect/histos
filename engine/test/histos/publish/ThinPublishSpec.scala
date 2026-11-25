@@ -1,6 +1,7 @@
 package histos.publish
 
 import histos.central.Revision
+import histos.suite.HistosSpec
 import histos.version.{ReleaseVersion, ShipNumber}
 import histos.{
   Dep,
@@ -21,7 +22,7 @@ import histos.{
 
 import zio.test.*
 
-object ThinPublishSpec extends ZIOSpecDefault:
+object ThinPublishSpec extends HistosSpec:
   private val version  = ScalaVersion("3.10.1")
   private val revision = Revision.Release(ReleaseVersion(ShipNumber.trusted(0, 5, 0)))
   private val group    = Organization.trusted("rocks.earlyeffect")

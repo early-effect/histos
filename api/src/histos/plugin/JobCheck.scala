@@ -65,7 +65,8 @@ object JobCheck:
     val modules = graph.projects.collect { case module: Module => module }
     val base    = List(JobName.trusted("workflow"), JobName.trusted("affected"))
     val suite   =
-      if modules.nonEmpty then List(JobName.trusted("test"), JobName.trusted("cache-seed")) else Nil
+      if modules.nonEmpty then List(JobName.trusted("test"), JobName.trusted("cache-seed"), JobName.trusted("compile"))
+      else Nil
     val doc      = if graph.docCheck == DocCheck.On then List(JobName.trusted("scaladoc")) else Nil
     val coverage = graph.coverage match
       case CoverageJob.Off    => Nil

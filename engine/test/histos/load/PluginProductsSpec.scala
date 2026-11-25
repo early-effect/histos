@@ -3,12 +3,13 @@ package histos.load
 import histos.cache.ContentStore
 import histos.plugin.*
 import histos.schedule.PluginManifest
+import histos.suite.HistosSpec
 import histos.workspace.IoFault
 import java.nio.file.{Files, Path}
 import zio.*
 import zio.test.*
 
-object PluginProductsSpec extends ZIOSpecDefault:
+object PluginProductsSpec extends HistosSpec:
   private val tests = suite("plugin owned products")(
     test("a declared Directory is accepted with assets, stamp and empty directories") {
       ProductFixture.use: fixture =>

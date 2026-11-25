@@ -172,7 +172,7 @@ object PluginRuntime:
       provenance: List[ProvenanceResult],
   ): ZIO[Scope & PluginProducts, Nothing, PluginRuntime] =
     for
-      environment <- (Parallelism.live >>> Histos.live).build
+      environment <- (ZLayer.succeed(Parallelism.of(graph.parallelism)) >>> Histos.live).build
       products    <- ZIO.service[PluginProducts]
       retained    <- Ref.make(Map.empty[PluginTaskId, CommittedOutputs])
       inputReads  <- Ref.Synchronized.make(Set.empty[PluginTaskId])
@@ -251,6 +251,7 @@ object PluginRuntime:
             Some(this),
             Some(TaskInvocation(id, args, caller, events)),
             Some(cache),
+            Parallelism.of(graph.parallelism),
           )
           completed <- runtime
             .ensure(

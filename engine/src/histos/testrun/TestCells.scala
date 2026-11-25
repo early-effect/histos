@@ -105,26 +105,26 @@ object TestCells:
       policy: TestCellPolicy,
   ): Either[TestSelectionError, List[Cell]] =
     selection.targets match
-      case TestTargets.All               => Right(suites(graph, selection.platforms))
+      case TestTargets.All               => Right(suites(graph, selection))
       case TestTargets.Filtered(modules) =>
         val eligible = policy match
-          case TestCellPolicy.Declared    => suites(graph, selection.platforms)
+          case TestCellPolicy.Declared    => suites(graph, selection)
           case TestCellPolicy.MeasuredJvm =>
             graph.projects
               .collect { case module: Module =>
                 module
               }
-              .flatMap(module => cells(module, selection.platforms.selected(module.platforms)))
+              .flatMap(module => kept(module, selection.platforms.selected(module.platforms), selection.scala))
         Right(eligible.filter(cell => modules.contains(cell.module)))
       case TestTargets.Named(first, rest) =>
         (first :: rest).distinct.foldLeft[Either[TestSelectionError, List[Cell]]](Right(Nil)): (acc, name) =>
           acc.flatMap: found =>
             named(graph, name, selection).map(picked => (found ++ picked).distinct)
 
-  private def suites(graph: ProjectGraph, platforms: histos.PlatformSelection): List[Cell] =
+  private def suites(graph: ProjectGraph, selection: TestSelection): List[Cell] =
     graph.projects
       .collect { case module: Module if module.lane == TestLane.Suite => module }
-      .flatMap(module => cells(module, platforms.selected(module.platforms)))
+      .flatMap(module => kept(module, selection.platforms.selected(module.platforms), selection.scala))
       .distinct
 
   private def named(
@@ -155,17 +155,31 @@ object TestCells:
       .map(TestSelectionError.Selection(_))
       .flatMap: platforms =>
         val members = if platforms.contains(Platform.Native) then module.testAggregates else Nil
-        members.foldLeft[Either[TestSelectionError, List[Cell]]](Right(cells(module, platforms))): (acc, name) =>
+        members.foldLeft[Either[TestSelectionError, List[Cell]]](
+          cells(module, platforms, selection.scala, named = true)
+        ): (acc, name) =>
           acc.flatMap: found =>
             graph.get(name) match
-              case Some(member: Module) => Right((found ++ cells(member, List(Platform.Native))).distinct)
-              case Some(_: Aggregate)   =>
+              case Some(member: Module) =>
+                Right((found ++ kept(member, List(Platform.Native), selection.scala)).distinct)
+              case Some(_: Aggregate) =>
                 Left(TestSelectionError.Aggregate(TestAggregateError.NonModuleMember(module.name, name)))
               case None => Left(TestSelectionError.Aggregate(TestAggregateError.MissingMember(module.name, name)))
 
-  private def cells(module: Module, platforms: List[Platform]): List[Cell] =
-    module.versions.all.distinct.flatMap: version =>
-      platforms.distinct.map(Cell(module.name, version, _))
+  private def cells(
+      module: Module,
+      platforms: List[Platform],
+      asked: histos.ScalaSelection,
+      named: Boolean,
+  ): Either[TestSelectionError, List[Cell]] =
+    val versions =
+      if named then asked.require(module.name, module.versions.all).left.map(TestSelectionError.Selection(_))
+      else Right(asked.filter(module.versions.all))
+    versions.map(picked => picked.flatMap(version => platforms.distinct.map(Cell(module.name, version, _))))
+
+  /** A whole-build or member cell. A series the module does not build contributes nothing. */
+  private def kept(module: Module, platforms: List[Platform], asked: histos.ScalaSelection): List[Cell] =
+    asked.filter(module.versions.all).flatMap(version => platforms.distinct.map(Cell(module.name, version, _)))
 
   private def execution(
       owners: List[Module],

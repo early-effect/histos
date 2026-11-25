@@ -61,7 +61,8 @@ object ModuleTest:
         process    <- CacheConfig.processEnv
         remote     <- CacheConfig.open(process).mapError(ModuleTestError.Remote(_))
         resolution <- ResolutionService.open(asked.repo, asked.graph).mapError(ModuleTestError.Lock(_))
-        services   <- (Compilers.live ++ CompileMemo.live).build
+        width = Parallelism.of(asked.graph.parallelism)
+        services <- (Compilers.live(width.cpu) ++ CompileMemo.live).build
       yield sessionOn(asked, hold).provideSomeLayer[Resolve & ContentStore](
         ZLayer.succeed(resolution) ++ ZLayer.succeed(remote) ++
           ZLayer.succeed(services.get[Compilers]) ++ ZLayer.succeed(services.get[CompileMemo])
@@ -75,7 +76,8 @@ object ModuleTest:
   ] =
     ZStream.unwrapScoped:
       for
-        scheduler  <- Histos.live.build.provideSomeLayer[Scope](ZLayer.succeed(Parallelism.default)).map(_.get[Histos])
+        width = Parallelism.of(asked.graph.parallelism)
+        scheduler  <- Histos.live.build.provideSomeLayer[Scope](ZLayer.succeed(width)).map(_.get[Histos])
         resolution <- ZIO.service[ResolutionService]
         lock       <- resolution.current
         tools      <- LockedTools.make(lock, asked.graph, resolution)
@@ -130,7 +132,7 @@ object ModuleTest:
       yield
         val streams = ZStream
           .fromIterable(plan.executionGroups)
-          .flatMapPar(Parallelism.default.process): group =>
+          .flatMapPar(Parallelism.of(asked.graph.parallelism).process): group =>
             ZStream
               .unwrap(SuiteLaunch.run(asked, group, completed))
               .tap:

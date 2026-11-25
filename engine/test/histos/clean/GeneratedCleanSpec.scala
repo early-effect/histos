@@ -4,12 +4,13 @@ import histos.*
 import histos.cache.ContentStore
 import histos.load.{PluginProducts, ProductError, ProductRequest}
 import histos.plugin.*
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import java.nio.file.Files
 import zio.*
 import zio.test.*
 
-object GeneratedCleanSpec extends ZIOSpecDefault:
+object GeneratedCleanSpec extends HistosSpec:
   private val declared = DeclaredTask(
     TaskName("generate"),
     Seal.Hermetic,

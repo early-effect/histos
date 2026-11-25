@@ -1,8 +1,10 @@
 package histos.zinc
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
-object UpstreamApisSpec extends ZIOSpecDefault:
+object UpstreamApisSpec extends HistosSpec:
   private val lib    = ClassSignature(BinaryName("Lib"), ApiHash(1))
   private val module = ClassSignature(BinaryName("Lib$"), ApiHash(1))
   private val idle   = ClassSignature(BinaryName("Idle"), ApiHash(7))

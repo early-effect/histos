@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.*
 import histos.pack.AssetSync
@@ -10,7 +11,7 @@ import java.nio.file.Files
 import zio.ZIO
 import zio.test.*
 
-object ScopedRootsSpec extends ZIOSpecDefault:
+object ScopedRootsSpec extends HistosSpec:
   private val version    = ScalaVersion("3.10.1")
   private val moduleName = ProjectName("app")
 

@@ -22,6 +22,8 @@ import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Path]
 import histos.report.WireJson.given JsonCodec[histos.MainClass]
 import histos.report.WireJson.given JsonCodec[histos.PlatformSelection]
+import histos.report.WireJson.given JsonCodec[histos.ScalaSelection]
+import histos.report.WireJson.given JsonCodec[histos.CompileExtent]
 import histos.report.WireJson.given JsonCodec[histos.TestSelection]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 
@@ -232,7 +234,12 @@ enum Attendance:
 end Attendance
 
 enum Call derives JsonCodec:
-  case Compile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
+  case Compile(
+      projects: List[ProjectName],
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
+  )
   case Test(
       selection: histos.TestSelection,
       patterns: List[SuitePattern],
@@ -256,6 +263,7 @@ enum Call derives JsonCodec:
       launch: RunLaunch,
       args: List[String],
       main: Option[histos.MainClass] = None,
+      scala: Option[histos.ScalaSelection] = None,
   )
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
@@ -280,7 +288,11 @@ enum Call derives JsonCodec:
   case CacheVerify(projects: List[ProjectName])
   case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
-  case PreviewCompile(projects: List[ProjectName], platforms: histos.PlatformSelection = histos.PlatformSelection.All)
+  case PreviewCompile(
+      projects: List[ProjectName],
+      platforms: histos.PlatformSelection = histos.PlatformSelection.All,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
+  )
   case PreviewTest(
       selection: histos.TestSelection,
       patterns: List[SuitePattern],
@@ -290,7 +302,12 @@ enum Call derives JsonCodec:
   case PreviewPublishLocal(tokens: List[PublishToken])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName], extent: CleanExtent)
-  case PreviewRun(id: String, platform: Option[histos.PlatformSelection], main: Option[histos.MainClass] = None)
+  case PreviewRun(
+      id: String,
+      platform: Option[histos.PlatformSelection],
+      main: Option[histos.MainClass] = None,
+      scala: Option[histos.ScalaSelection] = None,
+  )
 
   /** Project names, module names, plugin commands, or one plugin command's flags. Nothing here compiles. */
   case Catalog(query: CatalogQuery)
@@ -298,9 +315,9 @@ enum Call derives JsonCodec:
   /** A nested watch is quiet. Only the program under one watch reads stdin. */
   def attendance: Attendance =
     this match
-      case Bsp | Reboot(_) | Stop                            => Attendance.Held
-      case Run(_, _, _, _, _) | Watch(Run(_, _, _, _, _), _) => Attendance.Program
-      case _                                                 => Attendance.Quiet
+      case Bsp | Reboot(_) | Stop                                  => Attendance.Held
+      case Run(_, _, _, _, _, _) | Watch(Run(_, _, _, _, _, _), _) => Attendance.Program
+      case _                                                       => Attendance.Quiet
 end Call
 
 object Call:

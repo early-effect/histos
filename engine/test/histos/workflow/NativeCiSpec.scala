@@ -1,10 +1,11 @@
 package histos.workflow
 
 import histos.*
+import histos.suite.HistosSpec
 
 import zio.test.*
 
-object NativeCiSpec extends ZIOSpecDefault:
+object NativeCiSpec extends HistosSpec:
   def spec = suite("native CI packages")(
     test("one tool calculation consumes selected stage platforms and a supplied producer closure") {
       val consumer =

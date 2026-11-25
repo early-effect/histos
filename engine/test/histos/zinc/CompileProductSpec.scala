@@ -3,6 +3,7 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.{JdkRuntime, Sha256Digest}
 import histos.load.{PluginCompileError, PluginCompileSupport}
+import histos.suite.HistosSpec
 import histos.toolchain.{HostCompilerError, HostCompilerSession, HostToolRole, MaterializedTool, RuntimeIdentity}
 import histos.{Platform, ScalacFlags}
 
@@ -11,7 +12,7 @@ import java.nio.file.Path
 import zio.test.*
 import zio.{Chunk, durationInt, ZIO}
 
-object CompileProductSpec extends ZIOSpecDefault:
+object CompileProductSpec extends HistosSpec:
   def spec = suite("a compile product")(
     test("orphaned consumer TASTy cannot shadow a changed upstream constructor") {
       PluginCompileSupport
@@ -231,7 +232,7 @@ object CompileProductSpec extends ZIOSpecDefault:
           assertTrue(text == "two", missed, !hit)
         }
     },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private def markSource(text: String): String =
     s"""|object Mark:

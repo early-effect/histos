@@ -1,12 +1,13 @@
 package histos.theme
 
 import histos.*
+import histos.suite.HistosSpec
 
 import _root_.scala.compiletime.testing.typeChecks
 
 import zio.test.*
 
-object ThemeSpec extends ZIOSpecDefault:
+object ThemeSpec extends HistosSpec:
   private val blue = Style(Color.Blue, Emphasis.Plain)
 
   def spec = suite("a theme")(

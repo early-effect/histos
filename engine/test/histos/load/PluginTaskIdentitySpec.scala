@@ -34,6 +34,7 @@ import histos.plugin.{
 }
 import histos.resolve.{DependencyLock, ResolutionService, Resolve, Repository}
 import histos.schedule.{ActionCache, CacheError, Digest, RemoteCache}
+import histos.suite.HistosSpec
 import histos.task.{TaskError, TaskId}
 import histos.version.Catalog
 import histos.workspace.Workspace
@@ -61,7 +62,7 @@ import zio.{IO, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 
 /** Task cache identity. The loader's verified closure, not an empty artifact list, decides the output.
   */
-object PluginTaskIdentitySpec extends ZIOSpecDefault:
+object PluginTaskIdentitySpec extends HistosSpec:
   private val launcher: ApiDigest  = ApiDigest.trusted("ab" * 32)
   private val otherHost: ApiDigest = ApiDigest.trusted("cd" * 32)
 

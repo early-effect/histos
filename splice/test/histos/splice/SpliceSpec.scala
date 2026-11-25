@@ -1,12 +1,14 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import zio.*
 import zio.test.*
 
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 
-object SpliceSpec extends ZIOSpecDefault:
+object SpliceSpec extends HistosSpec:
 
   def spec =
     suite("Splice")(

@@ -3,6 +3,7 @@ package histos.supply
 import histos.*
 import histos.central.{FeedError, MavenModule, ReleaseFeed}
 import histos.doctor.*
+import histos.suite.HistosSpec
 import histos.version.ShipNumber
 import histos.workflow.SupplyYaml
 import histos.workspace.Workspace
@@ -10,7 +11,7 @@ import java.nio.file.Path
 import zio.{Duration, IO, Ref, UIO, ZIO, ZLayer}
 import zio.test.*
 
-object PreflightCompatibilitySpec extends ZIOSpecDefault:
+object PreflightCompatibilitySpec extends HistosSpec:
   private val version   = ScalaVersion("3.10.1")
   private val published = module("published", Jvm)(version)
   private val built     = Projects.organization(organization"example.test")(

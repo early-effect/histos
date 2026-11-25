@@ -46,17 +46,16 @@ object PluginCompileSupport:
 
   def run[A](
       body: (Path, Ref[Int]) => ZIO[Env & Scope, PluginCompileError, A]
-  ): ZIO[Any, PluginCompileError, Ran[A]] =
+  ): ZIO[Compilers, PluginCompileError, Ran[A]] =
     ZIO.scoped:
       for
         root   <- ZIO.attemptBlocking(Files.createTempDirectory("histos-p5")).orDie
         _      <- ZIO.addFinalizer(ZIO.attemptBlocking(Workspace.deleteSync(root)).orDie)
         cas    <- ZIO.attemptBlocking(Files.createDirectories(root.resolve("cas"))).orDie
         starts <- Ref.make(0)
-        value  <- body(root, starts).provideSomeLayer[Scope](
+        value  <- body(root, starts).provideSomeLayer[Compilers & Scope](
           ZLayer.succeed(ContentStore.in(cas)) ++
             ZLayer.succeed(CompilerStarts(starts)) ++
-            Compilers.live ++
             RemoteCache.off ++
             PluginFlights.live
         )

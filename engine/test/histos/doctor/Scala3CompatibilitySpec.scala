@@ -3,6 +3,7 @@ package histos.doctor
 import histos.Platform
 import histos.cache.ContentStore
 import histos.load.{PluginCompileError, PluginCompileJob, PluginCompileSupport, PluginCompiler}
+import histos.suite.HistosSpec
 import histos.toolchain.HostCompilerSession
 import histos.workspace.{IoFailure, IoFault}
 
@@ -14,7 +15,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{IO, Scope, ZIO, durationInt}
 import zio.test.*
 
-object Scala3CompatibilitySpec extends ZIOSpecDefault:
+object Scala3CompatibilitySpec extends HistosSpec:
   private val proof = suite("Scala 3 baseline preparation")(
     test("released TASTy supports both compatible and removed-member analysis") {
       PluginCompileSupport
@@ -99,7 +100,8 @@ object Scala3CompatibilitySpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = proof @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  def spec =
+    (proof @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   private def compile(
       root: Path,

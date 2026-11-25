@@ -113,6 +113,7 @@ import histos.{HttpUrl, PluginPublication, PluginRef, Resolution, Resolver}
 private object WireSchemaContract extends WireSchemaSupport:
   import WireSchemaLeaves.given
   import WireSchemaStages.given Schema[histos.PlatformSelection]
+  import WireSchemaStages.given Schema[histos.ScalaSelection]
   import WireSchemaStages.given Schema[histos.TestSelection]
 
   given Schema[SourceId]          = text("SourceId")

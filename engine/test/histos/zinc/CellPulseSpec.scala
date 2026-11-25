@@ -1,12 +1,14 @@
 package histos.zinc
 
+import histos.suite.HistosSpec
+
 import java.nio.file.Path
 
 import scala.collection.mutable
 
 import zio.test.*
 
-object CellPulseSpec extends ZIOSpecDefault:
+object CellPulseSpec extends HistosSpec:
   private val checkout = Path.of("/repo")
 
   def spec = suite("a compiling cell")(

@@ -3,6 +3,7 @@ package histos.testrun
 import histos.*
 import histos.build.BuildNode
 import histos.plugin.{Digests, SourceKind, SourceProvenance, SourceSet}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.CompilationCapture
 
@@ -11,7 +12,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object ResourceCaptureSpec extends ZIOSpecDefault:
+object ResourceCaptureSpec extends HistosSpec:
   private val names = List("vendor/escape-string-regexp@5.0.0.js", "notes/front page.txt", "données/日本語.txt")
   private val body  = "vendored resource\n"
   private val tests = suite("resource file capture")(
@@ -60,5 +61,6 @@ object ResourceCaptureSpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 end ResourceCaptureSpec

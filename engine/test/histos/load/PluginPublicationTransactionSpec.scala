@@ -1,10 +1,11 @@
 package histos.load
 
+import histos.suite.HistosSpec
 import java.nio.file.Files
 import zio.*
 import zio.test.*
 
-object PluginPublicationTransactionSpec extends ZIOSpecDefault:
+object PluginPublicationTransactionSpec extends HistosSpec:
   private val tests = suite("plugin publication transaction")(
     test("failure after staged page, asset and stamp writes leaves the complete prior generation") {
       ProductFixture.use: fixture =>

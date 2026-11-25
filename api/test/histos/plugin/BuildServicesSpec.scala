@@ -2,13 +2,14 @@ package histos.plugin
 
 import histos.doctor.Noted
 import histos.lock.{LockContext, LockDecision, LockStrategy, LockStrategyError}
+import histos.suite.HistosSpec
 
 import _root_.scala.compiletime.testing.typeChecks
 
 import zio.{Exit, Promise, Ref, Scope, ZIO, ZLayer}
 import zio.test.*
 
-object BuildServicesSpec extends ZIOSpecDefault:
+object BuildServicesSpec extends HistosSpec:
   private def exactLabel(
       plan: Plan[NoExtraServices & ReviewLabel, LabelSetupError]
   ): Plan[NoExtraServices & ReviewLabel, LabelSetupError] = plan

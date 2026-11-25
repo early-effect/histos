@@ -72,16 +72,24 @@ it, or throw the outputs away.
       md"""
 `histos compile` compiles every module. Name projects to compile those and their
 compilation prerequisites. `--platform jvm,js` or repeated `--platform` flags select
-platforms. Whole-build selection keeps matching cells; named modules refuse a
-platform they do not support. `--verbose` prints each compiler phase.
-"""
+platforms. `--scala 2.13`, `--scala 3`, or a full version such as `--scala 3.8.1`
+selects Scala versions the same way. Whole-build selection keeps matching cells;
+named modules refuse a platform or a Scala token they do not support, and a series
+that matches two versions. `--tests` also compiles test sources. It does not run
+suites and it does not link. `--verbose` prints each compiler phase.
+""",
+      cite[histos.ScalaSelection]((asked, module: histos.ProjectName) => asked.require(module, _)),
     ),
     section("run")(
       md"""
-`histos run <name>` runs a module main. `--platform jvm`, `js`, or `native` selects
-exactly one supported platform. Without it, the module's `runPlatform` default wins,
-then its sole platform. An ambiguous module requires the flag. Positional platform
-tokens are not accepted. `--main <class>` chooses among multiple mains.
+`histos run <name>` runs a module main. It starts one process: one platform and one
+Scala version. `--platform jvm`, `js`, or `native` selects exactly one supported
+platform. Without it, the module's `runPlatform` default wins, then its sole
+platform. An ambiguous module requires the flag. `--scala` selects one series or one
+full version. Omission uses the module's only version, and two declared versions
+require the flag. A series that matches two versions, or a comma list, is refused
+before anything starts. Positional platform tokens are not accepted. `--main <class>`
+chooses among multiple mains.
 
 Everything after `--` is passed to the program, including tokens that look like Histos
 flags: `histos run app --platform jvm --main demo.Main -- --port 8080`.
@@ -139,7 +147,8 @@ Open task's effects must rerun.
       md"""
 `histos fmt` formats sources with the scalafmt version the build locked. Name projects,
 or pass `--file <path>` for specific files. `--check` reports what would change and
-writes nothing, which is what CI runs.
+writes nothing. CI runs `scala-cli fmt --check` before it installs a toolchain, using
+the same `.scalafmt.conf`.
 """
     ),
     section("assembly")(
@@ -170,10 +179,14 @@ a suite whose stamp still matches, which is the run you want while editing. A fu
 `--tag` keeps tests with any listed exact tag, and `--ignore-tag` drops tests with
 any listed tag. A filter does not turn a skipped suite back on under `--quick`.
 
-These filters and `--platform` accept repeated flags and comma lists, before or
-after projects. Each flag consumes one value. Empty entries fail. Escape a literal
-comma as `\\,` and a backslash as `\\\\`, quoting for the shell:
-`histos test core --platform jvm --only '*Parser*,*Codec*' --tag 'db\\,local'`.
+These filters, `--platform`, and `--scala` accept repeated flags and comma lists,
+before or after projects. `--scala` takes a series (`2.13` or `3`) or a full version.
+A named module refuses a token that matches nothing and a series that matches two
+versions. A whole-build request keeps every matching cell. Omission is every declared
+version. When the run covers more than one full version, the tally prints one line
+per version before the combined line. Each flag consumes one value. Empty entries
+fail. Escape a literal comma as `\\,` and a backslash as `\\\\`, quoting for the shell:
+`histos test core --platform jvm --scala 2.13 --only '*Parser*,*Codec*' --tag 'db\\,local'`.
 
 `--affected <json>` intersects the original selection with changed modules. It stays
 a JSON list, not a comma list. `--suite <json>` supplies whole-suite CI eligibility;
@@ -190,10 +203,11 @@ but their suites do not run unless selected.
     section("coverage")(
       md"""
 `histos coverage` instruments Scala on the JVM, runs the suites, and writes a coverage
-report. The `--min-stmt` and `--min-branch` flags set a floor for the whole run, and the
-`-file` and `-package` forms set a floor for each file or each package. The run fails
-when a floor is missed. `--exclude-class` and `--exclude-file` take regular expressions
-for code you do not want measured.
+report. `--scala` selects versions the same way `histos test` does. `--platform` must
+be `jvm`; omission stays on the JVM. The `--min-stmt` and `--min-branch` flags set a
+floor for the whole run, and the `-file` and `-package` forms set a floor for each
+file or each package. The run fails when a floor is missed. `--exclude-class` and
+`--exclude-file` take regular expressions for code you do not want measured.
 """
     ),
     section("affected")(
@@ -358,8 +372,10 @@ what the build would generate.
     section("workflow")(
       md"""
 `histos workflow --check` fails when the generated workflows in the tree are stale.
-`histos workflow --update` writes them. Commit the result. Neither form publishes, and
-neither changes the Histos pin. The CI page says what a generated workflow contains.
+`histos workflow --update` writes them. Run it after `histos update`, then commit the
+files. The order is update, then generate, for a release pin and for a snapshot pin.
+Neither form publishes, and neither changes the Histos pin. The CI page says what a
+generated workflow contains and why the check fails if you skip the regenerate.
 """
     ),
     section("doctor")(
@@ -451,6 +467,10 @@ the newest release. A pin that ends in `-SNAPSHOT`, including a commit coordinat
 defaults to `--follow`, which writes the newest line pointer. `--freeze` writes the
 timestamp that pointer's channel file names now. A timestamp pin defaults to `--freeze`.
 `--follow` and `--freeze` are opposites.
+
+A project that commits generated workflows runs `histos workflow --update` next and
+commits what it writes. That follows a release update and a snapshot update. The CI
+page says why.
 """
     ),
     section("self update")(

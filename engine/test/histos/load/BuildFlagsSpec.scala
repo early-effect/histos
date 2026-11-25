@@ -2,6 +2,7 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.plugin.PluginCoordinate
+import histos.suite.HistosSpec
 import histos.toolchain.HostCompilerSession
 import histos.version.Catalog
 import histos.workspace.{IoFailure, IoFault}
@@ -26,7 +27,7 @@ import java.nio.file.{Files, Path}
 import zio.test.*
 import zio.{durationInt, Scope, ZIO}
 
-object BuildFlagsSpec extends ZIOSpecDefault:
+object BuildFlagsSpec extends HistosSpec:
   private val Strict   = ScalacFlags.of(ScalacFlag.Deprecation, ScalacFlag.FatalWarnings)
   private val Warnings = ScalacFlags.of(ScalacFlag.Deprecation)
   private val Warning  =
@@ -35,61 +36,64 @@ object BuildFlagsSpec extends ZIOSpecDefault:
        |  def text: String = old
        |""".stripMargin
 
-  private val suiteValue: Spec[Any, PluginCompileError | LoadError] = suite("build compiler flags")(
-    test("direct cache applies fatal warnings, invalidates flags and extra identity, and restores classes") {
-      PluginCompileSupport
-        .run { (root, starts) =>
-          for
-            session <- prepared(root)
-            source  <- PluginCompileSupport.write(root.resolve("src/Warning.scala"), Warning)
-            out     <- ZIO
-              .attemptBlocking(Files.createDirectories(root.resolve("classes")))
-              .mapError(_ => PluginCompileError.Io(IoFailure(root, IoFault.Write)))
-            runtime = PluginCompileSupport.runtimeJars(session)
-            first <- BuildCache.compile(List(source), runtime, out, "resources").either
-            _     <- ZIO
-              .attemptBlocking(Files.deleteIfExists(out.resolve("Warning$.class")))
-              .mapError(_ => PluginCompileError.Io(IoFailure(out, IoFault.Write)))
-            again    <- BuildCache.compile(List(source), runtime, out, "resources", BuildScalac.bootstrapFlags).either
-            warm     <- starts.get
-            text     <- PluginCompileSupport.invoke(out, runtime, "Warning$", "text")
-            warnings <- BuildCache.compile(List(source), runtime, out, "resources", Warnings).either
-            warningsAgain <- BuildCache.compile(List(source), runtime, out, "resources", Warnings).either
-            changed       <- starts.get
-            failed        <- BuildCache.compile(List(source), runtime, out, "resources", Strict).either
-            failedAgain   <- BuildCache.compile(List(source), runtime, out, "resources", Strict).either
-            extra      <- BuildCache.compile(List(source), runtime, out, "changed-resources", ScalacFlags.empty).either
-            extraAgain <- BuildCache.compile(List(source), runtime, out, "changed-resources", ScalacFlags.empty).either
-            restored   <- BuildCache.compile(List(source), runtime, out, "resources").either
-            restoredText <- PluginCompileSupport.invoke(out, runtime, "Warning$", "text")
-            labeled      <- BuildFile.compileLabeled(List(source -> "histos.scala"), runtime, out, Strict).either
-          yield (
-            List(first, again, warnings, warningsAgain, extra, extraAgain, restored).forall(_.contains(())),
-            warm,
-            changed,
-            text,
-            restoredText,
-            loadRejected(failed) && loadRejected(failedAgain) && loadRejected(labeled),
-          )
-        }
-        .map { ran =>
-          val (compiled, warm, changed, text, restored, rejected) = ran.value
-          assertTrue(
-            compiled,
-            warm == 1,
-            changed == 2,
-            text == "compiled",
-            restored == "compiled",
-            rejected,
-            ran.starts == 5,
-          )
-        }
-    },
-    hosted(Mode.Hosted),
-    hosted(Mode.Worker),
-    modules(Bootstrap.Direct),
-    modules(Bootstrap.Hosted),
-  )
+  private val suiteValue: Spec[histos.zinc.Compilers, PluginCompileError | LoadError] =
+    suite("build compiler flags")(
+      test("direct cache applies fatal warnings, invalidates flags and extra identity, and restores classes") {
+        PluginCompileSupport
+          .run { (root, starts) =>
+            for
+              session <- prepared(root)
+              source  <- PluginCompileSupport.write(root.resolve("src/Warning.scala"), Warning)
+              out     <- ZIO
+                .attemptBlocking(Files.createDirectories(root.resolve("classes")))
+                .mapError(_ => PluginCompileError.Io(IoFailure(root, IoFault.Write)))
+              runtime = PluginCompileSupport.runtimeJars(session)
+              first <- BuildCache.compile(List(source), runtime, out, "resources").either
+              _     <- ZIO
+                .attemptBlocking(Files.deleteIfExists(out.resolve("Warning$.class")))
+                .mapError(_ => PluginCompileError.Io(IoFailure(out, IoFault.Write)))
+              again    <- BuildCache.compile(List(source), runtime, out, "resources", BuildScalac.bootstrapFlags).either
+              warm     <- starts.get
+              text     <- PluginCompileSupport.invoke(out, runtime, "Warning$", "text")
+              warnings <- BuildCache.compile(List(source), runtime, out, "resources", Warnings).either
+              warningsAgain <- BuildCache.compile(List(source), runtime, out, "resources", Warnings).either
+              changed       <- starts.get
+              failed        <- BuildCache.compile(List(source), runtime, out, "resources", Strict).either
+              failedAgain   <- BuildCache.compile(List(source), runtime, out, "resources", Strict).either
+              extra <- BuildCache.compile(List(source), runtime, out, "changed-resources", ScalacFlags.empty).either
+              extraAgain <- BuildCache
+                .compile(List(source), runtime, out, "changed-resources", ScalacFlags.empty)
+                .either
+              restored     <- BuildCache.compile(List(source), runtime, out, "resources").either
+              restoredText <- PluginCompileSupport.invoke(out, runtime, "Warning$", "text")
+              labeled      <- BuildFile.compileLabeled(List(source -> "histos.scala"), runtime, out, Strict).either
+            yield (
+              List(first, again, warnings, warningsAgain, extra, extraAgain, restored).forall(_.contains(())),
+              warm,
+              changed,
+              text,
+              restoredText,
+              loadRejected(failed) && loadRejected(failedAgain) && loadRejected(labeled),
+            )
+          }
+          .map { ran =>
+            val (compiled, warm, changed, text, restored, rejected) = ran.value
+            assertTrue(
+              compiled,
+              warm == 1,
+              changed == 2,
+              text == "compiled",
+              restored == "compiled",
+              rejected,
+              ran.starts == 5,
+            )
+          }
+      },
+      hosted(Mode.Hosted),
+      hosted(Mode.Worker),
+      modules(Bootstrap.Direct),
+      modules(Bootstrap.Hosted),
+    )
 
   private enum Mode:
     case Hosted, Worker
@@ -106,7 +110,7 @@ object BuildFlagsSpec extends ZIOSpecDefault:
       session <- PluginCompileSupport.session(payload, store).mapError(PluginCompileError.Host(_))
     yield session
 
-  private def hosted(mode: Mode): Spec[Any, PluginCompileError] =
+  private def hosted(mode: Mode): Spec[histos.zinc.Compilers, PluginCompileError] =
     test(s"$mode applies flags, invalidates keys, and reuses successful classes") {
       PluginCompileSupport
         .run { (root, starts) =>
@@ -183,7 +187,7 @@ object BuildFlagsSpec extends ZIOSpecDefault:
         }
     }
 
-  private def modules(bootstrap: Bootstrap): Spec[Any, PluginCompileError | LoadError] =
+  private def modules(bootstrap: Bootstrap): Spec[histos.zinc.Compilers, PluginCompileError | LoadError] =
     test(s"$bootstrap plugin modules apply flags and retain resource identity") {
       PluginCompileSupport
         .run { (root, starts) =>
@@ -251,5 +255,8 @@ object BuildFlagsSpec extends ZIOSpecDefault:
       case (Mode.Worker, Left(PluginCompileError.Worker(code, detail))) => code != 0 && detail.contains("warnings")
       case _                                                            => false
 
-  def spec = suiteValue @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  def spec =
+    (suiteValue @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)).provideShared(
+      histos.zinc.Compilers.owned
+    )
 end BuildFlagsSpec

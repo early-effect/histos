@@ -3,12 +3,13 @@ package histos.cli
 import histos.*
 import histos.testrun.{TestCells, TestExecutionGroup, TestSelectionError}
 import histos.workflow.{CiBranch, CiEvent, NpmLock, RenderingShip, Workflow}
+import histos.suite.HistosSpec
 
 import zio.ZIO
 import zio.test.*
 import zio.json.*
 
-object SelectionCiSpec extends ZIOSpecDefault:
+object SelectionCiSpec extends HistosSpec:
   private val version  = ScalaVersion("3.10.1")
   private val upstream = module("fixture", Jvm, Js, Native)(version).clang(ClangMajor(21)).lane(TestLane.Verify)
   private val first    = module("first", Jvm, Js, Native)(version).clang(ClangMajor(21)).dependsOn(upstream)
@@ -18,8 +19,8 @@ object SelectionCiSpec extends ZIOSpecDefault:
   private val graph = Projects(Splits.of(Axis.Module, Axis.Platform), upstream, first, second, owner)
 
   private def selection(command: Command): Either[CliParseError, TestSelection] = command match
-    case Command.Test(names, affected, _, _, _, platforms) =>
-      Right(AffectedChoice.selection(names, affected, platforms))
+    case Command.Test(names, affected, _, _, _, platforms, versions) =>
+      Right(AffectedChoice.selection(names, affected, platforms, versions))
     case _ => Left(CliParseError.Rejected)
 
   private def renderedRequests(
@@ -141,7 +142,7 @@ object SelectionCiSpec extends ZIOSpecDefault:
         )
       )
     },
-    test("review F1: complete affected JVM row filters a JS-only or Verify-only change") {
+    test("a complete affected JVM row filters a JS-only or Verify-only change") {
       val api    = module("api", Jvm)(version)
       val web    = module("web", Js)(version)
       val verify = module("verify", Jvm)(version).lane(TestLane.Verify)
@@ -154,7 +155,7 @@ object SelectionCiSpec extends ZIOSpecDefault:
           yield TestCells.plan(build, request).map(_.requestedCells) == Right(Nil)
       yield assertTrue(results.forall(identity))
     },
-    test("review F2: singleton Native group and owner roots survive platform partition") {
+    test("a singleton Native group and its owner roots survive platform partition") {
       val member = module("member", Native)(version).clang(ClangMajor(21))
       val owner = module("singleton", Native)(version).clang(ClangMajor(21)).lane(TestLane.Verify).testAggregate(member)
       val other = module("other", Jvm)(version)
@@ -171,7 +172,7 @@ object SelectionCiSpec extends ZIOSpecDefault:
         rows.flatMap(_.cells.compileStageRoots).toSet == initial.compileStageRoots.toSet,
       )
     },
-    test("review F3: Module-only does not invent platform rows") {
+    test("a Module-only split does not invent platform rows") {
       val cross = module("cross", Jvm, Js)(version)
       for
         build <- ZIO.fromEither(Projects(Splits.of(Axis.Module), cross))
@@ -196,7 +197,7 @@ object SelectionCiSpec extends ZIOSpecDefault:
           .toSet == local.compileStageRoots.toSet
       checked.map(results => assertTrue(results.forall(identity)))
     },
-    test("review F3: multi-Scala fan-out refuses unsupported configured axis") {
+    test("a multi-Scala fan-out refuses an unsupported configured axis") {
       val multi = module("multi", Jvm)(version, ScalaVersion("3.9.0"))
       for
         build <- ZIO.fromEither(Projects(Splits.of(Axis.ScalaVersion), multi))

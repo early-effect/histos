@@ -2,6 +2,7 @@ package histos.js
 
 import histos.node.NodeBinary
 import histos.pack.MainClass
+import histos.suite.HistosSpec
 import histos.{JsEnv, JsModuleKind, JsVersion, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -9,7 +10,7 @@ import java.nio.file.Path
 
 import zio.test.*
 
-object JsArgsSpec extends ZIOSpecDefault:
+object JsArgsSpec extends HistosSpec:
   def spec = suite("program arguments on Scala.js")(
     test("an empty argument list keeps the link key") {
       val compared =

@@ -1,5 +1,7 @@
 package histos.splice
 
+import histos.suite.HistosSpec
+
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
@@ -8,7 +10,7 @@ import scala.jdk.OptionConverters.*
 import zio.{IO, Ref, ZIO, durationInt}
 import zio.test.*
 
-object OwnedMinifierSpec extends ZIOSpecDefault:
+object OwnedMinifierSpec extends HistosSpec:
   enum Failure:
     case File(path: Path)
     case Rejected

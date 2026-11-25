@@ -33,8 +33,15 @@ There are three platforms. `Jvm` is a JVM program or library. `Js` is Scala.js. 
 is Scala Native. On the command line the tokens are `jvm`, `js`, and `native`.
 `histos run <module> --platform js` selects that module's Scala.js cell, if it
 supports Scala.js. Positional platform tokens are not run selectors.
+
+`--scala 2.13` and `--scala 3` select a series. `--scala 2.13.18` selects that full
+version. Omission keeps every declared version of the modules you asked for. A named
+module refuses a token that matches nothing and a series that matches two of its
+versions. `histos run` starts one process, so it needs one Scala version and one
+platform.
 """,
       cite[histos.Platform](_.token),
+      cite[histos.ScalaSelection]((asked, module: histos.ProjectName) => asked.require(module, _)),
     ),
     section("Versions and dependencies are checked when the build file compiles")(
       md"""
@@ -140,6 +147,23 @@ val core = module("core", Jvm, Native)(scala"3.8.1")
 ```
 """,
       cite[histos.NativeLibrary](_.token),
+    ),
+    section("How many steps run at once")(
+      md"""
+Compile, publish, and forked programs each have their own pool. A pool has one permit
+per core, so a compile does not wait on a publish, and a small machine does not start
+more of one class than it has cores.
+
+`Projects.parallelism` sets a ceiling on every pool. `Projects.parallelism(2)` runs at
+most two of each, and one of each on a machine with a single core. Leaving it out keeps
+the core count. A second call replaces the ceiling. Zero and a negative number fail
+when the graph is built.
+
+```scala
+Projects.parallelism(2)
+```
+""",
+      cite[histos.Projects.type](_.parallelism),
     ),
     section("What this repository builds")(
       md"""

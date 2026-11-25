@@ -5,6 +5,7 @@ import histos.cache.ContentStore
 import histos.plugin.*
 import histos.resolve.{Resolve, ResolutionService}
 import histos.schedule.{ActionCache, RemoteCache}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 
@@ -13,7 +14,7 @@ import java.nio.file.{Files, Path}
 import zio.{Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PluginScopedCompileSpec extends ZIOSpecDefault:
+object PluginScopedCompileSpec extends HistosSpec:
   private val name    = ProjectName("app")
   private val version = ScalaVersion("3.10.1")
   private val mainDep = TaskDep.CompileScoped(name, None, None, SourceSet.Main)
@@ -428,7 +429,8 @@ object PluginScopedCompileSpec extends ZIOSpecDefault:
     },
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   private final case class CoverageProducer(count: Ref[Int], observed: Ref[List[CellClasspath]]) extends HistosPlugin:
     val id                       = PluginId("coverage-producer")

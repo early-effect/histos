@@ -1,6 +1,7 @@
 package histos.native
 
 import histos.NativeLibrary
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import zio.ZIO
@@ -9,7 +10,7 @@ import java.nio.file.Path
 
 import zio.test.*
 
-object NativeFlagsSpec extends ZIOSpecDefault:
+object NativeFlagsSpec extends HistosSpec:
   private val openssl = Path.of("/opt/homebrew/opt/openssl@3")
 
   def spec = suite("native link flags")(

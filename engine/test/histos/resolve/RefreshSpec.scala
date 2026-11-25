@@ -24,6 +24,7 @@ import histos.plugin.{
   PluginEvents,
   ResolutionIntent,
 }
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.ProjectName
 
@@ -33,7 +34,7 @@ import java.nio.file.{Files, Path}
 import zio.{Exit, IO, Ref, Scope, UIO, ZIO}
 import zio.test.*
 
-object RefreshSpec extends ZIOSpecDefault:
+object RefreshSpec extends HistosSpec:
   private val utf8  = StandardCharsets.UTF_8
   private val app   = PluginCoordinate.Module(ProjectName("app"))
   private val shots = LocatorName("shots")

@@ -2,11 +2,12 @@ package histos.workflow
 
 import histos.*
 import histos.plugin.{Cond, JobName, JobPermissions, PluginId, RepoPath, Site, SiteArrange, SiteShape, TaskName}
+import histos.suite.HistosSpec
 
 import zio.ZIO
 import zio.test.*
 
-object WorkflowPolicySpec extends ZIOSpecDefault:
+object WorkflowPolicySpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
   private val api     = module("api", Jvm)(version)
   private val built   = Projects.docCheck.scalafmt(ships(Ship("libs").next(0, 1, 0)(api)), api)
@@ -64,11 +65,12 @@ object WorkflowPolicySpec extends ZIOSpecDefault:
           .map(_.mkString("\n"))
         assertTrue(
           blocks.exists(body =>
-            body.contains("github.event_name == 'pull_request'") && body.contains("./histos run site/site")
+            body.contains("github.event_name == 'pull_request'") && body.contains("./histos run site/site") &&
+              body.contains("needs: [format, compile]") && body.contains("actions/cache/restore@")
           ),
           blocks.exists(body =>
             body.contains(
-              "needs: [docs, affected, workflow, supply-chain, test, versions, compatibility, scaladoc, format"
+              "needs: [docs, affected, compile, workflow, supply-chain, test, versions, compatibility, scaladoc, format"
             ) && body.contains("github.event_name == 'push'") && body.contains("needs.*.result") && body.contains(
               "actions/deploy-pages"
             ) && body.contains("browser-check")

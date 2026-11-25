@@ -1,10 +1,12 @@
 package histos.resolve
 
+import histos.suite.HistosSpec
+
 import coursier.cache.CachePolicy
 
 import zio.test.*
 
-object RecheckSpec extends ZIOSpecDefault:
+object RecheckSpec extends HistosSpec:
   def spec = suite("toolchain pack resolve")(
     test("a changing snapshot is checked again") {
       val cache = CoursierResolve.files("/tmp/histos-recheck", CoursierResolve.CacheUse.Recheck)

@@ -19,6 +19,7 @@ import histos.plugin.{
   PluginDetail,
   ResolutionIntent,
 }
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.{ProjectName, Resolution}
 
@@ -28,7 +29,7 @@ import java.nio.file.{Files, Path}
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object LockSnapshotSpec extends ZIOSpecDefault:
+object LockSnapshotSpec extends HistosSpec:
   private val app   = PluginCoordinate.Module(ProjectName("app"))
   private val tools = PluginCoordinate.Module(ProjectName("tools"))
   private val shots = LocatorName("shots")

@@ -1,13 +1,14 @@
 package histos.cli
 
 import histos.testrun.{SuitePattern, TagName, TagNameError, TestFilter, TestMode, TestTerm, TestTermError}
-import histos.ProjectName
+import histos.{Platform, PlatformSelection, ProjectName, ScalaSelection, ScalaToken, SelectionError}
+import histos.suite.HistosSpec
 
 import zio.test.*
 import zio.ZIO
 import zio.json.*
 
-object TestGrammarSpec extends ZIOSpecDefault:
+object TestGrammarSpec extends HistosSpec:
   private val selected = TestFilter(
     tests = List(TestTerm("one"), TestTerm("two")),
     tags = List(TagName("slow")),
@@ -23,7 +24,7 @@ object TestGrammarSpec extends ZIOSpecDefault:
   )
 
   def spec = suite("test selection")(
-    test("review F4: another flag owns its selector-looking value") {
+    test("another flag owns its selector-looking value") {
       val cases = List(
         "--test"       -> CliParseError.TestTerm(TestTermError.Flag("--platform")),
         "--tag"        -> CliParseError.TagName(TagNameError.Flag("--platform")),
@@ -172,6 +173,59 @@ object TestGrammarSpec extends ZIOSpecDefault:
             histos.PlatformSelection.only(histos.Platform.Jvm, histos.Platform.Js),
           )
         ),
+      )
+    },
+    test("scala series, a comma list, a run of two tokens, and non-jvm coverage are typed") {
+      val series = ScalaSelection.Only(ScalaToken.Series2(13), Nil)
+      val both   = ScalaSelection.Only(ScalaToken.Series2(13), List(ScalaToken.Series3))
+      for
+        tested   <- Grammar.parse(List("test", "core", "--scala", "2.13", "--platform", "js")).either
+        compiled <- Grammar.parse(List("compile", "core", "--scala", "2.13,3")).either
+        refused  <- Grammar.parse(List("run", "app", "--scala", "2.13,3")).either
+        missing  <- Grammar.parse(List("compile", "--scala")).either
+        coverage <- Grammar.parse(List("coverage", "--platform", "js")).either
+        measured <- Grammar.parse(List("coverage", "core", "--platform", "jvm", "--scala", "3")).either
+      yield assertTrue(
+        tested == Right(
+          Command.Test(
+            List(ProjectName("core")),
+            AffectedChoice.Unset,
+            TestMode.Run,
+            Nil,
+            TestFilter.empty,
+            PlatformSelection.only(Platform.Js),
+            series,
+          )
+        ),
+        compiled == Right(Command.Compile(List(ProjectName("core")), scala = both)),
+        refused == Left(
+          CliParseError.Selection(SelectionError.RunScalaMany(List(ScalaToken.Series2(13), ScalaToken.Series3)))
+        ),
+        missing == Left(CliParseError.Pattern("--scala needs a Scala version")),
+        coverage == Left(CliParseError.Pattern("coverage measures the JVM only")),
+        measured == Right(
+          Command.Coverage(
+            List(ProjectName("core")),
+            histos.CoverageFloors(),
+            histos.coverage.Excludes(Nil, Nil),
+            ScalaSelection.Only(ScalaToken.Series3, Nil),
+          )
+        ),
+      )
+    },
+    test("compile --tests compiles test sources and other commands refuse it") {
+      for
+        compiled <- Grammar.parse(List("compile", "core", "--tests")).either
+        repeated <- Grammar.parse(List("compile", "--tests", "--tests")).either
+        refused  <- Grammar.parse(List("run", "app", "--tests")).either
+        preview  <- Grammar.parse(List("preview", "compile", "--tests")).either
+      yield assertTrue(
+        compiled == Right(
+          Command.Compile(List(ProjectName("core")), sources = histos.CompileExtent.MainAndTest)
+        ),
+        repeated == Left(CliParseError.Pattern("compile --tests is already set")),
+        refused == Left(CliParseError.Pattern("only compile takes --tests")),
+        preview == Left(CliParseError.Pattern("only compile takes --tests")),
       )
     },
     test("delimited and repeated list syntax obey the same law") {

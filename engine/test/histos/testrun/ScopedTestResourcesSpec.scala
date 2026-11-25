@@ -4,6 +4,7 @@ import histos.*
 import histos.build.{BuildNode, ExecutionError, GeneratedTask}
 import histos.lock.ExecutionKind
 import histos.plugin.*
+import histos.suite.HistosSpec
 import histos.workspace.{IoFailure, Workspace}
 import histos.zinc.{GeneratedLocation, GeneratedRootId}
 
@@ -12,7 +13,7 @@ import java.nio.file.Files
 import zio.{Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
-object ScopedTestResourcesSpec extends ZIOSpecDefault:
+object ScopedTestResourcesSpec extends HistosSpec:
   private val tests = suite("generated Test resource inventory")(
     test(
       "the Test leaf and child consume leased File/tree resources at logical names, not file parents or publication aliases"
@@ -106,7 +107,8 @@ object ScopedTestResourcesSpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   private final case class ResourcesEmitter(runs: Ref[Int]) extends HistosPlugin:
     val id               = PluginId("test-resources")

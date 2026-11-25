@@ -3,6 +3,7 @@ package histos.cli
 import histos.build.BuildEvent
 import histos.theme.Role
 import histos.zinc.{CompileFeed, CompilePulse}
+import histos.suite.HistosSpec
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -10,7 +11,7 @@ import java.nio.file.Path
 import zio.Chunk
 import zio.test.*
 
-object ColumnSpec extends ZIOSpecDefault:
+object ColumnSpec extends HistosSpec:
   private val api     = ProjectName("api")
   private val engine  = ProjectName("engine")
   private val version = ScalaVersion("3.10.1")
@@ -90,6 +91,23 @@ object ColumnSpec extends ZIOSpecDefault:
       )
       val (out, err) = Show.transcript(repo, events)
       assertTrue(out == Chunk("api    3.10.1 jvm compiling"), err.isEmpty)
+    },
+    test("two Scala versions print a tally each and one version does not") {
+      val two = Lines.versionTallies(
+        List(
+          Lines.VersionTally("3.10.1", 3, 0, 0),
+          Lines.VersionTally("2.13.18", 3, 0, 0),
+        )
+      )
+      val one = Lines.versionTallies(List(Lines.VersionTally("3.10.1", 6, 0, 0)))
+      assertTrue(
+        two == List(
+          "2.13.18 passed: 3 failed: 0 cached: 0",
+          "3.10.1 passed: 3 failed: 0 cached: 0",
+        ),
+        one.isEmpty,
+        Lines.suites(6, 0, 0, 6).contains("tests passed: 6 failed: 0 cached: 0 modules: 6"),
+      )
     },
   )
 end ColumnSpec

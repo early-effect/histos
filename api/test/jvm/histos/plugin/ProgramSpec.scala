@@ -1,11 +1,13 @@
 package histos.plugin
 
+import histos.suite.HistosSpec
+
 import java.nio.file.Path
 
 import zio.{Queue, UIO, ZIO}
 import zio.test.*
 
-object ProgramSpec extends ZIOSpecDefault:
+object ProgramSpec extends HistosSpec:
   private val java: String =
     Path.of(sys.props.getOrElse("java.home", "")).resolve("bin").resolve("java").toString
 

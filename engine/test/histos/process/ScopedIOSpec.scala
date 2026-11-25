@@ -1,12 +1,14 @@
 package histos.process
 
+import histos.suite.HistosSpec
+
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Queue, Scope, ZIO, durationInt}
 import zio.test.*
 
-object ScopedIOSpec extends ZIOSpecDefault:
+object ScopedIOSpec extends HistosSpec:
   private enum ProbeError:
     case Java, Deadline
     case Child(message: String)

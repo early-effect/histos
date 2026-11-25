@@ -1,12 +1,13 @@
 package histos.doctor
 
 import histos.cli.Part
+import histos.suite.HistosSpec
 import histos.theme.Role
 
 import zio.Chunk
 import zio.test.*
 
-object RenderSpec extends ZIOSpecDefault:
+object RenderSpec extends HistosSpec:
   private val noted =
     Noted.error("ship.pin", "the pin trails", "move the pin", Noted.command("histos bump"))
 

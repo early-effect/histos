@@ -6,12 +6,15 @@ import zio.{ULayer, ZLayer}
 final case class Parallelism(cpu: Int, io: Int, process: Int)
 
 object Parallelism:
-  /** Compile steps take a CPU permit. Four compilers per core, and at least four, so independent cells share the
-    * machine.
+  /** One permit per core for each class, lowered when the build names a ceiling. The classes do not share a pool, so a
+    * compile does not wait on a download.
     */
-  def default: Parallelism =
+  def of(max: Option[histos.ParallelismMax]): Parallelism =
     val processors = java.lang.Runtime.getRuntime.availableProcessors.max(1)
-    Parallelism(cpu = (processors * 4).max(4), io = 16, process = 8)
+    val width      = max.fold(processors)(cap => processors.min(cap.value))
+    Parallelism(cpu = width, io = width, process = width)
+
+  def default: Parallelism = of(None)
 
   val live: ULayer[Parallelism] = ZLayer.succeed(default)
 end Parallelism

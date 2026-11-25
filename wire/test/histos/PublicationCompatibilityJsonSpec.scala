@@ -2,12 +2,13 @@ package histos
 
 import histos.publish.*
 import histos.report.WireJson.given
+import histos.suite.HistosSpec
 import histos.version.{BumpPart, ShipName, ShipNumber}
 import java.nio.file.Path
 import zio.json.*
 import zio.test.*
 
-object PublicationCompatibilityJsonSpec extends ZIOSpecDefault:
+object PublicationCompatibilityJsonSpec extends HistosSpec:
   private val previous   = ShipNumber.trusted(0, 15, 0)
   private val number     = ShipNumber.trusted(0, 15, 1)
   private val coordinate = PublicationCoordinate(Organization("example.test"), "second-artifact_3")

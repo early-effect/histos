@@ -6,7 +6,9 @@ import histos.pack.MainClass
 import histos.process.{ChildError, ChildProcess, ChildRequest}
 import histos.resolve.{DependencyLock, LockedTools, Repositories, ResolutionService, Resolve, ResolveError}
 import histos.schedule.{CacheError, RemoteCache}
+import histos.suite.HistosSpec
 import histos.workspace.{IoFailure, IoFault, Workspace}
+import histos.zinc.{CellPlatform, CompileError, CompileRequest, CompileToolchain, CompilerStarts}
 import histos.{JsOptimize, Platform, Resolution, ScalaVersion, ToolCatalog}
 
 import java.nio.file.{Files, Path, StandardCopyOption}
@@ -18,7 +20,7 @@ import scala.jdk.OptionConverters.*
 import zio.{IO, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object JsProductsSpec extends ZIOSpecDefault:
+object JsProductsSpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
   private val main    = MainClass.trusted("demo.Main")
   private type Env = LockedTools & ContentStore & LinkerStarts & RemoteCache
@@ -30,6 +32,7 @@ object JsProductsSpec extends ZIOSpecDefault:
     case Child(error: ChildError)
     case Io(error: IoFailure)
     case Compiler(out: String, err: String)
+    case Compile(error: CompileError)
     case NoHost
     case NoChild
     case Environment
@@ -43,22 +46,20 @@ object JsProductsSpec extends ZIOSpecDefault:
           val dependency = root.resolve("dependency.jar")
           val request    = JsLinkRequest(version, main, List(own, dependency), root.resolve("work"), jdk)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(
-              root,
-              jdk,
-              libraries,
-              "dependency-one",
-              "package demo\nobject Dependency:\n  def text: String = \"one\"",
-            )
-            _ <- jar(root.resolve("dependency-one/classes"), dependency)
             _ <- compile(
               root,
               jdk,
-              libraries :+ dependency,
+              "dependency-one",
+              "package demo\nobject Dependency:\n  def text: String = \"one\"",
+            )
+            _ <- irJar(root.resolve("dependency-one/classes"), dependency)
+            _ <- compile(
+              root,
+              jdk,
               "own-build",
               "package demo\nobject Main:\n  def main(args: Array[String]): Unit = println(Dependency.text)",
               Some(own),
+              List(root.resolve("dependency-one/classes")),
             )
             before <- bytes(own.resolve("demo/Main$.sjsir"))
             first  <- JsLink.link(request).mapError(Failure.Link(_))
@@ -66,11 +67,10 @@ object JsProductsSpec extends ZIOSpecDefault:
             _      <- compile(
               root,
               jdk,
-              libraries,
               "dependency-two",
               "package demo\nobject Dependency:\n  def text: String = \"two\"",
             )
-            _      <- jar(root.resolve("dependency-two/classes"), dependency)
+            _      <- irJar(root.resolve("dependency-two/classes"), dependency)
             second <- JsLink.link(request).mapError(Failure.Link(_))
             two    <- execute(root, second.script)
             again  <- JsLink.link(request).mapError(Failure.Link(_))
@@ -93,8 +93,7 @@ object JsProductsSpec extends ZIOSpecDefault:
           val implicitFull = JsOptimize.effective(JsOptimize.Full, None, None)
           val explicitFull = JsOptimize.effective(JsOptimize.Fast, None, Some(JsOptimize.Full))
           for
-            libraries         <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _                 <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
+            _                 <- compile(root, jdk, "own-build", argumentMain, Some(own))
             fast              <- JsLink.link(request).mapError(Failure.Link(_))
             fastBytes         <- bytes(fast.script)
             full              <- JsLink.link(request.copy(optimize = implicitFull)).mapError(Failure.Link(_))
@@ -133,9 +132,8 @@ object JsProductsSpec extends ZIOSpecDefault:
           val marker  = root.resolve("tool-content/marker.txt")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk, arguments = List("tool"))
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            _         <- io(marker, IoFault.Write) {
+            _ <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            _ <- io(marker, IoFault.Write) {
               Files.createDirectories(marker.getParent); Files.writeString(marker, "one"); ()
             }
             _   <- jar(marker.getParent, tool)
@@ -164,17 +162,16 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            previous  <- JsLink.link(request).mapError(Failure.Link(_))
-            original  <- bytes(previous.script)
-            store     <- ZIO.service[ContentStore]
-            before    <- store.list.mapError(Failure.Cache(_))
-            failed    <- JsLink.link(request.copy(main = MainClass.trusted("demo.Missing"))).either
-            after     <- store.list.mapError(Failure.Cache(_))
-            retained  <- bytes(previous.script)
-            again     <- JsLink.link(request).mapError(Failure.Link(_))
-            count     <- starts.get
+            _        <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            previous <- JsLink.link(request).mapError(Failure.Link(_))
+            original <- bytes(previous.script)
+            store    <- ZIO.service[ContentStore]
+            before   <- store.list.mapError(Failure.Cache(_))
+            failed   <- JsLink.link(request.copy(main = MainClass.trusted("demo.Missing"))).either
+            after    <- store.list.mapError(Failure.Cache(_))
+            retained <- bytes(previous.script)
+            again    <- JsLink.link(request).mapError(Failure.Link(_))
+            count    <- starts.get
           yield assertTrue(
             failed match
               case Left(JsLinkError.Linker(text)) => text.contains("demo.Missing")
@@ -233,9 +230,8 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk, optimize = JsOptimize.Full)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            failed    <- JsProducts
+            _      <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            failed <- JsProducts
               .observed(request)(
                 Some(event =>
                   if event.phase == JsPhase.Linked then
@@ -283,9 +279,8 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            captured  <- JsProducts.session.mapError(Failure.Link(_)).timed
+            _        <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            captured <- JsProducts.session.mapError(Failure.Link(_)).timed
             (captureTime, generation) = captured
             cold   <- generation.link(request).mapError(Failure.Link(_)).timed
             warm   <- generation.link(request).mapError(Failure.Link(_)).timed
@@ -306,9 +301,8 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            failed    <- JsProducts
+            _      <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            failed <- JsProducts
               .observed(request)(
                 Some(event =>
                   if event.phase == JsPhase.BeforeIr then
@@ -363,10 +357,9 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk, optimize = JsOptimize.Full)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            ready     <- Promise.make[Nothing, JsReady]
-            fiber     <- JsProducts
+            _     <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            ready <- Promise.make[Nothing, JsReady]
+            fiber <- JsProducts
               .observed(request)(
                 Some(event =>
                   if event.phase == JsPhase.MinifierStarted then ready.succeed(event) *> ZIO.never else ZIO.unit
@@ -410,10 +403,9 @@ object JsProductsSpec extends ZIOSpecDefault:
           val own     = root.resolve("own")
           val request = JsLinkRequest(version, main, List(own), root.resolve("work"), jdk, optimize = JsOptimize.Full)
           for
-            libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-            _         <- compile(root, jdk, libraries, "own-build", argumentMain, Some(own))
-            ready     <- Promise.make[Nothing, JsReady]
-            fiber     <- JsProducts
+            _     <- compile(root, jdk, "own-build", argumentMain, Some(own))
+            ready <- Promise.make[Nothing, JsReady]
+            fiber <- JsProducts
               .observed(request)(
                 Some(event => if event.phase == JsPhase.IrLoaded then ready.succeed(event) *> ZIO.never else ZIO.unit)
               )
@@ -431,9 +423,9 @@ object JsProductsSpec extends ZIOSpecDefault:
           yield assertTrue(alive, interrupted.isInterrupted, dead, removed, entries.isEmpty, count == 1)
       },
     )
-    tests @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect.timeout(
+    (tests @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect.timeout(
       5.minutes
-    ) @@ TestAspect.sequential
+    ) @@ TestAspect.sequential).provideShared(histos.zinc.Compilers.owned)
 
   private val argumentMain =
     "package demo\nobject Main:\n  def main(args: Array[String]): Unit = println(args.mkString(\"|\"))"
@@ -445,35 +437,35 @@ object JsProductsSpec extends ZIOSpecDefault:
       original: List[Byte],
   )
 
-  private def dependencyFixture(root: Path, jdk: JdkRuntime): ZIO[LockedTools, Failure, DependencyFixture] =
+  private def dependencyFixture(
+      root: Path,
+      jdk: JdkRuntime,
+  ): ZIO[LockedTools & histos.zinc.Compilers & RemoteCache, Failure, DependencyFixture] =
     val own        = root.resolve("own")
     val dependency = root.resolve("dependency.jar")
     val other      = root.resolve("other.jar")
     for
-      libraries <- ScalaJs.libraries(version).mapError(error => Failure.Link(JsLinkError.Library(error)))
-      _         <- compile(
+      _ <- compile(
         root,
         jdk,
-        libraries,
         "dependency-one",
         "package demo\nobject Dependency:\n  def text: String = \"one\"",
       )
       _ <- compile(
         root,
         jdk,
-        libraries,
         "dependency-two",
         "package demo\nobject Dependency:\n  def text: String = \"two\"",
       )
-      _ <- jar(root.resolve("dependency-one/classes"), dependency)
-      _ <- jar(root.resolve("dependency-two/classes"), other)
+      _ <- irJar(root.resolve("dependency-one/classes"), dependency)
+      _ <- irJar(root.resolve("dependency-two/classes"), other)
       _ <- compile(
         root,
         jdk,
-        libraries :+ dependency,
         "own-build",
         "package demo\nobject Main:\n  def main(args: Array[String]): Unit = println(Dependency.text)",
         Some(own),
+        List(root.resolve("dependency-one/classes")),
       )
       original <- bytes(dependency)
     yield DependencyFixture(
@@ -486,7 +478,9 @@ object JsProductsSpec extends ZIOSpecDefault:
   private def jsIo[A](path: Path)(body: => A): IO[JsLinkError, A] =
     ZIO.attemptBlocking(body).mapError(_ => JsLinkError.Io(IoFailure(path, IoFault.Write)))
 
-  private def fixture[A](use: (Path, JdkRuntime, Ref[Int]) => ZIO[Env & Scope, Failure, A]): IO[Failure, A] =
+  private def fixture[A](
+      use: (Path, JdkRuntime, Ref[Int]) => ZIO[Env & histos.zinc.Compilers & Scope, Failure, A]
+  ): ZIO[histos.zinc.Compilers, Failure, A] =
     ZIO
       .scoped:
         for
@@ -496,51 +490,49 @@ object JsProductsSpec extends ZIOSpecDefault:
           opened  <- ResolutionService.open(root, Resolution.Solve).mapError(Failure.Resolve(_))
           starts  <- Ref.make(0)
           tools = LockedTools(DependencyLock(Nil), ToolCatalog.default, Repositories.central, resolve, Some(opened))
-          result <- use(root, jdk, starts).provideSomeLayer[Scope](
+          result <- use(root, jdk, starts).provideSomeLayer[histos.zinc.Compilers & Scope](
             ZLayer.succeed(tools) ++ ZLayer.succeed(ContentStore.in(root.resolve("cas"))) ++
               ZLayer.succeed(LinkerStarts(starts)) ++ RemoteCache.off
           )
         yield result
-      .provide(Resolve.coursier)
+      .provideSomeLayer[histos.zinc.Compilers](Resolve.coursier)
 
   private def compile(
       root: Path,
       jdk: JdkRuntime,
-      libraries: List[Path],
       name: String,
       source: String,
       destination: Option[Path] = None,
-  ): IO[Failure, Unit] =
+      classpath: List[Path] = Nil,
+  ): ZIO[LockedTools & histos.zinc.Compilers & RemoteCache, Failure, Unit] =
     val work    = root.resolve(name)
     val classes = destination.getOrElse(work.resolve("classes"))
+    val file    = work.resolve("Source.scala")
+    val request = CompileRequest(
+      CompileToolchain(version, Platform.Js, jdk, histos.ScalacFlags.empty),
+      List(file),
+      classpath,
+      classes,
+      work.resolve("analysis"),
+      Nil,
+      Nil,
+      checkout = work,
+    )
     for
-      host <- hostClasspath
-      file <- io(work.resolve("Source.scala"), IoFault.Write) {
+      _ <- io(file, IoFault.Write) {
         Files.createDirectories(work)
         Files.createDirectories(classes)
-        Files.createDirectories(work.resolve("process"))
-        Files.writeString(work.resolve("Source.scala"), source)
+        Files.createDirectories(work.resolve("analysis"))
+        Files.createDirectories(work.resolve("cas"))
+        Files.writeString(file, source)
       }
-      result <- ChildProcess
-        .run(
-          ChildRequest(
-            Platform.Jvm,
-            jdk.home.resolve("bin/java"),
-            host,
-            MainClass.trusted("dotty.tools.dotc.Main"),
-            work.resolve("process"),
-            arguments = List(
-              "-scalajs",
-              "-classpath",
-              libraries.mkString(java.io.File.pathSeparator),
-              "-d",
-              classes.toString,
-              file.toString,
-            ),
-          )
+      revision <- ZIO.serviceWith[LockedTools](_.catalog.js.revision)
+      _        <- ScalaJs
+        .compile(request, CellPlatform.Js(revision))
+        .provideSomeLayer[LockedTools & histos.zinc.Compilers & RemoteCache](
+          ZLayer.succeed(ContentStore.in(work.resolve("cas"))) ++ CompilerStarts.live
         )
-        .mapError(Failure.Child(_))
-      _ <- ZIO.fail(Failure.Compiler(result.out.text, result.err.text)).unless(result.exit.value == 0)
+        .mapError(Failure.Compile(_))
     yield ()
 
   private def hostClasspath: IO[Failure, histos.process.ChildClasspath] =
@@ -569,20 +561,40 @@ object JsProductsSpec extends ZIOSpecDefault:
     io(path, IoFault.Read)(Files.readAllBytes(path).toList)
 
   private def jar(classes: Path, destination: Path): IO[Failure, Unit] =
+    for
+      files <- io(classes, IoFault.Read)(listed(classes, _ => true))
+      _     <- writeEntries(classes, destination, files)
+    yield ()
+
+  private def irJar(classes: Path, destination: Path): IO[Failure, Unit] =
+    for
+      files <- io(classes, IoFault.Read)(listed(classes, irName))
+      _     <- files match
+        case Nil   => ZIO.fail(Failure.Compiler("", s"no .sjsir under $classes"))
+        case found => writeEntries(classes, destination, found)
+    yield ()
+
+  private def listed(root: Path, keep: Path => Boolean): List[Path] =
+    val walk = Files.walk(root)
+    try
+      walk.iterator.asScala.filter(path => Files.isRegularFile(path) && keep(path)).toList.sortBy(_.toString)
+    finally walk.close()
+
+  private def writeEntries(root: Path, destination: Path, files: List[Path]): IO[Failure, Unit] =
     io(destination, IoFault.Write) {
-      val walk  = Files.walk(classes)
-      val files = try walk.iterator.asScala.filter(Files.isRegularFile(_)).toList.sortBy(_.toString)
-      finally walk.close()
       val stream = new ZipOutputStream(Files.newOutputStream(destination))
       try
         files.foreach: file =>
-          val entry = new ZipEntry(classes.relativize(file).toString)
+          val entry = new ZipEntry(root.relativize(file).toString)
           entry.setTime(0L)
           stream.putNextEntry(entry)
           stream.write(Files.readAllBytes(file))
           stream.closeEntry()
       finally stream.close()
     }
+
+  private def irName(path: Path): Boolean =
+    path.getNameCount > 0 && path.getFileName.toString.endsWith(".sjsir")
 
   private def io[A](path: Path, fault: IoFault)(body: => A): IO[Failure, A] =
     ZIO.attemptBlocking(body).mapError(_ => Failure.Io(IoFailure(path, fault)))

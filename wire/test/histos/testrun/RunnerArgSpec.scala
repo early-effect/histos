@@ -1,8 +1,10 @@
 package histos.testrun
 
+import histos.suite.HistosSpec
+
 import zio.test.*
 
-object RunnerArgSpec extends ZIOSpecDefault:
+object RunnerArgSpec extends HistosSpec:
   def spec = suite("runner arguments")(
     test("terms, tags, and ignored tags are one argv") {
       val filter = TestFilter(

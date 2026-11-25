@@ -4,13 +4,14 @@ import histos.*
 import histos.build.BuildNode
 import histos.cache.LinkerStarts
 import histos.plugin.{RepoPath, SourceSet}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.ApiDigest
 
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object NativeAggregateSpec extends ZIOSpecDefault:
+object NativeAggregateSpec extends HistosSpec:
   private val version   = TestExecutionFixtures.version
   private val leftName  = ProjectName("left")
   private val rightName = ProjectName("right")
@@ -49,8 +50,14 @@ object NativeAggregateSpec extends ZIOSpecDefault:
               platforms = PlatformSelection.only(Native),
             )
             for
-              _        <- Workspace.writeString(fixture.repo.resolve("left/test/demo/LeftSpec.scala"), leftSpec)
-              _        <- Workspace.writeString(fixture.repo.resolve("right/test/demo/RightSpec.scala"), rightSpec)
+              leftSource <- TestExecutionFixtures.checkout(
+                "engine/src/test/resources/fixtures/native-aggregate/LeftSpec.scala"
+              )
+              rightSource <- TestExecutionFixtures.checkout(
+                "engine/src/test/resources/fixtures/native-aggregate/RightSpec.scala"
+              )
+              _        <- Workspace.writeString(fixture.repo.resolve("left/test/demo/LeftSpec.scala"), leftSource)
+              _        <- Workspace.writeString(fixture.repo.resolve("right/test/demo/RightSpec.scala"), rightSource)
               _        <- Workspace.writeString(fixture.repo.resolve("assets/left/left/value.txt"), "left-one")
               _        <- Workspace.writeString(fixture.repo.resolve("assets/right/right/value.txt"), "right")
               plan     <- ZIO.fromEither(TestCells.plan(graph, asked.selection))
@@ -117,55 +124,12 @@ object NativeAggregateSpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.minutes) @@ TestAspect.sequential
+  def spec = (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.minutes) @@ TestAspect.sequential)
+    .provideShared(histos.zinc.Compilers.owned)
 
   private def completed(feeds: List[TestFeed]): Map[ProjectName, TestStatus] =
     feeds.collect { case TestFeed.Done(cell) => cell.module -> cell.status }.toMap
 
   private def count(fixture: TestExecutionFixtures.Fixture, name: String) =
     Workspace.readIfPresent(fixture.repo.resolve(s"$name-counter")).map(_.toList.flatMap(_.linesIterator).size)
-
-  private def support(name: String): String =
-    s"""|  enum Failure:
-        |    case Read, Write
-        |  private def hit = ZIO.attemptBlocking:
-        |    val path = java.nio.file.Path.of(sys.env.getOrElse("HISTOS_REPO", "."), "$name-counter")
-        |    java.nio.file.Files.writeString(path, "$name\\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
-        |  .mapError(_ => Failure.Write)
-        |  private def resource = ZIO.scoped:
-        |    ZIO.acquireRelease(ZIO.fromOption(Option(getClass.getResourceAsStream("/$name/value.txt"))).orElseFail(Failure.Read))(
-        |      input => ZIO.attemptBlocking(input.close()).ignore
-        |    ).flatMap(input => ZIO.attemptBlocking(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).mapError(_ => Failure.Read))
-        |""".stripMargin
-
-  private val leftSpec =
-    s"""|package demo
-        |import zio.*
-        |import zio.test.*
-        |import zio.json.*
-        |object LeftSpec extends ZIOSpecDefault:
-        |${support("left")}
-        |  def spec = test("left member dependency and resource") {
-        |    for
-        |      _ <- hit
-        |      text <- resource
-        |    yield assertTrue("42".fromJson[Int] == Right(42), text.startsWith("left-"))
-        |  }
-        |""".stripMargin
-
-  private val rightSpec =
-    s"""|package demo
-        |import zio.*
-        |import zio.test.*
-        |import zio.stream.*
-        |object RightSpec extends ZIOSpecDefault:
-        |${support("right")}
-        |  def spec = test("right member dependency and resource") {
-        |    for
-        |      _ <- hit
-        |      text <- resource
-        |      values <- ZStream(1, 2).runCollect
-        |    yield assertTrue(text == "right", values.toList == List(1, 2))
-        |  }
-        |""".stripMargin
 end NativeAggregateSpec

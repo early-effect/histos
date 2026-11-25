@@ -3,6 +3,7 @@ package histos.load
 import histos.jdk.Sha256Digest
 import histos.plugin.{ApiDigest, LinkStrategy, PluginCoordinate}
 import histos.resolve.{Classpath, Repository, Resolve, ResolvedArtifact}
+import histos.suite.HistosSpec
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.{
@@ -30,7 +31,7 @@ import zio.test.*
 import zio.{Chunk, Scope, ZIO}
 
 /** Red proofs for the closure the current loader does not check. */
-object PluginClosureSpec extends ZIOSpecDefault:
+object PluginClosureSpec extends HistosSpec:
   def spec = suite("plugin closure")(
     test("the api export manifest includes theme and step and refuses engine packages") {
       assertTrue(

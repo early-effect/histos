@@ -10,6 +10,7 @@ import histos.testrun.TestCompile
 import histos.toolchain.Runtimes
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileMemo, Compilers, GraphCompile}
+import histos.suite.HistosSpec
 
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -19,7 +20,7 @@ import zio.json.ast.Json
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object BspMetalsSpec extends ZIOSpecDefault:
+object BspMetalsSpec extends HistosSpec:
   private val scala3 = ScalaVersion("3.10.1")
   private val kept   = Set("PATH", "HOME", "XDG_CACHE_HOME")
 

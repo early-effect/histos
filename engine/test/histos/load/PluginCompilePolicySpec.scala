@@ -4,6 +4,7 @@ import histos.cache.ContentStore
 import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{CompilerConstraint, EntryName, StageAssurance, StageContract, StageInputs, StageRestrictions}
 import histos.schedule.Digest
+import histos.suite.HistosSpec
 import histos.toolchain.HostCompilerSession
 import histos.workspace.{IoFailure, IoFault}
 import histos.{ScalacFlag, ScalacFlags}
@@ -14,7 +15,7 @@ import java.nio.file.Path
 import zio.{Chunk, ZIO, durationInt}
 import zio.test.*
 
-object PluginCompilePolicySpec extends ZIOSpecDefault:
+object PluginCompilePolicySpec extends HistosSpec:
   private val strict     = ScalacFlags.of(ScalacFlag.Deprecation, ScalacFlag.FatalWarnings)
   private val sourceText =
     """|object Warning:
@@ -80,7 +81,8 @@ object PluginCompilePolicySpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.minutes)).provideShared(histos.zinc.Compilers.owned)
 
   // This fixture freezes format 3 independently of the current key policy.
   private def formerKey(session: HostCompilerSession, compiled: PluginCompileResult, flags: ScalacFlags): Sha256 =

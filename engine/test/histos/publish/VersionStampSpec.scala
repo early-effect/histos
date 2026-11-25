@@ -1,6 +1,7 @@
 package histos.publish
 
 import histos.plugin.PluginCoordinate
+import histos.suite.HistosSpec
 import histos.version.Catalog
 import histos.{
   Module,
@@ -17,7 +18,7 @@ import histos.{
 
 import zio.test.*
 
-object VersionStampSpec extends ZIOSpecDefault:
+object VersionStampSpec extends HistosSpec:
   private val name = ProjectName("plugin")
 
   def spec = suite("plugin version stamp")(

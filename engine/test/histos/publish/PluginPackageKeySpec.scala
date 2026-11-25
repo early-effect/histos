@@ -4,6 +4,7 @@ import histos.jdk.Sha256
 import histos.pack.PackageKey
 import histos.plugin.ArtifactFormat
 import histos.PluginPublication
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 import histos.zinc.ProductDigest
 
@@ -15,7 +16,7 @@ import org.objectweb.asm.tree.ClassNode
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object PluginPackageKeySpec extends ZIOSpecDefault:
+object PluginPackageKeySpec extends HistosSpec:
   def spec = suite("plugin package keys")(
     test("equal class products with different TASTy bytes do not share a key") {
       ZIO.scoped {

@@ -6,6 +6,7 @@ import histos.central.{Artifact, ArtifactId, Publisher, Published, Revision}
 import histos.clean.Products
 import histos.plugin.*
 import histos.preview.Plan
+import histos.suite.HistosSpec
 import histos.watch.SourceWatch
 import histos.workflow.Affected
 import histos.workspace.Workspace
@@ -16,7 +17,7 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object ProjectionSpec extends ZIOSpecDefault:
+object ProjectionSpec extends HistosSpec:
   private val version   = ScalaVersion("3.10.1")
   private val app       = ProjectName("app")
   private val generator = new HistosPlugin:

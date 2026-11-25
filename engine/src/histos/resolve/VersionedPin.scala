@@ -19,7 +19,7 @@ import histos.plugin.{
   ResolveVerb,
   Tokens,
 }
-import histos.{Dep, ProjectName, Resolution, PlatformSelection, TestSelection, TestTargets}
+import histos.{Dep, PlatformSelection, ProjectName, Resolution, ScalaSelection, TestSelection, TestTargets}
 import histos.report.WireJson.given
 import zio.json.*
 
@@ -388,10 +388,14 @@ private[histos] object LockCodec:
 
   def renderCommand(command: CommandIdentity): String =
     command match
-      case CommandIdentity.Compile(projects, PlatformSelection.All) => withNames("compile", projects)
-      case command: CommandIdentity.Compile                         => s"json ${commandJson(command)}"
-      case CommandIdentity.Test(TestSelection(TestTargets.All, PlatformSelection.All, None))                => "test"
-      case CommandIdentity.Test(TestSelection(TestTargets.Named(first, rest), PlatformSelection.All, None)) =>
+      case CommandIdentity.Compile(projects, PlatformSelection.All, ScalaSelection.All) =>
+        withNames("compile", projects)
+      case command: CommandIdentity.Compile => s"json ${commandJson(command)}"
+      case CommandIdentity.Test(TestSelection(TestTargets.All, PlatformSelection.All, None, ScalaSelection.All)) =>
+        "test"
+      case CommandIdentity.Test(
+            TestSelection(TestTargets.Named(first, rest), PlatformSelection.All, None, ScalaSelection.All)
+          ) =>
         withNames("test", first :: rest)
       case command: CommandIdentity.Test      => s"json ${commandJson(command)}"
       case command: CommandIdentity.Run       => s"json ${commandJson(command)}"

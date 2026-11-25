@@ -2,6 +2,7 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.suite.HistosSpec
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.zinc.{CompileInput, CompileInputs, CompileKey, CompileRequest, CompileRow, CompileToolchain}
@@ -13,7 +14,7 @@ import java.time.Instant
 import zio.test.*
 import zio.{Scope, ZIO}
 
-object HostApiInputsSpec extends ZIOSpecDefault:
+object HostApiInputsSpec extends HistosSpec:
   private val jdk  = JdkVersion.trusted("25", JdkMajor.trusted(25))
   private val salt = Sha256.trusted("ab" * 32)
 

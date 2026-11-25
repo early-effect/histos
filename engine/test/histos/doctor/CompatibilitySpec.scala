@@ -1,6 +1,7 @@
 package histos.doctor
 
 import histos.*
+import histos.suite.HistosSpec
 import histos.version.{BumpPart, ShipNumber}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
@@ -11,7 +12,7 @@ import org.objectweb.asm.{ClassWriter, Opcodes}
 import zio.{IO, ZIO, ZLayer}
 import zio.test.*
 
-object CompatibilitySpec extends ZIOSpecDefault:
+object CompatibilitySpec extends HistosSpec:
   private val previous = ShipNumber.trusted(0, 15, 0)
 
   def spec = suite("compatibility evidence")(

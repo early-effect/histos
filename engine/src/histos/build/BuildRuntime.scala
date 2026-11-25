@@ -38,6 +38,8 @@ object BuildRuntime:
       graph: histos.ProjectGraph,
       names: List[histos.ProjectName],
       platforms: histos.PlatformSelection,
+      scala: histos.ScalaSelection = histos.ScalaSelection.All,
+      sources: histos.CompileExtent = histos.CompileExtent.Main,
   ): Either[ModuleTestError, List[BuildNode]] =
     val selected = if names.isEmpty then Right(graph.projects.collect { case module: Module => module })
     else histos.select.Selection.select(graph, names).left.map(ModuleTestError.Target(_)).map(_.modules)
@@ -54,11 +56,27 @@ object BuildRuntime:
                   histos.testrun.ScopedTestFailure.Selection(histos.testrun.TestSelectionError.Selection(error))
                 )
               )
-          chosen.map(values =>
-            nodes ++ (for
-              version  <- module.versions.all
-              platform <- values
-            yield BuildNode.Compile(CompilationStage(histos.Cell(module.name, version, platform), SourceSet.Main)))
+          val versions =
+            if names.isEmpty then Right(scala.filter(module.versions.all))
+            else
+              scala
+                .require(module.name, module.versions.all)
+                .left
+                .map(error =>
+                  ModuleTestError.Scoped(
+                    histos.testrun.ScopedTestFailure.Selection(histos.testrun.TestSelectionError.Selection(error))
+                  )
+                )
+          val scope = sources match
+            case histos.CompileExtent.Main        => SourceSet.Main
+            case histos.CompileExtent.MainAndTest => SourceSet.Test
+          chosen.flatMap(values =>
+            versions.map(picked =>
+              nodes ++ (for
+                version  <- picked
+                platform <- values
+              yield BuildNode.Compile(CompilationStage(histos.Cell(module.name, version, platform), scope)))
+            )
           )
         }
       }
@@ -68,14 +86,17 @@ object BuildRuntime:
       plugins: Option[PluginRuntime],
       invocation: Option[TaskInvocation] = None,
       cache: Option[ActionCache] = None,
+      parallelism: Parallelism = Parallelism.default,
   ): ZIO[Resolve & ContentStore & ResolutionService & RemoteCache & Scope, Nothing, BuildRuntime] =
     for
       resolve    <- ZIO.service[Resolve]
       store      <- ZIO.service[ContentStore]
       resolution <- ZIO.service[ResolutionService]
       remote     <- ZIO.service[RemoteCache]
-      compilers  <- (Compilers.live ++ CompileMemo.live ++ CompilerStarts.live ++ LinkerStarts.live).build
-      scheduler  <- (ZLayer.succeed(Parallelism.default) >>> Histos.live).build
+      compilers  <- (Compilers.live(
+        parallelism.cpu
+      ) ++ CompileMemo.live ++ CompilerStarts.live ++ LinkerStarts.live).build
+      scheduler <- (ZLayer.succeed(parallelism) >>> Histos.live).build
       services = ZEnvironment(
         resolve,
         store,

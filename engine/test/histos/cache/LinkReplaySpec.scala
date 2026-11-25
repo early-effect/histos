@@ -2,6 +2,7 @@ package histos.cache
 
 import histos.jdk.Sha256Digest
 import histos.schedule.CacheError
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
@@ -13,7 +14,7 @@ import java.io.{BufferedReader, InputStreamReader}
 import scala.jdk.CollectionConverters.*
 import zio.test.*
 
-object LinkReplaySpec extends ZIOSpecDefault:
+object LinkReplaySpec extends HistosSpec:
   private val body = "console.log('complete');\n" * 1024
   private val key  = Sha256Digest.of(Chunk.fromArray("link-key".getBytes(UTF_8)))
 

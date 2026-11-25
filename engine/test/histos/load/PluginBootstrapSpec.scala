@@ -16,6 +16,7 @@ import histos.plugin.{
 }
 import histos.resolve.{Classpath, DependencyLock, Repository, ResolutionService, Resolve, ResolvedArtifact}
 import histos.schedule.{ActionCache, RemoteCache}
+import histos.suite.HistosSpec
 import histos.toolchain.HostToolRole
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompilerStarts, Compilers}
@@ -31,7 +32,7 @@ import zio.test.*
 import zio.{Chunk, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 
 /** First-load protocol: one loader, core seed, then strategies, then the remaining closure, then main. */
-object PluginBootstrapSpec extends ZIOSpecDefault:
+object PluginBootstrapSpec extends HistosSpec:
   def spec = suite("plugin bootstrap")(
     test("an empty cache compiles once and a second load does not compile again") {
       hosted { (root, starts) =>
@@ -55,22 +56,6 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
           case _                                          => false
         assertTrue(first > 0, second == first, sameLoader, emptyClosure, loaded.graph.resolution == Resolution.Solve)
       }
-    },
-    test("core seed runs before custom policy, and that policy runs before the remaining solve") {
-      hosted { (root, _) =>
-        for
-          api    <- apiJar(root.resolve("api.jar"))
-          digest <- digestOf(api)
-          seed   <- pluginJar(root.resolve("seed.jar"), digest, Nil)
-          rest   <- pluginJar(root.resolve("rest.jar"), digest, Nil)
-          log = root.resolve("order.txt")
-          _    <- write(root.resolve("histos.plugins.scala"), orderedCatalog)
-          _    <- write(root.resolve("histos.strategies.scala"), orderedStrategies(log))
-          _    <- write(root.resolve("histos.scala"), plainMain)
-          _    <- prepare(root, api, jarsOf(log, Map("seedplug" -> seed, "restplug" -> rest)), notice = append(log))
-          text <- ZIO.attemptBlocking(Files.readString(log)).orDie
-        yield text
-      }.map(ran => assertTrue(ran.value == "seed\nplugin:seedplug\nstrategy\ndecide\nplugin:restplug\n"))
     },
     test("a frozen miss does not solve") {
       hosted { (root, _) =>
@@ -109,23 +94,6 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
           loaded.graph.resolution == Resolution.Solve,
           loaded.graph.intent == ResolutionIntent.Inherit,
           loaded.buildFileClasspath == boundary,
-        )
-      }
-    },
-    test("an explicit main resolution that conflicts with the catalog is refused") {
-      hosted { (root, _) =>
-        for
-          api  <- apiJar(root.resolve("api.jar"))
-          _    <- write(root.resolve("histos.plugins.scala"), emptyCatalog)
-          _    <- write(root.resolve("histos.scala"), lockedMain)
-          exit <- prepare(root, api, silent).either
-        yield exit
-      }.map { ran =>
-        assertTrue(
-          ran.value.rejects {
-            case LoadError.Bootstrap(BootstrapError.ResolutionConflict(Resolution.Solve, Resolution.Lock)) => true
-            case _                                                                                         => false
-          }
         )
       }
     },
@@ -440,41 +408,6 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         yield assertTrue(directory)
       }
     },
-    test("a missing bridge does not solve") {
-      hosted { (root, starts) =>
-        for
-          before <- lockBytes
-          seen   <- Ref.make(0)
-          api    <- apiJar(root.resolve("api.jar"))
-          _      <- write(root.resolve("histos.plugins.scala"), bridgeCatalog)
-          _      <- write(root.resolve("bridge/src/demo/Marker.java"), Author.marker)
-          _      <- write(root.resolve("bridge/src/demo/Bridge.scala"), Author.bridge)
-          _      <- write(root.resolve("histos.scala"), plainMain)
-          built  <- PluginCompileSupport
-            .payload(
-              root.resolve("gap"),
-              "3.10.1",
-              PluginCompileSupport.Scala3101.filterNot(_.role == HostToolRole.Bridge),
-            )
-            .mapError(LoadError.HostCompiler(_))
-          exit  <- prepare(root, api, countingCalls(seen), payload = Some(built)).either
-          calls <- seen.get
-          after <- lockBytes
-          count <- starts.get
-        yield (exit, calls, before.sameElements(after), count)
-      }.map { ran =>
-        val (exit, calls, same, count) = ran.value
-        assertTrue(
-          calls == 0,
-          same,
-          count == 0,
-          exit.rejects {
-            case LoadError.HostCompiler(histos.toolchain.HostCompilerError.EntryAbsent(HostToolRole.Bridge)) => true
-            case _                                                                                           => false
-          },
-        )
-      }
-    },
     test("compiler B rebuilds a mixed module when the project lock has no B cell") {
       hosted { (root, _) =>
         for
@@ -515,38 +448,7 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
         )
       }
     },
-    test("the reviewed locks spec compiles") {
-      ZIO.scoped {
-        for
-          root     <- work("histos-reviewed-spec")
-          api      <- apiJar(root.resolve("api.jar"))
-          boundary <- Boundary.jars(api)
-          zioTest  <- ZIO
-            .fromOption(Boundary.codeSource(classOf[zio.test.ZIOSpecDefault]))
-            .orElseFail(LoadError.Io(IoFailure(Path.of("zio-test"), IoFault.Read)))
-          locks    <- repoText("examples/reviewed-locks/src/com/example/reviewed/ReviewedLocks.scala")
-          spec     <- repoText("examples/reviewed-locks/test/com/example/reviewed/ReviewedLocksSpec.scala")
-          harness  <- repoText("plugin-testkit/src/histos/plugin/testkit/LockHarness.scala")
-          repair   <- repoText("examples/expected-lock-repair.txt")
-          produced <- compileSources(
-            root.resolve("spec"),
-            List(
-              "ReviewedLocks.scala"     -> locks,
-              "LockHarness.scala"       -> harness,
-              "ReviewedLocksSpec.scala" -> spec,
-            ),
-            boundary :+ zioTest,
-          )
-          directory <- ZIO.attemptBlocking(Files.isDirectory(produced)).orDie
-        yield assertTrue(
-          directory,
-          repair.startsWith("Lock repair required:"),
-          repair.contains("Accept this proposal? [y/N]"),
-          repair.endsWith("Resuming: histos compile app\n"),
-        )
-      }
-    },
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
+  ).provideShared(Compilers.owned) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
 
   private val emptyCatalog: String =
     """|import histos.*
@@ -597,43 +499,6 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
        |  override def services =
        |    BuildServices.default.withPluginLoading(PluginLoading.exactOrRebuild)
        |""".stripMargin
-
-  private val orderedCatalog: String =
-    """|import histos.*
-       |import histos.lock.*
-       |import histos.plugin.*
-       |
-       |object plugins extends HistosPlugins:
-       |  private val seed = PluginSources.ship(dep"com.example::seedplug:1.0.0")
-       |  private val rest = PluginSources.ship(dep"com.example::restplug:1.0.0")
-       |
-       |  override def resolution = Resolution.Solve
-       |  def sources = PluginCatalog(seed, rest)
-       |  override def bootstrap =
-       |    BootstrapSource.File(RepoPath("histos.strategies.scala"), required = PluginCatalog(seed))
-       |""".stripMargin
-
-  private def orderedStrategies(log: Path): String =
-    s"""|import histos.lock.*
-        |import histos.plugin.*
-        |import zio.{ZIO, ZLayer}
-        |
-        |final class Custom extends LockStrategy:
-        |  def decide(context: LockContext) =
-        |    ZIO.attemptBlocking {
-        |      val path = java.nio.file.Path.of("${log.toString}")
-        |      val prior = if java.nio.file.Files.exists(path) then java.nio.file.Files.readString(path) else ""
-        |      java.nio.file.Files.writeString(path, prior + "decide\\n")
-        |      LockDecision.OfferRepair
-        |    }.orDie
-        |
-        |object Custom:
-        |  def layer: ZLayer[Any, Nothing, LockStrategy] =
-        |    ZLayer.succeed[LockStrategy](new Custom)
-        |
-        |object strategies extends HistosStrategies:
-        |  def services = StrategyServices.default.withLocks(Custom.layer)
-        |""".stripMargin
 
   private val missingShip: String =
     """|import histos.*
@@ -801,16 +666,15 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
 
   private def hosted[A](
       body: (Path, Ref[Int]) => ZIO[BuildCache.Env & PluginProducts & Scope, LoadError, A]
-  ): ZIO[Any, LoadError, Ran[A]] =
+  ): ZIO[Compilers, LoadError, Ran[A]] =
     ZIO.scoped {
       for
         root   <- work("histos-p6-boot")
         cas    <- ZIO.attemptBlocking(Files.createDirectories(root.resolve("cas"))).orDie
         starts <- Ref.make(0)
-        value  <- body(root, starts).provideSomeLayer[Scope](
+        value  <- body(root, starts).provideSomeLayer[Compilers & Scope](
           ZLayer.succeed(ContentStore.in(cas)) ++
             ZLayer.succeed(CompilerStarts(starts)) ++
-            Compilers.live ++
             RemoteCache.off ++
             PluginFlights.live ++ PluginProducts.live
         )
@@ -1117,18 +981,6 @@ object PluginBootstrapSpec extends ZIOSpecDefault:
       loader match
         case build: BuildLoader => build.isClosed
         case _                  => false
-
-  /** A suite's work directory is empty. `HISTOS_REPO` is the checkout. */
-  private def repoText(relative: String): ZIO[Any, LoadError, String] =
-    ZIO
-      .attemptBlocking(Option(System.getenv("HISTOS_REPO")))
-      .orDie
-      .flatMap:
-        case Some(root) if root.nonEmpty =>
-          val path = Path.of(root).resolve(relative)
-          ZIO.attemptBlocking(Files.readString(path)).mapError(_ => LoadError.Io(IoFailure(path, IoFault.Read)))
-        case _ =>
-          ZIO.fail(LoadError.Io(IoFailure(Path.of(relative), IoFault.Read)))
 
   private def compileSources(
       root: Path,

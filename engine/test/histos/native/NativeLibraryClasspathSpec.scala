@@ -1,5 +1,7 @@
 package histos.native
 
+import histos.suite.HistosSpec
+
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -9,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 import zio.ZIO
 import zio.test.*
 
-object NativeLibraryClasspathSpec extends ZIOSpecDefault:
+object NativeLibraryClasspathSpec extends HistosSpec:
   def spec = suite("native library classpath")(
     test("a renamed standard library jar is dropped and another jar stays") {
       ZIO.scoped {

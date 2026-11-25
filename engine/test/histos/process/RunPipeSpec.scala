@@ -2,6 +2,7 @@ package histos.process
 
 import histos.Platform
 import histos.pack.MainClass
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -12,7 +13,7 @@ import scala.jdk.OptionConverters.*
 import zio.{Chunk, Promise, Queue, Scope, ZIO, durationInt}
 import zio.test.*
 
-object RunPipeSpec extends ZIOSpecDefault:
+object RunPipeSpec extends HistosSpec:
   private val Echo: String =
     """package demo;
       |

@@ -18,6 +18,7 @@ import histos.native.NativeOrigin
 import histos.plugin.*
 import histos.resolve.{Resolve, ResolutionService}
 import histos.schedule.{ActionCache, Histos, Parallelism, RemoteCache}
+import histos.suite.HistosSpec
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, Workspace}
 
@@ -26,7 +27,7 @@ import java.nio.file.Path
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object GeneratedSourceReplaySpec extends ZIOSpecDefault:
+object GeneratedSourceReplaySpec extends HistosSpec:
   private val version    = ScalaVersion("3.10.1")
   private val name       = ProjectName("generated")
   private val stage      = CompilationStage(Cell(name, version, Platform.Jvm), SourceSet.Main)

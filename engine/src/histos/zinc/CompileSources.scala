@@ -10,14 +10,14 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, ZIO}
 
 enum SourceIdentity:
-  case Committed(path: RepoPath)
+  case Checkout(path: RepoPath)
   case Unmanaged(path: RepoPath)
   case Generated(task: PluginTaskId, output: OutputName, entry: ArtifactPath)
 
   def id: String = this match
-    case Committed(path)                => s"committed/${path.value}"
-    case Unmanaged(path)                => s"unmanaged/${path.value}"
-    case Generated(task, output, entry) => s"generated/${task.render}/${output.value}/${entry.value}"
+    case Checkout(path)                 => s"_checkout_/${path.value}"
+    case Unmanaged(path)                => s"_unmanaged_/${path.value}"
+    case Generated(task, output, entry) => s"_generated_/${task.render}/${output.value}/${entry.value}"
 end SourceIdentity
 
 /** Stable compiler identity paired with the current immutable physical read location. */
@@ -35,7 +35,7 @@ object CompileSources:
             .map(SourceIdentity.Generated(task, output, _))
         case Some(StageOrigin.Unmanaged) => relative(repo, source.path).map(SourceIdentity.Unmanaged(_))
         case Some(StageOrigin.Conventional(_) | StageOrigin.Declared) | None =>
-          relative(repo, source.path).map(SourceIdentity.Committed(_))
+          relative(repo, source.path).map(SourceIdentity.Checkout(_))
       identity.flatMap(value => rest.map(CompileSource(value, source.path) :: _))
     }
 

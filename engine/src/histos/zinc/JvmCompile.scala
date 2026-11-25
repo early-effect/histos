@@ -81,6 +81,8 @@ final case class CompileOutput(
     /** Compiler classpath, without the bridge jar. */
     compiler: List[Path],
     bridge: Path,
+    /** `cached` replaces the vacant placeholder a fresh compile carries. A hit sets disk or store. */
+    note: CacheNote,
 ):
   def facts: CompileFacts =
     CompileFacts(changed, sources, classesWritten)
@@ -482,7 +484,7 @@ object JvmCompile:
       store  <- ZIO.service[ContentStore]
       remote <- ZIO.service[RemoteCache]
       _      <- ProductCache.stage(remote, store, key).mapError(carried)
-      hit    <- CompileReplay.load(
+      found  <- CompileReplay.load(
         store,
         key,
         request,
@@ -490,10 +492,10 @@ object JvmCompile:
         artifacts.compiler,
         artifacts.bridge,
       )
-      output <- hit match
-        case Some(found) =>
-          CompileInputs.remember(store, request.analysis, rows).as(found)
-        case None =>
+      output <- found match
+        case Right(hit) =>
+          CompileInputs.remember(store, request.analysis, rows).as(hit)
+        case Left(lookup) =>
           for
             change   <- CompileInputs.explain(store, request.analysis, rows)
             _        <- ZIO.fromEither(TastyProducts.prune(request.classes))
@@ -505,7 +507,8 @@ object JvmCompile:
               else ZIO.succeed(written)
             keepNow    <- stable(request, rows)
             stampedNow <- stamps(request, keepNow)
-            _          <- ZIO.when(keepNow && !reject(change, produced, stampedNow))(
+            saved = saveOf(keepNow, change, produced, stampedNow)
+            _ <- ZIO.when(saved == CacheSave.Stored)(
               CompileReplay.save(
                 store,
                 produced.key,
@@ -517,8 +520,15 @@ object JvmCompile:
                 ProductCache.publish(remote, store, produced.key).mapError(carried) *>
                 CompileInputs.remember(store, request.analysis, rows)
             )
-          yield produced.copy(miss = Some(change))
+          yield produced.copy(miss = Some(change), note = CacheNote.Miss(lookup, change, saved))
     yield output
+
+  /** The same gate as the save. Unstable sources win, then a stamp mismatch, then an unproved write. */
+  private def saveOf(keepNow: Boolean, change: KeyMiss, written: CompileOutput, stamped: Boolean): CacheSave =
+    if !keepNow then CacheSave.Unsaved(CacheSkip.Unstable)
+    else if !stamped then CacheSave.Unsaved(CacheSkip.Stamps)
+    else if sourceMoved(change) && !proved(written) then CacheSave.Unsaved(CacheSkip.Unproved)
+    else CacheSave.Stored
 
   private def stamps(request: CompileRequest, keep: Boolean): IO[CompileError, Boolean] =
     if keep then SourceStale.current(request)
@@ -755,6 +765,7 @@ object JvmCompile:
               prepared.runtime,
               prepared.compilerJars,
               prepared.bridge,
+              CacheNote.Vacant,
             ),
             fingerprint(zip).map(Remembered(_, result)),
           )

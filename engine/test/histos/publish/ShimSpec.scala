@@ -1,6 +1,7 @@
 package histos.publish
 
 import histos.jdk.{Sha256, Sha256Digest}
+import histos.suite.HistosSpec
 import histos.workspace.Workspace
 
 import java.nio.charset.StandardCharsets
@@ -11,7 +12,7 @@ import java.util.concurrent.TimeUnit
 import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
-object ShimSpec extends ZIOSpecDefault:
+object ShimSpec extends HistosSpec:
   def spec = suite("the install shim")(
     test("a coordinate manifest does not need a dist jar") {
       ZIO.scoped {
@@ -45,6 +46,7 @@ object ShimSpec extends ZIOSpecDefault:
           _     <- executable(bin.resolve("curl"), curlStub)
           _     <- executable(bin.resolve("sha256sum"), shaStub)
           _     <- executable(bin.resolve("mv"), mvStub)
+          _     <- executable(bin.resolve("java"), javaVersionStub)
           out   <- runInstall(file, bin, home, log, sha)
           moved <- ZIO.attemptBlocking {
             if Files.isRegularFile(log) then Files.readString(log).split('\n').toList.filter(_.nonEmpty)
@@ -505,6 +507,14 @@ object ShimSpec extends ZIOSpecDefault:
        |case "$*" in
        |  *toolchain\ client*) exit 1 ;;
        |esac
+       |exit 0
+       |""".stripMargin
+
+  private val javaVersionStub =
+    """|#!/bin/sh
+       |if [ "$1" = "-version" ]; then
+       |  echo 'openjdk version "25.0.1"' >&2
+       |fi
        |exit 0
        |""".stripMargin
 

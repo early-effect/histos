@@ -2,6 +2,7 @@ package histos.testrun
 
 import histos.*
 import histos.build.BuildNode
+import histos.suite.HistosSpec
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.lang.ProcessHandle
@@ -10,7 +11,7 @@ import _root_.scala.jdk.OptionConverters.*
 import zio.{ZIO, durationInt}
 import zio.test.*
 
-object NativeInterruptionSpec extends ZIOSpecDefault:
+object NativeInterruptionSpec extends HistosSpec:
   private val tests = suite("Native test interruption")(
     test("interrupting an actual aggregate child ends the Native process and records no success") {
       val version = TestExecutionFixtures.version
@@ -37,6 +38,9 @@ object NativeInterruptionSpec extends ZIOSpecDefault:
             )
             val marker = fixture.repo.resolve("native-pid")
             for
+              source <- TestExecutionFixtures.checkout(
+                "engine/src/test/resources/fixtures/native-interruption/HeldSpec.scala"
+              )
               _        <- Workspace.writeString(fixture.repo.resolve("held/test/demo/HeldSpec.scala"), source)
               plan     <- ZIO.fromEither(TestCells.plan(graph, asked.selection))
               products <- fixture.ensure(plan.compileStageRoots.map(BuildNode.Compile(_)))
@@ -60,19 +64,6 @@ object NativeInterruptionSpec extends ZIOSpecDefault:
     }
   )
 
-  def spec = tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
-
-  private val source =
-    """package demo
-      |import zio.*
-      |import zio.test.*
-      |object HeldSpec extends ZIOSpecDefault:
-      |  enum Failure:
-      |    case Write
-      |  def spec = test("held native process") {
-      |    val marker = java.nio.file.Path.of(sys.env.getOrElse("HISTOS_REPO", "."), "native-pid")
-      |    ZIO.attemptBlocking(java.nio.file.Files.writeString(marker, scala.scalanative.posix.unistd.getpid().toString))
-      |      .mapError(_ => Failure.Write) *> ZIO.never
-      |  }
-      |""".stripMargin
+  def spec =
+    (tests @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)).provideShared(histos.zinc.Compilers.owned)
 end NativeInterruptionSpec

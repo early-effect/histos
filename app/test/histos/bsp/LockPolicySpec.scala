@@ -6,12 +6,13 @@ import histos.mcp.McpConsent
 import histos.plugin.{ClientId, CommandIdentity, Digests, PluginDetail, ProposalId}
 import histos.server.Call
 import histos.ProjectName
+import histos.suite.HistosSpec
 
 import java.nio.charset.StandardCharsets
 
 import zio.test.*
 
-object LockPolicySpec extends ZIOSpecDefault:
+object LockPolicySpec extends HistosSpec:
   private val utf8 = StandardCharsets.UTF_8
 
   private val call = Call.Compile(List(ProjectName("app")))

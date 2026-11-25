@@ -4,6 +4,7 @@ import histos.*
 import histos.central.{Artifact, ArtifactId, Published, Publisher, Revision}
 import histos.pack.ClassJar
 import histos.supply.Email
+import histos.suite.HistosSpec
 import histos.version.ShipName
 import histos.workspace.Workspace
 
@@ -16,7 +17,7 @@ import org.xml.sax.InputSource
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object PomMetadataSpec extends ZIOSpecDefault:
+object PomMetadataSpec extends HistosSpec:
   private val version = ScalaVersion("3.10.1")
   private val core    = module("heddle", Jvm)(version)
     .description(PomText("HTTP as an effect. Loom under the floor."))
