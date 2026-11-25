@@ -55,7 +55,7 @@ import histos.resolve.{
   Resolve,
   ResolveError,
 }
-import histos.schedule.{CacheConfig, CacheError, CacheNamespace, RemoteCache}
+import histos.schedule.{CacheConfig, CacheError, CacheNamespace, Parallelism, RemoteCache}
 import histos.workspace.{IoFailure, IoFault}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
@@ -1187,8 +1187,11 @@ object Calls:
             for
               roots   <- ZIO.fromEither(histos.build.BuildRuntime.compileRoots(graph, projects, platforms))
               lock    <- ZIO.serviceWithZIO[histos.resolve.ResolutionService](_.current)
-              runtime <- histos.build.BuildRuntime.open(Some(plugins))
-              _       <- runtime
+              runtime <- histos.build.BuildRuntime.open(
+                Some(plugins),
+                parallelism = Parallelism.of(graph.parallelism),
+              )
+              _ <- runtime
                 .ensure(
                   histos.build.ExecutionRequest(
                     histos.zinc.CompileSession(repo, graph, jdk, NativeOrigin.read(machine.env), lock),
@@ -1449,7 +1452,7 @@ object Calls:
                       _        <- zio.stream.ZStream
                         .unwrapScoped(
                           histos.build.BuildRuntime
-                            .open(Some(plugins))
+                            .open(Some(plugins), parallelism = Parallelism.of(graph.parallelism))
                             .map(runtime =>
                               runtime.tests(
                                 TestRun(

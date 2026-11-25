@@ -3,7 +3,7 @@ package histos.coverage
 import histos.build.{BuildDag, BuildNode, BuildRuntime, ExecutionError}
 import histos.jdk.JdkRuntime
 import histos.load.PluginRuntime
-import histos.schedule.CacheConfig
+import histos.schedule.{CacheConfig, Parallelism}
 import histos.resolve.{BuildResolvers, ResolutionService, Resolve, ResolveError}
 import histos.select.{SelectError, Selection}
 import histos.testrun.{
@@ -134,7 +134,7 @@ object Run:
         remote     <- CacheConfig.open(process).mapError(ModuleTestError.Remote(_))
         resolution <- ResolutionService.open(asked.repo, asked.graph).mapError(ModuleTestError.Lock(_))
         runtime    <- BuildRuntime
-          .open(plugins)
+          .open(plugins, parallelism = Parallelism.of(asked.graph.parallelism))
           .provideSomeLayer[Resolve & histos.cache.ContentStore & zio.Scope](
             ZLayer.succeed(resolution) ++ ZLayer.succeed(remote)
           )

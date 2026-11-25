@@ -27,6 +27,7 @@ import histos.server.{
   Watching,
 }
 import histos.task.{RunId, TaskId}
+import histos.schedule.Parallelism
 import histos.Platform
 
 import java.nio.file.Path
@@ -316,8 +317,11 @@ object Session:
               ConsentDesk.feed(say),
             )
             .flatMap: consent =>
+              val width = loaded match
+                case Right(Some(have)) => Parallelism.of(have.graph.parallelism).cpu
+                case _                 => Parallelism.default.cpu
               histos.zinc.CompileMemo.provide(
-                histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                histos.zinc.Compilers.provide(width)(
                   Perform
                     .run(
                       repo,

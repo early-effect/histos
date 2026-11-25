@@ -32,7 +32,7 @@ import histos.server.{
 }
 import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
-import histos.schedule.{CacheConfig, CacheNamespace, NamespaceError}
+import histos.schedule.{CacheConfig, CacheNamespace, NamespaceError, Parallelism}
 import histos.jdk.{HostSupport, Machine, Os, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
@@ -1127,9 +1127,12 @@ object Cli:
                     ConsentDesk.feed(say),
                   )
                   .flatMap: desk =>
+                    val width = loaded match
+                      case Right(Some(have)) => Parallelism.of(have.graph.parallelism).cpu
+                      case _                 => Parallelism.default.cpu
                     val ran = (relay: histos.process.RunRelay) =>
                       histos.zinc.CompileMemo.provide(
-                        histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                        histos.zinc.Compilers.provide(width)(
                           Perform
                             .run(
                               repo,
@@ -2545,7 +2548,7 @@ object Cli:
                                 histos.zinc.CompileMemo
                                   .provide(
                                     histos.zinc.Compilers
-                                      .provide(histos.schedule.Parallelism.default.cpu)(
+                                      .provide(Parallelism.of(loaded.graph.parallelism).cpu)(
                                         speak(session).provideSomeLayer(zio.ZLayer.succeed(report))
                                       )
                                   )

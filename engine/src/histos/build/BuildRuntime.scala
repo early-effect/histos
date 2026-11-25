@@ -68,14 +68,17 @@ object BuildRuntime:
       plugins: Option[PluginRuntime],
       invocation: Option[TaskInvocation] = None,
       cache: Option[ActionCache] = None,
+      parallelism: Parallelism = Parallelism.default,
   ): ZIO[Resolve & ContentStore & ResolutionService & RemoteCache & Scope, Nothing, BuildRuntime] =
     for
       resolve    <- ZIO.service[Resolve]
       store      <- ZIO.service[ContentStore]
       resolution <- ZIO.service[ResolutionService]
       remote     <- ZIO.service[RemoteCache]
-      compilers  <- (Compilers.live ++ CompileMemo.live ++ CompilerStarts.live ++ LinkerStarts.live).build
-      scheduler  <- (ZLayer.succeed(Parallelism.default) >>> Histos.live).build
+      compilers  <- (Compilers.live(
+        parallelism.cpu
+      ) ++ CompileMemo.live ++ CompilerStarts.live ++ LinkerStarts.live).build
+      scheduler <- (ZLayer.succeed(parallelism) >>> Histos.live).build
       services = ZEnvironment(
         resolve,
         store,

@@ -1,7 +1,7 @@
 package histos.bsp
 
 import histos.cache.ContentStore
-import histos.schedule.{CacheConfig, RemoteCache}
+import histos.schedule.{CacheConfig, Parallelism, RemoteCache}
 import histos.jdk.JdkRuntime
 import zio.stream.ZStream
 
@@ -640,8 +640,10 @@ object Bsp:
       opened { remote =>
         ZIO.scoped {
           for
-            lock      <- readLock
-            runtime   <- histos.build.BuildRuntime.open(plugins).provideSomeLayer(ZLayer.succeed(remote))
+            lock    <- readLock
+            runtime <- histos.build.BuildRuntime
+              .open(plugins, parallelism = Parallelism.of(graph.parallelism))
+              .provideSomeLayer(ZLayer.succeed(remote))
             completed <- runtime
               .ensure(
                 histos.build.ExecutionRequest(

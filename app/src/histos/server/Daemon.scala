@@ -10,7 +10,7 @@ import histos.plugin.{FlagName, InvocationPluginEvent, NamedText, ParamName, Plu
 import histos.publish.IvyRoot
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
-import histos.schedule.CacheNamespace
+import histos.schedule.{CacheNamespace, Parallelism}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.process.{LiveInput, RelayCommand, RunRelay, StdinFeed, Terminal}
@@ -527,7 +527,7 @@ object Daemon:
             )
             .unit
           _ <- histos.zinc.CompileMemo.provide(
-            histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+            histos.zinc.Compilers.provide(Parallelism.of(graph.parallelism).cpu)(
               accept(
                 channel,
                 repo,

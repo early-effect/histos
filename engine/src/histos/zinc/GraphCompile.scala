@@ -150,7 +150,7 @@ object GraphCompile:
       names: List[ProjectName],
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore & ResolutionService & RemoteCache, GraphCompileError, CompileFeed] =
-    fresh(Parallelism.default.cpu)(
+    fresh(Parallelism.of(session.graph.parallelism).cpu)(
       watch(
         session.repo,
         session.graph,
@@ -159,6 +159,7 @@ object GraphCompile:
         platform,
         session.jdk,
         session.native,
+        parallelism = Parallelism.of(session.graph.parallelism),
         inside = _ => ZIO.unit,
       ).provideSomeLayer(CompilerStarts.live)
     )
@@ -188,6 +189,7 @@ object GraphCompile:
       session.jdk,
       session.native,
       hold,
+      parallelism = Parallelism.of(session.graph.parallelism),
       inside = _ => ZIO.unit,
       coverage = session.coverage,
       after = after,
@@ -210,6 +212,7 @@ object GraphCompile:
       Some(platform),
       session.jdk,
       session.native,
+      parallelism = Parallelism.of(session.graph.parallelism),
       inside = _ => ZIO.unit,
     ).provideSomeLayer(CompilerStarts.live)
 
@@ -238,7 +241,9 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore & RemoteCache, GraphCompileError, CompileFeed] =
-    fresh[Resolve & ContentStore & CompilerStarts & RemoteCache, CompileFeed](Parallelism.default.cpu)(
+    fresh[Resolve & ContentStore & CompilerStarts & RemoteCache, CompileFeed](
+      Parallelism.of(graph.parallelism).cpu
+    )(
       consoleCounted(repo, graph, names, jdk, native, platform, _ => ZIO.unit)
     ).provideSomeLayer(CompilerStarts.live)
 
@@ -263,7 +268,17 @@ object GraphCompile:
         .open(repo, graph)
         .mapError(GraphCompileError.Lock(_))
         .map: report =>
-          watch(repo, graph, choose(graph, names), None, platform, jdk, native, inside = inside)
+          watch(
+            repo,
+            graph,
+            choose(graph, names),
+            None,
+            platform,
+            jdk,
+            native,
+            parallelism = Parallelism.of(graph.parallelism),
+            inside = inside,
+          )
             .provideSomeLayer(ZLayer.succeed(report))
 
   /** The daemon's compile. The caller keeps the compiler services. */
@@ -279,7 +294,17 @@ object GraphCompile:
     GraphCompileError,
     CompileFeed,
   ] =
-    watch(repo, graph, choose(graph, names), None, platform, jdk, native, inside = _ => ZIO.unit)
+    watch(
+      repo,
+      graph,
+      choose(graph, names),
+      None,
+      platform,
+      jdk,
+      native,
+      parallelism = Parallelism.of(graph.parallelism),
+      inside = _ => ZIO.unit,
+    )
       .provideSomeLayer(CompilerStarts.live)
 
   /** Fails after the last event when a cell failed. Test runs keep the lenient stream so passing cells still test.
@@ -318,7 +343,7 @@ object GraphCompile:
         .open(repo, graph)
         .mapError(GraphCompileError.Lock(_))
         .map: report =>
-          fresh(Parallelism.default.cpu)(
+          fresh(Parallelism.of(graph.parallelism).cpu)(
             watch(
               repo,
               graph,
@@ -327,6 +352,7 @@ object GraphCompile:
               Some(platform),
               jdk,
               native,
+              parallelism = Parallelism.of(graph.parallelism),
               inside = _ => ZIO.unit,
             ).provideSomeLayer(CompilerStarts.live ++ ZLayer.succeed(report))
           )
@@ -478,7 +504,7 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
-      parallelism: Parallelism = Parallelism.default,
+      parallelism: Parallelism,
       inside: ProjectName => UIO[Unit],
       coverage: Option[histos.coverage.CoverageCompile] = None,
       after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,

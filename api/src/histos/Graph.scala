@@ -170,6 +170,7 @@ final case class ProjectGraph private (
     theme: Theme = Theme.standard,
     intent: ResolutionIntent = ResolutionIntent.Inherit,
     verify: List[VerifyTask] = Nil,
+    parallelism: Option[ParallelismMax] = None,
 ):
   /** Width of the longest project name. Compile and test lines pad the name to it. */
   val moduleColumn: Int =
@@ -244,6 +245,7 @@ object ProjectGraph:
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
       verify: List[VerifyTask] = Nil,
+      parallelism: Option[ParallelismMax] = None,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -269,6 +271,7 @@ object ProjectGraph:
       theme,
       intent,
       verify,
+      parallelism,
     )
 end ProjectGraph
 
@@ -339,6 +342,10 @@ object Projects:
 
   /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
   def jobTimeout(value: JobTimeout): Organized = Organized.empty.jobTimeout(value)
+
+  /** Caps each resource class. Omission is one permit per core. A second call replaces the ceiling. `max` is at least 1.
+    */
+  def parallelism(max: Int): Organized = Organized.empty.parallelism(max)
 
   /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
   def coverage(floors: CoverageFloors = CoverageFloors()): Organized = Organized.empty.coverage(floors)
@@ -427,7 +434,10 @@ object Projects:
       ships       <- ShipLink.catalog(catalog, built)
       coordinates <- pluginCoordinates(settings.pluginSources, built)
       _           <- uniqueResolvers(settings.resolvers)
-      builtGraph  <-
+      ceiling     <- settings.parallelism match
+        case None      => Right(None)
+        case Some(raw) => ParallelismMax.from(raw).left.map(BuildError.Contract(_)).map(Some(_))
+      builtGraph <-
         Right(
           ProjectGraph.trusted(
             built,
@@ -453,6 +463,7 @@ object Projects:
             settings.theme,
             settings.intent,
             settings.verify,
+            ceiling,
           )
         )
       _ <- GraphContracts.verify(builtGraph)
@@ -1155,6 +1166,10 @@ final class Organized private (settings: Organized.Settings):
   def jobTimeout(value: JobTimeout): Organized =
     ci(settings.ci.copy(timeout = value))
 
+  /** Caps each resource class at `max`. A second call replaces the ceiling. `max` is at least 1. */
+  def parallelism(max: Int): Organized =
+    Organized(settings.copy(parallelism = Some(max)))
+
   /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
   def ci(value: CiSettings): Organized = Organized(settings.copy(ci = value))
 
@@ -1234,6 +1249,7 @@ object Organized:
       theme: Theme = Theme.standard,
       intent: ResolutionIntent = ResolutionIntent.Inherit,
       verify: List[VerifyTask] = Nil,
+      parallelism: Option[Int] = None,
   )
 
   private[histos] val empty: Organized = new Organized(Settings())

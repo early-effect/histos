@@ -8,7 +8,7 @@ import histos.native.NativeOrigin
 import histos.pack.ScaladocSite
 import histos.plugin.SourceSet
 import histos.resolve.{LockedTools, ResolutionService, Resolve}
-import histos.schedule.CacheConfig
+import histos.schedule.{CacheConfig, Parallelism}
 import histos.task.{TaskError, TaskResult}
 import histos.zinc.{CompileSession, GraphCompile}
 import histos.{Cell, CompilationStage, Module, ProjectGraph}
@@ -47,11 +47,13 @@ object DocTask:
     else
       ZIO.scoped:
         for
-          process  <- CacheConfig.processEnv
-          remote   <- CacheConfig.open(process).mapError(error => refused(error.message))
-          jdk      <- GraphCompile.jdk(machine).mapError(error => refused(error.message))
-          lock     <- ZIO.serviceWithZIO[ResolutionService](_.current)
-          runtime  <- BuildRuntime.open(Some(plugins)).provideSomeLayer(ZLayer.succeed(remote))
+          process <- CacheConfig.processEnv
+          remote  <- CacheConfig.open(process).mapError(error => refused(error.message))
+          jdk     <- GraphCompile.jdk(machine).mapError(error => refused(error.message))
+          lock    <- ZIO.serviceWithZIO[ResolutionService](_.current)
+          runtime <- BuildRuntime
+            .open(Some(plugins), parallelism = Parallelism.of(graph.parallelism))
+            .provideSomeLayer(ZLayer.succeed(remote))
           products <- runtime
             .ensure(
               ExecutionRequest(

@@ -63,6 +63,7 @@ object WireJsonSpec extends HistosSpec:
     ),
     ContractFault.TestModule(other),
     ContractFault.TestPlatform(module, Platform.Native),
+    ContractFault.Parallelism(0),
   ) ++ selections.map(ContractFault.TestSelection(_)) ++ (for
     expected <- OutputKind.values.toList
     actual   <- OutputKind.values.toList

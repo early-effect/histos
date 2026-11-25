@@ -65,7 +65,7 @@ object Program:
         )
         platform <- ZIO.fromEither(histos.RunPlatform.resolve(module, choice)).mapError(ProgramError.Selection(_))
         lock     <- ZIO.serviceWithZIO[ResolutionService](_.current)
-        runtime  <- histos.build.BuildRuntime.open(plugins)
+        runtime  <- histos.build.BuildRuntime.open(plugins, parallelism = Parallelism.of(graph.parallelism))
         roots = module.versions.all.map(version =>
           histos.build.BuildNode.Compile(
             histos.CompilationStage(histos.Cell(module.name, version, platform), histos.plugin.SourceSet.Main)

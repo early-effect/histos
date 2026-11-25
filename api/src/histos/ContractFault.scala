@@ -19,6 +19,7 @@ enum ContractFault:
   case TestModule(name: ProjectName)
   case TestPlatform(module: ProjectName, platform: Platform)
   case TestSelection(error: SelectionError)
+  case Parallelism(max: Int)
 
   def message: String = this match
     case RunDefault(module, platform)            => s"${module.value} does not build its default run platform $platform"
@@ -35,4 +36,5 @@ enum ContractFault:
     case TestModule(name)               => s"test selection ${name.value} is not a module"
     case TestPlatform(module, platform) => s"test selection ${module.value} does not build $platform"
     case TestSelection(error)           => s"invalid test selection: $error"
+    case Parallelism(max)               => s"a parallelism max is at least 1, not $max"
 end ContractFault

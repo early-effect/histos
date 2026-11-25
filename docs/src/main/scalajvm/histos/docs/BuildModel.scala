@@ -141,6 +141,23 @@ val core = module("core", Jvm, Native)(scala"3.8.1")
 """,
       cite[histos.NativeLibrary](_.token),
     ),
+    section("How many steps run at once")(
+      md"""
+Compile, publish, and forked programs each have their own pool. A pool has one permit
+per core, so a compile does not wait on a publish, and a small machine does not start
+more of one class than it has cores.
+
+`Projects.parallelism` sets a ceiling on every pool. `Projects.parallelism(2)` runs at
+most two of each, and one of each on a machine with a single core. Leaving it out keeps
+the core count. A second call replaces the ceiling. Zero and a negative number fail
+when the graph is built.
+
+```scala
+Projects.parallelism(2)
+```
+""",
+      cite[histos.Projects.type](_.parallelism),
+    ),
     section("What this repository builds")(
       md"""
 This repository is itself a Histos build. `object build extends HistosBuild` in
