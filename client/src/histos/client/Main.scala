@@ -1,7 +1,7 @@
 package histos.client
 
 import histos.ApiClock
-import histos.bsp.Frame
+import histos.bsp.{Frame, FrameQueue}
 import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
 import histos.server.{
@@ -199,31 +199,35 @@ object Main extends ZIOAppDefault:
   ): ZIO[Scope, Nothing, Either[ServerError, Int]] =
     val prompts = unistd.isatty(0) == 1 && unistd.isatty(1) == 1
     CallerFacts.native(call, environment, prompts).flatMap { posted =>
-      ZIO.attemptBlocking(Frame.put(session.output, posted.toJson)).orDie.flatMap {
-        case Left(_)  => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Write(socket))))
-        case Right(_) =>
-          ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
-            case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
-            case Right(head) =>
-              CommandFrame.ready(head) match
-                case Left(error) => ZIO.succeed(Left(error))
-                case Right(_)    =>
-                  copyInput(call, session.output) *> frames(
-                    repo,
-                    socket,
-                    session.input,
-                    Show.start,
-                    appearance,
-                    call.attendance,
-                  )
-          }
+      FrameQueue.open(session.output).flatMap { sink =>
+        sink
+          .offer(posted.toJson)
+          .foldZIO(
+            _ => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Write(socket)))),
+            _ =>
+              ZIO.attemptBlocking(Frame.take(session.input)).orDie.flatMap {
+                case Left(_)     => ZIO.succeed(Left(ServerError.Io(histos.server.ServerIo.Read(socket))))
+                case Right(head) =>
+                  CommandFrame.ready(head) match
+                    case Left(error) => ZIO.succeed(Left(error))
+                    case Right(_)    =>
+                      copyInput(call, sink) *> frames(
+                        repo,
+                        socket,
+                        session.input,
+                        Show.start,
+                        appearance,
+                        call.attendance,
+                      )
+              },
+          )
       }
     }
 
-  /** Stdin frames start after the call is written, so this fiber is the socket's only writer. */
-  private def copyInput(call: Call, output: java.io.OutputStream): ZIO[Scope, Nothing, Unit] =
+  /** Stdin frames start after the envelope. Both are offered to the connection writer. */
+  private def copyInput(call: Call, sink: FrameQueue): ZIO[Scope, Nothing, Unit] =
     call.attendance match
-      case Attendance.Program                 => StdinRelay.attach(output)
+      case Attendance.Program                 => StdinRelay.attach(sink)
       case Attendance.Held | Attendance.Quiet => ZIO.unit
 
   private def frames(

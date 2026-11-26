@@ -37,10 +37,11 @@ object Frame:
     try readMessage(in)
     catch case _: java.io.IOException => Left(FrameError.Io)
 
+  /** One frame. Only one fiber may call this for a given stream. Share a stream through [[FrameQueue]]. */
   def write(out: OutputStream, payload: String): IO[FrameError, Unit] =
     ZIO.attemptBlocking(put(out, payload)).mapError(_ => FrameError.Io).flatMap(ZIO.fromEither)
 
-  /** One frame, on the calling thread. */
+  /** One frame, on the calling thread. A stream with more than one caller goes through [[FrameQueue]]. */
   def put(out: OutputStream, payload: String): Either[FrameError, Unit] =
     val bytes = payload.getBytes(StandardCharsets.UTF_8)
     if bytes.length > BodyLimit then Left(FrameError.TooLarge)

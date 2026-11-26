@@ -77,7 +77,6 @@ import histos.{
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
 
-import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicReference
@@ -164,15 +163,12 @@ final class Say private (
 end Say
 
 object Say:
-  def frames(stream: OutputStream, socket: Path): Say =
+  def frames(sink: histos.bsp.FrameQueue, socket: Path): Say =
     val minted = new AtomicReference[Option[String]](None)
     val kept   = new AtomicReference[Option[Observation]](None)
     val noted  = new AtomicReference[Chunk[Diagnostic]](Chunk.empty)
     new Say(
-      message =>
-        histos.bsp.Frame
-          .write(stream, wire(message))
-          .mapError(_ => ServerError.Io(ServerIo.Write(socket))),
+      message => sink.offer(wire(message)).mapError(_ => ServerError.Io(ServerIo.Write(socket))),
       minted,
       kept,
       noted,

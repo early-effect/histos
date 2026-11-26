@@ -1,9 +1,7 @@
 package histos.client
 
-import histos.bsp.Frame
+import histos.bsp.FrameQueue
 import histos.server.{RunBytes, RunInput}
-
-import java.io.OutputStream
 
 import scala.scalanative.libc.stdlib
 import scala.scalanative.posix.errno
@@ -14,14 +12,14 @@ import scala.scalanative.unsigned.*
 import zio.json.*
 import zio.{Chunk, Queue, Scope, UIO, ZIO}
 
-/** Copy this process's stdin to the server as [[RunInput]] frames. One fiber writes the socket. */
+/** Copy this process's stdin to the server as [[RunInput]] frames. Frames are offered to the connection writer. */
 private[client] object StdinRelay:
   private val Interrupt: Byte = 'I'.toByte
   private val Stop: Byte      = 'S'.toByte
 
-  def attach(output: OutputStream): ZIO[Scope, Nothing, Unit] =
+  def attach(sink: FrameQueue): ZIO[Scope, Nothing, Unit] =
     openPipe match
-      case None                    => copyStdin(output)
+      case None                    => copyStdin(sink)
       case Some(readEnd, writeEnd) =>
         for
           queue <- Queue.unbounded[RunInput]
@@ -34,21 +32,21 @@ private[client] object StdinRelay:
           })
           _ <- readStdin(queue).forkScoped
           _ <- readNotes(readEnd, queue).forkScoped
-          _ <- writeAll(output, queue).forkScoped
+          _ <- writeAll(sink, queue).forkScoped
         yield ()
 
   /** A pipe still copies bytes when the signal pipe cannot be opened. Interrupt then ends this process. */
-  private def copyStdin(output: OutputStream): ZIO[Scope, Nothing, Unit] =
-    drain(output).forkScoped.unit
+  private def copyStdin(sink: FrameQueue): ZIO[Scope, Nothing, Unit] =
+    drain(sink).forkScoped.unit
 
-  private def drain(output: OutputStream): UIO[Unit] =
+  private def drain(sink: FrameQueue): UIO[Unit] =
     readChunks.flatMap {
-      case None        => put(output, RunInput.StdinEnd)
-      case Some(bytes) => put(output, RunInput.Stdin(RunBytes.encode(bytes))) *> drain(output)
+      case None        => put(sink, RunInput.StdinEnd)
+      case Some(bytes) => put(sink, RunInput.Stdin(RunBytes.encode(bytes))) *> drain(sink)
     }
 
-  private def put(output: OutputStream, frame: RunInput): UIO[Unit] =
-    ZIO.attemptBlocking(Frame.put(output, frame.toJson)).orDie.unit
+  private def put(sink: FrameQueue, frame: RunInput): UIO[Unit] =
+    sink.offer(frame.toJson).ignore
 
   private def readStdin(queue: Queue[RunInput]): UIO[Unit] =
     def loop: UIO[Unit] =
@@ -66,9 +64,9 @@ private[client] object StdinRelay:
       }
     loop
 
-  private def writeAll(output: OutputStream, queue: Queue[RunInput]): UIO[Unit] =
+  private def writeAll(sink: FrameQueue, queue: Queue[RunInput]): UIO[Unit] =
     def loop: UIO[Unit] =
-      queue.take.flatMap(frame => put(output, frame)) *> loop
+      queue.take.flatMap(frame => put(sink, frame)) *> loop
     loop
 
   private def readChunks: UIO[Option[Chunk[Byte]]] =
