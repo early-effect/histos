@@ -44,7 +44,7 @@ jobs:
         with:
           fetch-depth: "0"
           fetch-tags: "true"
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - id: affected
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,7 +70,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "25"
@@ -131,7 +131,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "25"
@@ -196,7 +196,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - run: "./histos run versions"
   compatibility:
     needs: [affected, format, compile]
@@ -206,7 +206,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
@@ -238,7 +238,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
@@ -281,7 +281,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: store
         with:
@@ -319,7 +319,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "25"
@@ -401,7 +401,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - id: app
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -430,7 +430,7 @@ jobs:
           fetch-depth: "0"
           fetch-tags: "true"
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/histos/advisories
@@ -465,7 +465,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
+      - uses: early-effect/histos/.github/actions/setup@f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8 # f8a13e5a612eb2bbc68d0ecf11888c0773fab0f8
       - run: ./histos deps snapshot --submit
         env:
           GH_TOKEN: ${{ github.token }}
