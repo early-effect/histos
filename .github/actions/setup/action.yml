@@ -1,5 +1,5 @@
 name: Setup Histos
-description: Install the Histos shim, restore toolchains and Coursier, and fetch what dependencies.lock records
+description: Install the Histos shim, restore toolchains, the build cache, and Coursier, and fetch what dependencies.lock records
 inputs:
   version:
     description: Histos version. Empty installs histos.version from build.properties.
@@ -18,6 +18,13 @@ runs:
       with:
         path: ~/.cache/coursier/v1
         key: coursier-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.histos/build-cache
+        key: histos-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+        restore-keys: |
+          histos-build-${{ runner.os }}-${{ runner.arch }}-
     - name: Install
       shell: bash
       env:

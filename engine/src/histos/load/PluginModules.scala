@@ -23,16 +23,16 @@ private[load] object PluginModules:
       repo: Path,
       graph: ProjectGraph,
       boundary: List[Path],
-  ): ZIO[Scope, LoadError, List[Path]] =
-    run(repo, graph, boundary, None, None, Set.empty).provideSomeLayer[Scope](BuildCache.ephemeral)
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
+    run(repo, graph, boundary, None, None, Set.empty)
 
   def compile(
       repo: Path,
       graph: ProjectGraph,
       boundary: List[Path],
       resolve: Resolve,
-  ): ZIO[Scope, LoadError, List[Path]] =
-    run(repo, graph, boundary, Some(resolve), None, Set.empty).provideSomeLayer[Scope](BuildCache.ephemeral)
+  ): ZIO[Scope & BuildCache.Env, LoadError, List[Path]] =
+    run(repo, graph, boundary, Some(resolve), None, Set.empty)
 
   /** Java, resources, flags, and a content-addressed class directory. A missing host bridge is typed. */
   def compileCached(

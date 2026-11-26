@@ -55,17 +55,17 @@ object ShipBumpRun:
       .collect { case row: Row.Moved => row }
       .collect:
         case Row.Moved(ship, due: ShipMove.Due) => (ship, due)
-    due
-      .foldLeft[Either[BumpFault, String]](Right(source)): (acc, pair) =>
-        val (ship, move) = pair
-        acc.flatMap: current =>
-          ShipBump.rewrite(current, ship.name, move.next).left.map(BumpFault.Rewrite(_))
-      .map: rewritten =>
-        val body = rows.map(line) match
-          case Nil   => "no catalog"
-          case found => found.mkString("\n")
-        val written = if due.isEmpty then None else Some(rewritten)
-        Report(s"$body\n", written)
+    val edits = due.map: (ship, move) =>
+      (ship.name, move.next)
+    val rewritten =
+      if edits.isEmpty then Right(source)
+      else ShipSource.rewrite(source, edits).left.map(BumpFault.Rewrite(_))
+    rewritten.map: text =>
+      val body = rows.map(line) match
+        case Nil   => "no catalog"
+        case found => found.mkString("\n")
+      val written = if due.isEmpty then None else Some(text)
+      Report(s"$body\n", written)
 
   private def line(row: Row): String =
     row match

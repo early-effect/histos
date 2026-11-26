@@ -57,7 +57,7 @@ object PluginClosureSpec extends HistosSpec:
           host     <- hostJar(repo.resolve("host.jar"))
           boundary <- Boundary.jars(host)
           graph = moduleGraph(ProjectName("helper"), Nil)
-          outs <- PluginModules.compile(repo, graph, boundary)
+          outs <- PluginModules.compile(repo, graph, boundary).provideSomeLayer[Scope](BuildCache.ephemeral)
           classFile = outs.headOption.map(_.resolve("demo/Helper.class"))
           present <- ZIO.attemptBlocking(classFile.exists(path => Files.isRegularFile(path))).orDie
         yield assertTrue(outs.nonEmpty, present, source.endsWith("Helper.scala"))
@@ -80,7 +80,7 @@ object PluginClosureSpec extends HistosSpec:
                |""".stripMargin,
           )
           graph = moduleGraph(ProjectName("helper"), List(Dep.trusted("demo", "ext", "1", DepKind.Java)))
-          outs    <- PluginModules.compile(repo, graph, jars, extOf(jar))
+          outs    <- PluginModules.compile(repo, graph, jars, extOf(jar)).provideSomeLayer[Scope](BuildCache.ephemeral)
           present <- ZIO.attemptBlocking(Files.isRegularFile(jar)).orDie
         yield assertTrue(outs.nonEmpty, present)
       }

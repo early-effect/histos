@@ -15,10 +15,7 @@ import zio.{IO, ZIO}
   */
 object LocalWithdraw:
   def revisions(ships: List[Ship], sha: CommitSha): List[String] =
-    ships.map: ship =>
-      val number = ship match
-        case Ship.Line(_, number, _, _, _, _) => number
-      SnapshotCoordinate(number, sha.abbreviate).render
+    ships.map(ship => SnapshotCoordinate(ship.release, sha.abbreviate).render)
 
   def run(
       repo: Path,

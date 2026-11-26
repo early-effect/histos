@@ -33,6 +33,40 @@ private[histos] object BuildCache:
       PluginFlights.live,
     )
 
+  /** A store that stays at `root` after this process exits. */
+  def at(root: Path): ZLayer[Scope, Nothing, Env] =
+    ZLayer.makeSome[Scope, Env](
+      ZLayer.succeed(ContentStore.in(root)),
+      CompilerStarts.live,
+      Compilers.live,
+      RemoteCache.off,
+      PluginFlights.live,
+    )
+
+  /** `~/.histos/build-cache`, or `build-cache` under `HISTOS_HOME`. */
+  def durable: ZLayer[Any, Nothing, Env] =
+    ZLayer.scopedEnvironment[Any](
+      for
+        base <- home
+        root <- ZIO.attemptBlocking(Files.createDirectories(base.resolve("build-cache"))).orDie
+        env  <- at(root).build
+      yield env
+    )
+
+  /** `HISTOS_HOME`, or `.histos` under the user home. */
+  private def home: zio.UIO[Path] =
+    zio.System
+      .env("HISTOS_HOME")
+      .orElseSucceed(None)
+      .flatMap:
+        case Some(dir) if dir.trim.nonEmpty => ZIO.succeed(Path.of(dir.trim))
+        case _                              =>
+          zio.System
+            .property("user.home")
+            .orElseSucceed(None)
+            .map: user =>
+              Path.of(user.getOrElse("."), ".histos")
+
   def compile(
       sources: List[Path],
       classpath: List[Path],
@@ -56,10 +90,20 @@ private[histos] object BuildCache:
         case Some(bytes) =>
           unpack(out, bytes)
         case None =>
-          CompilerStarts.tick *>
+          sayCompiling(sources) *>
+            CompilerStarts.tick *>
             BuildFile.compileSources(sources, classpath, out, flags).catchAll(late) *>
             storeZip(store, key, out)
     yield ()
+
+  /** One flushed line per source file. A hit, and an empty list, print nothing. */
+  private def sayCompiling(sources: List[Path]): zio.UIO[Unit] =
+    ZIO.foreachDiscard(names(sources)): name =>
+      zio.Console.printLineError(s"compiling $name").ignore *>
+        ZIO.attempt(java.lang.System.err.flush()).ignore
+
+  private def names(sources: List[Path]): List[String] =
+    sources.flatMap(source => Option(source.getFileName).map(_.toString))
 
   private def late(error: LoadError): ZIO[Any, LoadError, Unit] =
     error match

@@ -17,7 +17,7 @@ final class ShipStart private (val name: ShipName):
   ): ModuleDef[?] =
     ${ ShipDslMacro.parent('this, 'platform, 'platforms, 'version, 'versions) }
 
-  /** The next release. Components are non-negative integer literals. */
+  /** The next release. The receiver is any [[ShipStart]]. Each component is a non-negative integer literal. */
   inline def next(inline major: Int, inline minor: Int, inline patch: Int): ShipDraft =
     ${ ShipDslMacro.next('this, 'major, 'minor, 'patch) }
 end ShipStart
@@ -27,7 +27,10 @@ object ShipStart:
     new ShipStart(name)
 
 /** The next release of one ship. Apply it to the modules that publish that number. */
-final class ShipDraft private (val name: ShipName, val number: ShipNumber):
+final class ShipDraft private (
+    val name: ShipName,
+    val number: ShipNumber,
+):
   inline def apply(member: ProjectDef, members: ProjectDef*): ShipDef =
     ${ ShipDslMacro.row('this, 'member, 'members) }
 
@@ -124,25 +127,15 @@ private object ShipDslMacro:
       minor: Expr[Int],
       patch: Expr[Int],
   )(using Quotes): Expr[ShipDraft] =
-    import quotes.reflect.report
-    (major.value, minor.value, patch.value) match
-      case (Some(majorValue), Some(minorValue), Some(patchValue)) =>
-        badComponent(major, "major", majorValue)
-          .orElse(badComponent(minor, "minor", minorValue))
-          .orElse(badComponent(patch, "patch", patchValue)) match
-          case Some(found) => found
-          case None        =>
-            '{
-              ShipDraft.trusted(
-                $start.name,
-                ShipNumber.trusted(${ Expr(majorValue) }, ${ Expr(minorValue) }, ${ Expr(patchValue) }),
-              )
-            }
-      case _ =>
-        report.errorAndAbort(
-          "next(major, minor, patch) takes integer literals. Write next(0, 2, 0).",
-          major,
-        )
+    val majorValue = component(major, "major")
+    val minorValue = component(minor, "minor")
+    val patchValue = component(patch, "patch")
+    '{
+      ShipDraft.trusted(
+        $start.name,
+        ShipNumber.trusted(${ Expr(majorValue) }, ${ Expr(minorValue) }, ${ Expr(patchValue) }),
+      )
+    }
 
   def commit(draft: Expr[ShipDraft], raw: Expr[String])(using Quotes): Expr[CommitPin] =
     import quotes.reflect.report
@@ -170,16 +163,24 @@ private object ShipDslMacro:
       '{ SourcePos(${ Expr(at.sourceFile.path) }, ${ Expr(at.startLine + 1) }, ${ Expr(at.startColumn + 1) }) }
     '{ ShipDef.line($draft.name.value, $draft.number, ::($member, $members.toList), $pos) }
 
-  private def badComponent(using Quotes)(expr: Expr[Int], name: String, value: Int): Option[Expr[ShipDraft]] =
-    if value < 0 then
-      import quotes.reflect.report
-      Some(
+  /** An integer literal. An inline value, a name, or an expression is not one. */
+  private def component(using Quotes)(expr: Expr[Int], name: String): Int =
+    import quotes.reflect.*
+    def peel(term: Term): Term = term match
+      case Inlined(_, Nil, inner) => peel(inner)
+      case other                  => other
+    peel(expr.asTerm) match
+      case Literal(IntConstant(value)) if value >= 0 => value
+      case Literal(IntConstant(value))               =>
         report.errorAndAbort(
-          s"$name is $value. next takes three non-negative integers. Write next(0, 2, 0).",
+          s"$name is $value. next takes three non-negative integer literals. Write next(0, 2, 0).",
           expr,
         )
-      )
-    else None
+      case _ =>
+        report.errorAndAbort(
+          s"$name is not an integer literal. Write next(0, 2, 0).",
+          expr,
+        )
 
   private def nameMessage(raw: String): String =
     if raw.isEmpty then "Ship(\"\") is not a ship name. A ship name starts with a letter. Write Ship(\"histos\")."

@@ -1,7 +1,8 @@
 package histos.version
 
 import histos.central.MavenModule
-import histos.resolve.{BuildResolvers, Repository}
+import histos.format.FormatError
+import histos.resolve.{BuildResolvers, Repository, ResolveError}
 import histos.Resolver
 
 import zio.{IO, ZIO}
@@ -80,9 +81,13 @@ enum BumpFault:
   case Unanswered(coordinate: String)
   case Rewrite(error: ShipBump.Rewrite)
   case MissingShip(name: ShipName)
+  case Formatted(error: FormatError)
+  case Unresolved(error: ResolveError)
 
   def message: String = this match
     case Unanswered(coordinate) => s"$coordinate did not answer"
     case Rewrite(error)         => error.message
     case MissingShip(name)      => s"${name.value} is not a ship in this catalog"
+    case Formatted(error)       => error.message
+    case Unresolved(error)      => error.message
 end BumpFault

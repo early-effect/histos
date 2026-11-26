@@ -1,9 +1,9 @@
 package histos
 
-/** One warning when the running jar was packed from another commit of this checkout, or from a dirty tree.
+/** The skew between the running jar and this checkout. Doctor reports [[line]]. A command does not print it.
   *
-  * A commit mismatch is rebuilt: `publish local` packs this checkout and the command runs again on the jar it prints. A
-  * dirty tree has no commit to pack, so the warning names `commit` and the command runs on the jar it has.
+  * A clean commit mismatch is still a rebuild: the JVM command packs this checkout and runs again on the jar it prints.
+  * A dirty tree has no commit to pack.
   */
 object ToolchainSkew:
   /** The two commits, and whether the pack was dirty. No remedy: the caller adds what it will do. */

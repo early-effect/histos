@@ -6,17 +6,17 @@ import java.nio.file.Path
 
 import zio.{UIO, ZIO}
 
-/** The running jar against this checkout. A jar packed from a commit this checkout contains warns when that commit is
-  * not HEAD, or the tree was dirty. A commit mismatch is [[Admit.Rebuild]]: the caller packs this checkout and runs the
-  * command again on that jar. A dirty tree warns and the command runs.
+/** The running jar against this checkout. Doctor reports a jar packed from a commit this checkout contains when that
+  * commit is not HEAD, or the tree was dirty. A command does not print that line. A clean mismatch is
+  * [[Admit.Rebuild]]: the JVM command packs this checkout and runs again on that jar.
   */
 object ApiClock:
   enum Admit:
     case Go
     case Warn(line: String)
 
-    /** `commit` is HEAD. The pack has to come out stamped with it. `fact` names the two commits, with no remedy. */
-    case Rebuild(line: String, fact: String, commit: String)
+    /** `commit` is HEAD. The pack has to come out stamped with it. `line` is the doctor text. */
+    case Rebuild(line: String, commit: String)
   end Admit
 
   /** `owned` means `identity.commit` is a commit in this checkout. The warning names that commit and HEAD. */
@@ -28,7 +28,7 @@ object ApiClock:
           ToolchainSkew.warn(found, commit) match
             case Some(line) =>
               ToolchainSkew.rebuild(found, commit) match
-                case Some(head) => Admit.Rebuild(line, ToolchainSkew.fact(found.commit, found.dirty, commit), head)
+                case Some(head) => Admit.Rebuild(line, head)
                 case None       => Admit.Warn(line)
             case None => Admit.Go
         case _ => Admit.Go

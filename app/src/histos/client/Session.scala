@@ -91,33 +91,26 @@ object Session:
             ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
         },
         text =>
-          ApiClock.admit(repo).flatMap { admitted =>
-            val warned = admitted match
-              case ApiClock.Admit.Warn(line)          => Console.printLineError(line).ignore
-              case ApiClock.Admit.Rebuild(_, fact, _) => Console.printLineError(fact).ignore
-              case ApiClock.Admit.Go                  => ZIO.unit
-            warned *>
-              Attach.decide(repo, text).flatMap {
-                case Decision.DifferentVersion(socket) =>
-                  drop(desk) *>
-                    Record.read(repo).flatMap { stored =>
-                      val was  = stored.map(_.version).getOrElse(text)
-                      val line = ApiClock.stopText(was, socket.toString)
-                      Console.printLineError(line).ignore *>
-                        Attach.stop(repo, socket).mapError(TransportError.Remote(_)).flatMap { _ =>
-                          call match
-                            case Call.Reboot(_) | Call.Stop => ZIO.succeed(CallResult.reported())
-                            case _                          =>
-                              locally(repo, apiJar, machine, desk, call, text, paint)
-                                .flatMap(withProcess(repo, call, _))
-                        }
+          Attach.decide(repo, text).flatMap {
+            case Decision.DifferentVersion(socket) =>
+              drop(desk) *>
+                Record.read(repo).flatMap { stored =>
+                  val was  = stored.map(_.version).getOrElse(text)
+                  val line = ApiClock.stopText(was, socket.toString)
+                  Console.printLineError(line).ignore *>
+                    Attach.stop(repo, socket).mapError(TransportError.Remote(_)).flatMap { _ =>
+                      call match
+                        case Call.Reboot(_) | Call.Stop => ZIO.succeed(CallResult.reported())
+                        case _                          =>
+                          locally(repo, apiJar, machine, desk, call, text, paint)
+                            .flatMap(withProcess(repo, call, _))
                     }
-                case Decision.Open(socket) =>
-                  drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket, paint)
-                    .flatMap(withProcess(repo, call, _))
-                case Decision.Absent =>
-                  locally(repo, apiJar, machine, desk, call, text, paint).flatMap(withProcess(repo, call, _))
-              }
+                }
+            case Decision.Open(socket) =>
+              drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket, paint)
+                .flatMap(withProcess(repo, call, _))
+            case Decision.Absent =>
+              locally(repo, apiJar, machine, desk, call, text, paint).flatMap(withProcess(repo, call, _))
           },
       )
 

@@ -6,6 +6,7 @@ import histos.build.BuildEvent
 import histos.cli.{Appearance, CliExit, ColorFlag, CompileConsole, Paint, Peeled, Show}
 import histos.server.{
   Attendance,
+  BootNotice,
   Call,
   CatalogQuery,
   CommandFrame,
@@ -146,17 +147,10 @@ object Main extends ZIOAppDefault:
 
   private def batch(call: Call, appearance: Appearance): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
-    ApiClock.admit(repo).flatMap { admitted =>
-      val noted = admitted match
-        case ApiClock.Admit.Warn(line)          => ZIO.succeed(java.lang.System.err.println(line))
-        case ApiClock.Admit.Rebuild(_, fact, _) => ZIO.succeed(java.lang.System.err.println(fact))
-        case ApiClock.Admit.Go                  => ZIO.unit
-      noted *>
-        talk(repo, call, appearance).foldZIO(
-          error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
-          code => ZIO.succeed(leave(code, None)),
-        )
-    }
+    talk(repo, call, appearance).foldZIO(
+      error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
+      code => ZIO.succeed(leave(code, None)),
+    )
 
   /** Print `line` when one is present, then `_exit`. `_exit` does not return. The code keeps the caller's type. */
   private def leave(code: Int, line: Option[String]): Int =
@@ -320,7 +314,7 @@ object Main extends ZIOAppDefault:
             }
           case None => startChild(repo, socket, log, before)
         },
-        lost = untilUp(socket) *> awaitWritten(repo, socket, before) *> agreed(repo, socket),
+        lost = watching(log)(untilUp(socket) *> awaitWritten(repo, socket, before) *> agreed(repo, socket)),
       )
     }
 
@@ -425,7 +419,7 @@ object Main extends ZIOAppDefault:
       .flatMap: before =>
         held(home, gate)(
           won = startChild(repo, socket, log, before),
-          lost = untilUp(socket) *> awaitWritten(repo, socket, before).as(socket),
+          lost = watching(log)(untilUp(socket) *> awaitWritten(repo, socket, before).as(socket)),
         )
 
   private def held[R](home: Path, gate: Path)(
@@ -453,18 +447,30 @@ object Main extends ZIOAppDefault:
       log: Path,
       before: Option[java.nio.file.attribute.FileTime],
   ): IO[ServerError, Path] =
-    for
-      mark    <- logMark(log)
-      process <- spawn(repo, log)
-      _       <- ServerWait.awaitListening(
-        connect(socket),
-        ZIO.attempt(process.isAlive).orDie,
-        exitedDetail(log, mark, process),
-        socket,
-        1200,
-      )
-      _ <- awaitWritten(repo, socket, before)
-    yield socket
+    watching(log):
+      for
+        mark    <- logMark(log)
+        process <- spawn(repo, log)
+        _       <- ServerWait.awaitListening(
+          connect(socket),
+          ZIO.attempt(process.isAlive).orDie,
+          exitedDetail(log, mark, process),
+          socket,
+          1200,
+        )
+        _ <- awaitWritten(repo, socket, before)
+      yield socket
+
+  /** Print `compiling <file>` lines appended while `wait` runs. */
+  private def watching[R, E, A](log: Path)(wait: ZIO[R, E, A]): ZIO[R, E, A] =
+    BootNotice
+      .mark(log)
+      .flatMap: from =>
+        BootNotice
+          .follow(log, from)
+          .fork
+          .flatMap: relay =>
+            wait.ensuring(relay.interrupt)
 
   private def spawn(repo: Path, log: Path): IO[ServerError, Process] =
     val missing = ServerError.Io(histos.server.ServerIo.Bind(log))

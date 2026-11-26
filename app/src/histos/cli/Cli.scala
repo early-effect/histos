@@ -17,6 +17,7 @@ import histos.server.{
   ConsentDesk,
   ForgetTarget,
   Client,
+  BootNotice,
   Daemon,
   Decision,
   Feed,
@@ -531,33 +532,42 @@ object Cli:
           histos.coverage.CoverageFailure.Instrument(_) | histos.coverage.CoverageFailure.Io(_) =>
         CliExit.Failed
 
-  /** Rewrite `.next` past the newest stable. The pin in `build.properties` stays. */
+  /** Rewrite `.next` past the newest stable. The pin in `build.properties` stays. A formatting build then formats the
+    * file.
+    */
   private def bump(
       repo: Path,
       apiJar: Path,
       part: histos.version.BumpPart,
       ships: List[histos.version.ShipName],
-  ): URIO[Loader & Scope, Completed] =
+  ): URIO[Loader & Scope & Resolve, Completed] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
       .foldZIO(
         error => ZIO.succeed(Completed(CliExit.Failed, "", error.message, Playback.Held)),
         loaded =>
           rewrite(repo.resolve("histos.scala")): text =>
-            histos.version.ShipBumpRun.run(
-              loaded.graph,
-              part,
-              ships,
-              text,
-              module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
-            ),
+            histos.version.ShipBumpRun
+              .run(
+                loaded.graph,
+                part,
+                ships,
+                text,
+                module => histos.version.CoursierStables.list(module, loaded.graph.resolvers),
+              )
+              .flatMap: report =>
+                ZIO
+                  .foreach(report.source)(dress(repo, loaded.graph, _))
+                  .map(formatted => report.copy(source = formatted)),
       )
 
   /** Read `source`, edit its text, and write the text the edit returns. A read and a write each name their fault. */
   private[cli] def rewrite(
       source: Path
-  )(edit: String => IO[histos.version.BumpFault, histos.version.ShipBumpRun.Report]): UIO[Completed] =
-    val edited: IO[IoFailure | histos.version.BumpFault, String] =
+  )(
+      edit: String => ZIO[Resolve & Scope, histos.version.BumpFault, histos.version.ShipBumpRun.Report]
+  ): URIO[Resolve & Scope, Completed] =
+    val edited: ZIO[Resolve & Scope, IoFailure | histos.version.BumpFault, String] =
       for
         text   <- ZIO.attemptBlocking(Files.readString(source)).orElseFail(IoFailure(source, IoFault.Read))
         report <- edit(text)
@@ -572,10 +582,30 @@ object Cli:
       text => Completed(CliExit.Success, text, "", Playback.Held),
     )
 
+  /** The build's formatter, when the build asked for one. The spliced text is already the rewrite. */
+  private def dress(
+      repo: Path,
+      graph: histos.ProjectGraph,
+      raw: String,
+  ): ZIO[Resolve & Scope, histos.version.BumpFault, String] =
+    graph.formatting match
+      case histos.Formatting.Off         => ZIO.succeed(raw)
+      case histos.Formatting.Scalafmt(_) =>
+        histos.resolve.ResolutionService
+          .open(repo, graph)
+          .mapError(histos.version.BumpFault.Unresolved(_))
+          .flatMap: service =>
+            histos.format.FormatRun
+              .text(repo, graph, Path.of("histos.scala"), raw)
+              .provideSomeLayer(zio.ZLayer.succeed(service) ++ histos.format.Formatters.live)
+              .mapError(histos.version.BumpFault.Formatted(_))
+
   private def bumpExit(fault: histos.version.BumpFault): CliExit =
     fault match
-      case histos.version.BumpFault.MissingShip(_)                                      => CliExit.Usage
-      case histos.version.BumpFault.Unanswered(_) | histos.version.BumpFault.Rewrite(_) => CliExit.Failed
+      case histos.version.BumpFault.MissingShip(_) => CliExit.Usage
+      case histos.version.BumpFault.Unanswered(_) | histos.version.BumpFault.Rewrite(_) |
+          histos.version.BumpFault.Formatted(_) | histos.version.BumpFault.Unresolved(_) =>
+        CliExit.Failed
 
   private def doctor(
       repo: Path,
@@ -784,9 +814,9 @@ object Cli:
     ApiClock
       .admit(repo)
       .flatMap:
-        case ApiClock.Admit.Rebuild(line, _, commit) => repack(args, repo, apiJar, line, commit)
-        case ApiClock.Admit.Warn(found)              => sayError(found) *> commandedBody(args, repo, apiJar, line)
-        case ApiClock.Admit.Go                       => commandedBody(args, repo, apiJar, line)
+        case ApiClock.Admit.Rebuild(_, commit) => repack(args, repo, apiJar, commit)
+        case ApiClock.Admit.Warn(_)            => commandedBody(args, repo, apiJar, line)
+        case ApiClock.Admit.Go                 => commandedBody(args, repo, apiJar, line)
 
   private def commandedBody(
       args: List[String],
@@ -1365,13 +1395,26 @@ object Cli:
         else ZIO.succeed(Right(None))
 
   private def startServer(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
+    val log = repo.resolve(".histos").resolve("server.log")
     histos.server.ServerStamp
       .note(repo)
       .flatMap: before =>
-        gated(repo)(
-          won = spawn(repo) *> awaitServer(repo, before),
-          lost = awaitServer(repo, before),
-        )
+        watching(log):
+          gated(repo)(
+            won = spawn(repo) *> awaitServer(repo, before),
+            lost = awaitServer(repo, before),
+          )
+
+  /** Print `compiling <file>` lines appended while `wait` runs. */
+  private def watching[R, E, A](log: Path)(wait: ZIO[R, E, A]): ZIO[R, E, A] =
+    BootNotice
+      .mark(log)
+      .flatMap: from =>
+        BootNotice
+          .follow(log, from)
+          .fork
+          .flatMap: relay =>
+            wait.ensuring(relay.interrupt)
 
   /** One command holds the gate across a stop and the start that follows it. */
   private def gated[R](repo: Path)(
@@ -1405,21 +1448,24 @@ object Cli:
     * process's.
     */
   private def bringUp(repo: Path, socket: Path): IO[ServerError, Path] =
+    val log = repo.resolve(".histos").resolve("server.log")
     histos.server.ServerStamp.note(repo).flatMap { before =>
-      gated(repo)(
-        won = histos.server.Attach.stop(repo, socket) *> Daemon.spawn(repo) *> awaitServer(repo, before),
-        lost = awaitServer(repo, before).flatMap { fresh =>
-          versionOf(repo).orElseSucceed(None).flatMap {
-            case None       => ZIO.succeed(fresh)
-            case Some(text) =>
-              histos.server.Record.read(repo).flatMap {
-                case Some(written) if written.version == text => ZIO.succeed(written.socket)
-                case Some(written) => ZIO.fail(ApiClock.restart(socket, text, written.version))
-                case None          => ZIO.fail(ServerError.Unreachable(socket))
-              }
-          }
-        },
-      )
+      watching(log) {
+        gated(repo)(
+          won = histos.server.Attach.stop(repo, socket) *> Daemon.spawn(repo) *> awaitServer(repo, before),
+          lost = awaitServer(repo, before).flatMap { fresh =>
+            versionOf(repo).orElseSucceed(None).flatMap {
+              case None       => ZIO.succeed(fresh)
+              case Some(text) =>
+                histos.server.Record.read(repo).flatMap {
+                  case Some(written) if written.version == text => ZIO.succeed(written.socket)
+                  case Some(written) => ZIO.fail(ApiClock.restart(socket, text, written.version))
+                  case None          => ZIO.fail(ServerError.Unreachable(socket))
+                }
+            }
+          },
+        )
+      }
     }
 
   /** A record written at or before `before` is the previous server. The socket can accept before the new file lands. */
@@ -1763,19 +1809,18 @@ object Cli:
       args: List[String],
       repo: Path,
       apiJar: Path,
-      line: String,
       commit: String,
   )(using Appearance, LockChoice): URIO[Local, Completed] =
-    sayError(line) *>
-      (histos.publish.PublishToken.from("histos") match
-        case Left(_)      => ZIO.dieMessage("the histos publish token is one word")
-        case Right(found) =>
-          locally(repo, apiJar, Call.PublishLocal(List(found), histos.publish.ProofScope.All)).flatMap: packed =>
-            val pin = packed.out.linesIterator.map(histos.ToolchainSkew.pin).collectFirst { case Some(id) => id }
-            (packed.exit, pin) match
-              case (CliExit.Success, Some(id)) =>
-                sayError(s"packed $commit. running $id") *> relaunch(args, repo, id)
-              case _ => ZIO.succeed(packed))
+    (histos.publish.PublishToken.from("histos") match
+      case Left(_)      => ZIO.dieMessage("the histos publish token is one word")
+      case Right(found) =>
+        locally(repo, apiJar, Call.PublishLocal(List(found), histos.publish.ProofScope.All)).flatMap: packed =>
+          val pin = packed.out.linesIterator.map(histos.ToolchainSkew.pin).collectFirst { case Some(id) => id }
+          (packed.exit, pin) match
+            case (CliExit.Success, Some(id)) =>
+              sayError(s"packed $commit. running $id") *> relaunch(args, repo, id)
+            case _ => ZIO.succeed(packed)
+    )
 
   /** Replace this process with `./histos` in `repo`, pinned to `id`. That shim execs the toolchain jar. The child's
     * status is this command's status. A command that could not start keeps the failure here.
@@ -2430,37 +2475,13 @@ object Cli:
       call: Call,
       local: => URIO[R, Completed],
   )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    attach(Nil, Path.of(""), repo, call, local)
-
-  private def attach[R](
-      args: List[String],
-      apiJar: Path,
-      repo: Path,
-      call: Call,
-      local: => URIO[R, Completed],
-  )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
     LockDisposition.unapplied(call, summon[LockChoice].mode) match
       case Some(mode) =>
         ZIO.succeed(held("", CallResult.Fault(BuildFault.Resolve(LockDisposition.refused(mode)))))
       case None =>
-        attachOpen(args, apiJar, repo, call, local)
+        attached(repo, call, local)
 
-  private def attachOpen[R](
-      args: List[String],
-      apiJar: Path,
-      repo: Path,
-      call: Call,
-      local: => URIO[R, Completed],
-  )(using Appearance, LockChoice): URIO[R & Stdio, Completed] =
-    ApiClock.admit(repo).flatMap { admitted =>
-      admitted match
-        case ApiClock.Admit.Rebuild(_, fact, _) =>
-          sayError(s"$fact. java -jar does not pack this checkout") *> attached(repo, call, local)
-        case ApiClock.Admit.Warn(line) => sayError(line) *> attached(repo, call, local)
-        case ApiClock.Admit.Go         => attached(repo, call, local)
-    }
-
-  /** The command, once the running jar is the one this checkout packs. */
+  /** The command on the toolchain this process is already running. */
   private def attached[R](
       repo: Path,
       call: Call,
@@ -3031,7 +3052,7 @@ object Cli:
 
   private def withLocal(machine: Machine)(body: URIO[Local, Completed]): URIO[Launched, Completed] =
     body.provideSome[Launched](
-      Loader.live,
+      Loader.durable,
       ZLayer.succeed(ContentStore.in(machine.cache)),
       ZLayer.succeed(machine),
       IvyRoot.ivy2Local,
@@ -3041,7 +3062,7 @@ object Cli:
       machine: Machine
   )(body: URIO[Loader & ContentStore & Launched, Completed]): URIO[Launched, Completed] =
     body.provideSome[Launched](
-      Loader.live,
+      Loader.durable,
       ZLayer.succeed(ContentStore.in(machine.cache)),
     )
 
