@@ -45,18 +45,18 @@ object ToolchainChecks:
   /** The warning `doctor` reports when the running jar was packed from another commit of this checkout. */
   def reported(owned: Boolean, identity: Option[ToolchainIdentity], head: Option[String]): Outcome =
     ApiClock.decide(owned, identity, head) match
-      case ApiClock.Admit.Warn(line)          => Outcome.Found(ToolchainDiagnostic.Local(line))
-      case ApiClock.Admit.Rebuild(line, _, _) => Outcome.Found(ToolchainDiagnostic.Local(line))
-      case ApiClock.Admit.Go                  =>
+      case ApiClock.Admit.Warn(line)       => Outcome.Found(ToolchainDiagnostic.Local(line))
+      case ApiClock.Admit.Rebuild(line, _) => Outcome.Found(ToolchainDiagnostic.Local(line))
+      case ApiClock.Admit.Go               =>
         Outcome.Ok(localId, "the packed commit is not in this checkout, or it matches HEAD")
 
   def local(repo: Path): UIO[List[Outcome]] =
     ApiClock
       .admit(repo)
       .map:
-        case ApiClock.Admit.Warn(line)          => List(Outcome.Found(ToolchainDiagnostic.Local(line)))
-        case ApiClock.Admit.Rebuild(line, _, _) => List(Outcome.Found(ToolchainDiagnostic.Local(line)))
-        case ApiClock.Admit.Go                  => List(reported(false, None, None))
+        case ApiClock.Admit.Warn(line)       => List(Outcome.Found(ToolchainDiagnostic.Local(line)))
+        case ApiClock.Admit.Rebuild(line, _) => List(Outcome.Found(ToolchainDiagnostic.Local(line)))
+        case ApiClock.Admit.Go               => List(reported(false, None, None))
 
   def jdk(machine: Machine): UIO[List[Outcome]] =
     Toolchain

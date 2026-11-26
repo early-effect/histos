@@ -146,17 +146,10 @@ object Main extends ZIOAppDefault:
 
   private def batch(call: Call, appearance: Appearance): ZIO[Scope, Nothing, Int] =
     val repo = Path.of("").toAbsolutePath.normalize
-    ApiClock.admit(repo).flatMap { admitted =>
-      val noted = admitted match
-        case ApiClock.Admit.Warn(line)          => ZIO.succeed(java.lang.System.err.println(line))
-        case ApiClock.Admit.Rebuild(_, fact, _) => ZIO.succeed(java.lang.System.err.println(fact))
-        case ApiClock.Admit.Go                  => ZIO.unit
-      noted *>
-        talk(repo, call, appearance).foldZIO(
-          error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
-          code => ZIO.succeed(leave(code, None)),
-        )
-    }
+    talk(repo, call, appearance).foldZIO(
+      error => ZIO.succeed(leave(CliExit.Failed.code, Some(error.message))),
+      code => ZIO.succeed(leave(code, None)),
+    )
 
   /** Print `line` when one is present, then `_exit`. `_exit` does not return. The code keeps the caller's type. */
   private def leave(code: Int, line: Option[String]): Int =

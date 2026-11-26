@@ -13,6 +13,9 @@ import zio.{IO, Ref, Scope, UIO, ZIO, ZLayer}
 trait Formatters:
   def format(request: FormatRequest): IO[FormatError, FormatReport]
 
+  /** Formats `code` as `file` under `config`. The ledger is not consulted: the caller holds the text. */
+  def formatText(repo: Path, config: Path, file: Path, code: String, jars: FormatterJars): IO[FormatError, String]
+
   /** How many times a scalafmt-dynamic was loaded. */
   def openings: UIO[Int]
 end Formatters
@@ -20,6 +23,15 @@ end Formatters
 object Formatters:
   def format(request: FormatRequest): ZIO[Formatters, FormatError, FormatReport] =
     ZIO.serviceWithZIO[Formatters](_.format(request))
+
+  def formatText(
+      repo: Path,
+      config: Path,
+      file: Path,
+      code: String,
+      jars: FormatterJars,
+  ): ZIO[Formatters, FormatError, String] =
+    ZIO.serviceWithZIO[Formatters](_.formatText(repo, config, file, code, jars))
 
   /** The loaded scalafmt is released when `Scope` closes. */
   val make: ZIO[Scope, Nothing, Formatters] =
@@ -37,6 +49,13 @@ private final class FormattersLive(
     opened: Ref[Int],
 ) extends Formatters:
   def openings: UIO[Int] = opened.get
+
+  def formatText(repo: Path, config: Path, file: Path, code: String, jars: FormatterJars): IO[FormatError, String] =
+    for
+      engine  <- engineFor(jars)
+      session <- engine.session(repo, config)
+      text    <- session.format(file, code).mapError(fault => FormatError.Config(file, FormattersLive.shown(fault)))
+    yield text
 
   def format(request: FormatRequest): IO[FormatError, FormatReport] =
     val FormatRequest(root, config, selection, mode, jars) = request
@@ -111,6 +130,14 @@ private final class FormattersLive(
       yield outcome
     formatted.fold(Outcome.Faulted(_), identity)
 end FormattersLive
+
+private object FormattersLive:
+  def shown(fault: FormatFault): String =
+    fault match
+      case FormatFault.Parse(_, line, column, reason) => s"$line:$column: $reason"
+      case FormatFault.Failed(_, reason)              => reason
+      case FormatFault.Read(failure)                  => failure.message
+      case FormatFault.Write(failure)                 => failure.message
 
 /** One file's verdict. `proved` is what the ledger may record as formatted. A file this run wrote is not proved:
   * scalafmt is not idempotent on every input, so only a later run that leaves the bytes alone proves it.

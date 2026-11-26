@@ -1,6 +1,5 @@
 package histos.server
 
-import histos.ApiClock
 import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame, FrameQueue, Rpc}
 import histos.cli.Operation
@@ -781,25 +780,16 @@ object Daemon:
                             ServerError,
                             Unit,
                           ] =
-                            ApiClock.admit(repo).flatMap { admitted =>
-                              val noted = admitted match
-                                case ApiClock.Admit.Warn(line) =>
-                                  out(Message.Event(histos.build.BuildEvent.Err(line)))
-                                case ApiClock.Admit.Rebuild(_, fact, _) =>
-                                  out(Message.Event(histos.build.BuildEvent.Err(fact)))
-                                case ApiClock.Admit.Go => ZIO.unit
-                              noted *>
-                                (if adopts(target) then withGraph(target, out, relay)
-                                 else
-                                   val chosen = target match
-                                     case Call.Resolve(_) =>
-                                       histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
-                                     case _ =>
-                                       ZIO.succeed(machine)
-                                   chosen.flatMap { fresh =>
-                                     occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit, relay))
-                                   })
-                            }
+                            if adopts(target) then withGraph(target, out, relay)
+                            else
+                              val chosen = target match
+                                case Call.Resolve(_) =>
+                                  histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
+                                case _ =>
+                                  ZIO.succeed(machine)
+                              chosen.flatMap { fresh =>
+                                occupy(permit, target)(execute(target, out, Right(None), fresh, ZIO.unit, relay))
+                              }
 
                           def watched(
                               inner: Call,
