@@ -36,7 +36,7 @@ jobs:
           fetch-tags: "true"
           persist-credentials: false
       - run: git remote set-head origin --auto
-      - uses: early-effect/histos/.github/actions/setup@2ae3763548df7f1054dda0028d5d05f7acb4397b # 2ae3763548df7f1054dda0028d5d05f7acb4397b
+      - uses: early-effect/histos/.github/actions/setup@6d1eb0f2850b3e99870a9627c4da4cd68c8d82a4 # 6d1eb0f2850b3e99870a9627c4da4cd68c8d82a4
       - run: ./histos deps update --yes
       - run: ./histos resolve --update
       - run: ./histos workflow --update
