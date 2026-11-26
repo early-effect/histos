@@ -340,7 +340,9 @@ object Projects:
     */
   def theme(value: Theme): Organized = Organized.empty.theme(value)
 
-  /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
+  /** Caps every generated job. Omission writes no `timeout-minutes`. GitHub's default is 360 minutes.
+    * [[JobTimeout.Unbounded]] is that omission.
+    */
   def jobTimeout(value: JobTimeout): Organized = Organized.empty.jobTimeout(value)
 
   /** Caps each resource class. Omission is one permit per core. A second call replaces the ceiling. `max` is at least 1.
@@ -1160,8 +1162,8 @@ final class Organized private (settings: Organized.Settings):
     */
   def coverageExcludes(value: CoverageExcludes): Organized = Organized(settings.copy(coverageExcludes = value))
 
-  /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including
-    * this.
+  /** Caps every generated job. Omission writes no `timeout-minutes`. A second call replaces the cap. [[ci]] replaces
+    * the whole settings value, including this.
     */
   def jobTimeout(value: JobTimeout): Organized =
     ci(settings.ci.copy(timeout = value))

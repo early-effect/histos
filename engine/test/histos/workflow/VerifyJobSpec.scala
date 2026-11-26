@@ -8,6 +8,7 @@ import histos.{
   Axis,
   BuildError,
   ClientLink,
+  JobTimeout,
   Js,
   JsEnv,
   Jvm,
@@ -276,6 +277,19 @@ object VerifyJobSpec extends HistosSpec:
           seed.contains("setup-node") && doc.contains("setup-node")
         } == Right(true)
       )
+    },
+    test("omission writes no timeout-minutes") {
+      val text = render(Projects(api), NpmLock.Absent)
+      assertTrue(text.exists(!_.contains("timeout-minutes")))
+    },
+    test("an explicit job timeout is written on every job") {
+      val text = render(Projects.jobTimeout(JobTimeout.minutes(90))(api), NpmLock.Absent)
+      assertTrue(text.exists { body =>
+        val lines = body.split("\n", -1)
+        val jobs  = lines.count(_.trim.startsWith("runs-on:"))
+        val caps  = lines.count(_.trim == "timeout-minutes: 90")
+        jobs > 0 && jobs == caps
+      })
     },
   )
 

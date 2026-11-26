@@ -141,7 +141,7 @@ object build extends HistosBuild:
       .testDependsOn(suite)
     val library =
       ship
-        .next(0, 7, 0)(histos, api, wire, splice, central, engine)
+        .next(0, 7, 1)(histos, api, wire, splice, central, engine)
         .toolchain(launcher = histos, client = client)
     val docs = module("docs", Jvm, Js)(scala3)
       .dependsOn(Jvm)(api, histos)
