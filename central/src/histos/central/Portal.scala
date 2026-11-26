@@ -99,7 +99,7 @@ object PortalError:
 
 /** Upload, promote, and drop against one portal base. The layer does not read the environment. */
 trait Portal:
-  def upload(bundle: Chunk[Byte], mode: ReleaseMode): IO[PortalError, Deployment]
+  def upload(bundle: Chunk[Byte], mode: ReleaseMode, name: DeploymentName): IO[PortalError, Deployment]
   def promote(id: DeploymentId): IO[PortalError, Unit]
   def drop(id: DeploymentId): IO[PortalError, Unit]
 
@@ -175,10 +175,10 @@ private final class PortalClient(
   private val token =
     "Bearer " + BasicCredentials.render(credentials.user.value, new String(credentials.password.value.toArray))
 
-  def upload(bundle: Chunk[Byte], mode: ReleaseMode): IO[PortalError, Deployment] =
+  def upload(bundle: Chunk[Byte], mode: ReleaseMode, name: DeploymentName): IO[PortalError, Deployment] =
     for
-      _     <- note("uploading bundle to the portal")
-      id    <- Portal.keep(note, "uploading...")(posted(bundle, mode).tapError(error => note(error.message)))
+      _     <- note(s"uploading ${name.value} to the portal")
+      id    <- Portal.keep(note, "uploading...")(posted(bundle, mode, name).tapError(error => note(error.message)))
       state <- until(id, ready(mode))
     yield Deployment(id, state)
 
@@ -188,9 +188,9 @@ private final class PortalClient(
   def drop(id: DeploymentId): IO[PortalError, Unit] =
     completed(Method.DELETE, id)
 
-  private def posted(bundle: Chunk[Byte], mode: ReleaseMode): IO[PortalError, DeploymentId] =
+  private def posted(bundle: Chunk[Byte], mode: ReleaseMode, name: DeploymentName): IO[PortalError, DeploymentId] =
     val url = (base.root / "api" / "v1" / "publisher" / "upload")
-      .copy(query = QueryParams.of("publishingType" -> publishingType(mode)))
+      .copy(query = QueryParams.of("name" -> name.value, "publishingType" -> publishingType(mode)))
     val field = FormField.Binary("bundle", bundle, filename = Some("bundle.zip"))
     Body.multipart(Chunk.single(field)).flatMap { body =>
       exchange(Method.POST, url, body).flatMap(accepted)

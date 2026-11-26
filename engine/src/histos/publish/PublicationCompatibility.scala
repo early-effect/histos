@@ -32,8 +32,8 @@ final class PublicationCompatibility(verification: CompatibilityVerification):
       case rows =>
         ZIO
           .foreachPar(rows): (ship, member, version) =>
-            val artifact                                          = ArtifactName.module(member, version, Platform.Jvm)
-            val coordinate                                        = PublicationCoordinate(group, artifact)
+            val artifact   = ArtifactName.module(member, version, Platform.Jvm, Some(ship.name))
+            val coordinate = PublicationCoordinate(group, artifact)
             def failure(outcome: PublicationCompatibilityOutcome) =
               PublicationCompatibilityFailure(ship.name, ship.release, member.name, version, coordinate, outcome)
             for
@@ -95,7 +95,7 @@ object PublicationCompatibility:
             ship.release,
             member.name,
             version,
-            PublicationCoordinate(group, ArtifactName.module(member, version, Platform.Jvm)),
+            PublicationCoordinate(group, ArtifactName.module(member, version, Platform.Jvm, Some(ship.name))),
             PublicationCompatibilityOutcome.Incomplete(gap(CompatibilityIncomplete.AnalysisFailed(error)), None),
           )
         ZIO

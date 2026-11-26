@@ -21,7 +21,6 @@ object build extends HistosBuild:
     val api        = module("api", Jvm, Native)(scala3)
       .clang(ClangMajor(21))
       .nativeVersion(nativeNightly)
-      .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
       .testDependsOn(suite)
@@ -56,7 +55,6 @@ object build extends HistosBuild:
     val jackson3        = dep"tools.jackson.core:jackson-core:3.2.4"
     val jackson3Bind    = jackson3.module("jackson-databind")
     val splice          = module("splice", Jvm)(scala3)
-      .artifact(artifact"histos-splice")
       .libraryDependencies(
         zio,
         dep"io.get-coursier::coursier-cache:2.1.26",
@@ -119,9 +117,11 @@ object build extends HistosBuild:
       .dependsOn(wire)
       .libraryDependencies(zio, zioJson)
       .main(MainClass("histos.client.Main"))
-    val app = module("app", Jvm)(scala3)
+    val ship   = Ship("histos")
+    val histos = ship
+      .parent(Jvm)(scala3)
+      .in(path"app")
       .scalac(ScalacFlag.MaxInlines)
-      .artifact(artifact"histos")
       .assembly(MainClass("histos.cli.Main"))
       .asset(asset"dist/histos.jar")
       .dependsOn(engine, central, api, wire)
@@ -140,9 +140,11 @@ object build extends HistosBuild:
       )
       .testDependsOn(suite)
     val library =
-      Ship("histos").next(0, 5, 0)(api, wire, splice, central, engine, app).toolchain(launcher = app, client = client)
+      ship
+        .next(0, 6, 0)(histos, api, wire, splice, central, engine)
+        .toolchain(launcher = histos, client = client)
     val docs = module("docs", Jvm, Js)(scala3)
-      .dependsOn(Jvm)(api, app)
+      .dependsOn(Jvm)(api, histos)
       .note(PluginId("dev.earlyeffect.specular"), NoteKey("library"), shipNote(library.number.render))
       .main(MainClass("histos.docs.ClientMain"))
       .libraryDependencies(
@@ -199,7 +201,7 @@ object build extends HistosBuild:
         client,
         central,
         engine,
-        app,
+        histos,
         pluginTestkit,
         suite,
         docs,

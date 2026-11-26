@@ -3,6 +3,7 @@ package histos.workflow
 import histos.doctor.Suggest
 import histos.plugin.{CiExtra, CiHeader}
 import histos.publish.DistLayout
+import histos.resolve.ArtifactName
 import histos.schedule.{CacheConfig, CacheNamespace}
 import histos.Promote
 import histos.version.{Catalog, Ship}
@@ -613,7 +614,7 @@ object Workflow:
       case Some(org) =>
         graph.get(name) match
           case Some(module: Module) =>
-            val artifact = module.published.fold(module.name.value)(_.value)
+            val artifact = ArtifactName.base(module, ArtifactName.owning(graph, name))
             Right(org.value -> artifact)
           case _ => Left(CiError.NotModule(name))
 

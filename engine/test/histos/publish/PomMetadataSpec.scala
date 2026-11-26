@@ -184,7 +184,7 @@ object PomMetadataSpec extends HistosSpec:
       yield assertTrue(
         text == List("module & <text>", "Early & <Effect>", "https://example.com/?a=1&b=2"),
         LocalPublish.document(graph, ShipName("heddle"), describedModule).name.contains(PomText("heddle-core")),
-        LocalPublish.document(graph, ShipName("heddle"), plainModule).name.contains(PomText("plain")),
+        LocalPublish.document(graph, ShipName("heddle"), plainModule).name.contains(PomText("heddle-plain")),
         LocalPublish
           .document(graph, ShipName("heddle"), describedModule)
           .description

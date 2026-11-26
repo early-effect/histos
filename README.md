@@ -26,7 +26,7 @@ cd <name>
 
 ## Builds that use new APIs
 
-The project's `histos.version` pin selects the toolchain that compiles `histos.scala`, not just the launcher. A build using scoped roots, scoped plugin emissions or `MetadataUri` needs a snapshot containing those APIs. Obtain the matching snapshot coordinate from the integrating build, then:
+The project's `histos.version` pin selects the toolchain that compiles `histos.scala`, not just the launcher. A build using scoped roots, scoped plugin emissions, `MetadataUri`, or `ship.parent` needs a snapshot containing those APIs. Obtain the matching snapshot coordinate from the integrating build, then:
 
 1. Run `histos toolchain install <snapshot-version> --no-client` with the installed launcher.
 2. Set `histos.version=<snapshot-version>` in `build.properties`.

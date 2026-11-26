@@ -162,7 +162,7 @@ sealed trait ModuleDef[P] extends ProjectDef:
   def pipe(f: ModuleDef[P] => ModuleDef[P]): ModuleDef[P] =
     f(this)
 
-  /** The published artifact id, without a Scala or platform suffix. A second call replaces it. */
+  /** Replaces the base the owning ship would publish. No Scala or platform suffix. A second call replaces it. */
   def artifact(name: ArtifactBase): ModuleDef[P]
 
   /** Publish the library jar. A second publication on this module is refused at load. */
@@ -171,7 +171,9 @@ sealed trait ModuleDef[P] extends ProjectDef:
   /** Publish an sbt plugin. `series` is the binary series: `sbt"2"` stages `name_sbt2_3` on Scala 3. */
   def sbtPlugin(series: SbtSeries): ModuleDef[P]
 
-  /** Publish one JVM fat jar. The pom lists no dependencies. A second publication is refused at load. */
+  /** Publish the launcher coordinate. No Scala suffix. The pom lists the classpath, and the installing machine builds
+    * the fat jar. A second publication is refused at load.
+    */
   def assembly(main: MainClass): ModuleDef[P]
 
   /** Publish the thin jar. The pom lists the classpath. A second publication is refused at load. */

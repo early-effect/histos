@@ -149,7 +149,9 @@ object ShipChecks:
     for
       group  <- graph.organization
       member <- ship.members.flatMap(name => graph.get(name).collect { case module: Module => module }).headOption
-      id     <- ArtifactId.from(ArtifactName.module(member, member.versions.first, member.platforms.first)).toOption
+      id     <- ArtifactId
+        .from(ArtifactName.module(member, member.versions.first, member.platforms.first, Some(ship.name)))
+        .toOption
     yield MavenModule(group, id)
 
   private def bump(ship: Ship.Line, relation: Option[TagRelation], listing: Listing): Option[Outcome] =
