@@ -619,6 +619,7 @@ install_coordinate() {
   cp=$(fetch_classpath "$manifest" "$group" "$artifact" "$revision") || fail "could not resolve $group:$artifact:$revision"
   [ -n "$cp" ] || fail "could not resolve $group:$artifact:$revision"
   pack_repositories "$manifest" "$revision"
+  echo "packing $group:$artifact:$revision" >&2
   # shellcheck disable=SC2086
   "$java_bin" -cp "$cp" histos.pack.Pack \
     --out "$jar" \

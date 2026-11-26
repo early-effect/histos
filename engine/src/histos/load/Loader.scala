@@ -31,17 +31,29 @@ end Loader
 
 object Loader:
   val live: zio.ZLayer[Resolve, Nothing, Loader] =
+    layer(BuildCache.ephemeral)
+
+  /** Server and in-process commands. The store outlives the process. */
+  val durable: zio.ZLayer[Resolve, Nothing, Loader] =
+    layer(BuildCache.durable)
+
+  private def layer(cache: zio.ZLayer[Scope, Nothing, BuildCache.Env]): zio.ZLayer[Resolve, Nothing, Loader] =
     zio.ZLayer.fromZIO(for
       resolve  <- ZIO.service[Resolve]
       products <- PluginProducts.make()
-    yield LoaderLive(resolve, products))
+    yield LoaderLive(resolve, products, cache))
+end Loader
 
 /** Compiles `histos.scala`, reads the graph, compiles in-repo plugin modules, then ship pins. A locked graph fetches
   * those pins. A solve asks `Resolve`. A catalog load of a distribution jar checks its compiler payload. A classes
   * directory does not. `histos.wiring.scala` is not compiled. `loadLocked` solves even when the graph is locked:
   * `resolve update` writes the cells afterwards.
   */
-private final class LoaderLive(resolve: Resolve, products: PluginProducts) extends Loader:
+private final class LoaderLive(
+    resolve: Resolve,
+    products: PluginProducts,
+    cache: zio.ZLayer[Scope, Nothing, BuildCache.Env],
+) extends Loader:
   def reportBuild(repo: Path, classpath: List[Path]): IO[LoadError, BuildNotes] =
     ZIO.scoped:
       for
@@ -74,7 +86,7 @@ private final class LoaderLive(resolve: Resolve, products: PluginProducts) exten
       payloadOf.flatMap: payload =>
         BootstrapLoad
           .prepare(resolve, BootstrapLoad.Prepare(repo, apiJar, payload = payload, lockMode = mode))
-          .provideSomeLayer[Scope](BuildCache.ephemeral ++ zio.ZLayer.succeed(products)),
+          .provideSomeLayer[Scope](cache ++ zio.ZLayer.succeed(products)),
       open(repo, apiJar, if mode.isDefined then ShipSource.Solve else ShipSource.Follow),
     )
 
@@ -109,7 +121,7 @@ private final class LoaderLive(resolve: Resolve, products: PluginProducts) exten
         sourceFile <- BuildFile.writeTemp(text)
         _          <- BuildFile.compileLabeled(List(sourceFile -> "histos.scala"), boundary, out)
         graph      <- readGraph(out)
-        modules    <- PluginModules.compile(repo, graph, boundary, resolve)
+        modules    <- PluginModules.compile(repo, graph, boundary, resolve).provideSomeLayer[Scope](cache)
         ships      <- shipsOf(repo, graph, launcher, source)
         plugins = modules ++ ships
         opened  <- ZIO.acquireRelease(BuildFile.open(out, plugins))(BuildFile.close)

@@ -26,7 +26,7 @@ import histos.zinc.{GraphCompile, ScalacClasspath}
 
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, Ref, UIO, ZIO, ZLayer, durationInt}
+import zio.{Chunk, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ApiPinSpec extends HistosSpec:
@@ -209,6 +209,7 @@ object ApiPinSpec extends HistosSpec:
                 boundary <- Boundary.jars(api).catchAll(error => ZIO.dieMessage(error.message))
                 exit     <- PluginModules
                   .compile(repo, named, boundary, Keeping(inner, jar, apiDep, asked))
+                  .provideSomeLayer[Scope](BuildCache.ephemeral)
                   .either
               yield assertTrue(
                 exit.isRight,

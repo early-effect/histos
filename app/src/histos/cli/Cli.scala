@@ -17,6 +17,7 @@ import histos.server.{
   ConsentDesk,
   ForgetTarget,
   Client,
+  BootNotice,
   Daemon,
   Decision,
   Feed,
@@ -1394,13 +1395,26 @@ object Cli:
         else ZIO.succeed(Right(None))
 
   private def startServer(repo: Path, spawn: Path => IO[ServerError, Unit]): IO[ServerError, Path] =
+    val log = repo.resolve(".histos").resolve("server.log")
     histos.server.ServerStamp
       .note(repo)
       .flatMap: before =>
-        gated(repo)(
-          won = spawn(repo) *> awaitServer(repo, before),
-          lost = awaitServer(repo, before),
-        )
+        watching(log):
+          gated(repo)(
+            won = spawn(repo) *> awaitServer(repo, before),
+            lost = awaitServer(repo, before),
+          )
+
+  /** Print `compiling <file>` lines appended while `wait` runs. */
+  private def watching[R, E, A](log: Path)(wait: ZIO[R, E, A]): ZIO[R, E, A] =
+    BootNotice
+      .mark(log)
+      .flatMap: from =>
+        BootNotice
+          .follow(log, from)
+          .fork
+          .flatMap: relay =>
+            wait.ensuring(relay.interrupt)
 
   /** One command holds the gate across a stop and the start that follows it. */
   private def gated[R](repo: Path)(
@@ -1434,21 +1448,24 @@ object Cli:
     * process's.
     */
   private def bringUp(repo: Path, socket: Path): IO[ServerError, Path] =
+    val log = repo.resolve(".histos").resolve("server.log")
     histos.server.ServerStamp.note(repo).flatMap { before =>
-      gated(repo)(
-        won = histos.server.Attach.stop(repo, socket) *> Daemon.spawn(repo) *> awaitServer(repo, before),
-        lost = awaitServer(repo, before).flatMap { fresh =>
-          versionOf(repo).orElseSucceed(None).flatMap {
-            case None       => ZIO.succeed(fresh)
-            case Some(text) =>
-              histos.server.Record.read(repo).flatMap {
-                case Some(written) if written.version == text => ZIO.succeed(written.socket)
-                case Some(written) => ZIO.fail(ApiClock.restart(socket, text, written.version))
-                case None          => ZIO.fail(ServerError.Unreachable(socket))
-              }
-          }
-        },
-      )
+      watching(log) {
+        gated(repo)(
+          won = histos.server.Attach.stop(repo, socket) *> Daemon.spawn(repo) *> awaitServer(repo, before),
+          lost = awaitServer(repo, before).flatMap { fresh =>
+            versionOf(repo).orElseSucceed(None).flatMap {
+              case None       => ZIO.succeed(fresh)
+              case Some(text) =>
+                histos.server.Record.read(repo).flatMap {
+                  case Some(written) if written.version == text => ZIO.succeed(written.socket)
+                  case Some(written) => ZIO.fail(ApiClock.restart(socket, text, written.version))
+                  case None          => ZIO.fail(ServerError.Unreachable(socket))
+                }
+            }
+          },
+        )
+      }
     }
 
   /** A record written at or before `before` is the previous server. The socket can accept before the new file lands. */
@@ -3035,7 +3052,7 @@ object Cli:
 
   private def withLocal(machine: Machine)(body: URIO[Local, Completed]): URIO[Launched, Completed] =
     body.provideSome[Launched](
-      Loader.live,
+      Loader.durable,
       ZLayer.succeed(ContentStore.in(machine.cache)),
       ZLayer.succeed(machine),
       IvyRoot.ivy2Local,
@@ -3045,7 +3062,7 @@ object Cli:
       machine: Machine
   )(body: URIO[Loader & ContentStore & Launched, Completed]): URIO[Launched, Completed] =
     body.provideSome[Launched](
-      Loader.live,
+      Loader.durable,
       ZLayer.succeed(ContentStore.in(machine.cache)),
     )
 
