@@ -313,7 +313,7 @@ the Histos pin.
       md"""
 `histos publish release` publishes the number on the ship's `.next`. It runs only when
 `HISTOS_SESSION=release`. `--automatic` publishes and waits until the portal reports the
-deployment published.
+deployment published. Central shows that deployment as `organization ship version`.
 """
     ),
     section("publish assets")(

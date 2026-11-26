@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.central.{
   DeploymentId,
+  DeploymentName,
   DeploymentState,
   Fingerprint,
   Gav,
@@ -249,32 +250,38 @@ private[publish] object ReleaseRun:
       mode: ReleaseMode,
       note: String => UIO[Unit],
   ): UIO[Sent] =
-    val gavs = Chunk.fromIterable(
-      body.ship.modules.map(module => Gav(module.group.value, module.artifact, module.revision))
-    )
-    note(s"uploading ${body.ship.ship.value} to the portal") *>
-      Preflight
-        .release(staged.env, gavs, staged.fingerprint, portal.upload(body.bytes, mode))
-        .foldZIO(
-          error =>
-            val sent = sentOf(body.ship.ship, error)
-            ZIO.foreachDiscard(sent.failed ++ sent.held)(note).as(sent)
-          ,
-          deployment =>
-            DeploymentFile
-              .write(repo, body.ship.ship, deployment.id, deployment.state, body.ship.version)
-              .foldZIO(
-                error => note(error.message).as(Sent(Nil, List(error.message), Nil)),
-                _ =>
-                  ZIO.succeed(
-                    Sent(
-                      Nil,
-                      Nil,
-                      List(Deployed(body.ship.ship, deployment.id, deployment.state, body.ship.version)),
-                    )
-                  ),
-              ),
+    body.ship.modules match
+      case Nil =>
+        val line = s"${body.ship.ship.value} has no modules"
+        note(line).as(Sent(Nil, List(line), Nil))
+      case head :: _ =>
+        val label = DeploymentName.of(head.group, body.ship.ship, body.ship.version)
+        val gavs  = Chunk.fromIterable(
+          body.ship.modules.map(module => Gav(module.group.value, module.artifact, module.revision))
         )
+        note(s"uploading ${label.value} to the portal") *>
+          Preflight
+            .release(staged.env, gavs, staged.fingerprint, portal.upload(body.bytes, mode, label))
+            .foldZIO(
+              error =>
+                val sent = sentOf(body.ship.ship, error)
+                ZIO.foreachDiscard(sent.failed ++ sent.held)(note).as(sent)
+              ,
+              deployment =>
+                DeploymentFile
+                  .write(repo, body.ship.ship, deployment.id, deployment.state, body.ship.version)
+                  .foldZIO(
+                    error => note(error.message).as(Sent(Nil, List(error.message), Nil)),
+                    _ =>
+                      ZIO.succeed(
+                        Sent(
+                          Nil,
+                          Nil,
+                          List(Deployed(body.ship.ship, deployment.id, deployment.state, body.ship.version)),
+                        )
+                      ),
+                  ),
+            )
 
   private def sentOf(ship: ShipName, error: PreflightError): Sent =
     error match

@@ -48,9 +48,10 @@ platform.
 You write a Scala version as `scala"x.y.z"` and a dependency as `dep"org::name:revision"`.
 Those are macros. A version that is not a full Scala version, or a dependency that is not
 a real coordinate, fails compilation of `histos.scala`. Histos never gets as far as
-resolving it. A catalog row, the thing you publish, is
-`Ship("name").next(major, minor, patch)(the modules)`. The number on `next` is the next
-release. You do not write `SNAPSHOT` in the catalog.
+resolving it. Bind the ship once. `Ship("name").parent(Jvm)(scala"3.8.1")` is the
+member named like the ship. `ship.next(major, minor, patch)(the modules)` is the
+catalog row. The number on `next` is the next release. You do not write `SNAPSHOT`
+in the catalog.
 """,
       cite[histos.Dep.type](_.from),
     ),
@@ -169,8 +170,10 @@ Projects.parallelism(2)
       md"""
 This repository is itself a Histos build. `object build extends HistosBuild` in
 `histos.scala` returns the graph. The ship lists the modules that are published, and it
-names two roles: `app` is the launcher people run, and `client` is the optional native
-client. Reading that file is the example. The manual does not keep a second copy of the
+names two roles: `histos`, declared with `ship.parent`, is the launcher people run,
+with its sources in `app/`, and `client` is the optional native client. Reading that
+file is the example. The manual
+does not keep a second copy of the
 version numbers.
 """,
       cite[histos.ShipDef].signature.elided(16),

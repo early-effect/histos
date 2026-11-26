@@ -7,9 +7,20 @@ import histos.version.{CommitSha, ReleaseVersion, Revision, ShipName, ShipNumber
 
 /** A ship named at the call site, before its next release is chosen. */
 final class ShipStart private (val name: ShipName):
+  /** The member published as this ship. Its name is the ship name. Platforms and Scala versions match `module`. */
+  transparent inline def parent(
+      inline platform: Platform,
+      inline platforms: Platform*
+  )(
+      version: ScalaVersion,
+      versions: ScalaVersion*
+  ): ModuleDef[?] =
+    ${ ShipDslMacro.parent('this, 'platform, 'platforms, 'version, 'versions) }
+
   /** The next release. Components are non-negative integer literals. */
   inline def next(inline major: Int, inline minor: Int, inline patch: Int): ShipDraft =
     ${ ShipDslMacro.next('this, 'major, 'minor, 'patch) }
+end ShipStart
 
 object ShipStart:
   @publicInBinary private[histos] def trusted(name: ShipName): ShipStart =
@@ -73,7 +84,10 @@ object ReleasePin:
   @publicInBinary private[histos] def trusted(number: ShipNumber): ReleasePin =
     new ReleasePin(number)
 
-/** `Ship("histos").next(0, 2, 2)(api, app)` is one catalog row. The number is the next release. */
+/** Bind one `Ship`. `ship.parent(Jvm)(scala"3.8.1")` is the member named like the ship.
+  * `ship.next(0, 2, 2)(histos, api)` publishes `histos` and `histos-api`. `.artifact` replaces a base. The number is
+  * the next release.
+  */
 object Ship:
   inline def apply(inline name: String): ShipStart =
     ${ ShipDslMacro.start('name) }
@@ -94,6 +108,15 @@ private object ShipDslMacro:
             report.errorAndAbort(nameMessage(text), raw)
           case Right(_) =>
             '{ ShipStart.trusted(ShipName.trusted(${ Expr(text) })) }
+
+  def parent(
+      ship: Expr[ShipStart],
+      platform: Expr[Platform],
+      platforms: Expr[Seq[Platform]],
+      version: Expr[ScalaVersion],
+      versions: Expr[Seq[ScalaVersion]],
+  )(using Quotes): Expr[ModuleDef[?]] =
+    BuilderMacro.module('{ $ship.name.value }, platform, platforms, version, versions)
 
   def next(
       start: Expr[ShipStart],

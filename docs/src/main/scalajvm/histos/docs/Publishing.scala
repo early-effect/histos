@@ -13,11 +13,12 @@ object Publishing extends DocSpec:
 Publishing is how a module becomes a coordinate other builds can depend on. Histos keeps
 two different version numbers, and mixing them up is the usual mistake.
 
-A ship is a row in the catalog inside `histos.scala`. It names the modules that publish
-together and the next release number, written as `.next(major, minor, patch)`. You never
-write `SNAPSHOT` on that row. When you publish a snapshot, Histos derives the snapshot
-coordinate from the commit. When you publish a release, it publishes the number on
-`.next`.
+A ship is a row in the catalog inside `histos.scala`. Bind it once, as
+`val ship = Ship("histos")`. `ship.parent(Jvm)(scala"3.8.1")` is the member whose name
+is the ship. `ship.next(major, minor, patch)(the modules)` names the modules that
+publish together and the next release number. You never write `SNAPSHOT` on that row.
+When you publish a snapshot, Histos derives the snapshot coordinate from the commit.
+When you publish a release, it publishes the number on `.next`.
 
 `histos.version` in `build.properties` is not that number. It is the Histos toolchain
 this project runs. Changing the ship does not change the toolchain, and `histos bump`
@@ -35,8 +36,19 @@ lifting it into ZIO. `url"..."` still constructs `HttpUrl`, the HTTPS network
 capability. It no longer fits publication URL parameters. There is no implicit
 conversion between the two.
 
-POM descriptions prefer module, then ship, then organization. The POM name is the
-unsuffixed artifact base (or module name). Developer identity, email and homepage,
+POM descriptions prefer module, then ship, then organization. The POM `<name>` is the
+base a module publishes under. The member whose name is the ship name publishes as
+that name. `ship.parent(Jvm)(scala"3.8.1")` is that member: its name is the ship, so
+the two cannot drift. A name that already starts with `ship-` stays. Every other
+member publishes as `ship-` plus its name, so `wire` in ship `histos` publishes as
+`histos-wire`. A name that only shares the ship's letters, such as `historical`,
+still gains the prefix. `.artifact` replaces that base. A module in no ship
+publishes as its name. An assembly keeps the base and takes no Scala suffix. A
+library or an application adds the platform and Scala suffix, so JVM `wire` is
+`histos-wire_3`, Scala.js is `histos-wire_sjs1_3`, and Native is
+`histos-wire_native0.5_3`. An sbt plugin puts the series in front of that suffix
+(`histos-wire_sbt2_3`).
+Developer identity, email and homepage,
 organization display name/homepage, SCM connections, license and version scheme
 are publication facts, not runtime dependencies.
 
@@ -59,6 +71,12 @@ the handoff without relying on a temporary source-launcher script.
         val parsed = ZIO.fromEither(MetadataUri.from("https://example.org/project"))
         parsed.map(_.value)
       }.assert(uri => assertTrue(uri == "https://example.org/project")),
+      exampleValue {
+        import histos.*
+
+        val ship = Ship("histos")
+        ship.parent(Jvm)(scala"3.8.1").name
+      }.assert(name => assertTrue(name == "histos")),
     ),
     section("Which command to run")(
       md"""
@@ -134,7 +152,9 @@ next patch. A binary difference is reported by publish, not by doctor.
 The default release publishes to Maven Central's portal and waits until the portal says
 the deployment is published. You do not have to promote it by hand. A build that wants
 the other behavior sets a different release mode. Automatic is the one Histos itself
-uses.
+uses. Central shows the deployment as `organization ship version`, for example
+`rocks.earlyeffect histos 0.2.2`. Automatic sends `publishingType=AUTOMATIC`. A held
+release sends `USER_MANAGED`. The upload file is `bundle.zip`.
 """,
       cite[histos.HistosBuild](_.sona),
       cite[histos.ReleaseMode].signature,

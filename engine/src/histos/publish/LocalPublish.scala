@@ -531,7 +531,7 @@ object LocalPublish:
       organizationName = graph.facts.organizationName,
       organizationHomepage = graph.facts.organizationHomepage,
       versionScheme = graph.facts.versionScheme,
-      name = Some(histos.PomText.trusted(module.published.fold(module.name.value)(_.value))),
+      name = Some(histos.PomText.trusted(ArtifactName.base(module, Some(ship)))),
     )
 
   private def publishedRevision(
@@ -936,8 +936,9 @@ object LocalPublish:
       platform: Platform,
   ): String =
     graph.get(name) match
-      case Some(module: Module) => ArtifactName.module(module, version, platform)
-      case _                    => ArtifactName.published(name.value, version, platform)
+      case Some(module: Module) =>
+        ArtifactName.module(module, version, platform, ArtifactName.owning(graph, name))
+      case _ => ArtifactName.published(name.value, version, platform)
 
   private def cached(error: LocalPublishError | RemoteError | CacheError): LocalPublishError =
     error match
