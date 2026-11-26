@@ -2,15 +2,17 @@ package histos
 
 import _root_.scala.quoted.*
 
-/** How long a generated job may run. The default is [[JobTimeout.Minutes]] of 30. [[JobTimeout.Unbounded]] is the
-  * opt-out, and it is the only strategy that leaves GitHub's platform limit in place.
+/** How long a generated job may run.
+  *
+  * [[JobTimeout.Unbounded]] is the default. It writes no `timeout-minutes`, so GitHub applies its own default of 360
+  * minutes. [[JobTimeout.Minutes]] is a cap a build sets with [[JobTimeout.minutes]] or [[JobTimeout.from]].
   */
 enum JobTimeout:
   case Minutes(count: Int)
   case Unbounded
 
 object JobTimeout:
-  val default: JobTimeout = Minutes(30)
+  val default: JobTimeout = Unbounded
 
   /** GitHub rejects a `timeout-minutes` outside this range. */
   val ceiling: Int = 360

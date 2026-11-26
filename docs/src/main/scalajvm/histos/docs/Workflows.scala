@@ -58,6 +58,18 @@ repository and does not upload, so a generated workflow cannot install its resul
       cite[histos.workflow.CiInstall.type](_.ActionPath),
       cite[histos.workflow.Workflow.type](_.requiredJobs),
     ),
+    section("Job timeout")(
+      md"""
+A build that does not call `jobTimeout` writes no `timeout-minutes`. GitHub then
+applies its own default, 360 minutes. `jobTimeout` is how a generated job gets a
+shorter cap, and that cap is written on every job.
+
+```scala
+Projects.jobTimeout(JobTimeout.minutes(90))
+```
+""",
+      cite[histos.Projects.type](_.jobTimeout),
+    ),
     section("A plugin can add a job")(
       md"""
 The generated file is not only compile and test. A plugin can contribute a job. Histos

@@ -12,7 +12,6 @@ jobs:
       publish: ${{ steps.eligibility.outputs.publish }}
     if: "github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)"
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read
@@ -44,7 +43,6 @@ jobs:
     needs: eligibility
     if: needs.eligibility.outputs.publish == 'true'
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: read
@@ -57,7 +55,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: early-effect/histos/.github/actions/setup@ef7484592c11c0138d7e9cb0e29398838f3d301e # ef7484592c11c0138d7e9cb0e29398838f3d301e
+      - uses: early-effect/histos/.github/actions/setup@b39444ecc4b25dec43f92f35896fbd0009d0f680 # b39444ecc4b25dec43f92f35896fbd0009d0f680
       - id: authorized
         env:
           GH_TOKEN: ${{ github.token }}
